@@ -1,23 +1,33 @@
 // Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
 import crypto from "node:crypto";
-import fs from "node:fs";
-import { createServer } from "node:http";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
+} from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { escapeHtml } from "../shared/html-escape.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  startOAuthLoopbackCallbackServer,
+  type OAuthLoopbackCallbackServer,
+} from "../infra/oauth-loopback-callback.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
+export { withAuthProfileStoreAtEffect } from "../agents/auth-profiles/store-runtime.js";
+export { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
+export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+export { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 export {
+  isProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,
@@ -36,6 +46,16 @@ export type OAuthCallbackResult = {
 };
 
 /**
+ * Binds a hardened loopback listener before returning so provider plugins can open the browser
+ * only after the callback route is ready. Invalid request candidates remain nonterminal.
+ */
+export async function startProviderOAuthLoopbackCallbackServer(
+  params: Parameters<typeof startOAuthLoopbackCallbackServer>[0],
+): Promise<OAuthLoopbackCallbackServer> {
+  return await startOAuthLoopbackCallbackServer(params);
+}
+
+/**
  * Non-secret auth profile metadata used by provider discovery helpers.
  */
 export type ProviderAuthProfileMetadata = {
@@ -43,16 +63,39 @@ export type ProviderAuthProfileMetadata = {
   accountId?: string;
 };
 
+/** @deprecated Use resolveProviderAuthProfileMetadataAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveProviderAuthProfileMetadata(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
   agentDir?: string;
 }): ProviderAuthProfileMetadata {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "resolveProviderAuthProfileMetadata",
+    replacement: "resolveProviderAuthProfileMetadataAsync",
+  });
   const store = ensureAuthProfileStore(params.agentDir, {
     config: params.cfg,
     readOnly: true,
   });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+export async function resolveProviderAuthProfileMetadataAsync(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+): Promise<ProviderAuthProfileMetadata> {
+  const store = await ensureAuthProfileStoreAsync(params.agentDir, {
+    config: params.cfg,
+    readOnly: true,
+  });
+  return selectProviderAuthProfileMetadata(params, store);
+}
+
+function selectProviderAuthProfileMetadata(
+  params: Parameters<typeof resolveProviderAuthProfileMetadata>[0],
+  store: AuthProfileStore,
+): ProviderAuthProfileMetadata {
   const normalizedProvider = normalizeProviderId(params.provider);
   const entry = params.profileId
     ? ([params.profileId, store.profiles[params.profileId]] as const)
@@ -93,24 +136,21 @@ export function buildOAuthCallbackOriginResolver(
     if (!value) {
       return undefined;
     }
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "https:") {
-        return undefined;
-      }
-      return normalized.has(parsed.host.toLowerCase()) ? parsed.origin : undefined;
-    } catch {
-      return undefined;
-    }
+    const parsed = URL.parse(value);
+    return parsed?.protocol === "https:" && normalized.has(parsed.host.toLowerCase())
+      ? parsed.origin
+      : undefined;
   };
 }
 
 /**
  * Generates a high-entropy OAuth state token for local callback validation.
  */
-export function generateOAuthState(): string {
+function generateHexOAuthState(): string {
   return crypto.randomBytes(32).toString("hex");
 }
+
+export { generateHexOAuthState as generateOAuthState };
 
 /**
  * Parses a pasted OAuth redirect URL into callback code/state fields.
@@ -130,20 +170,19 @@ export function parseOAuthCallbackInput(
     return { error: "No input provided" };
   }
 
-  try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
-    }
-    return { code, state };
-  } catch {
+  const url = URL.parse(trimmed);
+  if (!url) {
     return { error: messages.invalidInput ?? "Paste the full redirect URL, not just the code." };
   }
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  if (!code) {
+    return { error: "Missing 'code' parameter in URL" };
+  }
+  if (!state) {
+    return { error: messages.missingState ?? "Missing 'state' parameter in URL" };
+  }
+  return { code, state };
 }
 
 /**
@@ -164,7 +203,7 @@ export async function waitForLocalOAuthCallback(params: {
   successTitle: string;
   /** Optional progress message emitted once the listener starts. */
   progressMessage?: string;
-  /** Loopback hostname to bind; defaults to localhost. */
+  /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
   /** Progress callback invoked after the server begins listening. */
   onProgress?: (message: string) => void;
@@ -175,211 +214,69 @@ export async function waitForLocalOAuthCallback(params: {
    */
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
-  const hostname = params.hostname ?? "localhost";
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const escapedSuccessTitle = escapeHtml(params.successTitle);
+  const callbackUrl = new URL(params.redirectUri);
+  callbackUrl.port = String(params.port);
+  callbackUrl.pathname = params.callbackPath;
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
   const hasCorsOriginAllowlist =
     params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
-
-  return new Promise<OAuthCallbackResult>((resolve, reject) => {
-    let settled = false;
-    let timeout: NodeJS.Timeout | null = null;
-    const server = createServer((req, res) => {
-      try {
-        applyOAuthCallbackCorsHeaders(
-          req,
-          res,
-          hasCorsOriginAllowlist ? resolveOAuthCallbackOrigin : undefined,
-        );
-        const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
-        if (req.method === "OPTIONS") {
-          res.statusCode = 204;
-          res.end();
-          return;
-        }
-        if (requestUrl.pathname !== params.callbackPath) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Not found");
-          return;
-        }
-        if (req.method !== "GET") {
-          res.statusCode = 405;
-          res.setHeader("Allow", "GET, OPTIONS");
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Method not allowed");
-          return;
-        }
-
-        const error = requestUrl.searchParams.get("error");
-        const code = requestUrl.searchParams.get("code")?.trim();
-        const state = requestUrl.searchParams.get("state")?.trim();
-
-        if (error) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end(`Authentication failed: ${error}`);
-          finish(new Error(`OAuth error: ${error}`));
-          return;
-        }
-
-        if (!code || !state) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Missing code or state");
-          finish(new Error("Missing OAuth code or state"));
-          return;
-        }
-
-        if (state !== params.expectedState) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "text/plain");
-          res.end("Invalid state");
-          finish(new Error("OAuth state mismatch"));
-          return;
-        }
-
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(
-          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-            `<body><h2>${escapedSuccessTitle}</h2>` +
-            "<p>You can close this window and return to OpenClaw.</p></body></html>",
-        );
-
-        finish(undefined, { code, state });
-      } catch (err) {
-        finish(err instanceof Error ? err : new Error("OAuth callback failed"));
-      }
-    });
-
-    const finish = (err?: Error, result?: OAuthCallbackResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      try {
-        server.close();
-      } catch {
-        // ignore close errors
-      }
-      if (err) {
-        reject(err);
-      } else if (result) {
-        resolve(result);
-      }
-    };
-
-    const onAbort = () => finish(new Error("OAuth callback cancelled"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    if (params.signal?.aborted) {
-      onAbort();
-      return;
-    }
-
-    server.once("error", (err) => {
-      finish(err instanceof Error ? err : new Error("OAuth callback server error"));
-    });
-
-    server.listen(params.port, hostname, () => {
-      params.onProgress?.(
-        params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
-      );
-    });
-
-    timeout = setTimeout(() => {
-      finish(new Error("OAuth callback timeout"));
-    }, timeoutMs);
+  const callback = await startOAuthLoopbackCallbackServer({
+    redirectUrl: callbackUrl,
+    expectedState: params.expectedState,
+    timeoutMs,
+    ...(params.hostname ? { bindHostname: params.hostname } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
+    resolveCorsOrigin: hasCorsOriginAllowlist
+      ? resolveOAuthCallbackOrigin
+      : (originHeader) => {
+          const value = Array.isArray(originHeader) ? originHeader[0] : originHeader;
+          return value && isHttpOrigin(value) ? value : undefined;
+        },
+    renderSuccess: () => ({
+      body: renderOAuthPage({
+        title: params.successTitle,
+        heading: params.successTitle,
+        message: "You can close this window and return to OpenClaw.",
+      }),
+      contentType: "text/html; charset=utf-8",
+    }),
   });
-}
-
-function applyOAuthCallbackCorsHeaders(
-  req: import("node:http").IncomingMessage,
-  res: import("node:http").ServerResponse,
-  resolveOrigin?: (originHeader: string | string[] | undefined) => string | undefined,
-): void {
-  const origin =
-    resolveOrigin === undefined
-      ? typeof req.headers.origin === "string" && isHttpOrigin(req.headers.origin)
-        ? req.headers.origin
-        : undefined
-      : resolveOrigin(req.headers.origin);
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+  try {
+    params.onProgress?.(
+      params.progressMessage ?? `Waiting for OAuth callback on ${params.redirectUri}...`,
+    );
+    const result = await callback.waitForCallback();
+    if (result.type === "oauth_error") {
+      throw new Error(`OAuth error: ${result.error}`);
+    }
+    return { code: result.code, state: result.state };
+  } finally {
+    await callback.close();
   }
-  if (resolveOrigin !== undefined && !origin) {
-    // With an allowlist present, untrusted origins receive a bare 204 preflight
-    // response so browser navigation still works but scripts cannot read it.
-    return;
-  }
-
-  const requestedHeaders = req.headers["access-control-request-headers"];
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    typeof requestedHeaders === "string" && requestedHeaders.trim().length > 0
-      ? requestedHeaders
-      : "content-type",
-  );
-  res.setHeader("Access-Control-Allow-Private-Network", "true");
-  res.setHeader("Access-Control-Max-Age", "600");
 }
 
 function isHttpOrigin(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return (url?.protocol === "http:" || url?.protocol === "https:") && url.origin === value;
 }
 
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProvider =
+  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 type GetRuntimeAuthForModel =
-  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;
-type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
-const RUNTIME_MODEL_AUTH_CANDIDATES = [
-  "./runtime-model-auth.runtime",
-  "../plugins/runtime/runtime-model-auth.runtime",
-] as const;
-const RUNTIME_MODEL_AUTH_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts"] as const;
-
-function resolveRuntimeModelAuthModuleHref(): string {
-  const baseDir = path.dirname(fileURLToPath(import.meta.url));
-  for (const relativeBase of RUNTIME_MODEL_AUTH_CANDIDATES) {
-    for (const ext of RUNTIME_MODEL_AUTH_EXTENSIONS) {
-      const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
-      if (fs.existsSync(candidate)) {
-        return pathToFileURL(candidate).href;
-      }
-    }
-  }
-  throw new Error(`Unable to resolve runtime model auth module from ${import.meta.url}`);
-}
-
-async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
-  return (await import(resolveRuntimeModelAuthModuleHref())) as RuntimeModelAuthModule;
-}
+  typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
 
 /**
- * Resolves provider API-key auth through the runtime auth module when available.
+ * Resolves provider API-key auth through the runtime auth module.
  */
 export async function resolveApiKeyForProvider(
   /** Provider auth lookup params forwarded to the runtime auth module. */
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
-  const runtimeAuth = await loadRuntimeModelAuthModule();
-  const resolveApiKeyForProviderLocal =
-    typeof runtimeAuth.resolveApiKeyForProvider === "function"
-      ? runtimeAuth.resolveApiKeyForProvider
-      : resolveModelApiKeyForProvider;
-  return resolveApiKeyForProviderLocal(params);
+  params.signal?.throwIfAborted();
+  const runtimeAuth = await import("../plugins/runtime/runtime-model-auth.runtime.js");
+  params.signal?.throwIfAborted();
+  return runtimeAuth.resolveProviderRuntimeApiKey(params);
 }
 
 /**
@@ -389,7 +286,7 @@ export async function getRuntimeAuthForModel(
   /** Concrete model auth request forwarded to the runtime auth module. */
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
-  const { getRuntimeAuthForModel: getRuntimeAuthForModelLocal } =
-    await loadRuntimeModelAuthModule();
+  const { getRuntimeAuthForModelCore: getRuntimeAuthForModelLocal } =
+    await import("../plugins/runtime/runtime-model-auth.runtime.js");
   return getRuntimeAuthForModelLocal(params);
 }

@@ -3,6 +3,7 @@ export function isDirectRunPath(
   modulePath: string | undefined,
   platform?: NodeJS.Platform,
 ): boolean;
+
 export function isDirectRunUrl(
   directPath: string | undefined,
   moduleUrl: string,

@@ -1,21 +1,15 @@
-/**
- * Read-only channel command default resolver.
- *
- * Reads native command/skill defaults from installed plugin manifests without loading plugins.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir, STATE_DIR } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { normalizeManifestChannelCommandDefaults } from "../../plugins/manifest-setup-normalizers.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
-/**
- * Native command/skill auto-enable defaults exposed by channel manifests.
- */
 type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
@@ -41,34 +35,6 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
 }
 
 /**
- * Normalizes manifest command defaults down to supported boolean fields.
- */
-export function normalizeChannelCommandDefaults(
-  value: ChannelCommandDefaults | undefined,
-): ChannelCommandDefaults | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  if (nativeCommandsAutoEnabled === undefined && nativeSkillsAutoEnabled === undefined) {
-    return undefined;
-  }
-  const defaults: ChannelCommandDefaults = {};
-  if (nativeCommandsAutoEnabled !== undefined) {
-    defaults.nativeCommandsAutoEnabled = nativeCommandsAutoEnabled;
-  }
-  if (nativeSkillsAutoEnabled !== undefined) {
-    defaults.nativeSkillsAutoEnabled = nativeSkillsAutoEnabled;
-  }
-  return defaults;
-}
-
-/**
  * Resolves command defaults from enabled installed plugin metadata without loading plugins.
  */
 export function resolveReadOnlyChannelCommandDefaults(
@@ -87,7 +53,11 @@ export function resolveReadOnlyChannelCommandDefaults(
   const env = options.env ?? process.env;
   const resolvedSnapshot = resolvePluginMetadataSnapshot({
     config: options.config,
-    stateDir: options.stateDir,
+    stateDir:
+      options.stateDir !== undefined &&
+      options.stateDir === (env === process.env ? STATE_DIR : resolveStateDir(env))
+        ? undefined
+        : options.stateDir,
     workspaceDir: options.workspaceDir,
     env,
     allowWorkspaceScopedCurrent: true,
@@ -114,7 +84,9 @@ export function resolveReadOnlyChannelCommandDefaults(
       record.channelCatalogMeta?.id === normalizedChannelId
         ? record.channelCatalogMeta.commands
         : undefined;
-    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+    const commands = normalizeManifestChannelCommandDefaults(
+      channelConfig?.commands ?? catalogCommands,
+    );
     if (commands) {
       return commands;
     }

@@ -1,0 +1,713 @@
+import { readFileSync, type WriteStream } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveQaStagedBundledPluginsRoot } from "./bundled-plugin-staging.js";
+import * as gatewaySetup from "./gateway-child-setup.js";
+import { createQaGatewayChild } from "./gateway-child.js";
+import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const boundary = vi.hoisted(() => ({ create: vi.fn() }));
+const rpcStop = vi.hoisted(() => vi.fn<() => Promise<void>>());
+vi.mock("./gateway-process-boundary.js", async (original) => ({
+  ...(await original<typeof import("./gateway-process-boundary.js")>()),
+  createQaGatewayProcessBoundaryController: boundary.create,
+}));
+// These tests own child lifetime, not the Gateway WebSocket protocol. HTTP
+// readiness, spawning, termination, liveness probes, and artifacts stay real.
+vi.mock("./gateway-rpc-client.js", () => ({
+  startQaGatewayRpcClient: async () => ({ request: async () => ({}), stop: rpcStop }),
+}));
+
+const dirs = createTempDirHarness();
+const owners: ReturnType<typeof createQaGatewayChild>[] = [];
+const groups: number[] = [];
+const artifactDirs: string[] = [];
+const privateStateDirs: string[] = [];
+beforeEach(() => {
+  rpcStop.mockReset().mockResolvedValue(undefined);
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  boundary.create.mockReset();
+  for (const owner of owners) {
+    await owner.stop();
+  }
+  for (const group of groups) {
+    if (isQaPosixProcessGroupAlive(group)) {
+      expect(signalQaPosixProcessGroup(group, "SIGKILL")).toBeUndefined();
+    }
+    await vi.waitFor(() => expect(isQaPosixProcessGroupAlive(group)).toBe(false));
+  }
+  owners.length = 0;
+  groups.length = 0;
+  for (const stateDir of privateStateDirs.splice(0)) {
+    await fs.chmod(stateDir, 0o700).catch((error: unknown) => {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    });
+  }
+  await dirs.cleanup();
+  await Promise.all(
+    artifactDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
+});
+
+async function makeArtifactDir() {
+  const root = path.join(process.cwd(), ".artifacts/qa-e2e/artifact-retry-fix");
+  await fs.mkdir(root, { recursive: true });
+  const dir = await fs.mkdtemp(path.join(root, "preserved-log-"));
+  artifactDirs.push(dir);
+  return dir;
+}
+
+async function readArtifacts(dir: string) {
+  return Promise.all(
+    ["gateway.stdout.log", "gateway.stderr.log", "README.txt"].map((file) =>
+      fs.readFile(path.join(dir, file), "utf8"),
+    ),
+  );
+}
+
+async function fixture(failReplacement: boolean | "descendant" = false, privateState = false) {
+  const root = await dirs.makeTempDir("qa-lifetime-");
+  const record = path.join(root, "children.json");
+  const cli = path.join(root, "gateway.mjs");
+  await fs.writeFile(
+    cli,
+    `
+import fs from "node:fs";
+import http from "node:http";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+const [record, failReplacement, command, ...args] = process.argv.slice(2);
+if (command === "descendant") {
+  process.on("SIGTERM", () => {});
+  setTimeout(() => process.exit(0), 30_000);
+  let lastOutput;
+  setInterval(() => {
+    if (fs.existsSync(record + ".emit")) {
+      const output = fs.readFileSync(record + ".emit", "utf8");
+      if (output !== lastOutput) {
+        console.log("QA_DESCENDANT_" + output);
+        lastOutput = output;
+      }
+    }
+  }, 25);
+  process.send("ready");
+} else if (command === "models") {
+  for await (const ignored of process.stdin) {}
+  if (process.env.QA_PRIVATE_STATE === "1") {
+    fs.chmodSync(process.env.OPENCLAW_STATE_DIR, 0);
+  }
+  process.exit(0);
+}
+if (command === "gateway") {
+const previous = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, "utf8")) : [];
+fs.writeFileSync(record, JSON.stringify([...previous, process.pid]));
+fs.writeSync(1, "QA_GATEWAY_ATTEMPT_" + (previous.length + 1) + " apiKey=synthetic-fixture-secret\\n");
+fs.writeSync(2, "QA_GATEWAY_STDERR apiKey=synthetic-fixture-secret\\n");
+if (previous.length && failReplacement !== "false") {
+  if (failReplacement === "descendant") {
+    const descendant = spawn(process.execPath, [process.argv[1], record, "false", "descendant"], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
+    await once(descendant, "message");
+  }
+  process.exit(17);
+}
+http.createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/readyz" ? { ready: true, agentDatabases: [] } : { ok: true }));
+}).listen(Number(args[args.indexOf("--port") + 1]), "127.0.0.1");
+}
+`,
+  );
+  const params = {
+    repoRoot: process.cwd(),
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: [cli, record, String(failReplacement)],
+      usePackagedPlugins: true,
+      tempParentDir: root,
+    },
+    transportBaseUrl: "http://127.0.0.1:1",
+    controlUiEnabled: false,
+    ...(privateState ? { runtimeEnvPatch: { QA_PRIVATE_STATE: "1" } } : {}),
+  };
+  const pids = () => {
+    const children = JSON.parse(readFileSync(record, "utf8")) as number[];
+    for (const pid of children) {
+      if (!groups.includes(pid)) {
+        groups.push(pid);
+      }
+    }
+    return children;
+  };
+  return {
+    root,
+    params,
+    pids,
+    emitOutput: (text = "STILL_OWNED") => fs.writeFile(record + ".emit", text),
+  };
+}
+
+function own(params: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]) {
+  const owner = createQaGatewayChild();
+  owners.push(owner);
+  return { start: () => owner.start(params), stop: owner.stop };
+}
+
+async function startFixture(
+  failReplacement: Parameters<typeof fixture>[0] = false,
+  packaged = true,
+) {
+  const fixtureState = await fixture(failReplacement);
+  const owner = own({
+    ...fixtureState.params,
+    command: { ...fixtureState.params.command, usePackagedPlugins: packaged },
+  });
+  const gateway = await owner.start();
+  return { ...fixtureState, owner, gateway };
+}
+
+function expectStopped(result: ReturnType<ReturnType<typeof own>["stop"]>, errors: unknown[] = []) {
+  return expect(result).resolves.toEqual({ process: "confirmed-stopped", errors });
+}
+
+function expectGone(target: string) {
+  return expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+function expectDead(pids: number[]) {
+  expect(pids.every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+}
+
+function boundaryCommand(
+  params: Awaited<ReturnType<typeof fixture>>["params"],
+  runtimeArgsPrefix: string[] = [],
+) {
+  return {
+    ...params.command,
+    processBoundary: {
+      kind: "linux-proc-v1" as const,
+      evidenceDir: params.command.tempParentDir,
+      expectedGid: 1,
+      expectedUid: 1,
+      forwardedEnvKeys: [],
+      runtimeArgsPrefix,
+      runtimeExecutablePath: process.execPath,
+      terminationRetryTimeoutMs: 45_000,
+    },
+  };
+}
+
+describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", () => {
+  it.each(["stdout", "stderr"] as const)(
+    "fails and releases a child when its %s log sink stops draining",
+    async (label) => {
+      const prepare = gatewaySetup.prepareQaGatewayChild;
+      let sink: WriteStream | undefined;
+      let maxQueuedBytes = 0;
+      vi.spyOn(gatewaySetup, "prepareQaGatewayChild").mockImplementation(async (...args) => {
+        const setup = await prepare(...args);
+        sink = label === "stdout" ? setup.stdoutLog : setup.stderrLog;
+        // Cork the real file stream: disk never accepts the child's diagnostic burst.
+        sink.cork();
+        const write = sink.write.bind(sink);
+        vi.spyOn(sink, "write").mockImplementation((chunk: Buffer) => {
+          const accepted = write(chunk);
+          maxQueuedBytes = Math.max(maxQueuedBytes, sink!.writableLength);
+          return accepted;
+        });
+        return setup;
+      });
+      const { params, pids } = await fixture();
+      const cliPath = params.command.argsPrefix[0]!;
+      const cli = await fs.readFile(cliPath, "utf8");
+      await fs.writeFile(
+        cliPath,
+        cli.replace(
+          "http.createServer((request, response) => {",
+          `const chunk = Buffer.alloc(64 * 1024, 120);
+for (let index = 0; index < 128; index++) {
+  if (!process.${label}.write(chunk)) await once(process.${label}, "drain");
+}
+http.createServer((request, response) => {`,
+        ),
+      );
+      const owner = own(params);
+      try {
+        const failure = await owner.start().then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(maxQueuedBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining(`${label} log backlog exceeded`),
+        });
+        expectDead(pids());
+        expect((await owner.stop()).process).toBe("confirmed-stopped");
+        expect(sink?.destroyed).toBe(true);
+      } finally {
+        sink?.destroy();
+        await owner.stop();
+      }
+    },
+  );
+
+  it("captures final receipts after process stop and before removing runtime state", async () => {
+    const { owner, gateway, pids } = await startFixture();
+    const receiptPath = path.join(gateway.tempRoot, "owned-receipt.txt");
+    await fs.writeFile(receiptPath, "final native receipt");
+    let captured: string | undefined;
+    const beforeTempCleanup = vi.fn(async () => {
+      expectDead(pids());
+      captured = await fs.readFile(receiptPath, "utf8");
+    });
+    await expectStopped(owner.stop({ beforeTempCleanup }));
+    expect(captured).toBe("final native receipt");
+    await expectGone(gateway.tempRoot);
+    await owner.stop({ beforeTempCleanup });
+    expect(beforeTempCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("retains stopped runtime evidence when final receipt capture fails", async () => {
+    const { owner, gateway, pids } = await startFixture();
+    const receiptPath = path.join(gateway.tempRoot, "owned-receipt.txt");
+    await fs.writeFile(receiptPath, "recoverable native receipt");
+    const result = await owner.stop({
+      beforeTempCleanup: async () => {
+        throw new Error("capture unavailable");
+      },
+    });
+    expect(result.process).toBe("confirmed-stopped");
+    expectDead(pids());
+    expect(result.errors.map(String).join("; ")).toContain("receipt capture failed");
+    expect(await fs.readFile(receiptPath, "utf8")).toBe("recoverable native receipt");
+  });
+
+  it("reports never spawned when preparation fails", async () => {
+    const root = await dirs.makeTempDir("qa-lifetime-missing-");
+    const owner = own({
+      repoRoot: root,
+      command: { executablePath: process.execPath, tempParentDir: path.join(root, "absent") },
+      transportBaseUrl: "http://127.0.0.1:1",
+    });
+    await expect(owner.start()).rejects.toThrow("ENOENT");
+    await expect(owner.stop()).resolves.toEqual({ process: "never-spawned", errors: [] });
+  });
+
+  it("closes startup admission before asynchronous preparation can spawn", async () => {
+    const { root, params } = await fixture();
+    const owner = own(params);
+    const start = owner.start();
+    const rejected = expect(start).rejects.toThrow("lifecycle is closed");
+    await expect(owner.stop()).resolves.toEqual({ process: "never-spawned", errors: [] });
+    await rejected;
+    expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
+  });
+
+  it("cleans retained fixture roots after stopped work", async () => {
+    const { params, owner, gateway } = await startFixture(false, false);
+    const stagedRoot = resolveQaStagedBundledPluginsRoot({
+      repoRoot: params.repoRoot,
+      tempRoot: gateway.tempRoot,
+    });
+    await expectStopped(owner.stop({ keepTemp: true }));
+    await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+    await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
+
+    await expectStopped(owner.stop({ keepTemp: false }));
+    await expectGone(gateway.tempRoot);
+    await expectGone(stagedRoot);
+  });
+
+  it("owns an unaccepted launcher and separates boundary diagnostics from termination", async () => {
+    const { params } = await fixture();
+    const rejected = new Error("verified acceptance failed");
+    const diagnostic = new Error("boundary evidence write failed");
+    boundary.create.mockResolvedValue({
+      prepare: async ({ env }: { env: NodeJS.ProcessEnv }) => ({ env }),
+      accept: async ({ child }: { child: { pid: number } }) => {
+        groups.push(child.pid);
+        throw rejected;
+      },
+      abort: async () => {
+        throw diagnostic;
+      },
+    });
+    const owner = own({
+      ...params,
+      command: boundaryCommand(params),
+    });
+    const error = await owner.start().catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors[0]).toMatchObject({
+      message: expect.stringContaining(rejected.message),
+    });
+    await expectStopped(owner.stop(), [diagnostic]);
+    expectDead(groups);
+  });
+
+  it.each(["startup", "replacement"] as const)(
+    "preserves sanitized log evidence when explicit stop follows %s failure",
+    async (phase) => {
+      const { params, pids } = await fixture(phase === "replacement");
+      const failure = new Error("fixture listening failed");
+      let listeningLogs: (() => string) | undefined;
+      const owner = own({
+        ...params,
+        onListening: ({ logs }) => {
+          listeningLogs = logs;
+          pids();
+          if (phase === "startup") {
+            throw failure;
+          }
+        },
+      });
+      if (phase === "startup") {
+        const started = owner.start();
+        await expect(started).rejects.toThrow("fixture listening failed");
+        await expect(started).rejects.toMatchObject({ cause: failure });
+      } else {
+        const gateway = await owner.start();
+        await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toThrow(
+          "exitCode=17",
+        );
+      }
+      expect(listeningLogs?.()).toContain("QA_GATEWAY_ATTEMPT_1");
+      expect(listeningLogs?.()).toContain("apiKey=<redacted>");
+      expect(listeningLogs?.()).not.toContain("synthetic-fixture-secret");
+      const preserveToDir = await makeArtifactDir();
+      await expectStopped(owner.stop({ preserveToDir }));
+      const [log] = await readArtifacts(preserveToDir);
+      expect(log).toContain(`QA_GATEWAY_ATTEMPT_${phase === "startup" ? 1 : 2}`);
+      expect(log).toContain("apiKey=<redacted>");
+      expect(log).not.toContain("synthetic-fixture-secret");
+      expect(pids()).toHaveLength(phase === "startup" ? 1 : 2);
+      expectDead(pids());
+    },
+  );
+
+  it.each([
+    { failurePhase: "RPC stop", destination: "same" },
+    { failurePhase: "RPC stop", destination: "changed" },
+    { failurePhase: "staging removal", destination: "same" },
+  ])(
+    "retains finalized artifacts when $failurePhase fails and retries with $destination destination",
+    async ({ failurePhase, destination }) => {
+      const failsStaging = failurePhase === "staging removal";
+      const { params, pids, owner, gateway } = await startFixture(false, !failsStaging);
+      pids();
+      const preserveToDir = await makeArtifactDir();
+      const failure = new Error("gateway RPC close failed");
+      const stagedRoot = resolveQaStagedBundledPluginsRoot({
+        repoRoot: params.repoRoot,
+        tempRoot: gateway.tempRoot,
+      });
+      if (failsStaging) {
+        await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
+        const originalRm = fs.rm;
+        let failed = false;
+        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+          if (target === stagedRoot && !failed) {
+            failed = true;
+            throw Object.assign(new Error("EACCES: staging removal denied"), { code: "EACCES" });
+          }
+          return originalRm(target, options);
+        });
+      } else {
+        rpcStop.mockRejectedValueOnce(failure);
+      }
+      const stopped = await owner.stop({ preserveToDir });
+      expect(stopped.process).toBe("confirmed-stopped");
+      expectDead(pids());
+      if (failsStaging) {
+        expect(stopped.errors).toHaveLength(1);
+        expect(String(stopped.errors[0])).toContain(
+          "stagedBundledPluginsRoot: EACCES: staging removal denied",
+        );
+        await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
+      } else {
+        expect(stopped.errors).toEqual([failure]);
+      }
+      await expectGone(gateway.tempRoot);
+      const artifacts = await readArtifacts(preserveToDir);
+      expect(artifacts[0]).toContain("QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>");
+      expect(artifacts[1]).toContain("QA_GATEWAY_STDERR apiKey=<redacted>");
+      expect(artifacts[2]).toContain("Only sanitized gateway debug artifacts");
+      expect(artifacts.join("\n")).not.toContain("synthetic-fixture-secret");
+      const retryDir = destination === "same" ? preserveToDir : await makeArtifactDir();
+      await expectStopped(owner.stop({ preserveToDir: retryDir }));
+      expect(rpcStop).toHaveBeenCalledTimes(2);
+      if (failsStaging) {
+        await expectGone(stagedRoot);
+      }
+      expect(await readArtifacts(preserveToDir)).toEqual(artifacts);
+      if (destination === "changed") {
+        expect(await fs.readdir(retryDir)).toEqual([]);
+      }
+      expectDead(pids());
+    },
+  );
+
+  it.each([true, false])(
+    "only exports on retry if the first stop retained temporary logs (keepTemp=%s)",
+    async (keepTemp) => {
+      const { pids, owner, gateway } = await startFixture();
+      pids();
+      const preserveToDir = await makeArtifactDir();
+      const failure = new Error("gateway RPC close failed");
+      rpcStop.mockRejectedValueOnce(failure);
+      await expectStopped(
+        owner.stop({ keepTemp, preserveToDir: keepTemp ? preserveToDir : undefined }),
+        [failure],
+      );
+      expect(await fs.readdir(preserveToDir)).toEqual([]);
+      if (keepTemp) {
+        await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      } else {
+        await expectGone(gateway.tempRoot);
+      }
+      await expectStopped(owner.stop({ keepTemp: false, preserveToDir }));
+      if (keepTemp) {
+        expect((await readArtifacts(preserveToDir))[0]).toContain(
+          "QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>",
+        );
+      } else {
+        expect(await fs.readdir(preserveToDir)).toEqual([]);
+      }
+      await expectGone(gateway.tempRoot);
+    },
+  );
+
+  it("refreshes artifacts while a failed replacement group awaits confirmed termination", async ({
+    signal: testSignal,
+  }) => {
+    const outputFlushed = new Map(
+      ["STILL_OWNED", "FINAL_OUTPUT"].map((text) => [text, Promise.withResolvers<void>()] as const),
+    );
+    for (const gate of outputFlushed.values()) {
+      void gate.promise.catch(() => undefined);
+    }
+    const prepare = gatewaySetup.prepareQaGatewayChild;
+    vi.spyOn(gatewaySetup, "prepareQaGatewayChild").mockImplementation(async (...args) => {
+      const setup = await prepare(...args);
+      const write = setup.stdoutLog.write.bind(setup.stdoutLog);
+      let flushed = "";
+      // The owner writes Buffers without callbacks. Observe its real write callback,
+      // so readiness means the forwarded output has reached the file, not just stdout.
+      vi.spyOn(setup.stdoutLog, "write").mockImplementation((chunk: Buffer) =>
+        write(chunk, (error) => {
+          if (error) {
+            for (const gate of outputFlushed.values()) {
+              gate.reject(error);
+            }
+            return;
+          }
+          flushed += chunk.toString("utf8");
+          for (const [text, gate] of outputFlushed) {
+            if (flushed.includes(`QA_DESCENDANT_${text}`)) {
+              gate.resolve();
+            }
+          }
+        }),
+      );
+      return setup;
+    });
+    const { pids, emitOutput, owner, gateway } = await startFixture("descendant");
+    const preserveToDir = await makeArtifactDir();
+    const [predecessor] = pids();
+    const realKill = process.kill.bind(process);
+    let terminationPending = false;
+    let overlappingTermination = false;
+    const signalFault = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      const replacement = pids()[1];
+      if (replacement && pid === -replacement && (signal === "SIGTERM" || signal === "SIGKILL")) {
+        if (signal === "SIGTERM") {
+          overlappingTermination ||= terminationPending;
+          terminationPending = true;
+        } else {
+          terminationPending = false;
+        }
+        throw Object.assign(new Error("owned replacement signal denied"), { code: "EPERM" });
+      }
+      return realKill(pid, signal);
+    });
+    try {
+      await expect(gateway.restartAfterStateMutation(async () => {})).rejects.toBeInstanceOf(
+        AggregateError,
+      );
+      const [stopped] = await Promise.all([
+        owner.stop({ preserveToDir }),
+        owner.stop({ preserveToDir }),
+      ]);
+      expect(overlappingTermination).toBe(false);
+      expect(stopped.process).toBe("unconfirmed");
+      expect(stopped.errors.length).toBeGreaterThan(0);
+      expect(isQaPosixProcessGroupAlive(predecessor!)).toBe(false);
+      expect(isQaPosixProcessGroupAlive(pids()[1]!)).toBe(true);
+      await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      expect((await readArtifacts(preserveToDir))[0]).not.toContain("QA_DESCENDANT_STILL_OWNED");
+      await emitOutput();
+      await withinTest(outputFlushed.get("STILL_OWNED")!.promise, testSignal);
+      expect(
+        await fs.readFile(path.join(gateway.tempRoot, "gateway.stdout.log"), "utf8"),
+      ).toContain("QA_DESCENDANT_STILL_OWNED");
+      expect((await owner.stop({ preserveToDir })).process).toBe("unconfirmed");
+      expect((await readArtifacts(preserveToDir))[0]).toContain("QA_DESCENDANT_STILL_OWNED");
+      await emitOutput("FINAL_OUTPUT");
+      await withinTest(outputFlushed.get("FINAL_OUTPUT")!.promise, testSignal);
+      expect(
+        await fs.readFile(path.join(gateway.tempRoot, "gateway.stdout.log"), "utf8"),
+      ).toContain("QA_DESCENDANT_FINAL_OUTPUT");
+    } finally {
+      signalFault.mockRestore();
+    }
+    await expectStopped(owner.stop({ preserveToDir }));
+    const [log] = await readArtifacts(preserveToDir);
+    expect(log).toContain("QA_DESCENDANT_STILL_OWNED");
+    expect(log).toContain("QA_DESCENDANT_FINAL_OUTPUT");
+    expectDead(pids());
+  });
+
+  it("does not spawn a replacement after stop closes an awaited mutation", async () => {
+    const { pids, owner, gateway } = await startFixture();
+    pids();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const restarting = gateway.restartAfterStateMutation(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const rejected = expect(restarting).rejects.toThrow("lifecycle is closed");
+    await entered.promise;
+    const stopping = owner.stop();
+    release.resolve();
+    await rejected;
+    await expectStopped(stopping);
+    expect(pids()).toHaveLength(1);
+  });
+
+  it("reports failed runtime removal without undoing confirmed shutdown and retries cleanup", async () => {
+    const { pids, owner, gateway } = await startFixture();
+    pids();
+    const originalRm = fs.rm;
+    const fault = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === gateway.tempRoot) {
+        throw Object.assign(new Error("EACCES: runtime removal denied"), { code: "EACCES" });
+      }
+      return originalRm(target, options);
+    });
+    try {
+      const result = await owner.stop();
+      expect(result.process).toBe("confirmed-stopped");
+      expectDead(pids());
+      await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+      expect(result.errors.map(String).join("; ")).toContain("EACCES");
+      await expect(gateway.stop()).rejects.toThrow("EACCES");
+    } finally {
+      fault.mockRestore();
+    }
+    await expectStopped(owner.stop());
+    await expectGone(gateway.tempRoot);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "removes isolated runtime state through its boundary after shutdown and artifact preservation",
+    async () => {
+      const { params, pids } = await fixture(false, true);
+      const preserveToDir = await makeArtifactDir();
+      const originalRm = fs.rm;
+      const cleanup = vi.fn(async (tempRoot: string) => {
+        expectDead(pids());
+        expect((await readArtifacts(preserveToDir))[0]).toContain("QA_GATEWAY_ATTEMPT_1");
+        await expect(
+          fs.stat(path.join(tempRoot, "state", "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "EACCES" });
+        await fs.chmod(path.join(tempRoot, "state"), 0o700);
+        await originalRm(tempRoot, { recursive: true, force: true });
+      });
+      boundary.create.mockImplementation(async ({ tempRoot }: { tempRoot: string }) => {
+        privateStateDirs.push(path.join(tempRoot, "state"));
+        return {
+          prepare: async ({ env }: { env: NodeJS.ProcessEnv }) => ({ env }),
+          accept: async () => ({}),
+          signal: async () => {},
+          markReady: async () => {},
+          markExited: async () => {},
+          cleanupTempRoot: () => cleanup(tempRoot),
+        };
+      });
+      const owner = own({
+        ...params,
+        runtimePreloads: ["file:///adapter-first.mjs", "qa-second-preload"],
+        command: boundaryCommand(params, [
+          "--import",
+          "/tmp/boundary-preload.mjs",
+          "/tmp/index.js",
+        ]),
+      });
+      const gateway = await owner.start();
+      expect(boundary.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            runtimeArgsPrefix: [
+              "--import",
+              "file:///adapter-first.mjs",
+              "--import",
+              "qa-second-preload",
+              "--import",
+              "/tmp/boundary-preload.mjs",
+              "/tmp/index.js",
+            ],
+          }),
+        }),
+      );
+      expect(gateway.cliCommand).toBeUndefined();
+      pids();
+      const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (target === gateway.tempRoot) {
+          throw Object.assign(new Error("isolated state belongs to another UID"), {
+            code: "EACCES",
+          });
+        }
+        return originalRm(target, options);
+      });
+      try {
+        await expectStopped(owner.stop({ preserveToDir }));
+        expect(cleanup).toHaveBeenCalledOnce();
+        await expectGone(gateway.tempRoot);
+      } finally {
+        denied.mockRestore();
+      }
+    },
+  );
+
+  it("retries failed preservation after confirming process shutdown", async () => {
+    const { pids, owner, gateway } = await startFixture();
+    pids();
+    const invalidOptions = {
+      preserveToDir: path.resolve(process.cwd(), "../qa-artifacts-outside-repo"),
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await owner.stop(invalidOptions);
+      expect(result.process).toBe("confirmed-stopped");
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(await fs.stat(gateway.tempRoot)).toBeDefined();
+    }
+    const preserveToDir = await makeArtifactDir();
+    await expectStopped(owner.stop({ preserveToDir }));
+    const [stdout, stderr, readme] = await readArtifacts(preserveToDir);
+    expect(stdout).toContain("QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>");
+    expect(stderr).toContain("QA_GATEWAY_STDERR apiKey=<redacted>");
+    expect(readme).toContain("Only sanitized gateway debug artifacts");
+    expectDead(pids());
+    await expectGone(gateway.tempRoot);
+  });
+});

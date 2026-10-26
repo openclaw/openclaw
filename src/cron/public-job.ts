@@ -1,11 +1,48 @@
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 /** Remove scheduler-only state before a cron job crosses a public API boundary. */
-export function toPublicCronJob(job: CronJob): CronJob {
+export function toPublicCronJob(job: CronStoredJob): CronJob {
+  const {
+    pluginCommand: _pluginCommand,
+    operatorSource: _operatorSource,
+    inferenceBinding: _inferenceBinding,
+    sourceConversation: _sourceConversation,
+    streamSandbox: _streamSandbox,
+    skillLibrarySelections: _skillLibrarySelections,
+    createdActor: _createdActor,
+    toolsAllowProvenance: _toolsAllowProvenance,
+    toolsAllowExecTarget: _toolsAllowExecTarget,
+    toolsAllowExecTargetRequirement: _toolsAllowExecTargetRequirement,
+    runtimeAuthority: _runtimeAuthority,
+    runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
+    ...publicJob
+  } = job;
   const state = { ...job.state };
+  delete state.pluginCommandRuns;
+  delete state.pluginCommandBinding;
   delete state.queuedAtMs;
+  delete state.runningReceiptId;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;
-  return { ...job, state };
+  delete state.runningScheduleChangeId;
+  delete state.failureAlertIncident;
+  delete state.lastFailureNotificationId;
+  return {
+    ...publicJob,
+    state,
+    ...(job.schedule.kind === "stream"
+      ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }
+      : {}),
+    // Names the stored kind without exposing the private envelope or the requester's arguments.
+    ...(job.pluginCommand
+      ? {
+          payloadSource: {
+            kind: "pluginCommand" as const,
+            pluginId: job.pluginCommand.pluginId,
+            command: job.pluginCommand.command,
+          },
+        }
+      : {}),
+  };
 }

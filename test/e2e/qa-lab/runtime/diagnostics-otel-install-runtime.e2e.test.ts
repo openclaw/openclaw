@@ -1,20 +1,36 @@
-import { execFile } from "node:child_process";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import {
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, test } from "vitest";
-import { startQaGatewayChild, startQaMockOpenAiServer } from "../../../../extensions/qa-lab/api.js";
+import { afterAll, describe, expect, test, type TestContext } from "vitest";
+import {
+  createQaGatewayChild,
+  startQaMockOpenAiServer,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/api.js";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "@openclaw/diagnostics-otel";
-const PACKAGE_VERSION = "2026.7.2";
 
 type MutableConfig = {
   diagnostics?: unknown;
@@ -24,40 +40,23 @@ type MutableConfig = {
   [key: string]: unknown;
 };
 
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null) {
-    return true;
+async function stopChild(
+  owned: { child: ChildProcess; exited: Promise<unknown> } | undefined,
+): Promise<void> {
+  if (!owned) {
+    return;
   }
-  return await new Promise<boolean>((resolve) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    const timer = setTimeout(() => {
-      child.off("exit", onExit);
-      resolve(false);
-    }, timeoutMs);
-    timer.unref();
-    child.once("exit", onExit);
-    if (child.exitCode !== null) {
-      child.off("exit", onExit);
-      clearTimeout(timer);
-      resolve(true);
+  const { child, exited } = owned;
+  // The grace only escalates termination; cleanup still joins the retained exit.
+  const escalation = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  escalation.unref();
+  try {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
     }
-  });
-}
-
-async function stopChild(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  if (await waitForChildExit(child, 5_000)) {
-    return;
-  }
-  child.kill("SIGKILL");
-  if (!(await waitForChildExit(child, 5_000))) {
-    throw new Error("fixture registry did not exit after SIGKILL");
+    await exited;
+  } finally {
+    clearTimeout(escalation);
   }
 }
 
@@ -82,39 +81,34 @@ async function startReceiver() {
   return { ...receiver, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-async function runCleanup(
-  label: string,
-  cleanup: () => Promise<void>,
-  timeoutMs = 30_000,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} cleanup timed out`)), timeoutMs);
-    timer.unref();
-    cleanup().then(
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
-async function settleCleanup(
-  ...cleanups: Array<readonly [label: string, cleanup: () => Promise<void>]>
-): Promise<void> {
-  const results = await Promise.allSettled(
-    cleanups.map(async ([label, cleanup]) => await runCleanup(label, cleanup)),
-  );
+async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
   if (failures.length > 0) {
     throw new AggregateError(failures, "managed diagnostics-otel cleanup failed");
   }
+}
+
+function runOtelTestFixture(
+  context: Pick<TestContext, "signal" | "onTestFinished">,
+  body: () => Promise<void>,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  let closing: Promise<void> | undefined;
+  const close = () => (closing ??= cleanup());
+  const completed = runQaGatewayFixture(async () => {
+    context.signal.throwIfAborted();
+    await body();
+  }, close);
+  // Vitest cancels its wrapper before the body finishes unwinding. Retain that
+  // original lifetime so suite teardown cannot remove the packed seed early.
+  context.onTestFinished(async () => {
+    await completed.catch(() => {});
+    await close();
+  });
+  return completed;
 }
 
 async function packPlugin(repoRoot: string, scratch: string) {
@@ -163,43 +157,59 @@ async function packPlugin(repoRoot: string, scratch: string) {
   if (!tarballName) {
     throw new Error("diagnostics-otel pack did not produce a tarball");
   }
-  return path.join(outputDir, tarballName);
+  const manifest = JSON.parse(await readFile(path.join(stagingDir, "package.json"), "utf8")) as {
+    version?: unknown;
+  };
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw new Error("diagnostics-otel package version is missing");
+  }
+  return {
+    tarball: path.join(outputDir, tarballName),
+    version: manifest.version.trim(),
+  };
 }
 
-async function startRegistry(repoRoot: string, scratch: string, tarball: string) {
+async function startRegistry(
+  repoRoot: string,
+  scratch: string,
+  tarball: string,
+  version: string,
+  signal: AbortSignal,
+) {
   const portFile = path.join(scratch, "registry-port");
   const child = spawn(
     process.execPath,
-    [
-      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-      portFile,
-      PACKAGE_NAME,
-      PACKAGE_VERSION,
-      tarball,
-    ],
+    ["scripts/e2e/lib/plugins/npm-registry-server.mjs", portFile, PACKAGE_NAME, version, tarball],
     {
       cwd: repoRoot,
       env: {
         ...process.env,
         OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
+  const exited = once(child, "exit");
+  const ready = once(child, "message").then(([message]: unknown[]) => {
+    if (typeof message === "number" && Number.isInteger(message) && message > 0) {
+      return message;
+    }
+    throw new Error("fixture npm registry sent invalid readiness");
+  });
   try {
-    const port = await waitFor(async () => {
-      try {
-        return (await readFile(portFile, "utf8")).trim() || undefined;
-      } catch {
-        if (child.exitCode !== null) {
+    const port = await withinTest(
+      awaitGateBeforeSettlement(
+        ready,
+        exited.then(() => {
           throw new Error(`fixture npm registry exited early (${child.exitCode})`);
-        }
-        return undefined;
-      }
-    });
-    return { baseUrl: `http://127.0.0.1:${port}`, child };
+        }),
+        "fixture npm registry exited early",
+      ),
+      signal,
+    );
+    return { baseUrl: `http://127.0.0.1:${port}`, child, exited };
   } catch (error) {
-    await stopChild(child).catch((stopError) => {
+    await stopChild({ child, exited }).catch((stopError: unknown) => {
       throw new Error(
         `fixture npm registry startup cleanup failed: ${
           stopError instanceof Error ? stopError.message : String(stopError)
@@ -213,7 +223,7 @@ async function startRegistry(repoRoot: string, scratch: string, tarball: string)
   }
 }
 
-async function runTurn(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>, marker: string) {
+async function runTurn(gateway: QaGatewayChild, marker: string) {
   const started = (await gateway.call("chat.send", {
     sessionKey: `agent:qa:${marker.toLowerCase()}`,
     message: `Reply exactly: ${marker}`,
@@ -230,7 +240,7 @@ async function runTurn(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
 }
 
 async function restartWithOtelConfig(params: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   sampleRate: number;
   traceEndpoint: string;
 }) {
@@ -254,16 +264,16 @@ async function restartWithOtelConfig(params: {
   });
 }
 
-async function installAndConfigure(params: {
-  configTraceEndpoint: string;
+// The caller retains the owner before startup and every later installation step.
+async function startInstallGateway(params: {
+  owner: ReturnType<typeof createQaGatewayChild>;
   envTraceEndpoint: string;
   mockBaseUrl: string;
   nodeOptions?: string;
   registryBaseUrl: string;
   repoRoot: string;
-  sampleRate?: number;
 }) {
-  const gateway = await startQaGatewayChild({
+  return await params.owner.start({
     repoRoot: params.repoRoot,
     providerBaseUrl: `${params.mockBaseUrl}/v1`,
     providerMode: "mock-openai",
@@ -289,8 +299,17 @@ async function installAndConfigure(params: {
       ...(params.nodeOptions ? { OPENCLAW_OTEL_PRELOADED: "1" } : {}),
     },
   });
-  const spec = `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`;
-  await gateway.runCli(["plugins", "install", spec, "--force"]);
+}
+
+async function installAndConfigure(params: {
+  gateway: QaGatewayChild;
+  configTraceEndpoint: string;
+  packageVersion: string;
+  sampleRate?: number;
+}) {
+  const { gateway } = params;
+  const spec = `npm:${PACKAGE_NAME}@${params.packageVersion}`;
+  await gateway.runCli(["plugins", "install", spec, "--force", "--accept-capabilities"]);
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("qa gateway state directory was not configured");
@@ -301,10 +320,10 @@ async function installAndConfigure(params: {
   });
   expect(records["diagnostics-otel"]).toMatchObject({
     source: "npm",
-    spec: `${PACKAGE_NAME}@${PACKAGE_VERSION}`,
-    version: PACKAGE_VERSION,
+    spec: `${PACKAGE_NAME}@${params.packageVersion}`,
+    version: params.packageVersion,
     resolvedName: PACKAGE_NAME,
-    resolvedVersion: PACKAGE_VERSION,
+    resolvedVersion: params.packageVersion,
   });
   expect(records["diagnostics-otel"]?.installPath).toContain("diagnostics-otel");
   expect(records["diagnostics-otel"]?.integrity).toMatch(/^sha512-/u);
@@ -329,28 +348,61 @@ async function installAndConfigure(params: {
     id: "diagnostics-otel",
     status: "loaded",
   });
-  return gateway;
 }
 
 describe("managed diagnostics-otel install runtime", () => {
-  test("installs the exact package and exports with config precedence, sampling, and flush", async () => {
+  let seedDir: string | undefined;
+  let packedPlugin: ReturnType<typeof packPlugin> | undefined;
+
+  afterAll(async () => {
+    await runQaGatewayFixture(
+      async () => await packedPlugin,
+      async () => {
+        if (seedDir) {
+          await rm(seedDir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  async function copyPackedPlugin(repoRoot: string, scratch: string) {
+    packedPlugin ??= (async () => {
+      seedDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-seed-"));
+      return await packPlugin(repoRoot, seedDir);
+    })();
+    const packed = await packedPlugin;
+    const outputDir = path.join(scratch, "pack");
+    await mkdir(outputDir, { recursive: true });
+    const tarball = path.join(outputDir, path.basename(packed.tarball));
+    await copyFile(packed.tarball, tarball);
+    return { tarball, version: packed.version };
+  }
+
+  test("installs the exact package and exports with config precedence, sampling, and flush", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-"));
     const configured = await startReceiver();
     const envOnly = await startReceiver();
     let registry: Awaited<ReturnType<typeof startRegistry>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
-    try {
-      const tarball = await packPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, tarball);
+    const gatewayOwner = createQaGatewayChild();
+    let gateway: QaGatewayChild | undefined;
+    const runProof = async () => {
+      const packed = await copyPackedPlugin(repoRoot, scratch);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version, signal);
       mock = await startQaMockOpenAiServer();
-      gateway = await installAndConfigure({
-        configTraceEndpoint: configured.baseUrl,
+      gateway = await startInstallGateway({
+        owner: gatewayOwner,
         envTraceEndpoint: envOnly.baseUrl,
         mockBaseUrl: mock.baseUrl,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
+      });
+      await installAndConfigure({
+        gateway,
+        configTraceEndpoint: configured.baseUrl,
+        packageVersion: packed.version,
         sampleRate: 0,
       });
       await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
@@ -394,38 +446,61 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(exportDelayMs).toBeGreaterThanOrEqual(1_000);
       expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.capturedRequests).toHaveLength(0);
-    } finally {
-      await settleCleanup(
-        ["gateway", async () => await gateway?.stop()],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry?.child)],
-        ["configured receiver", async () => await configured.close()],
-        ["environment receiver", async () => await envOnly.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    };
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await configured.close(),
+            async () => await envOnly.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
-    }
+    });
   }, 180_000);
 
-  test("keeps installed diagnostic listeners active with a preloaded SDK", async () => {
+  test("keeps installed diagnostic listeners active with a preloaded SDK", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+    const rootPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")) as {
+      devDependencies?: Record<string, string>;
+    };
+    const sourcePluginPackage = JSON.parse(
+      await readFile(path.join(repoRoot, "extensions/diagnostics-otel/package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.223.0");
+    expect(sourcePluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
+    expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-preloaded-"));
     const receiver = await startReceiver();
     const ignoredConfig = await startReceiver();
     let registry: Awaited<ReturnType<typeof startRegistry>> | undefined;
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-    let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
-    try {
-      const tarball = await packPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, tarball);
+    const gatewayOwner = createQaGatewayChild();
+    let gateway: QaGatewayChild | undefined;
+    const runProof = async () => {
+      const packed = await copyPackedPlugin(repoRoot, scratch);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version, signal);
       mock = await startQaMockOpenAiServer();
       const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
       await mkdir(preloadModules, { recursive: true });
-      // The scratch preload resolves the same hoisted packages declared by the
-      // diagnostics plugin without making them root test dependencies.
+      const requireFromSdk = createRequire(
+        createRequire(path.join(repoRoot, "package.json")).resolve(
+          "@opentelemetry/sdk-node/package.json",
+        ),
+      );
+      // Resolve through the root-owned SDK without relying on dependency hoisting.
+      // The installed plugin remains independently packed without sdk-node.
       for (const packageName of ["sdk-node", "exporter-trace-otlp-proto"]) {
         await symlink(
-          path.join(repoRoot, "node_modules", "@opentelemetry", packageName),
+          path.dirname(requireFromSdk.resolve(`@opentelemetry/${packageName}/package.json`)),
           path.join(preloadModules, packageName),
           process.platform === "win32" ? "junction" : "dir",
         );
@@ -441,14 +516,38 @@ describe("managed diagnostics-otel install runtime", () => {
           "globalThis.__openclawQaPreloadedOtelSdk = sdk;",
         ].join("\n"),
       );
-      gateway = await installAndConfigure({
-        configTraceEndpoint: ignoredConfig.baseUrl,
+      gateway = await startInstallGateway({
+        owner: gatewayOwner,
         envTraceEndpoint: receiver.baseUrl,
         mockBaseUrl: mock.baseUrl,
         nodeOptions: `--import=${pathToFileURL(preloadPath).href}`,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
       });
+      await installAndConfigure({
+        gateway,
+        configTraceEndpoint: ignoredConfig.baseUrl,
+        packageVersion: packed.version,
+      });
+      const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("qa gateway state directory was not configured");
+      }
+      const installPath = readPluginInstallRecords({
+        stateDir,
+        configPath: gateway.configPath,
+      })["diagnostics-otel"]?.installPath;
+      if (!installPath) {
+        throw new Error("diagnostics-otel install path was not recorded");
+      }
+      const installedPluginPackage = JSON.parse(
+        await readFile(path.join(installPath, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      expect(installedPluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
+      expect(installedPluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
       expect(gateway.logs()).toContain("diagnostics-otel: using preloaded OpenTelemetry SDK");
       await runTurn(gateway, "OTEL-PRELOADED-INSTALL-OK");
       const runSpan = await waitFor(
@@ -458,15 +557,19 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(runSpan.traceId).toBeTruthy();
       expect(runSpan.spanId).toBeTruthy();
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
-    } finally {
-      await settleCleanup(
-        ["gateway", async () => await gateway?.stop()],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry?.child)],
-        ["preloaded receiver", async () => await receiver.close()],
-        ["ignored config receiver", async () => await ignoredConfig.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    };
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await receiver.close(),
+            async () => await ignoredConfig.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
-    }
+    });
   }, 180_000);
 });

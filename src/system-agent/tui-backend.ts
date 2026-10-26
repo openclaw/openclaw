@@ -1,13 +1,15 @@
-// OpenClaw TUI backend runs setup-helper dialogue inside the shared local TUI shell.
 import { randomUUID } from "node:crypto";
 import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { ChannelsAddOptions } from "../commands/channels/add.js";
-import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  buildAgentMainSessionKey,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { resolveModelRefOverride } from "../shared/model-ref-override.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -18,116 +20,61 @@ import type {
   TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
-import type { SystemAgentAssistantPlanner } from "./assistant.js";
-import {
-  assertLocalGatewaySetupMode,
-  GATEWAY_SETUP_AFTER_WRITE,
-  SystemAgentChatEngine,
-  type SystemAgentChatEngineOptions,
-} from "./chat-engine.js";
+import { SystemAgentChatEngine, type SystemAgentChatEngineOptions } from "./chat-engine.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { requireSystemAgentPersistentApplyInference } from "./inference-guard.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
-import {
-  executeSystemAgentOperation,
-  type SystemAgentCommandDeps,
-  type SystemAgentOperation,
-} from "./operations.js";
-import { formatSystemAgentStartupMessage, loadSystemAgentOverview } from "./overview.js";
-import {
-  resolveSystemAgentVerifiedInferenceRoute,
-  type SystemAgentVerifiedInferenceBinding,
-} from "./verified-inference.js";
+import { loadOverviewForOperation } from "./operations-execution-helpers.js";
+import { executeSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
+import { formatSystemAgentStartupMessage } from "./overview.js";
+import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.js";
 
 type RunTui = typeof import("../tui/tui.js").runTui;
 
-export type SystemAgentTuiOptions = {
-  yes?: boolean;
-  deps?: SystemAgentCommandDeps;
-  planWithAssistant?: SystemAgentAssistantPlanner;
+async function loadHostedSetupForTui() {
+  const [{ createClackPrompter }, hostedSetup] = await Promise.all([
+    import("../wizard/clack-prompter.js"),
+    import("./hosted-setup.runtime.js"),
+  ]);
+  return { createClackPrompter, hostedSetup };
+}
+
+export type SystemAgentTuiOptions = Pick<
+  SystemAgentChatEngineOptions,
+  "yes" | "deps" | "verifiedInference"
+> & {
   runTui?: RunTui;
   /** "onboarding" swaps the greeting for the first-run setup proposal. */
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
-  /** Test seam for the channel-setup wizard hosted by the chat bridge. */
-  runChannelSetupWizard?: SystemAgentChatEngineOptions["runChannelSetupWizard"];
-  runSkillsSetupWizard?: SystemAgentChatEngineOptions["runSkillsSetupWizard"];
-  runSearchSetupWizard?: SystemAgentChatEngineOptions["runSearchSetupWizard"];
-  runGatewaySetupWizard?: SystemAgentChatEngineOptions["runGatewaySetupWizard"];
-  runChannelsAdd?: (
-    opts: ChannelsAddOptions,
-    runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
-  ) => Promise<unknown>;
-  runSearchSetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
-  runGatewaySetupHandoff?: (
-    runtime: RuntimeEnv,
-    beforePersistentEffect: () => Promise<void>,
-  ) => Promise<void>;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  /** Selected first-agent name for the proposed onboarding setup. */
+  setupAgentName?: string;
 };
 
-type SystemAgentHistoryMessage = {
-  role: "assistant" | "user";
-  content: Array<{ type: "text"; text: string }>;
-  timestamp: number;
-};
-
-type SystemAgentTuiRoute = {
-  model?: string;
-  modelProvider?: string;
-  thinkingLevel: string;
-};
+type SystemAgentHistoryMessage = ReturnType<typeof message>;
+type SystemAgentTuiRoute = Awaited<ReturnType<typeof requireTuiVerifiedInference>>;
 
 const SYSTEM_AGENT_SESSION_KEY = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
+const SYSTEM_AGENT_HISTORY_LIMIT = 200;
 
 function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
   return new SystemAgentChatEngine({
     yes: opts.yes,
     deps: opts.deps,
-    planWithAssistant: opts.planWithAssistant,
     surface: "cli",
     verifiedInference: opts.verifiedInference,
-    ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
-    ...(opts.runSkillsSetupWizard ? { runSkillsSetupWizard: opts.runSkillsSetupWizard } : {}),
-    ...(opts.runSearchSetupWizard ? { runSearchSetupWizard: opts.runSearchSetupWizard } : {}),
-    ...(opts.runGatewaySetupWizard ? { runGatewaySetupWizard: opts.runGatewaySetupWizard } : {}),
   });
 }
 
-async function loadOverviewForTui(opts: SystemAgentTuiOptions) {
-  if (opts.deps?.loadOverview) {
-    return await opts.deps.loadOverview();
-  }
-  return await loadSystemAgentOverview();
-}
-
-function message(role: "assistant" | "user", text: string): SystemAgentHistoryMessage {
+function message(role: "assistant" | "user", text: string) {
   return {
     role,
-    content: [{ type: "text", text }],
+    content: [{ type: "text" as const, text }],
     timestamp: Date.now(),
-  };
-}
-
-function splitModelRef(ref: string | undefined): { provider?: string; model?: string } {
-  const trimmed = ref?.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return { model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
   };
 }
 
@@ -155,7 +102,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     private readonly route: SystemAgentTuiRoute,
   ) {
     this.engine = engine;
-    this.messages.push(message("assistant", welcome));
+    this.appendMessage(message("assistant", welcome));
   }
 
   setRequestExitHandler(handler: () => void): void {
@@ -184,7 +131,7 @@ class SystemAgentTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
-    this.messages.push(message("user", opts.message));
+    this.appendMessage(message("user", opts.message));
     // Keep the backend queue ahead of the engine queue so a failed inference
     // turn can retire the session before an already-submitted host command runs.
     const response = this.responseQueue.then(() => this.respond(runId, opts.sessionKey, text));
@@ -196,15 +143,11 @@ class SystemAgentTuiBackend implements TuiBackend {
     return { ok: true, aborted: false };
   }
 
-  async loadHistory(): Promise<{
-    sessionId: string;
-    messages: SystemAgentHistoryMessage[];
-    thinkingLevel: string;
-    verboseLevel: string;
-  }> {
+  async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
+    const limit = Math.min(opts.limit ?? SYSTEM_AGENT_HISTORY_LIMIT, SYSTEM_AGENT_HISTORY_LIMIT);
     return {
       sessionId: "openclaw",
-      messages: this.messages,
+      messages: limit > 0 ? this.messages.slice(-limit) : [],
       thinkingLevel: this.route.thinkingLevel,
       verboseLevel: "off",
     };
@@ -232,6 +175,15 @@ class SystemAgentTuiBackend implements TuiBackend {
           modelProvider: this.route.modelProvider,
         },
       ],
+    };
+  }
+
+  async describeSession(opts: Parameters<TuiBackend["describeSession"]>[0]) {
+    const { sessions, defaults } = await this.listSessions();
+    return {
+      session:
+        sessions.find((row) => agentSessionKeysMatchByRequestKey(row.key, opts.sessionKey)) ?? null,
+      defaults,
     };
   }
 
@@ -271,12 +223,9 @@ class SystemAgentTuiBackend implements TuiBackend {
     await this.disposeEngine();
     this.engine = createChatEngine(this.opts);
     this.engineDisposal = null;
-    const overview = await loadOverviewForTui(this.opts);
-    this.messages.splice(
-      0,
-      this.messages.length,
-      message("assistant", formatSystemAgentStartupMessage(overview)),
-    );
+    const overview = await loadOverviewForOperation(this.opts.deps);
+    this.messages.length = 0;
+    this.appendMessage(message("assistant", formatSystemAgentStartupMessage(overview)));
     return { ok: true };
   }
 
@@ -290,7 +239,7 @@ class SystemAgentTuiBackend implements TuiBackend {
   }
 
   async getGatewayStatus(): Promise<string> {
-    const overview = await loadOverviewForTui(this.opts);
+    const overview = await loadOverviewForOperation(this.opts.deps);
     return overview.gateway.reachable ? "Gateway reachable" : "Gateway unreachable";
   }
 
@@ -314,9 +263,11 @@ class SystemAgentTuiBackend implements TuiBackend {
     return this.engineDisposal;
   }
 
-  private nextSeq(): number {
-    this.seq += 1;
-    return this.seq;
+  private appendMessage(entry: SystemAgentHistoryMessage): void {
+    this.messages.push(entry);
+    if (this.messages.length > SYSTEM_AGENT_HISTORY_LIMIT) {
+      this.messages.splice(0, this.messages.length - SYSTEM_AGENT_HISTORY_LIMIT);
+    }
   }
 
   private emit(event: string, payload: unknown): void {
@@ -328,7 +279,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     notifyListeners([listener], {
       event,
       payload,
-      seq: this.nextSeq(),
+      seq: ++this.seq,
     });
   }
 
@@ -337,7 +288,7 @@ class SystemAgentTuiBackend implements TuiBackend {
       "assistant",
       text || "OpenClaw listened and found nothing to change.",
     );
-    this.messages.push(assistant);
+    this.appendMessage(assistant);
     this.emit("chat", {
       runId,
       sessionKey,
@@ -409,111 +360,30 @@ async function runSetupHandoff(
     return;
   }
   const beforePersistentEffect = async () => {
-    const binding = opts?.verifiedInference;
-    if (!binding) {
-      throw new SystemAgentInferenceUnavailableError("conversation");
-    }
-    try {
-      const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-      const route = await resolvePersistentApplyInference({
-        binding,
-        runtime,
-        deps: opts.deps,
-      });
-      if (route) {
-        return;
-      }
-    } catch (error) {
-      if (isSystemAgentInferenceUnavailableError(error)) {
-        throw error;
-      }
-      throw new SystemAgentInferenceUnavailableError("conversation", [error]);
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation");
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts?.verifiedInference, runtime },
+      (failures) => {
+        if (isSystemAgentInferenceUnavailableError(failures[0])) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   };
-  if (handoff.target === "gateway") {
-    if (opts.runGatewaySetupHandoff) {
-      await opts.runGatewaySetupHandoff(runtime, beforePersistentEffect);
+  if (handoff.target === "gateway" || handoff.target === "search") {
+    const { createClackPrompter, hostedSetup } = await loadHostedSetupForTui();
+    const runHosted =
+      handoff.target === "gateway"
+        ? hostedSetup.runHostedGatewaySetup
+        : hostedSetup.runHostedSearchSetup;
+    await runHosted(createClackPrompter(), beforePersistentEffect, runtime);
+    if (handoff.target === "gateway") {
       runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
-      return;
     }
-    const [
-      { resolveGatewayPort },
-      { createClackPrompter },
-      { configureGatewayForSetup },
-      { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults, writeWizardConfigFile },
-    ] = await Promise.all([
-      import("../config/config.js"),
-      import("../wizard/clack-prompter.js"),
-      import("../wizard/setup.gateway-config.js"),
-      import("../wizard/setup.shared.js"),
-    ]);
-    const snapshot = await readSetupConfigFileSnapshot();
-    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-      throw new Error(
-        "Gateway setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
-      );
-    }
-    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-    assertLocalGatewaySetupMode(baseConfig);
-    const result = await configureGatewayForSetup({
-      flow: "advanced",
-      baseConfig,
-      nextConfig: baseConfig,
-      localPort: resolveGatewayPort(baseConfig),
-      quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
-      prompter: createClackPrompter(),
-      runtime,
-    });
-    await beforePersistentEffect();
-    await writeWizardConfigFile(result.nextConfig, {
-      allowConfigSizeDrop: false,
-      baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
-      afterWrite: GATEWAY_SETUP_AFTER_WRITE,
-    });
-    runtime.log("Done — gateway settings saved. Run `openclaw gateway restart` to apply them.");
     return;
   }
-  if (handoff.target === "search") {
-    if (opts.runSearchSetupHandoff) {
-      await opts.runSearchSetupHandoff(runtime, beforePersistentEffect);
-      return;
-    }
-    const [
-      { runSearchSetupFlow },
-      { createClackPrompter },
-      { readSetupConfigFileSnapshot, writeWizardConfigFile },
-    ] = await Promise.all([
-      import("../flows/search-setup.js"),
-      import("../wizard/clack-prompter.js"),
-      import("../wizard/setup.shared.js"),
-    ]);
-    const snapshot = await readSetupConfigFileSnapshot();
-    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
-      throw new Error(
-        "Web search setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
-      );
-    }
-    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
-    const searchSetup = await runSearchSetupFlow(baseConfig, runtime, createClackPrompter(), {
-      preserveDisabledSearchState: false,
-      beforePersistentEffect,
-    });
-    if (searchSetup.outcome !== "completed") {
-      return;
-    }
-    await beforePersistentEffect();
-    await writeWizardConfigFile(searchSetup.config, {
-      allowConfigSizeDrop: false,
-      baseHash: snapshot.hash,
-      migrationBaseConfig: baseConfig,
-    });
-    return;
-  }
-  const runChannelsAdd =
-    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
-  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+  const { channelsAddCommand } = await import("../commands/channels/add.js");
+  await channelsAddCommand(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
     beforePersistentEffect,
   });
@@ -546,10 +416,11 @@ export async function runSystemAgentTui(
           engine,
           localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
+          ...(boundOpts.setupAgentName ? { agentName: boundOpts.setupAgentName } : {}),
         })
       ).text;
     } else {
-      welcome = formatSystemAgentStartupMessage(await loadOverviewForTui(boundOpts));
+      welcome = formatSystemAgentStartupMessage(await loadOverviewForOperation(boundOpts.deps));
       engine.noteAssistantMessage(welcome);
     }
     // The onboarding greeting applies to the first shell only; re-entry after
@@ -561,7 +432,7 @@ export async function runSystemAgentTui(
       await runTui({
         local: true,
         session: SYSTEM_AGENT_SESSION_KEY,
-        historyLimit: 200,
+        historyLimit: SYSTEM_AGENT_HISTORY_LIMIT,
         backend,
         config: {},
         title: "openclaw setup",
@@ -596,16 +467,15 @@ export async function runSystemAgentTui(
   }
 }
 
-async function requireTuiVerifiedInference(
-  opts: SystemAgentTuiOptions,
-): Promise<SystemAgentTuiRoute> {
+async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
   const binding = opts?.verifiedInference;
   if (!binding) {
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
-    if (route) {
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding);
+    if (verified) {
+      const { config, route } = verified;
       const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([
         import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
@@ -613,17 +483,18 @@ async function requireTuiVerifiedInference(
       // Catalog metadata improves the label but must not become a new startup
       // dependency after this exact inference route has already been verified.
       const catalog = getPreparedModelCatalogSnapshot({
-        config: route.runConfig,
+        config,
         agentId: route.agentId,
         agentDir: route.agentDir,
         readOnly: true,
       })?.entries;
-      const model = splitModelRef(route.modelLabel);
+      const model = resolveModelRefOverride(route.modelLabel);
       return {
         model: model.model,
         modelProvider: model.provider,
         thinkingLevel: resolveThinkingDefault({
           cfg: route.runConfig,
+          agentId: route.agentId,
           provider: route.provider,
           model: route.model,
           catalog,
@@ -631,7 +502,7 @@ async function requireTuiVerifiedInference(
       };
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }

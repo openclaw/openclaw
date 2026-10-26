@@ -1,226 +1,268 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
-import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { buildSubagentSessionListReadIndex } from "../agents/subagent-registry-read.js";
-import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionListRowContext,
-} from "./session-utils-contracts.js";
+import { isDeepStrictEqual } from "node:util";
 import {
-  buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
-  resolveEstimatedSessionCostUsd,
-  resolvePositiveNumber,
-  resolveRuntimeChildSessionKeys,
-  resolveStoreChildSessionKeysFromCandidates,
-} from "./session-utils-core.js";
-import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
-
-export function buildSessionListRowContext(params: {
-  store: Record<string, SessionEntry>;
-  now: number;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
-  const subagentRuns = buildSubagentSessionListReadIndex(params.now);
-  return buildSessionListRowContextFromParts({
-    subagentRuns,
-    storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
-    userProfileIdentityById: params.userProfileIdentityById,
-  });
-}
-
-function buildSessionListRowContextFromParts(params: {
-  subagentRuns: SessionListRowContext["subagentRuns"];
-  storeChildSessionsByKey: Map<string, string[]>;
-  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
-  return {
-    subagentRuns: params.subagentRuns,
-    storeChildSessionsByKey: params.storeChildSessionsByKey,
-    selectedModelByOverrideRef: new Map(),
-    thinkingMetadataByModelRef: new Map(),
-    displayModelIdentityByKey: new Map(),
-    modelCostConfigByModelRef: new Map(),
-    userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
-    acpSessionMetaByEntry: new Map(),
-  };
-}
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { captureRuntimeStateEnvironment } from "../config/paths.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { iterateProjectedAgentRunSessionKeys } from "../infra/agent-run-projection.js";
+import {
+  buildProjectedAgentRunIndex,
+  type ProjectedAgentRunIndex,
+} from "../infra/agent-run-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
+import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
+import {
+  createSessionRowModelCacheKey,
+  type SessionActorProfileIdentity,
+  type SessionListRowContext,
+} from "./session-utils-contracts.js";
+import { resolveEstimatedSessionCostUsd, type SessionChildLink } from "./session-utils-core.js";
+import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
+  sessionKeys?: readonly string[];
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  projectedAgentRuns?: ProjectedAgentRunIndex;
+  projectedSubagentActivity?: ReadonlySet<string>;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
-}): SessionListRowContext {
-  return buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentSessionListReadIndex(params.now),
-    storeChildSessionsByKey: new Map(),
-    userProfileIdentityById: params.userProfileIdentityById,
-  });
+}): SessionListRowContext & {
+  projectedAgentRuns: ProjectedAgentRunIndex;
+  projectedSubagentActivity: ReadonlySet<string>;
+} {
+  const subagentRuns =
+    params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now, params.sessionKeys);
+  const projectedAgentRuns = params.projectedAgentRuns ?? buildProjectedAgentRunIndex();
+  const catalogEntries = new WeakMap<
+    ModelCatalogEntry[],
+    Map<string, ModelCatalogEntry | undefined>
+  >();
+  const runtimeEntries = new WeakMap<
+    readonly ModelCatalogEntry[],
+    Map<string, ReturnType<typeof selectModelCatalogRuntimeEntry>>
+  >();
+  return {
+    subagentRuns,
+    projectedAgentRuns,
+    projectedSubagentActivity:
+      params.projectedSubagentActivity ??
+      buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
+    subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
+    configuredDefaultModelByAgent: new Map(),
+    thinkingFactsByModelRef: new Map(),
+    findModelCatalogEntry: (catalog, query) => {
+      const entries = getOrCreateWeakOwnerMap(catalogEntries, catalog);
+      const key = createSessionRowModelCacheKey(query.provider, query.modelId);
+      if (!entries.has(key)) {
+        entries.set(key, findModelCatalogEntry(catalog, query));
+      }
+      return entries.get(key);
+    },
+    selectModelCatalogRuntimeEntry: (selection) => {
+      const entries = getOrCreateWeakOwnerMap(runtimeEntries, selection.routeVariants);
+      const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
+      let selected = entries.get(key);
+      if (!selected) {
+        selected = selectModelCatalogRuntimeEntry(selection);
+        entries.set(key, selected);
+      }
+      return selected;
+    },
+    displayModelIdentityByKey: new Map(),
+    modelCostConfigByModelRef: new Map(),
+    userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
+  };
 }
 
-export function buildSingleRowStoreChildSessionsByKey(params: {
-  store: Record<string, SessionEntry>;
-  storePath: string;
-  key: string;
-  now: number;
-}): Map<string, string[]> {
-  const storeChildSessions = resolveStoreChildSessionKeysFromCandidates({
-    store: params.store,
-    key: params.key,
-    now: params.now,
-    candidates: getSingleRowChildSessionCandidates({
-      storePath: params.storePath,
-      store: params.store,
-    }),
-  });
-  return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
-}
-
-export function resolveSessionSelectedModelRef(params: {
-  cfg: OpenClawConfig;
-  entry?: SessionEntry;
-  agentId: string;
-  rowContext?: SessionListRowContext;
-  allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> | null {
-  const override = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
-  });
-  if (!override.modelOverride) {
-    return null;
+/** Prepare follow-up ancestor membership with the indexes, outside per-row presentation. */
+export function buildProjectedSubagentActivity(
+  subagentRuns: SessionListRowContext["subagentRuns"],
+  projectedAgentRuns: ProjectedAgentRunIndex,
+): ReadonlySet<string> {
+  const active = new Set<string>();
+  for (const key of iterateProjectedAgentRunSessionKeys(projectedAgentRuns)) {
+    const run = subagentRuns.latestRunsByChildSessionKey.get(key);
+    if (!run) {
+      continue;
+    }
+    let requester = run.requesterSessionKey;
+    while (requester && !active.has(requester)) {
+      active.add(requester);
+      requester =
+        subagentRuns.latestRunsByChildSessionKey.get(requester)?.requesterSessionKey ?? "";
+    }
   }
-  if (!params.rowContext) {
-    return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
-      allowPluginNormalization: params.allowPluginNormalization,
+  return active;
+}
+
+/** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
+export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
+  return links?.map(({ key, entry }) => ({
+    key,
+    parsedKey: parseAgentSessionKey(key),
+    entry: {
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      updatedAt: entry.updatedAt,
+      archivedAt: entry.archivedAt,
+      status: entry.status,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      spawnedBy: entry.spawnedBy,
+      parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
+      createdActor: entry.createdActor,
+      visibility: entry.visibility,
+      incognito: entry.incognito,
+    },
+  }));
+}
+
+/** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
+export function reuseSessionRowChildLinks(
+  links: readonly SessionChildLink[],
+  previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
+) {
+  return previous &&
+    previous.length === links.length &&
+    links.every(({ key, entry }, index) => {
+      const before = previous[index]!;
+      return (
+        key === before.key &&
+        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
+        (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
+          (field) =>
+            entry[field] === before.entry[field] ||
+            isDeepStrictEqual(entry[field], before.entry[field]),
+        )
+      );
+    })
+    ? previous
+    : links;
+}
+
+export function resolveTranscriptUsageFallbacks(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+  storePath: string;
+  freshTotalTokens?: number;
+  fallbackModelRefs: readonly (string | undefined)[];
+  allowPluginNormalization?: boolean;
+  rowContext?: SessionListRowContext;
+  agentId: string;
+  storeAgentId?: string;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
+}): Map<
+  string | undefined,
+  {
+    estimatedCostUsd?: number;
+    totalTokens?: number;
+    totalTokensFresh?: boolean;
+    usageReport?: SessionEntry["usageReport"];
+  } | null
+> {
+  const { entry, agentId } = params;
+  const fallbacks: ReturnType<typeof resolveTranscriptUsageFallbacks> = new Map();
+  const snapshot = params.transcriptUsage;
+  for (const fallbackModelRef of new Set(params.fallbackModelRefs)) {
+    fallbacks.set(fallbackModelRef, null);
+    if (!entry?.sessionId || !snapshot) {
+      continue;
+    }
+    const resolvedModel = resolveSessionModelIdentityRef(
+      params.cfg,
+      entry,
+      agentId,
+      fallbackModelRef,
+      { allowPluginNormalization: params.allowPluginNormalization },
+    );
+    if (
+      params.freshTotalTokens !== undefined &&
+      resolveEstimatedSessionCostUsd({
+        cfg: params.cfg,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
+        entry,
+        rowContext: params.rowContext,
+      }) !== undefined
+    ) {
+      continue;
+    }
+    const estimatedCostUsd = resolveEstimatedSessionCostUsd({
+      cfg: params.cfg,
+      provider: snapshot.modelProvider ?? resolvedModel.provider,
+      model: snapshot.model ?? resolvedModel.model,
+      explicitCostUsd: snapshot.costUsd,
+      entry: snapshot,
+      rowContext: params.rowContext,
+    });
+    fallbacks.set(fallbackModelRef, {
+      usageReport: snapshot.usageReport,
+      totalTokens:
+        snapshot.usageReport?.state === "available"
+          ? asNonNegativeFiniteNumber(snapshot.totalTokens)
+          : asPositiveFiniteNumber(snapshot.totalTokens),
+      totalTokensFresh: snapshot.totalTokensFresh === true,
+      estimatedCostUsd,
     });
   }
-  const key = [
-    normalizeAgentId(params.agentId),
-    override.providerOverride ?? "",
-    override.modelOverride,
-  ].join("\0");
-  const cached = params.rowContext.selectedModelByOverrideRef.get(key);
-  if (cached) {
-    return cached;
-  }
-  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
-    allowPluginNormalization: params.allowPluginNormalization,
-  });
-  params.rowContext.selectedModelByOverrideRef.set(key, selected);
-  return selected;
+  return fallbacks;
 }
 
-export function mergeChildSessionKeys(
-  runtimeChildSessions: string[] | undefined,
-  storeChildSessions: string[] | undefined,
-): string[] | undefined {
-  if (!runtimeChildSessions?.length) {
-    return storeChildSessions?.length ? storeChildSessions : undefined;
-  }
-  if (!storeChildSessions?.length) {
-    return runtimeChildSessions;
-  }
-  return uniqueStrings([...runtimeChildSessions, ...storeChildSessions]);
+/** Runtime ownership is independent of whether the model itself can change. */
+export function resolveGatewaySessionRuntimeSelectionLocked(
+  entry: Pick<SessionEntry, "modelSelectionLocked"> | undefined,
+  acpMeta: SessionEntry["acp"],
+): boolean {
+  return entry?.modelSelectionLocked === true || acpMeta != null;
 }
 
-export function resolveChildSessionKeys(
-  controllerSessionKey: string,
-  store: Record<string, SessionEntry>,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): string[] | undefined {
-  const runtimeChildSessions = resolveRuntimeChildSessionKeys(
-    controllerSessionKey,
-    now,
-    subagentRuns,
-  );
-  const storeChildSessions = buildStoreChildSessionIndex(store, now, subagentRuns).get(
-    controllerSessionKey,
-  );
-  return mergeChildSessionKeys(runtimeChildSessions, storeChildSessions);
-}
-
-export function resolveTranscriptUsageFallback(params: {
+export function resolveGatewaySessionRuntimeProjection(params: {
   cfg: OpenClawConfig;
-  key: string;
+  provider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
   entry?: SessionEntry;
-  storePath: string;
-  fallbackProvider?: string;
-  fallbackModel?: string;
-  maxTranscriptBytes?: number;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
-  agentId?: string;
-}): {
-  estimatedCostUsd?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  contextTokens?: number;
-  modelProvider?: string;
-  model?: string;
-} | null {
-  const entry = params.entry;
-  if (!entry?.sessionId) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(params.key);
-  const agentId = parsed?.agentId
-    ? normalizeAgentId(parsed.agentId)
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const storePath =
-    resolveConcreteSessionStorePath(params.storePath) ??
-    resolveStorePath(params.cfg.session?.store, { agentId });
-  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript>;
-  try {
-    snapshot = readScopedRecentSessionUsageFromTranscript(
-      {
-        agentId,
-        sessionEntry: entry,
-        sessionId: entry.sessionId,
-        sessionKey: params.key,
-        storePath,
-      },
-      typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
-    );
-  } catch {
-    return null;
-  }
-  if (!snapshot) {
-    return null;
-  }
-  const modelProvider = snapshot.modelProvider ?? params.fallbackProvider;
-  const model = snapshot.model ?? params.fallbackModel;
-  const contextTokens = resolveContextTokensForModel({
+  metadataSnapshot?: PluginMetadataSnapshot | null;
+}) {
+  const { entry } = params;
+  const acpMeta = params.preparedAcpMeta ?? undefined;
+  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    provider: modelProvider,
-    model,
-    // Gateway/session listing is read-only; don't start async model discovery.
-    allowAsyncLoad: false,
+    agentScope: { kind: "prepared", agentId: params.agentId },
+    provider: params.provider,
+    model: params.model,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
   });
-  const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-    cfg: params.cfg,
-    provider: modelProvider,
-    model,
-    explicitCostUsd: snapshot.costUsd,
-    entry: {
-      inputTokens: snapshot.inputTokens,
-      outputTokens: snapshot.outputTokens,
-      cacheRead: snapshot.cacheRead,
-      cacheWrite: snapshot.cacheWrite,
-    },
-    rowContext: params.rowContext,
-  });
+  if (agentRuntime.id === "auto" && entry) {
+    agentRuntime.id = resolveWorkerPlacementModelRuntime({
+      ...params,
+      entry,
+      preparedEnvironment: params.rowContext
+        ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
+        : undefined,
+    });
+  }
   return {
-    modelProvider,
-    model,
-    totalTokens: resolvePositiveNumber(snapshot.totalTokens),
-    totalTokensFresh: snapshot.totalTokensFresh === true,
-    contextTokens: resolvePositiveNumber(contextTokens),
-    estimatedCostUsd,
+    acpMeta,
+    agentRuntime,
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
   };
 }

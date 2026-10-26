@@ -1,12 +1,12 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Hidden machine-facing gateway restart-handoff commands for external supervisors.
 import type { Command } from "commander";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
-  createGatewayRestartHandoffCapabilities,
   GATEWAY_RESTART_HANDOFF_PROTOCOL,
   GATEWAY_RESTART_HANDOFF_PROTOCOL_VERSION,
 } from "../../infra/restart-handoff-contract.js";
 import { defaultRuntime } from "../../runtime.js";
+import { MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION } from "../machine-output-argv.js";
 
 function writeRestartHandoffError(reason: "invalid-expected-pid" | "store-unavailable") {
   defaultRuntime.writeJson({
@@ -28,11 +28,13 @@ export function addGatewayRestartHandoffCommands(gateway: Command): void {
   restartHandoff
     .command("capabilities")
     .description("Report the gateway restart-handoff machine contract")
-    .option("--json", "Output JSON", false)
+    .option("--json", MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION)
     .action(() => {
       defaultRuntime.writeJson({
         ok: true,
-        ...createGatewayRestartHandoffCapabilities(),
+        protocol: GATEWAY_RESTART_HANDOFF_PROTOCOL,
+        protocolVersion: GATEWAY_RESTART_HANDOFF_PROTOCOL_VERSION,
+        operations: ["consume"] as const,
       });
     });
 
@@ -43,14 +45,14 @@ export function addGatewayRestartHandoffCommands(gateway: Command): void {
     .allowUnknownOption()
     .allowExcessArguments()
     .option("--expected-pid [pid]", "PID of the exited gateway process", collectExpectedPid, [])
-    .option("--json", "Output JSON", false)
+    .option("--json", MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION)
     .action(async (opts, command: Command) => {
       const expectedPidValues = Array.isArray(opts.expectedPid) ? opts.expectedPid : [];
       const expectedPid =
         command.args.length === 0 && expectedPidValues.length === 1
           ? parseStrictPositiveInteger(expectedPidValues[0])
           : undefined;
-      if (expectedPid === undefined || !Number.isSafeInteger(expectedPid)) {
+      if (expectedPid === undefined) {
         writeRestartHandoffError("invalid-expected-pid");
         defaultRuntime.exit(2);
         return;

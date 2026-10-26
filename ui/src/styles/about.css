@@ -1,12 +1,19 @@
-/* Settings > System > About — page-specific leftovers on top of settings.css. */
-
-/* Hero: big Clawd, product identity, and community links (iOS About-style). */
 .about-hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 10px 16px 26px;
   text-align: center;
+}
+
+.about-hero__mark--neutral {
+  width: 168px;
+  height: 168px;
+}
+
+.about-hero__mark--neutral svg {
+  width: 100%;
+  height: 100%;
 }
 
 .about-hero__clawd {
@@ -17,7 +24,7 @@
   border: 0;
   background: transparent;
   border-radius: var(--radius-lg);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: transform 160ms ease;
 }
 
@@ -28,7 +35,7 @@
   border-radius: 50%;
   background: radial-gradient(
     closest-side,
-    color-mix(in srgb, var(--lob-shell, #c44536) 22%, transparent),
+    color-mix(in srgb, var(--lob-shell) 22%, transparent),
     transparent 72%
   );
   pointer-events: none;
@@ -42,7 +49,8 @@
   transform: translateY(0) scale(0.97);
 }
 
-.about-hero__clawd:focus-visible {
+.about-hero__clawd:focus-visible,
+.about-hero__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -87,7 +95,7 @@
 }
 
 /* One-shot poke wave: the same gesture without the loop's long idle lead-in.
-   Duration must stay in sync with CLAWD_WAVE_MS in about-page.ts. */
+   Duration must stay in sync with CLAWD_WAVE_MS in about-page.tsx. */
 .about-hero__clawd--wave .lob-claw--r {
   animation: about-clawd-poke-wave 1.4s ease-in-out;
 }
@@ -154,7 +162,6 @@
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  text-decoration: none;
   transition:
     transform 140ms ease,
     background 140ms ease,
@@ -165,12 +172,6 @@
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-  text-decoration: none;
-}
-
-.about-hero__link:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .about-hero__link-icon {
@@ -227,7 +228,6 @@
   grid-template-columns: max-content minmax(0, 1fr);
 }
 
-/* Commit hash, age, and copy button cluster inside the build facts grid. */
 .about-commit {
   display: inline-flex;
   align-items: center;
@@ -251,7 +251,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     opacity var(--duration-fast, 120ms) ease,
     color var(--duration-fast, 120ms) ease,
@@ -292,17 +292,4 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs, 12px);
   white-space: nowrap;
-}
-
-/* Screen-reader-only live region for copy feedback (no shared utility yet). */
-.about-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }

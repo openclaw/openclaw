@@ -1,428 +1,218 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onAgentEvent,
-  resetAgentEventsForTest,
-  type AgentEventPayload,
-} from "../../infra/agent-events.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
-  resetSharedRunIntegrationHarnessMocks,
+  createOverflowRunParams,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let state: OpenClawTestState;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
+let resetAgentEventsForTest: typeof import("../../infra/agent-events.js").resetAgentEventsForTest;
 
-function successAttempt(provider: string, model: string): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    assistantTexts: ["done"],
-    lastAssistant: {
-      stopReason: "stop",
-      provider,
-      model,
-      content: [{ type: "text", text: "done" }],
-      usage: { input: 100, output: 5, totalTokens: 105 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-  });
-}
+type AttemptParams = Parameters<typeof mockedRunEmbeddedAttempt>[0];
 
-type FastModeAttemptParams = {
-  fastMode?: unknown;
-  fastModeAutoOnSeconds?: number;
-  fastModeAutoProgressState?: {
-    offAnnounced: boolean;
-    resetAnnounced: boolean;
-  };
-  onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => unknown;
-  onRunProgress?: (payload: { reason: string }) => unknown;
-  onToolStreamBoundary?: () => unknown;
-  onToolResult?: (payload: { text?: string; channelData?: Record<string, unknown> }) => unknown;
-};
-
-function resolveAttemptFastMode(params: unknown): void {
-  const fastMode = (params as { fastMode?: unknown }).fastMode;
+function resolveAttemptFastMode({ fastMode }: AttemptParams): void {
   if (typeof fastMode === "function") {
     fastMode();
   }
 }
 
+async function startFastAttempt(overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]>) {
+  vi.useFakeTimers();
+  const base = createOverflowRunParams(state);
+  const events: Array<{ data?: { summary?: unknown } }> = [];
+  const toolResults: Array<{ text?: string; channelData?: Record<string, unknown> }> = [];
+  const globalSummaries: string[] = [];
+  const stopCapture = onAgentEvent((event) => {
+    if (
+      event.runId === (overrides.runId ?? base.runId) &&
+      event.stream === "item" &&
+      typeof event.data.summary === "string"
+    ) {
+      globalSummaries.push(event.data.summary);
+    }
+  });
+  const done = createDeferred<EmbeddedRunAttemptResult>();
+  const started = createDeferred<AttemptParams>();
+  mockedRunEmbeddedAttempt.mockImplementationOnce(async (input) => {
+    resolveAttemptFastMode(input);
+    started.resolve(input);
+    return done.promise;
+  });
+  const run = runEmbeddedAgent({
+    ...base,
+    provider: "ollama",
+    model: "glm-5.1:cloud",
+    fastMode: "auto",
+    fastModeAutoOnSeconds: 30,
+    ...overrides,
+    onAgentEvent: (event) => {
+      events.push(event);
+      return overrides.onAgentEvent?.(event);
+    },
+    onToolResult: (payload) => {
+      toolResults.push(payload);
+      return overrides.onToolResult?.(payload);
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const params = await started.promise;
+  return {
+    events,
+    toolResults,
+    globalSummaries,
+    params,
+    run,
+    complete: () => done.resolve(makeAttemptResult()),
+    summaries: () => events.map((event) => event.data?.summary).filter(Boolean),
+    texts: () => toolResults.map((payload) => payload.text),
+    async [Symbol.asyncDispose]() {
+      done.resolve(makeAttemptResult());
+      try {
+        await run;
+      } finally {
+        stopCapture();
+      }
+    },
+  };
+}
+
 describe("runEmbeddedAgent fast auto progress", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+    ({ onAgentEvent, resetAgentEventsForTest } = await import("../../infra/agent-events.js"));
   });
 
-  beforeEach(() => {
-    resetSharedRunIntegrationHarnessMocks();
+  beforeEach(async () => {
+    state = await createFreshRunIntegrationState("run.fast-mode-auto");
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     resetAgentEventsForTest();
+    await state?.cleanup();
   });
 
-  it("uses the selected model's auto cutoff when the caller omits one", async () => {
-    let attemptParams: FastModeAttemptParams | undefined;
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      attemptParams = params as FastModeAttemptParams;
-      resolveAttemptFastMode(params);
-      return successAttempt("ollama", "glm-5.1:cloud");
-    });
+  it("dispatches ultrafast without resolving it as auto", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+    await runEmbeddedAgent({ ...createOverflowRunParams(state), fastMode: "ultrafast" });
+    expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0].fastMode).toBe("ultrafast");
+  });
 
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-      config: {
+  it.each([
+    [undefined, 23],
+    [30, 30],
+  ] as const)(
+    "emits auto-off once at a completed boundary with cutoff %s, then resets",
+    async (cutoff, expected) => {
+      const config = {
         agents: {
-          defaults: {
-            models: {
-              "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
-            },
-          },
+          defaults: { models: { "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } } } },
         },
-      },
-      fastMode: "auto",
-    });
-
-    expect(attemptParams?.fastModeAutoOnSeconds).toBe(23);
-  });
-
-  it("emits auto-off after a tool execution boundary crosses the threshold", async () => {
-    vi.useFakeTimers();
-
-    const events: Array<{
-      data?: { summary?: unknown };
-    }> = [];
-    const toolResults: Array<{
-      text?: string;
-      channelData?: Record<string, unknown>;
-    }> = [];
-    const globalSummaries: string[] = [];
-    const stopGlobalCapture = onAgentEvent((event: AgentEventPayload) => {
-      if (event.runId !== "run-fast-auto-retry" || event.stream !== "item") {
-        return;
-      }
-      const summary = event.data.summary;
-      if (typeof summary === "string") {
-        globalSummaries.push(summary);
-      }
-    });
-    let attemptParams: FastModeAttemptParams | undefined;
-    let completeAttempt: (() => void) | undefined;
-    const attemptDone = new Promise<EmbeddedRunAttemptResult>((resolve) => {
-      completeAttempt = () => {
-        resolve(successAttempt("ollama", "glm-5.1:cloud"));
       };
-    });
-    const attemptStarted = createDeferred();
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      attemptParams = params as FastModeAttemptParams;
-      resolveAttemptFastMode(params);
-      attemptStarted.resolve();
-      return attemptDone;
-    });
-
-    const resultPromise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-      runId: "run-fast-auto-retry",
-      fastMode: "auto",
-      fastModeAutoOnSeconds: 30,
-      onAgentEvent: (event) => {
-        events.push(event);
-      },
-      onToolResult: (payload) => {
-        toolResults.push(payload);
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await attemptStarted.promise;
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(31_000);
-
-    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
-    expect(toolResults).toHaveLength(0);
-    expect(globalSummaries).toHaveLength(0);
-
-    attemptParams?.onRunProgress?.({ reason: "model-progress" });
-    await vi.advanceTimersByTimeAsync(2);
-    expect(events).toHaveLength(0);
-    expect(toolResults).toHaveLength(0);
-    expect(globalSummaries).toHaveLength(0);
-
-    await attemptParams?.onToolResult?.({ text: "🛠️ Exec: still running" });
-    await vi.advanceTimersByTimeAsync(2);
-    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
-    expect(toolResults.map((payload) => payload.text)).toEqual(["🛠️ Exec: still running"]);
-    expect(globalSummaries).toHaveLength(0);
-
-    await attemptParams?.onAgentEvent?.({
-      stream: "tool",
-      data: { phase: "start", name: "exec" },
-    });
-    await vi.advanceTimersByTimeAsync(2);
-
-    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
-    expect(toolResults.map((payload) => payload.text)).toEqual(["🛠️ Exec: still running"]);
-    expect(globalSummaries).toHaveLength(0);
-
-    await attemptParams?.onAgentEvent?.({
-      stream: "tool",
-      data: { phase: "result", name: "exec" },
-    });
-    await vi.advanceTimersByTimeAsync(2);
-
-    expect(events.map((event) => event.data?.summary).filter(Boolean)).toHaveLength(0);
-    expect(globalSummaries).toHaveLength(0);
-
-    await attemptParams?.onToolStreamBoundary?.();
-    await vi.advanceTimersByTimeAsync(2);
-
-    const summaries = events.map((event) => event.data?.summary).filter(Boolean);
-    expect(summaries).toContain("💨Fast: auto-off(31s>=30s)");
-    expect(globalSummaries).toContain("💨Fast: auto-off(31s>=30s)");
-    expect(toolResults.some((payload) => payload.text === "💨Fast: auto-off(31s>=30s)")).toBe(true);
-    expect(toolResults.at(-1)?.channelData?.openclawProgressKind).toBe("fast-mode-auto");
-
-    completeAttempt?.();
-    await resultPromise;
-
-    expect(events.map((event) => event.data?.summary)).toContain("💨Fast: auto-on");
-    expect(toolResults.map((payload) => payload.text)).toContain("💨Fast: auto-on");
-    expect(globalSummaries).toContain("💨Fast: auto-on");
-    stopGlobalCapture();
-  });
-
-  it("emits one auto-off notice at the first completed boundary past the threshold", async () => {
-    vi.useFakeTimers();
-
-    const events: Array<{
-      data?: { summary?: unknown };
-    }> = [];
-    const toolResults: Array<{
-      text?: string;
-      channelData?: Record<string, unknown>;
-    }> = [];
-    let attemptParams: FastModeAttemptParams | undefined;
-    let completeAttempt: (() => void) | undefined;
-    const attemptDone = new Promise<EmbeddedRunAttemptResult>((resolve) => {
-      completeAttempt = () => {
-        resolve(successAttempt("ollama", "glm-5.1:cloud"));
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(config);
+      await using attempt = await startFastAttempt({
+        runId: "run-fast-auto-retry",
+        config,
+        fastModeAutoOnSeconds: cutoff,
+      });
+      const { events, toolResults, run, complete, summaries, texts, params, globalSummaries } =
+        attempt;
+      expect(params.fastModeAutoOnSeconds).toBe(expected);
+      const offText = `💨Fast: auto-off(31s>=${expected}s)`;
+      const expectSilent = (expectedTexts: string[] = [], emptyEvents = false) => {
+        expect(summaries()).toEqual([]);
+        expect(texts()).toEqual(expectedTexts);
+        expect(globalSummaries).toEqual([]);
+        if (emptyEvents) {
+          expect(events).toEqual([]);
+        }
       };
-    });
-    const attemptStarted = createDeferred();
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      attemptParams = params as FastModeAttemptParams;
-      resolveAttemptFastMode(params);
-      attemptStarted.resolve();
-      return attemptDone;
-    });
+      const toolPhase = (phase: string) =>
+        params?.onAgentEvent?.({
+          stream: "tool",
+          data: { phase, name: "exec" },
+        });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expectSilent();
+      params?.onRunProgress?.({ reason: "model-progress" });
+      await vi.advanceTimersByTimeAsync(2);
+      expectSilent([], true);
+      await params?.onToolResult?.({ text: "🛠️ Exec: still running" });
+      await toolPhase("start");
+      await toolPhase("result");
+      await vi.advanceTimersByTimeAsync(2);
+      expectSilent(["🛠️ Exec: still running"]);
+      await params?.onToolStreamBoundary?.();
+      await vi.advanceTimersByTimeAsync(2);
+      for (const output of [summaries(), globalSummaries, texts()]) {
+        expect(output).toContain(offText);
+      }
+      expect(toolResults.at(-1)?.channelData?.openclawProgressKind).toBe("fast-mode-auto");
 
-    const resultPromise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-      runId: "run-fast-auto-single-off",
-      fastMode: "auto",
-      fastModeAutoOnSeconds: 30,
-      onAgentEvent: (event) => {
-        events.push(event);
-      },
-      onToolResult: (payload) => {
-        toolResults.push(payload);
-      },
-    });
+      await vi.advanceTimersByTimeAsync(14_000);
+      await toolPhase("result");
+      await params?.onToolStreamBoundary?.();
+      await params?.onToolResult?.({ text: "🛠️ Exec: later tool summary" });
+      complete();
+      await run;
 
-    await vi.advanceTimersByTimeAsync(0);
-    await attemptStarted.promise;
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(31_000);
-    await attemptParams?.onAgentEvent?.({
-      stream: "tool",
-      data: { phase: "result", name: "exec" },
-    });
-    await attemptParams?.onToolStreamBoundary?.();
-
-    await vi.advanceTimersByTimeAsync(14_000);
-    await attemptParams?.onAgentEvent?.({
-      stream: "tool",
-      data: { phase: "result", name: "exec" },
-    });
-    await attemptParams?.onToolStreamBoundary?.();
-    await attemptParams?.onToolResult?.({ text: "🛠️ Exec: later tool summary" });
-
-    completeAttempt?.();
-    await resultPromise;
-
-    const autoOffEvents = events
-      .map((event) => event.data?.summary)
-      .filter((summary) => typeof summary === "string" && summary.includes("Fast: auto-off"));
-    const autoOffToolResults = toolResults
-      .map((payload) => payload.text)
-      .filter((text) => typeof text === "string" && text.includes("Fast: auto-off"));
-
-    expect(autoOffEvents).toEqual(["💨Fast: auto-off(31s>=30s)"]);
-    expect(autoOffToolResults).toEqual(["💨Fast: auto-off(31s>=30s)"]);
-    expect(attemptParams?.fastModeAutoProgressState).toMatchObject({
-      offAnnounced: true,
-      resetAnnounced: true,
-    });
-  });
-
-  it.each(["agent-event", "tool-result"] as const)(
-    "keeps successful runs when fast auto-off %s delivery fails",
-    async (failureTarget) => {
-      vi.useFakeTimers();
-
-      const events: Array<{
-        data?: { summary?: unknown };
-      }> = [];
-      const toolResults: Array<{
-        text?: string;
-        channelData?: Record<string, unknown>;
-      }> = [];
-      let attemptParams: FastModeAttemptParams | undefined;
-      let completeAttempt: (() => void) | undefined;
-      const attemptDone = new Promise<EmbeddedRunAttemptResult>((resolve) => {
-        completeAttempt = () => {
-          resolve(successAttempt("ollama", "glm-5.1:cloud"));
-        };
-      });
-      const attemptStarted = createDeferred();
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        attemptParams = params as FastModeAttemptParams;
-        resolveAttemptFastMode(params);
-        attemptStarted.resolve();
-        return attemptDone;
-      });
-
-      const resultPromise = runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "ollama",
-        model: "glm-5.1:cloud",
-        runId: `run-fast-auto-off-${failureTarget}`,
-        fastMode: "auto",
-        timeoutMs: 120_000,
-        onAgentEvent: (event) => {
-          events.push(event);
-          const summary = event.data?.summary;
-          if (
-            failureTarget === "agent-event" &&
-            typeof summary === "string" &&
-            summary.startsWith("💨Fast: auto-off")
-          ) {
-            throw new Error("auto-off event delivery failed");
-          }
-        },
-        onToolResult: (payload) => {
-          toolResults.push(payload);
-          if (failureTarget === "tool-result" && payload.text?.startsWith("💨Fast: auto-off")) {
-            throw new Error("auto-off tool delivery failed");
-          }
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(0);
-      await attemptStarted.promise;
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(61_000);
-      await attemptParams?.onAgentEvent?.({
-        stream: "tool",
-        data: { phase: "result", name: "exec" },
-      });
-      await attemptParams?.onToolStreamBoundary?.();
-
-      completeAttempt?.();
-      await expect(resultPromise).resolves.toBeTruthy();
-
-      expect(events.map((event) => event.data?.summary).filter(Boolean)).toContainEqual(
-        expect.stringMatching(/^💨Fast: auto-off\(/u),
-      );
-      if (failureTarget === "tool-result") {
-        expect(toolResults.map((payload) => payload.text)).toContainEqual(
-          expect.stringMatching(/^💨Fast: auto-off\(/u),
-        );
+      const autoOff = (text: unknown) =>
+        typeof text === "string" && text.includes("Fast: auto-off");
+      expect(summaries().filter(autoOff)).toEqual([offText]);
+      expect(texts().filter(autoOff)).toEqual([offText]);
+      for (const output of [summaries(), texts(), globalSummaries]) {
+        expect(output).toContain("💨Fast: auto-on");
       }
     },
   );
 
   it.each(["agent-event", "tool-result"] as const)(
-    "keeps successful runs when fast auto reset %s delivery fails",
+    "keeps successful runs when fast auto-off %s delivery fails",
     async (failureTarget) => {
-      vi.useFakeTimers();
-
-      const events: Array<{
-        data?: { summary?: unknown };
-      }> = [];
-      const toolResults: Array<{
-        text?: string;
-        channelData?: Record<string, unknown>;
-      }> = [];
-      let attemptParams: FastModeAttemptParams | undefined;
-      let completeAttempt: (() => void) | undefined;
-      const attemptDone = new Promise<EmbeddedRunAttemptResult>((resolve) => {
-        completeAttempt = () => {
-          resolve(successAttempt("ollama", "glm-5.1:cloud"));
-        };
-      });
-      const attemptStarted = createDeferred();
-      mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        attemptParams = params as FastModeAttemptParams;
-        resolveAttemptFastMode(params);
-        attemptStarted.resolve();
-        return attemptDone;
-      });
-
-      const resultPromise = runEmbeddedAgent({
-        ...overflowBaseRunParams,
-        provider: "ollama",
-        model: "glm-5.1:cloud",
-        runId: `run-fast-auto-reset-${failureTarget}`,
-        fastMode: "auto",
+      const rejectProgress = (target: typeof failureTarget, summary: unknown) => {
+        if (
+          failureTarget === target &&
+          typeof summary === "string" &&
+          summary.startsWith("💨Fast: auto-off")
+        ) {
+          throw new Error("auto-off delivery failed");
+        }
+      };
+      await using attempt = await startFastAttempt({
+        runId: `run-fast-auto-off-${failureTarget}`,
+        fastModeAutoOnSeconds: undefined,
         timeoutMs: 120_000,
-        onAgentEvent: (event) => {
-          events.push(event);
-          if (failureTarget === "agent-event" && event.data?.summary === "💨Fast: auto-on") {
-            throw new Error("reset event delivery failed");
-          }
-        },
-        onToolResult: (payload) => {
-          toolResults.push(payload);
-          if (failureTarget === "tool-result" && payload.text === "💨Fast: auto-on") {
-            throw new Error("reset tool delivery failed");
-          }
-        },
+        onAgentEvent: (event) => rejectProgress("agent-event", event.data?.summary),
+        onToolResult: (payload) => rejectProgress("tool-result", payload.text),
       });
-
-      await vi.advanceTimersByTimeAsync(0);
-      await attemptStarted.promise;
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      const { run, complete, summaries, texts, params } = attempt;
       await vi.advanceTimersByTimeAsync(61_000);
-      await attemptParams?.onAgentEvent?.({
+      await params?.onAgentEvent?.({
         stream: "tool",
         data: { phase: "result", name: "exec" },
       });
-      await attemptParams?.onToolStreamBoundary?.();
+      await params?.onToolStreamBoundary?.();
 
-      expect(events.map((event) => event.data?.summary).filter(Boolean)).toContainEqual(
-        expect.stringMatching(/^💨Fast: auto-off\(/u),
-      );
+      complete();
+      await expect(run).resolves.toBeTruthy();
 
-      completeAttempt?.();
-      await expect(resultPromise).resolves.toBeTruthy();
-
-      expect(events.map((event) => event.data?.summary)).toContain("💨Fast: auto-on");
+      expect(summaries()).toContainEqual(expect.stringMatching(/^💨Fast: auto-off\(/u));
       if (failureTarget === "tool-result") {
-        expect(toolResults.map((payload) => payload.text)).toContain("💨Fast: auto-on");
+        expect(texts()).toContainEqual(expect.stringMatching(/^💨Fast: auto-off\(/u));
       }
     },
   );

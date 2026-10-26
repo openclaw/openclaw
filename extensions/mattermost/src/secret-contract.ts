@@ -1,41 +1,29 @@
-// Mattermost plugin module implements secret contract behavior.
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-helpers";
 import {
   collectSimpleChannelFieldAssignments,
-  createChannelSecretTargetRegistryEntries,
-  getChannelSurface,
-  type ResolverContext,
-  type SecretDefaults,
+  createChannelSecretContract,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+export const channelSecrets = createChannelSecretContract({
   channelKey: "mattermost",
   account: ["botToken"],
   channel: ["botToken"],
+  // Matches account listing: a root baseUrl plus a root or environment botToken keeps the
+  // implicit default account, so the root ref has to be collected for that account too.
+  hasImplicitDefaultAccount: ({ channel, context }) =>
+    Boolean(
+      typeof channel.baseUrl === "string" &&
+      channel.baseUrl.trim() &&
+      (hasConfiguredAccountValue(channel.botToken) || context.env.MATTERMOST_BOT_TOKEN?.trim()),
+    ),
+  collect(params) {
+    collectSimpleChannelFieldAssignments({
+      ...params,
+      field: "botToken",
+      topInactiveReason: "no enabled account inherits this top-level Mattermost botToken.",
+      accountInactiveReason: "Mattermost account is disabled.",
+    });
+  },
 });
 
-export function collectRuntimeConfigAssignments(params: {
-  config: { channels?: Record<string, unknown> };
-  defaults?: SecretDefaults;
-  context: ResolverContext;
-}): void {
-  const resolved = getChannelSurface(params.config, "mattermost");
-  if (!resolved) {
-    return;
-  }
-  const { channel: mattermost, surface } = resolved;
-  collectSimpleChannelFieldAssignments({
-    channelKey: "mattermost",
-    field: "botToken",
-    channel: mattermost,
-    surface,
-    defaults: params.defaults,
-    context: params.context,
-    topInactiveReason: "no enabled account inherits this top-level Mattermost botToken.",
-    accountInactiveReason: "Mattermost account is disabled.",
-  });
-}
-
-export const channelSecrets = {
-  secretTargetRegistryEntries,
-  collectRuntimeConfigAssignments,
-};
+export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;

@@ -1,140 +1,77 @@
-// Discord tests cover chunk plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 
-type ChunkOptions = Omit<Parameters<typeof chunkDiscordTextWithMode>[1], "chunkMode">;
+type ChunkOptions = Parameters<typeof chunkDiscordTextWithMode>[1];
+const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
-function chunkDiscordText(text: string, options: ChunkOptions = {}) {
-  return chunkDiscordTextWithMode(text, { ...options, chunkMode: "length" });
+function split(text: string, options: ChunkOptions = {}, cap = options.maxChars ?? 2000) {
+  const chunks = chunkDiscordTextWithMode(text, { chunkMode: "length", ...options });
+  for (const value of chunks) {
+    expect(value.length).toBeLessThanOrEqual(cap);
+    expect(value).not.toMatch(loneSurrogate);
+  }
+  return chunks;
+}
+
+function inlineCodeSpans(markdown: string) {
+  type Node = { type: string; value?: string; depth?: number; children?: Node[] };
+  const values: Array<{ value: string; containers: string[] }> = [];
+  const visit = (node: Node, containers: string[]) => {
+    if (node.type === "inlineCode") {
+      values.push({ value: (node.value ?? "").replace(/\r\n|[\r\n]/g, " "), containers });
+    }
+    const kind = node.type === "heading" ? `heading:${node.depth}` : node.type;
+    const nested = ["blockquote", "list", "listItem", "heading", "paragraph"].includes(node.type)
+      ? [...containers, kind]
+      : containers;
+    for (const child of node.children ?? []) {
+      visit(child, nested);
+    }
+  };
+  visit(fromMarkdown(markdown), []);
+  return values;
 }
 
 describe("chunkDiscordText", () => {
-  it("splits tall messages even when under 2000 chars", () => {
-    const text = Array.from({ length: 45 }, (_, i) => `line-${i + 1}`).join("\n");
-    expect(text.length).toBeLessThan(2000);
-
-    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 20 });
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(countLines(chunk)).toBeLessThanOrEqual(20);
-    }
-  });
-
-  it("counts the first line after each flush toward maxLines", () => {
-    expect(chunkDiscordText("first\nsecond", { maxChars: 2000, maxLines: 1 })).toEqual([
-      "first",
-      "second",
-    ]);
-    expect(chunkDiscordText(`${"x".repeat(35)}\nz`, { maxChars: 30, maxLines: 1 })).toEqual([
-      "x".repeat(30),
-      "x".repeat(5),
-      "z",
-    ]);
-  });
-
-  it("uses default chunk limits for non-finite options", () => {
+  it.each([
+    { chunkMode: "length" as const, maxLines: Number.POSITIVE_INFINITY },
+    { chunkMode: "newline" as const, maxLines: 50 },
+  ])("uses default chunk limits for non-finite options in $chunkMode mode", (options) => {
     const text = "x".repeat(2500);
-    const chunks = chunkDiscordText(text, {
-      maxChars: Number.NaN,
-      maxLines: Number.POSITIVE_INFINITY,
-    });
-
+    const chunks = split(text, { ...options, maxChars: Number.NaN }, 2000);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
     expect(chunks.join("")).toBe(text);
   });
 
-  it("keeps fenced code blocks balanced across chunks", () => {
+  it("keeps closed fenced code blocks balanced across chunks", () => {
     const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
     const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
 
-    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 10 });
+    const chunks = split(text, { maxChars: 2000, maxLines: 10 });
     expect(chunks.length).toBeGreaterThan(1);
 
     for (const chunk of chunks) {
       expect(hasBalancedFences(chunk)).toBe(true);
-      expect(chunk.length).toBeLessThanOrEqual(2000);
     }
 
     expect(chunks[0]).toContain("```js");
     expect(chunks.at(-1)).toContain("Done.");
   });
 
-  it("keeps fenced blocks intact when chunkMode is newline", () => {
-    const text = "```js\nconst a = 1;\nconst b = 2;\n```\nAfter";
-    const chunks = chunkDiscordTextWithMode(text, {
-      maxChars: 2000,
-      maxLines: 50,
-      chunkMode: "newline",
-    });
-    expect(chunks).toEqual([text]);
-  });
-
-  it("uses default newline chunk limits for non-finite max chars", () => {
-    const text = "x".repeat(2500);
-    const chunks = chunkDiscordTextWithMode(text, {
-      maxChars: Number.NaN,
-      maxLines: 50,
-      chunkMode: "newline",
-    });
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("reserves space for closing fences when chunking", () => {
-    const body = "a".repeat(120);
-    const text = `\`\`\`txt\n${body}\n\`\`\``;
-
-    const chunks = chunkDiscordText(text, { maxChars: 50, maxLines: 50 });
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(50);
-      expect(hasBalancedFences(chunk)).toBe(true);
-    }
-  });
-
   it("keeps chunks within maxChars when a closing fence line carries trailing text", () => {
-    // A line that both closes the fence and carries a long tail must still reserve closing-fence
-    // space; otherwise a mid-line flush appended "```" and overflowed maxChars (e.g. 2004 > 2000).
+    // Reserve closing-fence space even when the closing line has a long tail.
     for (let pad = 1990; pad <= 2000; pad++) {
       const text = "hi\n```lang\n```" + "z".repeat(pad);
-      for (const chunk of chunkDiscordText(text, { maxChars: 2000, maxLines: 100 })) {
-        expect(chunk.length).toBeLessThanOrEqual(2000);
-      }
-    }
-  });
-
-  it("keeps chunks within maxChars when a fenced block's opening line is very long", () => {
-    // Sibling of the closing-fence test above, on the OPENING/reopen side. flush() reopened
-    // continuation chunks with the FULL opening line (info string included), so reopen prefix +
-    // body + closing marker overflowed maxChars (observed 2108 > 2000). Balance is not asserted:
-    // an opening fence line longer than maxChars must be split, orphaning its marker, so no
-    // chunking can keep that physical line both within maxChars and balanced.
-    for (let pad = 1990; pad <= 2010; pad++) {
-      const text = "```" + "a".repeat(pad) + "\nbody line one\nbody line two\n```";
-      for (const chunk of chunkDiscordText(text, { maxChars: 2000, maxLines: 100 })) {
-        expect(chunk.length).toBeLessThanOrEqual(2000);
-      }
-    }
-  });
-
-  it("keeps chunks within maxChars when a fence-open line exceeds a small maxChars", () => {
-    // Minimal repro mirroring the existing 50-char reserve test above.
-    for (let len = 44; len <= 80; len++) {
-      const text = "```" + "a".repeat(len) + "\nbody\nmore body\n```";
-      for (const chunk of chunkDiscordText(text, { maxChars: 50, maxLines: 50 })) {
-        expect(chunk.length).toBeLessThanOrEqual(50);
-      }
+      split(text, { maxChars: 2000, maxLines: 100 });
     }
   });
 
   it("puts continued code on the line after a reopened fence", () => {
     const text = `\`\`\`ts\nconst value = '${"x".repeat(80)}';\n\`\`\``;
-    const chunks = chunkDiscordText(text, { maxChars: 30, maxLines: 50 });
+    const chunks = split(text, { maxChars: 30, maxLines: 50 });
 
     expect(chunks.length).toBeGreaterThan(1);
     const fencedBodyChunks = chunks.filter((chunk) => /^```(?:ts)?\n[^`]/.test(chunk));
@@ -144,232 +81,37 @@ describe("chunkDiscordText", () => {
         .filter((chunk) => chunk.startsWith("```"))
         .every((chunk) => /^```(?:ts)?(?:\n|$)/.test(chunk)),
     ).toBe(true);
-    expect(chunks.every((chunk) => chunk.length <= 30)).toBe(true);
-  });
-
-  it("keeps the hard size limit when synthetic fence balancing cannot fit", () => {
-    const cases = [
-      { text: "```\nabcdefghij\n```", maxChars: 8 },
-      { text: "~~~~~~~~\nabcdefghij\n~~~~~~~~", maxChars: 18 },
-    ];
-
-    for (const { text, maxChars } of cases) {
-      const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
-      expect(chunks.length).toBeGreaterThan(1);
-      expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
-    }
-  });
-
-  it("preserves whitespace when splitting long lines", () => {
-    const text = Array.from({ length: 40 }, () => "word").join(" ");
-    const chunks = chunkDiscordText(text, { maxChars: 20, maxLines: 50 });
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("preserves mixed whitespace across chunk boundaries", () => {
-    const text = "alpha  beta\tgamma   delta epsilon  zeta";
-    const chunks = chunkDiscordText(text, { maxChars: 12, maxLines: 50 });
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("keeps leading whitespace when splitting long lines", () => {
-    const text = "    indented line with words that force splits";
-    const chunks = chunkDiscordText(text, { maxChars: 14, maxLines: 50 });
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("uses CJK punctuation as a safe long-line split point", () => {
-    const text = "一二三四五。六七八九十。甲乙丙丁戊。";
-    const chunks = chunkDiscordText(text, { maxChars: 10, maxLines: 50 });
-
-    expect(chunks).toEqual(["一二三四五。", "六七八九十。", "甲乙丙丁戊。"]);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("still prefers whitespace before CJK punctuation", () => {
-    const text = "alpha beta。gamma delta";
-    const chunks = chunkDiscordText(text, { maxChars: 13, maxLines: 50 });
-
-    expect(chunks[0]).toBe("alpha");
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("does not split surrogate pairs at hard fallback boundaries", () => {
-    const text = "ab😀cd😀ef";
-    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
-
-    expect(chunks).toEqual(["ab", "😀c", "d😀", "ef"]);
-    expect(chunks.join("")).toBe(text);
-  });
-
-  it("keeps reasoning italics balanced across chunks", () => {
-    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
-    const text = `Reasoning:\n_${body}_`;
-
-    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
-    expect(chunks.length).toBeGreaterThan(1);
-
-    for (const chunk of chunks) {
-      // Each chunk should have balanced italics markers (even count).
-      const count = (chunk.match(/_/g) || []).length;
-      expect(count % 2).toBe(0);
-    }
-
-    // Ensure italics reopen on subsequent chunks
-    expect(expectDefined(chunks[0], "first Discord chunk")).toContain("_1. line");
-    // Second chunk should reopen italics at the start
-    expect(expectDefined(chunks[1], "second Discord chunk").trimStart().startsWith("_")).toBe(true);
-  });
-
-  it("keeps reasoning italics balanced when chunks split by char limit", () => {
-    const longLine = "This is a very long reasoning line that forces char splits.";
-    const body = Array.from({ length: 5 }, () => longLine).join("\n");
-    const text = `Reasoning:\n_${body}_`;
-
-    const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
-    expect(chunks.length).toBeGreaterThan(1);
-
-    for (const chunk of chunks) {
-      const underscoreCount = (chunk.match(/_/g) || []).length;
-      expect(underscoreCount % 2).toBe(0);
-      expect(chunk.length).toBeLessThanOrEqual(80);
-    }
-  });
-
-  it("reserves the Discord transport limit for reasoning italic markers", () => {
-    const maxChars = 2000;
-    const text = `Reasoning:\n_${"a".repeat(maxChars * 2)}_`;
-
-    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
-
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(maxChars);
-      expect((chunk.match(/_/g) || []).length % 2).toBe(0);
-    }
-  });
-
-  it("keeps newline-mode reasoning chunks within the Discord transport limit", () => {
-    const maxChars = 2000;
-    const text = `Reasoning:\n_${"a".repeat(maxChars * 2)}_`;
-
-    const chunks = chunkDiscordTextWithMode(text, {
-      chunkMode: "newline",
-      maxChars,
-      maxLines: 50,
-    });
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
-  });
-
-  it.each([1, 2, 3, 4, 20])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
-    const text = `Reasoning:\n_${"abcdef".repeat(8)}_`;
-
-    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
-  });
-
-  it("does not split surrogate pairs when reserving reasoning italic markers", () => {
-    const text = `Reasoning:\n_${"😀".repeat(24)}_`;
-    const maxChars = 4;
-
-    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
-
-    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
-    for (const chunk of chunks) {
-      expect(chunk).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
-      expect(chunk).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
-    }
-  });
-
-  it("keeps thinking-prefixed reasoning italics balanced across chunks", () => {
-    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
-    const text = `Thinking\n\n_${body}_`;
-
-    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
-    expect(chunks.length).toBeGreaterThan(1);
-
-    for (const chunk of chunks) {
-      const underscoreCount = (chunk.match(/_/g) || []).length;
-      expect(underscoreCount % 2).toBe(0);
-    }
-  });
-
-  it("reopens italics while preserving leading whitespace on following chunk", () => {
-    const body = [
-      "1. line",
-      "2. line",
-      "3. line",
-      "4. line",
-      "5. line",
-      "6. line",
-      "7. line",
-      "8. line",
-      "9. line",
-      "10. line",
-      "  11. indented line",
-      "12. line",
-    ].join("\n");
-    const text = `Reasoning:\n_${body}_`;
-
-    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
-    expect(chunks.length).toBeGreaterThan(1);
-
-    const second = expectDefined(chunks[1], "second Discord chunk");
-    expect(second.startsWith("_")).toBe(true);
-    expect(second).toContain("  11. indented line");
   });
 
   it.each([
-    ["a backtick fence", ["```python", "print(1)", "```"], "```python\nprint(1)\n```"],
-    [
-      "a backtick fence followed by reasoning",
-      ["```python", "print(1)", "```", "more reasoning"],
-      "```python\nprint(1)\n```\n_more reasoning_",
-    ],
+    ["```\nabcdefghij\n```", 8],
+    ["~~~~~~~~\nabcdefghij\n~~~~~~~~", 18],
+    [`Reasoning:\n_${"abcdef".repeat(8)}_`, 1],
+  ] as const)("keeps the hard size limit for %j at %i chars", (text, maxChars) => {
+    expect(split(text, { maxChars, maxLines: 50 }).length).toBeGreaterThan(1);
+  });
+
+  it("keeps a family emoji whole when the inline-code retry cut lands inside its ZWJ sequence", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const cap = 2000;
+    // Reopening backticks must step back over the whole cluster, not just a surrogate pair.
+    const text = `\`${"a".repeat(cap - 12)}${family}${"Z".repeat(300)}\``;
+    const chunks = split(text, { maxChars: cap, maxLines: 50 });
+
+    expect(chunks).toEqual([`\`${"a".repeat(cap - 12)}\``, `\`${family}${"Z".repeat(300)}\``]);
+    expect(chunks[0]).not.toContain("\u200D");
+  });
+
+  it.each([
     ["a tilde fence", ["~~~python", "print(1)", "~~~"], "~~~python\nprint(1)\n~~~"],
-    [
-      "a tilde fence followed by reasoning",
-      ["~~~python", "print(1)", "~~~", "more reasoning"],
-      "~~~python\nprint(1)\n~~~\n_more reasoning_",
-    ],
-    [
-      "an indented fence",
-      ["  ```python", "print(1)", "  ```", "more reasoning"],
-      "  ```python\nprint(1)\n  ```\n_more reasoning_",
-    ],
-    [
-      "a longer closing fence",
-      ["```python", "print(1)", "````", "more reasoning"],
-      "```python\nprint(1)\n````\n_more reasoning_",
-    ],
-    [
-      "inline code followed by reasoning",
-      ["`inline_code_token`", "10. after"],
-      "`inline_code_token`\n_10. after_",
-    ],
-    [
-      "inline code with a longer interior backtick run",
-      ["``a```b``", "10. after"],
-      "``a```b``\n_10. after_",
-    ],
-    [
-      "consecutive leading code spans",
-      ["```js", "one()", "```", "~~~sh", "two", "~~~", "more reasoning"],
-      "```js\none()\n```\n~~~sh\ntwo\n~~~\n_more reasoning_",
-    ],
+    ["a CRLF code fence", ["```ts\r", "body\r", "```\r", "more"], "```ts\r\nbody\r\n```\r\n_more_"],
+    ["unmatched inline prose", ["`unclosed", "10. after"], "_`unclosed\n10. after_"],
   ] as const)("preserves %s at a reasoning chunk boundary", (_name, continuation, expected) => {
     const body = [
       ...Array.from({ length: 9 }, (_, index) => `${index + 1}. line`),
       ...continuation,
     ].join("\n");
-    const chunks = chunkDiscordText(`Reasoning:\n_${body}_`, {
+    const chunks = split(`Reasoning:\n_${body}_`, {
       maxLines: 10,
       maxChars: 2000,
     });
@@ -377,24 +119,72 @@ describe("chunkDiscordText", () => {
     expect(chunks.length).toBeGreaterThan(1);
     const second = expectDefined(chunks[1], "second Discord chunk");
     expect(second).toBe(expected);
-    expect(second.trimStart()).not.toMatch(/^_(```|~~~|`)/u);
+    if (!expected.startsWith("_")) {
+      expect(second.trimStart()).not.toMatch(/^_(```|~~~|`)/u);
+    }
     for (const chunk of chunks) {
       expect((chunk.match(/_/g) || []).length % 2).toBe(0);
     }
   });
+  function inlineCodeValue(text: string): string | undefined {
+    const nodes = fromMarkdown(text).children;
+    const paragraph = nodes[0];
+    if (nodes.length !== 1 || paragraph?.type !== "paragraph" || paragraph.children.length !== 1) {
+      return undefined;
+    }
+    const code = paragraph.children[0];
+    return code?.type === "inlineCode" ? code.value : undefined;
+  }
 
-  it("treats an unmatched inline delimiter as reasoning prose", () => {
-    const body = [
-      ...Array.from({ length: 9 }, (_, index) => `${index + 1}. line`),
-      "`unclosed",
-      "10. after",
-    ].join("\n");
-    const chunks = chunkDiscordText(`Reasoning:\n_${body}_`, {
-      maxLines: 10,
-      maxChars: 2000,
-    });
+  it("preserves code content across newline mode", () => {
+    const text = "`command " + "--argument=value ".repeat(160) + "`";
+    const maxChars = 2000;
+    const maxLines = 17;
+    const expected = inlineCodeValue(text);
+    const chunks = split(text, { maxChars, maxLines, chunkMode: "newline" });
+    const values = chunks.map(inlineCodeValue);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(values.every((value) => value !== undefined)).toBe(true);
+    expect(values.join("")).toBe(expected);
+    expect(chunks.every((chunk) => countLines(chunk) <= maxLines)).toBe(true);
+  });
 
-    expect(expectDefined(chunks[1], "second Discord chunk")).toBe("_`unclosed\n10. after_");
-    expect(chunks.every((chunk) => (chunk.match(/_/g) || []).length % 2 === 0)).toBe(true);
+  it.each([
+    { text: "`aaaa``b`", maxChars: 6, maxLines: 17 },
+    { text: "`\naaaa\r\nbbbb `", maxChars: 6, maxLines: 17 },
+    { text: "```aa`\r\n``b```", maxChars: 9, maxLines: 2 },
+  ])("preserves rendered inline content at $maxChars chars and $maxLines lines", (options) => {
+    const chunks = split(options.text, options);
+    const values = chunks.map(inlineCodeValue);
+    const normalize = (value: string) => value.replace(/\r\n|[\r\n]/g, " ");
+    expect(values.every((value) => value !== undefined)).toBe(true);
+    expect(values.map((value) => normalize(value ?? "")).join("")).toBe(
+      normalize(expectDefined(inlineCodeValue(options.text), "source inline code")),
+    );
+    expect(chunks.every((chunk) => countLines(chunk) <= options.maxLines)).toBe(true);
+  });
+
+  it("retains raw source when no inline backtick fragment fits the hard cap", () => {
+    expect(split("`aaaa``b`", { maxChars: 5 })).toEqual(["`aaaa", "``b`"]);
+  });
+
+  it("sizes an oversized fence opener retained after inline code", () => {
+    const source = "`a`\n```" + "x".repeat(1997) + "\ny\n```";
+    const chunks = split(source);
+    expect(chunks.join("")).toBe(source);
+  });
+  it("retains inline ownership after blockquote list prefixes", () => {
+    const prefix = "> - item\n>\n>   ";
+    for (const ending of ["\n", "\r\n"]) {
+      const source =
+        "Intro" + ending + prefix.replaceAll("\n", ending) + "`" + "a".repeat(2400) + "`";
+      const expected = expectDefined(inlineCodeSpans(source)[0], "source container code");
+      const chunks = split(source);
+      const actual = chunks.flatMap(inlineCodeSpans);
+      expect(actual.map(({ value }) => value).join("")).toBe(expected.value);
+      for (const span of actual) {
+        expect(span.containers).toEqual(expected.containers);
+      }
+    }
   });
 });

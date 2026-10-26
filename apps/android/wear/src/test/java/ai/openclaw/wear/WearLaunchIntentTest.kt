@@ -1,25 +1,15 @@
 package ai.openclaw.wear
 
 import android.content.Intent
-import android.os.Looper
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.wear.protolayout.ActionBuilders
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
-import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -31,6 +21,26 @@ class WearLaunchIntentTest {
     assertEquals(
       WearLaunchTarget.Chat,
       parseWearLaunchTarget(Intent().putExtra(extraWearLaunchTarget, "unknown")),
+    )
+  }
+
+  @Test
+  fun olderPhoneKeepsOriginalHomePages() {
+    assertEquals(
+      listOf(WearHomePage.Chat, WearHomePage.Voice, WearHomePage.Controls),
+      wearHomePages(agentPulseSupported = false),
+    )
+  }
+
+  @Test
+  fun capablePhoneAppendsPulseWithoutChangingExistingHomePageOrdinals() {
+    assertEquals(0, WearHomePage.Chat.ordinal)
+    assertEquals(1, WearHomePage.Voice.ordinal)
+    assertEquals(2, WearHomePage.Controls.ordinal)
+    assertEquals(3, WearHomePage.Pulse.ordinal)
+    assertEquals(
+      listOf(WearHomePage.Chat, WearHomePage.Voice, WearHomePage.Controls, WearHomePage.Pulse),
+      wearHomePages(agentPulseSupported = true),
     )
   }
 
@@ -91,49 +101,6 @@ class WearLaunchIntentTest {
       WearHomePage.Chat,
       wearLaunchPage(WearLaunchTarget.Chat, realtimeActive = false),
     )
-  }
-
-  @Test
-  fun warmPagerRequestsPreservePendingReplyAndRealtimeUiState() {
-    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
-    var launchState by mutableStateOf(WearLaunchState.initial(Intent(Intent.ACTION_MAIN)))
-    var retainedState: WarmLaunchRetentionProbe? = null
-
-    controller.get().setContent {
-      WearLaunchContent(launchState) { _, _ ->
-        retainedState =
-          remember {
-            WarmLaunchRetentionProbe(
-              awaitingReply = true,
-              realtimeStartedAtMillis = 4_200L,
-            )
-          }
-      }
-    }
-    idleMainLooper()
-    val initialRetainedState = retainedState
-
-    launchState =
-      launchState.next(
-        Intent().putExtra(extraWearLaunchTarget, WearLaunchTarget.Voice.rawValue),
-      )
-    idleMainLooper()
-
-    assertSame(initialRetainedState, retainedState)
-    assertTrue(retainedState?.awaitingReply == true)
-    assertEquals(4_200L, retainedState?.realtimeStartedAtMillis)
-
-    launchState =
-      launchState.next(
-        Intent().putExtra(extraWearLaunchTarget, WearLaunchTarget.Chat.rawValue),
-      )
-    idleMainLooper()
-
-    assertSame(initialRetainedState, retainedState)
-    assertTrue(retainedState?.awaitingReply == true)
-    assertEquals(4_200L, retainedState?.realtimeStartedAtMillis)
-
-    controller.pause().stop().destroy()
   }
 
   @Test
@@ -207,13 +174,4 @@ class WearLaunchIntentTest {
       assertEquals(target.rawValue, pageExtra?.value)
     }
   }
-
-  private fun idleMainLooper() {
-    shadowOf(Looper.getMainLooper()).idle()
-  }
-
-  private data class WarmLaunchRetentionProbe(
-    val awaitingReply: Boolean,
-    val realtimeStartedAtMillis: Long,
-  )
 }

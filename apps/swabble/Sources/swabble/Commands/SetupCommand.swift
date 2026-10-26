@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct SetupCommand: ParsableCommand {
+struct SetupCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "setup", abstract: "Write default config")
     }
@@ -13,7 +13,7 @@ struct SetupCommand: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
+        if let cfg = parsed.options["configPath"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

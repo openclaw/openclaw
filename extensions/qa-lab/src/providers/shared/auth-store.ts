@@ -1,87 +1,56 @@
-// Qa Lab plugin module implements auth store behavior.
 import path from "node:path";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
-  type AuthProfileStore,
+  loadAuthProfileStoreForRuntimeAsync,
+  type AuthProfileCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
-
-type QaAuthProfileCredential =
-  | {
-      type: "api_key";
-      provider: string;
-      key?: string;
-      keyRef?: QaSecretRef;
-      displayName?: string;
-    }
-  | {
-      type: "token";
-      provider: string;
-      token?: string;
-      tokenRef?: QaSecretRef;
-      expires?: number;
-    }
-  | {
-      type: "oauth";
-      provider: string;
-      access?: string;
-      refresh?: string;
-      expires?: number;
-      idToken?: string;
-      clientId?: string;
-      enterpriseUrl?: string;
-      projectId?: string;
-      accountId?: string;
-      chatgptPlanType?: string;
-      oauthRef?: QaLegacyOAuthRef;
-    };
-
-type QaSecretRef = {
-  source: "env" | "file" | "exec";
-  provider?: string;
-  id: string;
-};
-
-type QaLegacyOAuthRef = {
-  source: "openclaw-credentials";
-  provider: "openai";
-  id: string;
-};
-
-export function resolveQaAgentAuthDir(params: { stateDir: string; agentId: string }): string {
-  return path.join(params.stateDir, "agents", params.agentId, "agent");
-}
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 
 export async function writeQaAuthProfiles(params: {
-  agentDir: string;
-  profiles: Record<string, QaAuthProfileCredential>;
+  agentId: string;
+  profiles: Record<string, AuthProfileCredential>;
   replace?: boolean;
+  stateDir: string;
 }): Promise<void> {
-  const existing = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-    inheritedAuthDir: params.agentDir,
+  const agentDir = path.join(params.stateDir, "agents", params.agentId, "agent");
+  // Surface pending legacy-source errors before the locked updater, whose
+  // public failure contract is intentionally nullable.
+  await readQaAuthProfiles(agentDir);
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir,
+    stateDir: params.stateDir,
+    saveOptions: {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    },
+    updater: (store) => {
+      store.version = 1;
+      store.profiles = params.replace
+        ? { ...params.profiles }
+        : { ...store.profiles, ...params.profiles };
+      if (params.replace) {
+        delete store.order;
+        delete store.lastGood;
+        delete store.usageStats;
+      }
+      return true;
+    },
   });
-  const nextStore: AuthProfileStore = params.replace
-    ? { version: 1, profiles: params.profiles as AuthProfileStore["profiles"] }
-    : {
-        ...existing,
-        version: 1,
-        profiles: { ...existing.profiles, ...params.profiles } as AuthProfileStore["profiles"],
-      };
-  saveAuthProfileStore(nextStore, params.agentDir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
+  if (!updated) {
+    throw new Error("Failed to stage the isolated QA auth profile store.");
+  }
 }
 
-export function readQaAuthProfiles(agentDir: string): {
+export async function readQaAuthProfiles(agentDir: string): Promise<{
   version: number;
-  profiles: Record<string, QaAuthProfileCredential>;
-} {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-    inheritedAuthDir: agentDir,
-  });
+  profiles: Record<string, AuthProfileCredential>;
+}> {
+  const store = await loadAuthProfileStoreForRuntimeAsync(
+    agentDir,
+    { inheritedAuthDir: agentDir, readOnly: true, externalCli: { mode: "none" } },
+    { ...process.env, OPENCLAW_STATE_DIR: path.resolve(agentDir, "../../..") },
+  );
   return {
     version: store.version,
-    profiles: store.profiles as Record<string, QaAuthProfileCredential>,
+    profiles: store.profiles,
   };
 }

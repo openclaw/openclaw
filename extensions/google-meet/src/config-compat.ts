@@ -1,7 +1,6 @@
-// Google Meet helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  asNullableRecord as asRecord,
+  asNullableRecord,
   normalizeOptionalLowercaseString as normalizeProviderId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -11,16 +10,14 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
-
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {
-  const realtime = asRecord(value);
+  const realtime = asNullableRecord(value);
   if (!realtime || normalizeProviderId(realtime.provider) !== "google") {
     return false;
   }
-  return !hasOwn(realtime, "voiceProvider") || !hasOwn(realtime, "transcriptionProvider");
+  return (
+    !Object.hasOwn(realtime, "voiceProvider") || !Object.hasOwn(realtime, "transcriptionProvider")
+  );
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
@@ -32,48 +29,38 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
+export function normalizeCompatibilityConfig({ cfg: config }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
-} | null {
-  const rawEntry = asRecord(config.plugins?.entries?.["google-meet"]);
-  const rawPluginConfig = asRecord(rawEntry?.config);
-  const rawRealtime = asRecord(rawPluginConfig?.realtime);
+} {
+  const rawEntry = asNullableRecord(config.plugins?.entries?.["google-meet"]);
+  const rawPluginConfig = asNullableRecord(rawEntry?.config);
+  const rawRealtime = asNullableRecord(rawPluginConfig?.realtime);
   if (!rawRealtime || !hasLegacyGoogleRealtimeProvider(rawRealtime)) {
-    return null;
+    return { config, changes: [] };
   }
 
-  const nextConfig = structuredClone(config);
-  const nextPlugins = asRecord(nextConfig.plugins) ?? {};
-  nextConfig.plugins = nextPlugins;
-  const nextEntries = asRecord(nextPlugins.entries) ?? {};
-  nextPlugins.entries = nextEntries;
-  const nextEntry = asRecord(nextEntries["google-meet"]) ?? {};
-  nextEntries["google-meet"] = nextEntry;
-  const nextPluginConfig = asRecord(nextEntry.config) ?? {};
-  nextEntry.config = nextPluginConfig;
-  const nextRealtime = asRecord(nextPluginConfig.realtime) ?? {};
-  nextPluginConfig.realtime = nextRealtime;
-
-  nextRealtime.provider = "openai";
-  if (!hasOwn(nextRealtime, "transcriptionProvider")) {
+  const nextRealtime: Record<string, unknown> = { ...rawRealtime, provider: "openai" };
+  if (!Object.hasOwn(nextRealtime, "transcriptionProvider")) {
     nextRealtime.transcriptionProvider = "openai";
   }
-  if (!hasOwn(nextRealtime, "voiceProvider")) {
+  if (!Object.hasOwn(nextRealtime, "voiceProvider")) {
     nextRealtime.voiceProvider = "google";
   }
 
   return {
-    config: nextConfig,
+    config: {
+      ...config,
+      plugins: {
+        ...config.plugins,
+        entries: {
+          ...config.plugins?.entries,
+          "google-meet": { ...rawEntry, config: { ...rawPluginConfig, realtime: nextRealtime } },
+        },
+      },
+    },
     changes: [
       'Moved Google Meet legacy realtime.provider="google" intent to realtime.voiceProvider="google" and realtime.transcriptionProvider="openai".',
     ],
   };
-}
-
-export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
-  config: OpenClawConfig;
-  changes: string[];
-} {
-  return migrateGoogleMeetLegacyRealtimeProvider(cfg) ?? { config: cfg, changes: [] };
 }

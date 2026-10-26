@@ -1,85 +1,115 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { loadSessionEntry as loadInternalSessionEntry } from "../config/sessions/session-accessor.js";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadSessionEntry as loadInternalSessionEntry,
+  replaceSessionEntry as replaceInternalSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
   patchSessionEntry,
+  updateSessionStoreEntry,
   upsertSessionEntry,
   type SessionEntry,
 } from "./session-store-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-session-recovery-");
+const publicPendingProjectIsPrivate: "pendingProjectGitUrl" extends keyof SessionEntry
+  ? false
+  : true = true;
+const configPendingProjectIsPrivate: "pendingProjectGitUrl" extends keyof ConfigSessionEntry
+  ? false
+  : true = true;
+void publicPendingProjectIsPrivate;
+void configPendingProjectIsPrivate;
 
 describe("session-store-runtime recovery boundary", () => {
-  let tempDir: string;
-  let storePath: string;
-
+  let scope: { sessionKey: string; storePath: string };
+  const read = () => loadInternalSessionEntry(scope);
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-sdk-session-recovery-");
-    storePath = path.join(tempDir, "sessions.json");
+    scope = {
+      sessionKey: "agent:main:recovery",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
   });
 
   it("allows public recovery fields to change without an active core transaction", async () => {
-    const sessionKey = "agent:main:healthy-public-recovery";
     await upsertSessionEntry({
+      ...scope,
       agentId: "main",
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: "healthy-session",
-        updatedAt: 10,
-      },
+      entry: { sessionId: "healthy-session", updatedAt: 10 },
     });
 
     await patchSessionEntry({
-      sessionKey,
-      storePath,
+      ...scope,
       update: () => ({
         abortedLastRun: true,
         restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
       }),
     });
 
-    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+    expect(read()).toMatchObject({
       abortedLastRun: true,
       restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
       sessionId: "healthy-session",
     });
   });
 
-  it("rejects core recovery state from runtime-escaped creation inputs", async () => {
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "cycle-injected",
-      revision: 1,
-    };
-    const patchSessionKey = "agent:main:patch-created";
+  it("keeps pending remote-project recovery private across public session mutations", async () => {
+    const pendingProjectGitUrl = "https://github.com/openclaw/openclaw.git";
+    await replaceInternalSessionEntry(scope, {
+      pendingProjectGitUrl,
+      sessionId: "project-session",
+      updatedAt: 10,
+    });
+
+    expect(getSessionEntry(scope)).not.toHaveProperty("pendingProjectGitUrl");
+    expect(listSessionEntries(scope)[0]?.entry).not.toHaveProperty("pendingProjectGitUrl");
+
+    for (const [mutate, model] of [
+      [patchSessionEntry, "gpt-5.5"],
+      [updateSessionStoreEntry, "gpt-5.6"],
+    ] as const) {
+      await mutate({ ...scope, update: () => ({ model }) });
+      expect(read()).toMatchObject({ model, pendingProjectGitUrl });
+    }
+
+    await upsertSessionEntry({
+      entry: { sessionId: "project-session", updatedAt: 20 },
+      ...scope,
+    });
+    expect(read()?.pendingProjectGitUrl).toBe(pendingProjectGitUrl);
+
     await patchSessionEntry({
-      fallbackEntry: {
-        mainRestartRecovery,
-        sessionId: "patch-created",
-        updatedAt: 10,
-      } as unknown as SessionEntry,
-      sessionKey: patchSessionKey,
-      storePath,
+      replaceEntry: true,
+      ...scope,
+      update: () => ({ sessionId: "replacement-session", updatedAt: 30 }),
+    });
+    expect(read()).not.toHaveProperty("pendingProjectGitUrl");
+  });
+
+  it("rejects core recovery state from runtime-escaped creation inputs", async () => {
+    const injected = {
+      mainRestartRecovery: { chargedAttempts: 1, cycleId: "cycle-injected", revision: 1 },
+      pendingProjectGitUrl: "https://github.com/openclaw/injected.git",
+      sessionId: "created",
+      updatedAt: 10,
+    } as unknown as SessionEntry;
+    const expectPrivateFieldsRemoved = () => {
+      expect(read()).not.toHaveProperty("mainRestartRecovery");
+      expect(read()).not.toHaveProperty("pendingProjectGitUrl");
+    };
+    await patchSessionEntry({
+      ...scope,
+      fallbackEntry: injected,
       update: () => ({ updatedAt: 20 }),
     });
-    expect(loadInternalSessionEntry({ sessionKey: patchSessionKey, storePath })).not.toHaveProperty(
-      "mainRestartRecovery",
-    );
+    expectPrivateFieldsRemoved();
 
-    const upsertSessionKey = "agent:main:upsert-created";
-    await upsertSessionEntry({
-      entry: {
-        mainRestartRecovery,
-        sessionId: "upsert-created",
-        updatedAt: 10,
-      } as unknown as SessionEntry,
-      sessionKey: upsertSessionKey,
-      storePath,
-    });
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertSessionKey, storePath }),
-    ).not.toHaveProperty("mainRestartRecovery");
+    scope = { ...scope, sessionKey: "agent:main:upsert-created" };
+    await upsertSessionEntry({ ...scope, entry: injected });
+    expectPrivateFieldsRemoved();
   });
 });

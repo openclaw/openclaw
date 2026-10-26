@@ -1,32 +1,57 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
+  createStreamingDirectiveAccumulator,
+  prepareAgentRunTerminalReply,
+  type StreamingDirectiveAccumulator,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readCodexAsyncQuestions, type CodexAsyncQuestion } from "./async-questions.js";
+import {
+  createAssistantAsyncDelivery as buildAssistantAsyncDelivery,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
-  createAssistantMirrorMessage as buildAssistantMirrorMessage,
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
-import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
-import { extractRawAssistantText, readItemString, readString } from "./event-projector-values.js";
+import {
+  shouldAdvancePersistableAssistantBarrier,
+  shouldClearTerminalPresentationForNativeItem,
+} from "./event-projector-items.js";
+import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
+import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
+type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
 
 export class CodexAssistantProjection {
-  private readonly assistantTextByItem = new Map<string, string>();
+  readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  private readonly preparedStreams = new Map<
+    string,
+    { accumulator: StreamingDirectiveAccumulator; text: string }
+  >();
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
-  private latestCompletedItemId: string | undefined;
-  private latestCompletedTerminalAssistantItemId: string | undefined;
+  private readonly assistantDeliveryByItem = new Map<string, string>();
+  private readonly assistantQuestionsByItem = new Map<string, CodexAsyncQuestion[]>();
   private latestTerminalAssistantCandidateItemId: string | undefined;
   private latestTerminalAssistantCandidateSuperseded = false;
-  private latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
   private pendingRawTerminalAssistantEchoItemId: string | undefined;
-  private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
-  private readonly lastAnswerCandidateEventByItem = new Map<string, string>();
+  private readonly lastCommentaryProgressEventByItem = new Map<
+    string,
+    { phase: "update" | "end"; text: string }
+  >();
+  private readonly lastAnswerCandidateEventByItem = new Map<
+    string,
+    { status: AnswerCandidateStatus; text: string }
+  >();
   private visibleAnswerCandidateItemId: string | undefined;
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -36,59 +61,38 @@ export class CodexAssistantProjection {
   // would drop legitimate verbatim answers ("reply with exactly the command output").
   private readonly rawPromotedAssistantItemIds = new Set<string>();
   private assistantStarted = false;
-  private streamedPartialAssistantItemId: string | undefined;
-  private streamedPartialAssistantItemReplaceable = false;
+  private responseModel: string | undefined;
+  // Native handoffs retire earlier finals; terminal summaries contain only the last answer.
+  private persistableAssistantBarrier = 0;
+  // Stable partial answers survive native work, but not a completed transcript mirror.
+  private persistedAssistantBarrier = 0;
+  // A completed answer mirrored before a steer is already durable. Do not
+  // replay it as the enclosing turn's terminal answer if Codex emits no coda.
+  private persistedAssistantBoundary = false;
+  private readonly steeringSegments = new CodexSteeringAssistantSegments();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
     private readonly matchesToolProgressEcho: (text: string) => boolean,
     private readonly nextTranscriptTimestamp: () => number,
+    private readonly checkpointCommentary?: (
+      itemId: string,
+      entry: CodexTranscriptCheckpointEntry,
+    ) => void,
+    private readonly hasDeliveredFinalSourceReply?: () => boolean,
   ) {}
 
-  hasCompletedTerminalAssistantText(completedItemIds: ReadonlySet<string>): boolean {
-    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
-    if (!latestCompletedItemId) {
-      return false;
+  handleNotification(method: string, params: JsonObject): void {
+    if (method === "model/rerouted") {
+      this.responseModel = readString(params, "toModel") ?? this.responseModel;
     }
-    const finalItem = this.resolveFinalAssistantTextItem();
-    return (
-      this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem?.itemId === latestCompletedItemId &&
-      completedItemIds.has(latestCompletedItemId)
-    );
   }
 
-  getLatestTerminalAssistantCandidate(): { itemId: string; hasText: boolean } | undefined {
-    const itemId = this.latestTerminalAssistantCandidateItemId;
-    if (!itemId) {
-      return undefined;
-    }
-    const text = this.assistantTextByItem.get(itemId)?.trim();
-    return {
-      itemId,
-      hasText: Boolean(text && !this.isToolProgressEchoText(itemId, text)),
-    };
-  }
-
-  hasLatestTerminalAssistantCandidateText(): boolean {
-    return (
-      !this.latestTerminalAssistantCandidateSuperseded &&
-      this.getLatestTerminalAssistantCandidate()?.hasText === true
-    );
-  }
-
-  canReleaseLatestTerminalAssistantAfterToolHandoff(): boolean {
-    return (
-      this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
-      this.hasLatestTerminalAssistantCandidateText()
-    );
-  }
-
-  async handleAssistantDelta(params: JsonObject): Promise<void> {
+  async handleAssistantDelta(params: JsonObject, final = false): Promise<void> {
     const itemId = readString(params, "itemId") ?? "assistant";
     const delta = readString(params, "delta") ?? "";
-    if (!delta) {
+    if ((!delta && !final) || this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
@@ -96,134 +100,179 @@ export class CodexAssistantProjection {
     }
     // Deltas carry no phase; item/started has already recorded it.
     const isCommentary = this.isCommentaryAssistantItem(itemId);
-    if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
+    const isAsync = this.isAsyncAssistantItem(itemId);
+    const opensNewCandidate = delta && itemId !== this.latestTerminalAssistantCandidateItemId;
+    if (opensNewCandidate && !isCommentary && !isAsync) {
       this.markTerminalAssistantCandidateSupersededBy();
     }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
       await this.params.onAssistantMessageStart?.();
     }
+    if (this.hasDeliveredFinalSourceReply?.()) {
+      return;
+    }
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
-    if (isCommentary) {
-      this.emitCommentaryProgress({ itemId, text });
+    if (isAsync) {
       return;
     }
-    if (this.isFinalAnswerAssistantItem(itemId)) {
+    if (isCommentary) {
+      this.emitCommentaryProgress({ itemId, text, phase: "update" });
+      return;
+    }
+    const phase = this.assistantPhaseByItem.get(itemId);
+    const knownStableAnswer = phase === "partial_answer" || phase === "final_answer";
+    const { occurrenceId, replacement, replaceable } = this.steeringSegments.recordStream(
+      itemId,
+      knownStableAnswer,
+    );
+    let prepared = this.preparedStreams.get(itemId);
+    if (!prepared) {
+      prepared = { accumulator: createStreamingDirectiveAccumulator(), text: "" };
+      this.preparedStreams.set(itemId, prepared);
+    }
+    const preparedDelta = prepared.accumulator.consume(delta, { final })?.text ?? "";
+    prepared.text += preparedDelta;
+    if (phase === "final_answer") {
       this.emitAnswerCandidate(itemId, "candidate");
     }
-    const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
-    const replace =
-      this.streamedPartialAssistantItemId !== undefined &&
-      this.streamedPartialAssistantItemId !== itemId;
-    // Codex defines final_answer as terminal text. Replacement mode is for
-    // phase-unknown/provisional items; append-only consumers cannot retract bytes.
-    if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
-      this.streamedPartialAssistantItemReplaceable = true;
-    } else if (this.streamedPartialAssistantItemId === undefined) {
-      this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
+    if (!preparedDelta && !replacement) {
+      return;
     }
-    this.streamedPartialAssistantItemId = itemId;
-    const replaceable = this.streamedPartialAssistantItemReplaceable;
-    const replacement = replace && replaceable;
     const streamPayload = {
-      text,
-      delta: replacement ? "" : delta,
+      text: prepared.text,
+      delta: replacement ? "" : preparedDelta,
       ...(replacement ? { replace: true as const } : {}),
     };
     this.emitAgentEvent({
       stream: "assistant",
       data: {
+        itemId,
+        occurrenceId,
         ...streamPayload,
         ...(replaceable ? { replaceable: true as const } : {}),
       },
     });
     // Legacy channel preview callbacks are append-oriented and do not all
     // understand replacement snapshots.
-    if (knownFinalAnswer && !replaceable) {
+    if (knownStableAnswer && !replaceable) {
       await this.params.onPartialReply?.(streamPayload);
     }
   }
 
-  recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+  async recordItemStarted(
+    item: CodexThreadItem | undefined,
+    itemId: string | undefined,
+  ): Promise<void> {
+    if (item?.type === "agentMessage" && this.hasDeliveredFinalSourceReply?.()) {
+      return;
+    }
+    this.noteNativeWorkBarrier(item);
+    this.rememberAssistantPhase(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
+      !this.isNonTerminalAssistantItem(itemId) &&
       itemId !== this.pendingRawTerminalAssistantEchoItemId
     ) {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
-    this.rememberAssistantPhase(item);
     if (item?.type === "agentMessage" && itemId) {
       this.rememberAssistantItem(itemId);
     }
-    if (itemId && itemId !== this.latestTerminalAssistantCandidateItemId) {
+    if (
+      itemId &&
+      !this.isNonTerminalAssistantItem(itemId) &&
+      itemId !== this.latestTerminalAssistantCandidateItemId
+    ) {
       this.markTerminalAssistantCandidateSupersededBy(itemId, {
         preserveEarlierActiveItem: true,
       });
       if (this.latestTerminalAssistantCandidateSuperseded) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
       }
+    }
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      item.text &&
+      !this.assistantTextByItem.has(itemId)
+    ) {
+      // Codex may seed visible text in item/started before sending further deltas.
+      await this.handleAssistantDelta({ itemId, delta: item.text });
     }
   }
 
   recordItemCompleted(
     item: CodexThreadItem | undefined,
-    itemId: string | undefined,
-    activeItemIds: ReadonlySet<string>,
-  ): void {
-    if (
-      item?.type === "agentMessage" &&
-      itemId &&
-      itemId !== this.pendingRawTerminalAssistantEchoItemId
-    ) {
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    notification?: { itemId: string | undefined; activeItemIds: ReadonlySet<string> },
+  ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    if (item?.type === "agentMessage" && this.hasDeliveredFinalSourceReply?.()) {
+      return undefined;
     }
-    if (itemId) {
-      this.latestCompletedItemId = itemId;
+    this.adoptSteeringPrefixForCompletion(item);
+    if (item?.type === "agentMessage" && (!notification || notification.itemId)) {
+      this.steeringSegments.recordCompletion(notification?.itemId ?? item.id);
+    }
+    if (notification) {
+      this.noteNativeWorkBarrier(item);
     }
     this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
-      this.latestCompletedTerminalAssistantItemId = item.id;
-      this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
-      this.pendingRawTerminalAssistantEchoItemId = item.id;
-    } else if (itemId) {
-      this.markTerminalAssistantCandidateSupersededBy(itemId, {
-        preserveEarlierActiveItem: true,
-      });
-      if (this.latestTerminalAssistantCandidateSuperseded) {
+    if (notification) {
+      const { itemId, activeItemIds } = notification;
+      if (
+        item?.type === "agentMessage" &&
+        itemId &&
+        !this.isNonTerminalAssistantItem(itemId) &&
+        itemId !== this.pendingRawTerminalAssistantEchoItemId
+      ) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+      if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
+        this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
+        this.pendingRawTerminalAssistantEchoItemId = item.id;
+      } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
       }
     }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
-      this.assistantTextByItem.set(item.id, item.text);
-      if (item.text && this.isCommentaryAssistantItem(item.id)) {
-        this.emitCommentaryProgress({ itemId: item.id, text: item.text });
-        this.pendingRawCommentaryEchoes += 1;
-      } else if (item.text && this.isFinalAnswerAssistantItem(item.id)) {
-        this.emitAnswerCandidate(item.id, "candidate");
+      this.recordCompletedAssistantText(item.id, item.text);
+      if (notification) {
+        if (this.isCommentaryAssistantItem(item.id)) {
+          this.emitCommentaryProgress({ itemId: item.id, text: item.text, phase: "end" });
+          this.pendingRawCommentaryEchoes += 1;
+        } else if (
+          item.text &&
+          !this.isAsyncAssistantItem(item.id) &&
+          this.isFinalAnswerAssistantItem(item.id)
+        ) {
+          this.emitAnswerCandidate(item.id, "candidate");
+        }
       }
+      return this.createAsyncDelivery(item.id);
     }
+    return undefined;
   }
 
-  recordSnapshotItem(item: CodexThreadItem): void {
-    this.rememberAssistantPhase(item);
-    if (item.type === "agentMessage" && typeof item.text === "string") {
-      this.rememberAssistantItem(item.id);
-      this.assistantTextByItem.set(item.id, item.text);
-    }
-  }
-
-  handleRawResponseItemCompleted(item: JsonObject, activeItemIds: ReadonlySet<string>): void {
-    const role = readString(item, "role");
+  handleRawResponseItemCompleted(
+    item: JsonObject,
+    activeItemIds: ReadonlySet<string>,
+    text: string | undefined,
+  ): void {
     const phase = readString(item, "phase");
     const rawItemId = readString(item, "id");
     const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
     const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
     const isPendingTerminalAssistantEcho =
-      role === "assistant" &&
+      item.role === "assistant" &&
       phase !== "commentary" &&
       pendingTerminalAssistantEchoItemId !== undefined &&
       (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
@@ -231,26 +280,18 @@ export class CodexAssistantProjection {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
     if (!isPendingTerminalAssistantEcho) {
-      this.latestCompletedItemId = undefined;
       this.markTerminalAssistantCandidateSupersededBy(rawItemId);
     }
-    if (role !== "assistant") {
+    if (item.role !== "assistant" || this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
-    const text = extractRawAssistantText(item);
     if (isPendingTerminalAssistantEcho) {
-      const typedItemId = pendingTerminalAssistantEchoItemId;
       this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
+      // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
     if (
@@ -264,7 +305,6 @@ export class CodexAssistantProjection {
     }
     const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
     const isIdlessTerminalAssistantAfterCompletedWork =
-      candidateWasSupersededBeforeRaw &&
       rawItemId === undefined &&
       pendingTerminalAssistantEchoItemId === undefined &&
       activeItemIds.size === 0;
@@ -272,58 +312,129 @@ export class CodexAssistantProjection {
       text &&
       phase !== "commentary" &&
       candidateWasSupersededBeforeRaw &&
-      itemId !== this.streamedPartialAssistantItemId &&
+      itemId !== this.steeringSegments.streamedPartialAssistantItemId &&
       !isIdlessTerminalAssistantAfterCompletedWork
     ) {
       return;
     }
+    this.adoptSteeringPrefixForCompletion({ ...item, type: "agentMessage", id: itemId, text });
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
+    this.steeringSegments.recordCompletion(itemId);
     this.rememberAssistantItem(itemId);
-    this.assistantTextByItem.set(itemId, text);
+    this.recordCompletedAssistantText(itemId, text);
     // Empty raw finals prove an actual stop; retain that fact without publishing fake output.
     if (!text) {
       return;
     }
     this.rawPromotedAssistantItemIds.add(itemId);
     if (phase === "commentary") {
-      this.emitCommentaryProgress({ itemId, text });
+      this.emitCommentaryProgress({ itemId, text, phase: "end" });
     } else {
-      this.markLatestTerminalAssistantCandidate(itemId, activeItemIds, {
-        canReleaseAfterToolHandoff: isIdlessTerminalAssistantAfterCompletedWork,
-      });
+      this.markLatestTerminalAssistantCandidate(itemId, activeItemIds);
     }
   }
 
   collectAssistantTexts(): string[] {
-    const finalText = this.resolveFinalAssistantTextItem()?.text;
-    return finalText ? [finalText] : [];
+    const afterHandoff = this.collectPersistableAssistantTexts(this.persistableAssistantBarrier);
+    if (afterHandoff.length > 0 || this.persistedAssistantBoundary) {
+      return afterHandoff;
+    }
+    return this.collectPersistableAssistantTexts(0).slice(-1);
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
     return this.assistantItemOrder.flatMap((itemId) => {
-      if (!this.isCommentaryAssistantItem(itemId)) {
-        return [];
-      }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      const timestamp = this.assistantTimestampByItem.get(itemId);
-      if (!text || timestamp === undefined) {
-        return [];
-      }
-      return [
-        {
-          itemId,
-          message: buildAssistantCommentaryMessage(this.params, text, itemId, timestamp),
-        },
-      ];
+      const message = this.readCommentaryMessage(itemId);
+      return message ? [{ itemId, message }] : [];
     });
   }
 
+  collectTerminalAssistantItemIds(): string[] {
+    // A settled terminal row supersedes orphan previews as well as selected items.
+    return this.steeringSegments.collectOccurrenceIds(
+      this.assistantItemOrder.filter((itemId) => !this.isNonTerminalAssistantItem(itemId)),
+    );
+  }
+
+  private readCommentaryMessage(itemId: string): AssistantMessage | undefined {
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    const timestamp = this.assistantTimestampByItem.get(itemId);
+    return this.isCommentaryAssistantItem(itemId) && text && timestamp !== undefined
+      ? buildAssistantCommentaryMessage(this.params, text, itemId, timestamp)
+      : undefined;
+  }
+
+  collectAsyncMessages(): Array<{ itemId: string; message: AssistantMessage }> {
+    return this.assistantItemOrder.flatMap((itemId) => {
+      const delivery = this.createAsyncDelivery(itemId);
+      return delivery ? [{ itemId, message: delivery.message }] : [];
+    });
+  }
+
+  collectSteeringAssistantMessages(
+    completedItemIds: ReadonlySet<string>,
+    options: AssistantMessageOptions,
+  ): Array<{ itemId: string; message: AssistantMessage }> {
+    this.steeringSegments.beginSnapshot();
+    return this.assistantItemOrder.flatMap((itemId) => {
+      const sourceText = this.assistantTextByItem.get(itemId);
+      const completed = completedItemIds.has(itemId);
+      if (
+        (!completed && !this.steeringSegments.isVisible(itemId)) ||
+        this.isNonTerminalAssistantItem(itemId) ||
+        (sourceText && this.isToolProgressEchoText(itemId, sourceText.trim()))
+      ) {
+        return [];
+      }
+      const segment = this.steeringSegments.capture(itemId, sourceText, completed);
+      if (!segment) {
+        return [];
+      }
+      const message = attachCodexAssistantItemIds(
+        this.createAssistantMessage(segment.text, options),
+        segment.occurrenceIds,
+      );
+      message.timestamp = segment.split
+        ? this.nextTranscriptTimestamp()
+        : (this.assistantTimestampByItem.get(itemId) ?? message.timestamp);
+      return [{ itemId: segment.itemId, message }];
+    });
+  }
+
+  markSteeringMessagePersisted(mirrorItemId: string): void {
+    const prefix = this.steeringSegments.consume(mirrorItemId);
+    if (!prefix) {
+      return;
+    }
+    if (prefix.completed) {
+      const index = this.assistantItemOrder.indexOf(prefix.itemId);
+      this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
+      this.persistedAssistantBarrier = Math.max(this.persistedAssistantBarrier, index + 1);
+    }
+    this.persistedAssistantBoundary = true;
+  }
+
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
-    if (turn.status !== "completed") {
+    if (turn.status !== "completed" || this.hasDeliveredFinalSourceReply?.()) {
       this.supersedeVisibleAnswerCandidate();
       return;
+    }
+    // Native completion may replace a streamed item ID. Cutoffs already own durable
+    // prefixes; retire unmatched previews so they cannot replay beside the authoritative answer.
+    for (const itemId of this.assistantItemOrder) {
+      if (
+        !this.steeringSegments.isCompleted(itemId) &&
+        !this.isAsyncAssistantItem(itemId) &&
+        (this.isFinalAnswerAssistantItem(itemId) || this.isCommentaryAssistantItem(itemId))
+      ) {
+        if (itemId === this.visibleAnswerCandidateItemId) {
+          // Activity needs the preview text to publish its superseded transition.
+          this.supersedeVisibleAnswerCandidate();
+        }
+        this.assistantTextByItem.delete(itemId);
+      }
     }
     const turnItems = turn.items ?? [];
     const authoritativeIndex = turnItems.findLastIndex((item) => {
@@ -334,8 +445,9 @@ export class CodexAssistantProjection {
       ) {
         return false;
       }
-      const phase = readItemString(item, "phase");
-      return phase === "final_answer" || phase === undefined;
+      const phase = readString(item, "phase");
+      const delivery = readString(item, "delivery");
+      return delivery !== "async" && (phase === "final_answer" || phase === undefined);
     });
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
     const invalidatedByLaterTool = turnItems
@@ -361,17 +473,10 @@ export class CodexAssistantProjection {
   }
 
   hasAssistantItemTextForSynthesis(): boolean {
-    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
-      const itemId = this.assistantItemOrder[i];
-      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
-        continue;
-      }
-      const text = this.assistantTextByItem.get(itemId);
-      if (text && text.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.assistantItemOrder.some(
+      (itemId) =>
+        !this.isNonTerminalAssistantItem(itemId) && Boolean(this.assistantTextByItem.get(itemId)),
+    );
   }
 
   createCurrentAttemptAssistantMessage(
@@ -381,12 +486,12 @@ export class CodexAssistantProjection {
       const itemId = this.assistantItemOrder[i];
       if (
         !itemId ||
-        this.isCommentaryAssistantItem(itemId) ||
+        this.isNonTerminalAssistantItem(itemId) ||
         !this.assistantTextByItem.has(itemId)
       ) {
         continue;
       }
-      const text = this.assistantTextByItem.get(itemId) ?? "";
+      const text = this.remainingAssistantText(itemId) ?? "";
       const normalizedText = text.trim();
       if (normalizedText && this.isToolProgressEchoText(itemId, normalizedText)) {
         continue;
@@ -397,20 +502,74 @@ export class CodexAssistantProjection {
   }
 
   createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
-    return buildAssistantMessage(this.params, text, options);
+    const message = buildAssistantMessage(this.params, text, options);
+    return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
   }
 
-  createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
-    return buildAssistantMirrorMessage(this.params, title, text);
+  private recordCompletedAssistantText(itemId: string, text: string): void {
+    if (
+      this.visibleAnswerCandidateItemId === itemId &&
+      !prepareAgentRunTerminalReply({ rawText: text }).text.trim()
+    ) {
+      this.supersedeVisibleAnswerCandidate();
+    }
+    // Completed text is authoritative even when it replaces rather than extends
+    // the streamed prefix. Never let a prepared preview mask its replacement.
+    this.preparedStreams.delete(itemId);
+    this.assistantTextByItem.set(itemId, text);
+  }
+
+  private remainingAssistantText(itemId: string): string | undefined {
+    const text = this.assistantTextByItem.get(itemId);
+    return text === undefined ? undefined : this.steeringSegments.remainingText(itemId, text);
+  }
+
+  private adoptSteeringPrefixForCompletion(item: AssistantCompletion | undefined): void {
+    const sourceId = this.steeringSegments.streamedPartialAssistantItemId;
+    if (
+      item?.type !== "agentMessage" ||
+      !sourceId ||
+      item.id === sourceId ||
+      this.steeringSegments.isCompleted(sourceId) ||
+      this.assistantTimestampByItem.has(item.id) ||
+      this.isNonTerminalAssistantItem(sourceId) ||
+      item.delivery === "async" ||
+      (item.phase !== undefined && item.phase !== this.assistantPhaseByItem.get(sourceId))
+    ) {
+      return;
+    }
+    const sourceText = this.assistantTextByItem.get(sourceId);
+    if (!this.steeringSegments.adoptCompletion(sourceId, item.id, item.text, sourceText)) {
+      return;
+    }
+    // A completion may replace the current uncompleted output ID. A separately
+    // started item owns its own text even when it happens to repeat this prefix.
+    if (this.visibleAnswerCandidateItemId === sourceId) {
+      this.supersedeVisibleAnswerCandidate();
+    }
+    this.assistantTextByItem.delete(sourceId);
+    this.steeringSegments.streamedPartialAssistantItemId = item.id;
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
     if (item?.type !== "agentMessage") {
       return;
     }
-    const phase = readItemString(item, "phase");
+    const phase = readString(item, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(item.id, phase);
+    }
+    const delivery = readString(item, "delivery");
+    if (delivery) {
+      this.assistantDeliveryByItem.set(item.id, delivery);
+    }
+    if (item.questions !== undefined) {
+      const questions = readCodexAsyncQuestions(item.questions);
+      if (questions && delivery === "async") {
+        this.assistantQuestionsByItem.set(item.id, questions);
+      } else {
+        this.assistantQuestionsByItem.delete(item.id);
+      }
     }
   }
 
@@ -418,30 +577,47 @@ export class CodexAssistantProjection {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
   }
 
+  private isAsyncAssistantItem(itemId: string): boolean {
+    return this.assistantDeliveryByItem.get(itemId) === "async";
+  }
+
+  private isNonTerminalAssistantItem(itemId: string): boolean {
+    return this.isCommentaryAssistantItem(itemId) || this.isAsyncAssistantItem(itemId);
+  }
+
   private isFinalAnswerAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
-  private shouldStreamAssistantPartial(itemId: string): boolean {
-    return this.assistantPhaseByItem.get(itemId) === "final_answer";
-  }
-
-  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
-    const progressText = params.text.replace(/\s+/g, " ").trim();
+  private emitCommentaryProgress(params: {
+    itemId: string;
+    text: string;
+    phase: "update" | "end";
+  }): void {
+    const cleared = this.steeringSegments.clearProvisionalStream(params.itemId);
+    if (cleared) {
+      this.emitAgentEvent({ stream: "assistant", data: cleared });
+    }
+    const progressText = params.text.trimEnd();
+    // Codex completes an item with the same text as its last delta. Channels
+    // need that boundary before their first notifying post, so agents must not
+    // collapse completion into a text-only duplicate or invent a timer instead.
+    const previous = this.lastCommentaryProgressEventByItem.get(params.itemId);
     if (
-      !progressText ||
-      this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText
+      !progressText.trim() ||
+      (previous?.phase === params.phase && previous.text === progressText)
     ) {
       return;
     }
-    this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    const current = { phase: params.phase, text: progressText };
+    this.lastCommentaryProgressEventByItem.set(params.itemId, current);
     this.emitAgentEvent({
       stream: "item",
       data: {
         itemId: params.itemId,
         kind: "preamble",
         title: "Preamble",
-        phase: "update",
+        phase: params.phase,
         progressText,
         source: "codex-app-server",
       },
@@ -449,7 +625,10 @@ export class CodexAssistantProjection {
   }
 
   private emitAnswerCandidate(itemId: string, status: AnswerCandidateStatus): void {
-    const text = this.assistantTextByItem.get(itemId)?.trim();
+    const text = (
+      this.preparedStreams.get(itemId)?.text ??
+      prepareAgentRunTerminalReply({ rawText: this.assistantTextByItem.get(itemId) }).text
+    ).trim();
     if (!text) {
       return;
     }
@@ -457,11 +636,11 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       this.visibleAnswerCandidateItemId = itemId;
     }
-    const signature = `${status}\0${text}`;
-    if (this.lastAnswerCandidateEventByItem.get(itemId) === signature) {
+    const previous = this.lastAnswerCandidateEventByItem.get(itemId);
+    if (previous?.status === status && previous.text === text) {
       return;
     }
-    this.lastAnswerCandidateEventByItem.set(itemId, signature);
+    this.lastAnswerCandidateEventByItem.set(itemId, { status, text });
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -490,12 +669,9 @@ export class CodexAssistantProjection {
   private markLatestTerminalAssistantCandidate(
     itemId: string,
     activeItemIds: ReadonlySet<string>,
-    options?: { canReleaseAfterToolHandoff?: boolean },
   ): void {
     this.latestTerminalAssistantCandidateItemId = itemId;
     this.latestTerminalAssistantCandidateSuperseded = false;
-    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff =
-      options?.canReleaseAfterToolHandoff === true;
     this.terminalAssistantCandidateEarlierActiveItemIds = new Set(activeItemIds);
   }
 
@@ -515,34 +691,76 @@ export class CodexAssistantProjection {
       return;
     }
     this.latestTerminalAssistantCandidateSuperseded = true;
-    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
     this.supersedeVisibleAnswerCandidate();
   }
 
-  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
-    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
-      const itemId = this.assistantItemOrder[i];
-      if (!itemId) {
+  private collectPersistableAssistantTexts(minIndex: number): string[] {
+    let texts: string[] = [];
+    let replaceable = false;
+    // Walk time order. Unphased text replaces the current segment. Stable partial
+    // and final answers accumulate unless they follow a replacement. Native item identity,
+    // not text content, determines which answer survives.
+    for (const [index, itemId] of this.assistantItemOrder.entries()) {
+      const phase = this.assistantPhaseByItem.get(itemId);
+      const cutoff = phase === "partial_answer" ? this.persistedAssistantBarrier : minIndex;
+      if (
+        this.isNonTerminalAssistantItem(itemId) ||
+        (index < cutoff && !this.steeringSegments.survivesHandoff(itemId))
+      ) {
         continue;
       }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+      const text = this.remainingAssistantText(itemId);
+      if (!text?.trim() || this.isToolProgressEchoText(itemId, text.trim())) {
         continue;
       }
-      if (text && !this.isToolProgressEchoText(itemId, text)) {
-        return { itemId, text };
+      const isStableAnswer = phase === "partial_answer" || phase === "final_answer";
+      if (!isStableAnswer || replaceable) {
+        texts = [text];
+        replaceable = !isStableAnswer;
+        continue;
       }
+      texts.push(text);
     }
-    return undefined;
+    return texts;
+  }
+
+  private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
+    if (
+      item &&
+      shouldAdvancePersistableAssistantBarrier(item) &&
+      this.steeringSegments.recordHandoff(item.id)
+    ) {
+      this.persistableAssistantBarrier = this.assistantItemOrder.length;
+    }
   }
 
   private rememberAssistantItem(itemId: string): void {
-    if (!itemId || this.assistantItemOrder.includes(itemId)) {
+    if (!itemId) {
       return;
     }
-    this.assistantItemOrder.push(itemId);
-    this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
+    if (!this.assistantTimestampByItem.has(itemId)) {
+      this.assistantItemOrder.push(itemId);
+      this.assistantTimestampByItem.set(itemId, this.nextTranscriptTimestamp());
+    }
+    if (this.isCommentaryAssistantItem(itemId)) {
+      this.checkpointCommentary?.(itemId, {
+        read: () => this.readCommentaryMessage(itemId),
+        ready: () => this.steeringSegments.isCompleted(itemId),
+      });
+    }
+  }
+
+  private createAsyncDelivery(itemId: string) {
+    return this.isAsyncAssistantItem(itemId)
+      ? buildAssistantAsyncDelivery(
+          this.params,
+          this.assistantTextByItem.get(itemId),
+          itemId,
+          this.assistantTimestampByItem.get(itemId),
+          this.assistantQuestionsByItem.get(itemId),
+        )
+      : undefined;
   }
 
   private isToolProgressEchoText(itemId: string, text: string): boolean {

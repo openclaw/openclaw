@@ -1,0 +1,168 @@
+import type {
+  ChannelsStatusResult,
+  EnvironmentsListResult,
+  UserProfile,
+  ProjectsCheckoutOptionsResult,
+} from "../../../packages/gateway-protocol/src/index.ts";
+import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.ts";
+import type { ExecApprovalGrantsListResult } from "../../../packages/gateway-protocol/src/schema/exec-approvals.ts";
+import type { SystemAgentChatHistoryResult } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
+import type {
+  PluginsCatalogBrowseResult,
+  PluginsCatalogCategoriesResult,
+} from "../../../packages/gateway-protocol/src/schema/plugins.ts";
+import { BUILTIN_THEMES } from "../../../packages/gateway-protocol/src/theme.js";
+import type { DoctorMemoryStatusPayload } from "../../../src/gateway/server-methods/doctor.ts";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import type { SessionsUsageResult } from "../../../src/shared/usage-types.ts";
+import type { ChannelsPairingListResult } from "../api/types.ts";
+import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
+
+export const defaultControlUiFeatureMethods = [
+  "agents.create",
+  "chat.abort",
+  "chat.history",
+  "chat.send",
+  "chat.metadata",
+  "chat.startup",
+  "config.apply",
+  "config.patch",
+  "config.schema",
+  "config.set",
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
+  "session.members.add",
+  "session.members.list",
+  "session.members.listEvidence",
+  "session.members.remove",
+  "session.reactions.list",
+  "session.reactions.set",
+  "session.visibility.set",
+  "sessions.abort",
+  "sessions.patchMany",
+  "sessions.branches.switch",
+  "sessions.compact",
+  "sessions.companion.state",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.dispatch",
+  "sessions.fork",
+  "sessions.groups.delete",
+  "sessions.groups.defaults",
+  "sessions.groups.list",
+  "sessions.groups.put",
+  "sessions.groups.rename",
+  "sessions.groups.update",
+  "sessions.patch",
+  "sessions.reclaim",
+  "sessions.reset",
+  "sessions.rewind",
+  "sessions.search",
+  "system.info",
+  "users.github.status",
+  "users.github.authorize.start",
+  "users.github.authorize.poll",
+  "users.github.authorize.cancel",
+  "users.github.disconnect",
+  "sessions.github.options",
+  "sessions.github.status",
+  "sessions.github.confirm",
+  "themes.list",
+  "themes.get",
+  "themes.set",
+  "themes.import",
+  "tools.github.status",
+  "tools.github.configure",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
+  "update.hold",
+  "update.run",
+  "update.runs.get",
+  "update.runs.list",
+  "update.status",
+  "worktrees.branches",
+] as const;
+
+export function createControlUiDefaultResponses(scenario: {
+  presenceUsers?: ControlUiMockPresenceUser[];
+}) {
+  const user = scenario.presenceUsers?.find((entry) => entry.self);
+  const profile: UserProfile | null = user
+    ? {
+        id: user.id,
+        displayName: user.name ?? null,
+        emails: user.email ? [user.email] : [],
+        avatarMime: null,
+        hasAvatar: Boolean(user.avatarUrl),
+        githubIdentity: null,
+        mergedInto: null,
+        createdAt: 1,
+        updatedAt: 1,
+      }
+    : null;
+  const selection = {
+    theme: BUILTIN_THEMES[0],
+    current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
+  };
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  return {
+    "approval.history": { items: [] } satisfies ApprovalHistoryResult,
+    "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
+    "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
+    "sessions.usage": {
+      updatedAt: now.getTime(),
+      startDate: date,
+      endDate: date,
+      sessions: [],
+      totals: createEmptyCostUsageTotals(),
+      aggregates: {
+        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+        costDaily: [],
+      },
+    } satisfies SessionsUsageResult,
+    "environments.list": {
+      environments: [],
+      profiles: [],
+    } satisfies EnvironmentsListResult,
+    "projects.checkoutOptions": {
+      current: true,
+      worktree: true,
+    } satisfies ProjectsCheckoutOptionsResult,
+    "doctor.memory.status": {
+      agentId: "main",
+      provider: "none",
+      embedding: { ok: false, checked: false },
+    } satisfies DoctorMemoryStatusPayload,
+    "channels.status": {
+      ts: 0,
+      channelOrder: [],
+      channelLabels: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    } satisfies ChannelsStatusResult,
+    "channels.pairing.list": {
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: true,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    } satisfies ChannelsPairingListResult,
+    "plugins.catalog.categories": { categories: [] } satisfies PluginsCatalogCategoriesResult,
+    "plugins.catalog.browse": { items: [] } satisfies PluginsCatalogBrowseResult,
+    "users.self": profile
+      ? { profile }
+      : {
+          __mockError: { code: "FORBIDDEN", message: "users.self requires an authenticated user" },
+        },
+    "themes.list": { ...selection, themes: BUILTIN_THEMES },
+    "themes.get": selection,
+  };
+}

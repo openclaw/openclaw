@@ -1,17 +1,36 @@
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Payload test helpers provide stable defaults and assertion helpers for the
 // embedded run reply payload builder.
 import { expect } from "vitest";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
 type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
 type RunPayloads = ReturnType<typeof buildEmbeddedRunPayloads>;
+
+export function makePayloadAssistant(overrides: Partial<AssistantMessage>): AssistantMessage {
+  const errorJson =
+    '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
+  return makeAssistantMessageFixture({
+    errorMessage: errorJson,
+    content: [{ type: "text", text: errorJson }],
+    ...overrides,
+  });
+}
+
+export function makePayloadToolAssistant(name: string, args: Record<string, unknown>) {
+  return makePayloadAssistant({
+    stopReason: "toolUse",
+    errorMessage: undefined,
+    content: [{ type: "toolCall", id: "toolu_01", name, arguments: args }],
+  });
+}
 
 export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
   // Defaults mirror a quiet interactive session so tests opt into cron,
   // verbose, tool-result, or current-assistant behavior explicitly.
   return buildEmbeddedRunPayloads({
     assistantTexts: [],
-    toolMetas: [],
     lastAssistant: undefined,
     currentAssistant:
       overrides.currentAssistant === undefined
@@ -19,7 +38,6 @@ export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
         : overrides.currentAssistant,
     isCronTrigger: false,
     sessionKey: "session:telegram",
-    inlineToolResultsAllowed: false,
     verboseLevel: "off",
     reasoningLevel: "off",
     toolResultFormat: "plain",

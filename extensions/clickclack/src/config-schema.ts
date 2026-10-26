@@ -1,9 +1,8 @@
-/**
- * Zod-backed config schema for ClickClack channel accounts.
- */
 import {
+  buildChannelAllowBotsSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
+  ChannelBotLoopProtectionSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -13,6 +12,8 @@ const ClickClackAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    responsePrefix: z.string().optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
@@ -26,10 +27,14 @@ const ClickClackAccountConfigSchema = z
     toolsAllow: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),
+    nativeProgress: z.boolean().optional(),
     commandMenu: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     mentionPatterns: z.array(z.string()).optional(),
     groups: z
       .record(
@@ -37,7 +42,10 @@ const ClickClackAccountConfigSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            requireMentionInBotThreads: z.boolean().optional(),
             mentionPatterns: z.array(z.string()).optional(),
+            allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+            botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
           })
           .strict(),
       )
@@ -54,12 +62,36 @@ const ClickClackAccountConfigSchema = z
   })
   .strict();
 
-const ClickClackConfigSchema = buildMultiAccountChannelSchema(ClickClackAccountConfigSchema, {
-  accountSchema: ClickClackAccountConfigSchema.partial(),
-});
+export type ClickClackAccountConfigInput = z.input<typeof ClickClackAccountConfigSchema>;
+
+const ClickClackConfigSchema = buildMultiAccountChannelSchema(
+  ClickClackAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: ClickClackAccountConfigSchema.partial() },
+);
+
+export type ClickClackConfigInput = z.input<typeof ClickClackConfigSchema>;
 
 /**
  * Config schema exported to core so `openclaw doctor` and config validation
  * understand both default and named ClickClack accounts.
  */
-export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);
+export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema, {
+  uiHints: {
+    requireMentionInBotThreads: {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset keeps the normal mention policy.",
+    },
+    "groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+    "accounts.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override mention requirements in threads rooted in this bot's messages. Unset inherits the channel configuration.",
+    },
+    "accounts.*.groups.*.requireMentionInBotThreads": {
+      label: "Require Mention in Bot Threads",
+      help: "Override the account policy for threads rooted in this bot's messages in this channel.",
+    },
+  },
+});

@@ -1,4 +1,3 @@
-// Runtime forwarder tests cover channel plugin runtime method delegation and fallback handling.
 import { describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
@@ -7,9 +6,8 @@ import {
 } from "./runtime-forwarders.js";
 import type { ChannelOutboundAdapter } from "./types.adapters.js";
 
-type RenderPresentationParams = Parameters<
-  NonNullable<ChannelOutboundAdapter["renderPresentation"]>
->[0];
+const ctx = { cfg: {}, to: "a", text: "hi" };
+const directoryCtx = { cfg: {}, runtime: {} as never };
 
 describe("createRuntimeDirectoryLiveAdapter", () => {
   it("forwards live directory calls through the runtime getter", async () => {
@@ -21,12 +19,12 @@ describe("createRuntimeDirectoryLiveAdapter", () => {
       listPeersLive: (runtime) => runtime.listPeersLive,
     });
 
-    await expect(adapter.self?.({ cfg: {} as never, runtime: {} as never })).resolves.toEqual({
+    await expect(adapter.self?.(directoryCtx)).resolves.toEqual({
       kind: "user",
       id: "self",
     });
     await expect(
-      adapter.listPeersLive?.({ cfg: {} as never, runtime: {} as never, query: "a", limit: 1 }),
+      adapter.listPeersLive?.({ ...directoryCtx, query: "a", limit: 1 }),
     ).resolves.toEqual([{ kind: "user", id: "alice" }]);
     expect(self).toHaveBeenCalled();
     expect(listPeersLive).toHaveBeenCalled();
@@ -34,39 +32,23 @@ describe("createRuntimeDirectoryLiveAdapter", () => {
 });
 
 describe("createRuntimeOutboundDelegates", () => {
-  it("forwards outbound methods through the runtime getter", async () => {
-    const renderPresentation = vi.fn(async (ctx: RenderPresentationParams) => ({
-      ...ctx.payload,
-      text: "rendered",
-    }));
-    const sendPayload = vi.fn(async () => ({ channel: "x", messageId: "payload-1" }));
-    const sendText = vi.fn(async () => ({ channel: "x", messageId: "1" }));
-    const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => ({ outbound: { renderPresentation, sendPayload, sendText } }),
-      renderPresentation: { resolve: (runtime) => runtime.outbound.renderPresentation },
-      sendPayload: { resolve: (runtime) => runtime.outbound.sendPayload },
-      sendText: { resolve: (runtime) => runtime.outbound.sendText },
-    });
+  it("resolves the current runtime and method for each call", async () => {
+    const firstSender = vi.fn(async () => ({ channel: "x", messageId: "first" }));
+    const secondSender = vi.fn(async () => ({ channel: "x", messageId: "second" }));
+    let sender = firstSender;
+    const params = {
+      getRuntime: vi.fn(async () => ({ sendText: sender })),
+      sendText: { resolve: (runtime: { sendText: typeof firstSender }) => runtime.sendText },
+    };
+    const outbound = createRuntimeOutboundDelegates(params);
 
-    await expect(
-      outbound.renderPresentation?.({
-        payload: { text: "raw" },
-        presentation: { blocks: [{ type: "text", text: "shown" }] },
-        ctx: {} as never,
-      }),
-    ).resolves.toEqual({
-      text: "rendered",
-    });
-    await expect(
-      outbound.sendPayload?.({ cfg: {} as never, to: "a", text: "hi", payload: { text: "hi" } }),
-    ).resolves.toEqual({ channel: "x", messageId: "payload-1" });
-    await expect(outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" })).resolves.toEqual({
-      channel: "x",
-      messageId: "1",
-    });
-    expect(renderPresentation).toHaveBeenCalled();
-    expect(sendPayload).toHaveBeenCalled();
-    expect(sendText).toHaveBeenCalled();
+    expect(params.getRuntime).not.toHaveBeenCalled();
+    await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "first" });
+    sender = secondSender;
+    await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "second" });
+    expect(params.getRuntime).toHaveBeenCalledTimes(2);
+    expect(firstSender).toHaveBeenCalledWith(ctx);
+    expect(secondSender).toHaveBeenCalledWith(ctx);
   });
 
   it("classifies unavailable outbound runtime methods as definitely not dispatched", async () => {
@@ -79,11 +61,7 @@ describe("createRuntimeOutboundDelegates", () => {
     });
 
     const error = await outbound
-      .sendPoll?.({
-        cfg: {} as never,
-        to: "a",
-        poll: { question: "q", options: ["a"] },
-      })
+      .sendPoll?.({ ...ctx, poll: { question: "q", options: ["a"] } })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({ message: "poll unavailable" });
@@ -92,20 +70,35 @@ describe("createRuntimeOutboundDelegates", () => {
   it("classifies outbound runtime loading failures before method dispatch", async () => {
     const loadError = new Error("runtime import failed");
     const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => {
-        throw loadError;
-      },
+      getRuntime: () => Promise.reject(loadError),
       sendText: {
         resolve: (runtime: { sendText?: ChannelOutboundAdapter["sendText"] }) => runtime.sendText,
       },
     });
 
-    await expect(
-      outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" }),
-    ).rejects.toMatchObject({
+    await expect(outbound.sendText?.(ctx)).rejects.toMatchObject({
       name: "PlatformMessageNotDispatchedError",
       message: "runtime import failed",
       cause: loadError,
     });
+  });
+
+  it("preserves presentation runtime loading failures without classifying dispatch", async () => {
+    const loadError = new Error("renderer import failed");
+    const outbound = createRuntimeOutboundDelegates({
+      getRuntime: () => Promise.reject(loadError),
+      renderPresentation: {
+        resolve: () => undefined,
+        unavailableMessage: "renderer unavailable",
+      },
+    });
+
+    await expect(
+      outbound.renderPresentation?.({
+        payload: { text: "raw" },
+        presentation: { blocks: [{ type: "text", text: "shown" }] },
+        ctx: { ...ctx, text: "raw", payload: { text: "raw" } },
+      }),
+    ).rejects.toBe(loadError);
   });
 });

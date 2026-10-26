@@ -1,24 +1,25 @@
-// Session cleanup service for store entries and transcript/artifact files.
-// Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
-
 import fs from "node:fs";
-import path from "node:path";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import {
+  createSessionsCleanupFailure,
+  SessionsCleanupFailureError,
+  type SessionCleanupSummary,
+  type SessionsCleanupFailure,
+} from "./cleanup-result.js";
+import { withSessionCleanupStore } from "./cleanup-service-read.js";
+import type { SessionCleanupReadResult } from "./cleanup-service-read.types.js";
 import {
   pruneUnreferencedSessionArtifacts,
   resolveSessionArtifactCanonicalPathsForEntry,
-  type SessionDiskBudgetSweepResult,
-  type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
-  loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
@@ -27,22 +28,29 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
-  capEntryCount,
-  pruneStaleModelRunEntries,
-  pruneStaleEntries,
-  shouldPreserveMaintenanceEntry,
-  shouldRunModelRunPrune,
+  countUnarchivedSessionEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import {
+  resolveSessionStoreCompatibilityAgentId,
   resolveSessionStoreTargets,
   type SessionStoreTarget,
   type SessionStoreSelectionOptions,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
+
+export {
+  createSessionsCleanupFailure,
+  isSessionsCleanupPartialResult,
+  serializeSessionCleanupResult,
+  SessionsCleanupFailureError,
+  type SessionsCleanupResult,
+} from "./cleanup-result.js";
+export { resolveSessionCleanupAction } from "./cleanup-action.js";
 
 export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   dryRun?: boolean;
@@ -53,150 +61,15 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   fixDmScope?: boolean;
 };
 
-type SessionCleanupAction =
-  | "keep"
-  | "prune-missing"
-  | "prune-model-run"
-  | "prune-stale"
-  | "cap-overflow"
-  | "evict-budget"
-  | "retire-dm-scope";
-
-export type SessionCleanupSummary = {
-  agentId: string;
-  storePath: string;
-  mode: ResolvedSessionMaintenanceConfig["mode"];
-  dryRun: boolean;
-  beforeCount: number;
-  afterCount: number;
-  missing: number;
-  dmScopeRetired: number;
-  modelRunPruned: number;
-  pruned: number;
-  capped: number;
-  unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
-  diskBudget: SessionDiskBudgetSweepResult | null;
-  wouldMutate: boolean;
-  applied?: true;
-  appliedCount?: number;
-};
-
-export type SessionsCleanupResult =
-  | SessionCleanupSummary
-  | {
-      allAgents: true;
-      mode: ResolvedSessionMaintenanceConfig["mode"];
-      dryRun: boolean;
-      stores: SessionCleanupSummary[];
-    };
-
 type SessionsCleanupRunResult = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
-  previewResults: Array<{
-    summary: SessionCleanupSummary;
-    beforeStore: Record<string, SessionEntry>;
-    missingKeys: Set<string>;
-    modelRunPrunedKeys: Set<string>;
-    staleKeys: Set<string>;
-    cappedKeys: Set<string>;
-    budgetEvictedKeys: Set<string>;
-    dmScopeRetiredKeys: Set<string>;
-  }>;
+  previewResults: Array<Awaited<ReturnType<typeof previewStoreCleanup>>>;
   appliedSummaries: SessionCleanupSummary[];
-};
+} & ({ failure?: never } | { failure: SessionsCleanupFailure });
 
 function resolveCleanupSqlitePath(target: SessionStoreTarget): string {
-  return (
-    resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
-    resolveOpenClawAgentSqlitePath({ agentId: target.agentId })
-  );
-}
-
-function loadCleanupSessionStore(
-  target: SessionStoreTarget,
-  options: { createIfMissing?: boolean } = {},
-): Record<string, SessionEntry> {
-  if (options.createIfMissing !== true && !fs.existsSync(resolveCleanupSqlitePath(target))) {
-    return {};
-  }
-  return Object.fromEntries(
-    listSessionEntries({
-      agentId: target.agentId,
-      storePath: target.storePath,
-    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-}
-
-function isTranscriptMessageRole(role: unknown): boolean {
-  return (
-    role === "user" ||
-    role === "assistant" ||
-    role === "tool" ||
-    role === "toolResult" ||
-    role === "system"
-  );
-}
-
-function isTranscriptMessageRecord(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const record = entry as { message?: unknown; role?: unknown; type?: unknown };
-  if (record.type === "message") {
-    return true;
-  }
-  if (
-    record.type === undefined &&
-    record.message &&
-    typeof record.message === "object" &&
-    isTranscriptMessageRole((record.message as { role?: unknown }).role)
-  ) {
-    return true;
-  }
-  return record.type === undefined && isTranscriptMessageRole(record.role);
-}
-
-function sqliteTranscriptHasMessageRecords(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): boolean {
-  try {
-    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord);
-  } catch {
-    return false;
-  }
-}
-
-/** Resolves the action label for one session key from cleanup key sets. */
-export function resolveSessionCleanupAction(params: {
-  key: string;
-  missingKeys: Set<string>;
-  modelRunPrunedKeys: Set<string>;
-  staleKeys: Set<string>;
-  cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
-  dmScopeRetiredKeys: Set<string>;
-}): SessionCleanupAction {
-  if (params.dmScopeRetiredKeys.has(params.key)) {
-    return "retire-dm-scope";
-  }
-  if (params.missingKeys.has(params.key)) {
-    return "prune-missing";
-  }
-  if (params.modelRunPrunedKeys.has(params.key)) {
-    return "prune-model-run";
-  }
-  if (params.staleKeys.has(params.key)) {
-    return "prune-stale";
-  }
-  if (params.cappedKeys.has(params.key)) {
-    return "cap-overflow";
-  }
-  if (params.budgetEvictedKeys.has(params.key)) {
-    return "evict-budget";
-  }
-  return "keep";
+  return resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId })
+    .path;
 }
 
 function isMainScopeStaleDirectSessionKey(params: {
@@ -260,78 +133,13 @@ function retireMainScopeDirectSessionEntries(params: {
   return retired;
 }
 
-export function serializeSessionCleanupResult(params: {
-  mode: ResolvedSessionMaintenanceConfig["mode"];
-  dryRun: boolean;
-  summaries: SessionCleanupSummary[];
-}): SessionsCleanupResult {
-  if (params.summaries.length === 1) {
-    return params.summaries[0] ?? ({} as SessionCleanupSummary);
-  }
-  return {
-    allAgents: true,
-    mode: params.mode,
-    dryRun: params.dryRun,
-    stores: params.summaries,
-  };
-}
-
-function pruneMissingTranscriptEntries(params: {
-  store: Record<string, SessionEntry>;
-  storePath: string;
-  onPruned?: (key: string, entry: SessionEntry) => void;
-}): number {
-  let removed = 0;
-  for (const [key, entry] of Object.entries(params.store)) {
-    // `--fix-missing` cannot release harness ownership or delete a user-shelved archive.
-    if (
-      (entry?.modelSelectionLocked === true || entry?.archivedAt !== undefined) &&
-      shouldPreserveMaintenanceEntry({ key, entry })
-    ) {
-      continue;
-    }
-    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
-    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
-    if (
-      parseAgentSessionKey(key) &&
-      (entry.initializationPending === true ||
-        (entry.sessionId === key &&
-          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
-    ) {
-      continue;
-    }
-    if (!entry?.sessionId) {
-      if (parseAgentSessionKey(key)) {
-        // Agent-scoped keys without session ids are valid routing entries; keep them.
-        continue;
-      }
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key, entry);
-      continue;
-    }
-    if (
-      !sqliteTranscriptHasMessageRecords({
-        sessionId: entry.sessionId,
-        sessionKey: key,
-        storePath: params.storePath,
-      })
-    ) {
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key, entry);
-    }
-  }
-  return removed;
-}
-
 function addEntryArtifactPathsToSet(params: {
   paths: Set<string>;
   store: Record<string, SessionEntry>;
   storePath: string;
   keys: ReadonlySet<string>;
 }): void {
-  const sessionsDir = path.dirname(params.storePath);
+  const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
   for (const key of params.keys) {
     const entry = params.store[key];
     if (!entry) {
@@ -353,29 +161,25 @@ async function previewStoreCleanup(params: {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   dryRun: boolean;
   activeKey?: string;
-  fixMissing?: boolean;
   fixDmScope?: boolean;
+  snapshot: SessionCleanupReadResult;
 }) {
-  const beforeStore = loadCleanupSessionStore(params.target, {
-    createIfMissing: !params.dryRun,
-  });
+  const beforeStore = params.snapshot.store;
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const modelRunPrunedKeys = new Set<string>();
+  const archivedKeys = new Set<string>();
+  const capArchivedKeys = new Set<string>();
+  const ageArchivedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
-  const missing =
-    params.fixMissing === true
-      ? pruneMissingTranscriptEntries({
-          store: previewStore,
-          storePath: params.target.storePath,
-          onPruned: (key) => {
-            missingKeys.add(key);
-          },
-        })
-      : 0;
+  for (const { sessionKey } of params.snapshot.missing) {
+    missingKeys.add(sessionKey);
+    delete previewStore[sessionKey];
+  }
+  const missing = missingKeys.size;
   const dmScopeRetired =
     params.fixDmScope === true
       ? retireMainScopeDirectSessionEntries({
@@ -388,66 +192,51 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.target.storePath,
     store: previewStore,
     baseKeys: [params.activeKey],
   });
-  const modelRunPruned = shouldRunModelRunPrune({
+  const {
+    modelRunPruned,
+    archived: totalArchived,
+    capArchived,
+    pruned,
+    capped,
+  } = planSessionEntryMaintenance({
     maintenance: params.maintenance,
-    entryCount: Object.keys(previewStore).length,
-    // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
-    // preview caps unconditionally below), so mirror that here: prune stale probes before the
-    // forced cap can evict real sessions in their place.
-    force: true,
-  })
-    ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
-        log: false,
-        preserveKeys: preserveSessionKeys,
-        onPruned: ({ key }) => {
-          modelRunPrunedKeys.add(key);
-        },
-      })
-    : 0;
-  const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
+    initialUnarchivedCount: countUnarchivedSessionEntries(previewStore),
+    // Cleanup previews apply the same immediate cap as the apply path.
+    forceMaintenance: true,
+    readPreserveKeys: () => preserveSessionKeys,
     log: false,
-    preserveKeys: preserveSessionKeys,
-    onPruned: ({ key }) => {
-      staleKeys.add(key);
+    readAgeCandidates: () => previewStore,
+    readCapCandidates: () => ({ store: previewStore, maxEntries: params.maintenance.maxEntries }),
+    onRemoved: ({ key }, reason) => {
+      const keys =
+        reason === "model-run-pruned"
+          ? modelRunPrunedKeys
+          : reason === "pruned"
+            ? staleKeys
+            : cappedKeys;
+      keys.add(key);
+    },
+    onArchived: ({ key }, phase) => {
+      const keys =
+        phase === "dashboard" ? archivedKeys : phase === "age" ? ageArchivedKeys : capArchivedKeys;
+      keys.add(key);
     },
   });
-  const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
-    log: false,
-    preserveKeys: preserveSessionKeys,
-    onCapped: ({ key }) => {
-      cappedKeys.add(key);
-    },
-  });
-  const entryCleanupArtifactPaths = new Set<string>();
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: modelRunPrunedKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: staleKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: cappedKeys,
-  });
-  addEntryArtifactPathsToSet({
-    paths: entryCleanupArtifactPaths,
-    store: beforeStore,
-    storePath: params.target.storePath,
-    keys: dmScopeRetiredKeys,
-  });
+  const archived = totalArchived - capArchived;
+  const entryCleanupArtifactPaths = new Set(params.snapshot.retainedArtifactPaths);
+  for (const keys of [modelRunPrunedKeys, staleKeys, cappedKeys, dmScopeRetiredKeys]) {
+    addEntryArtifactPathsToSet({
+      paths: entryCleanupArtifactPaths,
+      store: beforeStore,
+      storePath: params.target.storePath,
+      keys,
+    });
+  }
   const diskBudgetPreview = fs.existsSync(resolveCleanupSqlitePath(params.target))
     ? await inspectSqliteSessionHistoryDiskBudget({
         agentId: params.target.agentId,
@@ -464,13 +253,14 @@ async function previewStoreCleanup(params: {
     dryRun: true,
     excludeCanonicalPaths: entryCleanupArtifactPaths,
   });
-  const budgetEvictedKeys = new Set<string>();
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
     modelRunPruned > 0 ||
+    archived > 0 ||
+    capArchived > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -488,6 +278,8 @@ async function previewStoreCleanup(params: {
     missing,
     dmScopeRetired,
     modelRunPruned,
+    archived,
+    capArchived,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -500,9 +292,11 @@ async function previewStoreCleanup(params: {
     beforeStore,
     missingKeys,
     modelRunPrunedKeys,
+    archivedKeys,
+    capArchivedKeys,
+    ageArchivedKeys,
     staleKeys,
     cappedKeys,
-    budgetEvictedKeys,
     dmScopeRetiredKeys,
   };
 }
@@ -512,8 +306,12 @@ export async function runSessionsCleanup(params: {
   cfg: OpenClawConfig;
   opts: SessionsCleanupOptions;
   targets?: SessionStoreTarget[];
+  reclamationMode?: "worker" | "in-process";
+  assertCurrent?: () => void;
+  commitGuard?: () => void;
 }): Promise<SessionsCleanupRunResult> {
   const { cfg, opts } = params;
+  params.assertCurrent?.();
   const maintenance = resolveMaintenanceConfig();
   const mode = opts.enforce ? "enforce" : maintenance.mode;
   const targets =
@@ -525,162 +323,158 @@ export async function runSessionsCleanup(params: {
     });
 
   const previewResults: SessionsCleanupRunResult["previewResults"] = [];
-  for (const target of targets) {
-    const result = await previewStoreCleanup({
-      cfg,
+  for (const target of opts.dryRun ? targets : []) {
+    const result = await withSessionCleanupStore(
       target,
-      maintenance,
-      mode,
-      dryRun: Boolean(opts.dryRun),
-      activeKey: opts.activeKey,
-      fixMissing: Boolean(opts.fixMissing),
-      fixDmScope: Boolean(opts.fixDmScope),
-    });
+      async (owner) => {
+        const snapshot = await owner.read(Boolean(opts.fixMissing));
+        return previewStoreCleanup({
+          cfg,
+          target,
+          maintenance,
+          mode,
+          dryRun: Boolean(opts.dryRun),
+          activeKey: opts.activeKey,
+          fixDmScope: Boolean(opts.fixDmScope),
+          snapshot,
+        });
+      },
+      { assertCurrent: params.assertCurrent },
+    );
     previewResults.push(result);
   }
 
   const appliedSummaries: SessionCleanupSummary[] = [];
-  if (!opts.dryRun) {
-    for (const target of targets) {
-      const applyStore = loadCleanupSessionStore(target, { createIfMissing: true });
-      const missingRemovals: SessionEntryLifecycleRemoval[] = [];
-      const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
-      if (opts.fixMissing) {
-        pruneMissingTranscriptEntries({
-          store: applyStore,
-          storePath: target.storePath,
-          onPruned: (sessionKey, entry) => {
-            missingRemovals.push({
-              sessionKey,
-              expectedEntry: structuredClone(entry),
-            });
-          },
-        });
-      }
-      if (opts.fixDmScope) {
-        retireMainScopeDirectSessionEntries({
-          cfg,
-          store: applyStore,
-          targetAgentId: target.agentId,
-          activeKey: opts.activeKey,
-          onRetired: (sessionKey, entry) => {
-            dmScopeRetiredRemovals.push({
-              sessionKey,
-              expectedEntry: structuredClone(entry),
-              archiveRemovedTranscript: true,
-            });
-          },
-        });
-      }
-      const removals: SessionEntryLifecycleRemoval[] = [
-        ...missingRemovals,
-        ...dmScopeRetiredRemovals,
-      ];
-      const lifecycleResult = await applySessionEntryLifecycleMutation({
-        storePath: target.storePath,
-        removals,
-        activeSessionKey: opts.activeKey,
-        maintenanceOverride: {
-          ...maintenance,
-          mode,
-        },
-      });
-      const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
-      const appliedUnreferencedArtifacts =
-        mode === "warn"
-          ? null
-          : await pruneUnreferencedSessionArtifacts({
-              store: postApplyStore,
-              storePath: target.storePath,
-              olderThanMs: maintenance.pruneAfterMs,
-              dryRun: false,
-            });
-      const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
-      const missingApplied = missingRemovals.filter(({ sessionKey }) =>
-        removedSessionKeys.has(sessionKey),
-      ).length;
-      const dmScopeRetiredApplied = dmScopeRetiredRemovals.filter(({ sessionKey }) =>
-        removedSessionKeys.has(sessionKey),
-      ).length;
-      const unreferencedArtifacts =
-        mode === "warn"
-          ? {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: maintenance.pruneAfterMs,
+  let failingTarget: SessionStoreTarget | undefined;
+  let failingTargetLifecycleCommitted = false;
+  try {
+    if (!opts.dryRun) {
+      for (const target of targets) {
+        failingTarget = target;
+        failingTargetLifecycleCommitted = false;
+        await withSessionCleanupStore(
+          target,
+          async (owner) => {
+            let missingRemovals: SessionEntryLifecycleRemoval[] = [];
+            const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
+            if (opts.fixMissing || opts.fixDmScope) {
+              const snapshot = await owner.read(Boolean(opts.fixMissing));
+              const applyStore = snapshot.store;
+              if (opts.fixMissing) {
+                missingRemovals = snapshot.missing;
+                for (const { sessionKey } of missingRemovals) {
+                  delete applyStore[sessionKey];
+                }
+              }
+              if (opts.fixDmScope) {
+                retireMainScopeDirectSessionEntries({
+                  cfg,
+                  store: applyStore,
+                  targetAgentId: target.agentId,
+                  activeKey: opts.activeKey,
+                  onRetired: (sessionKey, entry) => {
+                    dmScopeRetiredRemovals.push({
+                      sessionKey,
+                      expectedEntry: structuredClone(entry),
+                      archiveRemovedTranscript: true,
+                    });
+                  },
+                });
+              }
             }
-          : (lifecycleResult.unreferencedArtifacts ??
-            appliedUnreferencedArtifacts ?? {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: maintenance.pruneAfterMs,
-            });
-      const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
-        agentId: target.agentId,
-        storePath: target.storePath,
-        mode,
-        maintenance,
-      });
-      const preview = previewResults.find(
-        (result) => result.summary.storePath === target.storePath,
-      );
-      const appliedReport = lifecycleResult.maintenanceReport;
-      const summary: SessionCleanupSummary =
-        appliedReport === null
-          ? {
-              ...(preview?.summary ?? {
+            const removals: SessionEntryLifecycleRemoval[] = [
+              ...missingRemovals,
+              ...dmScopeRetiredRemovals,
+            ];
+            // Let queued I/O run between preview/repair work and the lifecycle commit.
+            await yieldToEventLoop();
+            owner.assertCurrent();
+            const lifecycleResult = await applySessionEntryLifecycleMutation(
+              {
                 agentId: target.agentId,
                 storePath: target.storePath,
-                mode,
-                dryRun: false,
-                beforeCount: 0,
-                afterCount: 0,
-                missing: 0,
-                dmScopeRetired: 0,
-                modelRunPruned: 0,
-                pruned: 0,
-                capped: 0,
-                unreferencedArtifacts,
-                diskBudget: null,
-                wouldMutate: false,
-              }),
-              dryRun: false,
-              unreferencedArtifacts,
-              diskBudget: appliedDiskBudget,
-              wouldMutate:
-                removedSessionKeys.size > 0 ||
-                unreferencedArtifacts.removedFiles > 0 ||
-                (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
-                (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
-                // Checkpoint/incremental-vacuum reclamation mutates the store
-                // even when no session or archive was removed.
-                (appliedDiskBudget != null &&
-                  appliedDiskBudget.totalBytesAfter < appliedDiskBudget.totalBytesBefore),
-              applied: true,
-              appliedCount: lifecycleResult.afterCount,
-            }
-          : {
+                removals,
+                commitGuard: () => {
+                  owner.assertCurrent();
+                  params.commitGuard?.();
+                },
+                activeSessionKey: opts.activeKey,
+                maintenanceOverride: {
+                  ...maintenance,
+                  mode,
+                },
+                onLifecycleCommitted: () => {
+                  failingTargetLifecycleCommitted = true;
+                },
+              },
+              owner.resolved,
+            );
+            await yieldToEventLoop();
+            owner.assertCurrent();
+            const retainedArtifactPaths = new Set<string>();
+            const unreferencedArtifacts =
+              mode === "warn"
+                ? {
+                    scannedFiles: 0,
+                    removedFiles: 0,
+                    freedBytes: 0,
+                    olderThanMs: maintenance.pruneAfterMs,
+                  }
+                : await pruneUnreferencedSessionArtifacts({
+                    store: async () => {
+                      const snapshot = await owner.read();
+                      for (const artifactPath of snapshot.retainedArtifactPaths) {
+                        retainedArtifactPaths.add(artifactPath);
+                      }
+                      return snapshot.store;
+                    },
+                    storePath: target.storePath,
+                    olderThanMs: maintenance.pruneAfterMs,
+                    dryRun: false,
+                    excludeCanonicalPaths: retainedArtifactPaths,
+                  });
+            owner.assertCurrent();
+            const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
+            const appliedDiskBudget = await enforceSqliteSessionHistoryDiskBudget({
               agentId: target.agentId,
               storePath: target.storePath,
-              mode: appliedReport.mode,
+              mode,
+              maintenance,
+              reclamationMode: params.reclamationMode,
+            });
+            owner.assertCurrent();
+            const finalCount =
+              (appliedDiskBudget?.removedEntries ?? 0) > 0
+                ? Object.keys((await owner.read()).store).length
+                : lifecycleResult.afterCount;
+            const missing = missingRemovals.filter(({ sessionKey }) =>
+              removedSessionKeys.has(sessionKey),
+            ).length;
+            const dmScopeRetired = dmScopeRetiredRemovals.filter(({ sessionKey }) =>
+              removedSessionKeys.has(sessionKey),
+            ).length;
+            const maintenanceRemovedEntries =
+              lifecycleResult.modelRunPruned + lifecycleResult.pruned + lifecycleResult.capped;
+            const summary: SessionCleanupSummary = {
+              agentId: target.agentId,
+              storePath: target.storePath,
+              mode,
               dryRun: false,
-              beforeCount: appliedReport.beforeCount,
-              afterCount: appliedReport.afterCount,
-              missing: missingApplied,
-              dmScopeRetired: dmScopeRetiredApplied,
-              modelRunPruned: appliedReport.modelRunPruned,
-              pruned: appliedReport.pruned,
-              capped: appliedReport.capped,
+              beforeCount: lifecycleResult.beforeCount,
+              afterCount: finalCount,
+              missing,
+              dmScopeRetired,
+              modelRunPruned: lifecycleResult.modelRunPruned,
+              archived: lifecycleResult.archived - (lifecycleResult.capArchived ?? 0),
+              capArchived: lifecycleResult.capArchived ?? 0,
+              pruned: lifecycleResult.pruned,
+              capped: lifecycleResult.capped,
               unreferencedArtifacts,
               diskBudget: appliedDiskBudget,
               wouldMutate:
-                missingApplied > 0 ||
-                dmScopeRetiredApplied > 0 ||
-                appliedReport.modelRunPruned > 0 ||
-                appliedReport.pruned > 0 ||
-                appliedReport.capped > 0 ||
+                lifecycleResult.removedEntries > 0 ||
+                lifecycleResult.archived > 0 ||
+                maintenanceRemovedEntries > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
                 (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedDiskBudget?.removedFiles ?? 0) > 0 ||
@@ -689,10 +483,34 @@ export async function runSessionsCleanup(params: {
                 (appliedDiskBudget != null &&
                   appliedDiskBudget.totalBytesAfter < appliedDiskBudget.totalBytesBefore),
               applied: true,
-              appliedCount: lifecycleResult.afterCount,
+              appliedCount: finalCount,
             };
-      appliedSummaries.push(summary);
+            appliedSummaries.push(summary);
+          },
+          { assertCurrent: params.assertCurrent },
+        );
+      }
     }
+  } catch (cause) {
+    // A first-store failure preserves the existing rejection contract. Once a
+    // store commits, the owner must return its summary with the later failure.
+    if (!failingTarget) {
+      throw cause;
+    }
+    const failure = createSessionsCleanupFailure(
+      failingTarget,
+      cause,
+      failingTargetLifecycleCommitted,
+    );
+    if (appliedSummaries.length === 0) {
+      throw new SessionsCleanupFailureError(failure, cause);
+    }
+    return {
+      mode,
+      previewResults,
+      appliedSummaries,
+      failure,
+    };
   }
 
   return { mode, previewResults, appliedSummaries };
@@ -702,22 +520,54 @@ export async function runSessionsCleanup(params: {
 export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
-): Promise<void> {
+  options: {
+    runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
+    onFailure?: (failure: { path: string; reason: string }) => void;
+  } = {},
+): Promise<boolean> {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  let storePath = typeof cfg.session?.store === "string" ? cfg.session.store : "<default>";
+  let failurePath = storePath;
+  let step = "resolve session store";
   try {
-    const normalizedAgentId = normalizeAgentId(agentId);
-    const storeConfig = cfg.session?.store;
-    const storeAgentId =
-      typeof storeConfig === "string" && !storeConfig.includes("{agentId}")
-        ? normalizeAgentId(resolveDefaultAgentId(cfg))
-        : normalizedAgentId;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: normalizedAgentId });
-    await purgeDeletedAgentSessionEntries({
-      cfg,
+    storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
-      storeAgentId,
-      storePath,
     });
-  } catch (err) {
-    getLogger().debug("session store purge skipped during agent delete", err);
+    const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: normalizedAgentId,
+      defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+    });
+    failurePath = sqliteTarget.path;
+    if (!fs.existsSync(sqliteTarget.path)) {
+      return false;
+    }
+    const storeAgentId = sqliteTarget.agentId ?? normalizedAgentId;
+    const purge = async () => {
+      step = "purge session entries";
+      await purgeDeletedAgentSessionEntries({
+        cfg,
+        agentId: normalizedAgentId,
+        storeAgentId,
+        storePath,
+      });
+      step = "close session-store cleanup";
+    };
+    if (options.runDatabaseCleanup) {
+      step = "admit session-store cleanup";
+      await options.runDatabaseCleanup({ agentId: storeAgentId, path: sqliteTarget.path }, purge);
+    } else {
+      await purge();
+    }
+    return false;
+  } catch (error) {
+    const failure = { path: failurePath, reason: `${step}: ${formatErrorMessageWithCode(error)}` };
+    getLogger().warn("session store purge failed during agent deletion", {
+      agentId: normalizedAgentId,
+      error,
+      storePath,
+      ...failure,
+    });
+    options.onFailure?.(failure);
+    return true;
   }
 }

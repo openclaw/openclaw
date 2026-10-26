@@ -1,18 +1,13 @@
-// QA Lab Matrix plugin module implements scenario runtime state files behavior.
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findMatrixStateDatabases } from "./scenario-runtime-find-files.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_SYNC_CACHE_NAMESPACE = "sync-cache";
-// Mirrors the matrix plugin's core claimable-dedupe state namespace:
-// `matrix.inbound-dedupe.<hash>` (extensions/matrix monitor/inbound-dedupe.ts).
-const MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE = "matrix.inbound-dedupe.%";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 const MATRIX_SYNC_CACHE_MAX_ENTRIES = 20_000;
 const MATRIX_SYNC_CACHE_MAX_CHUNKS = Math.floor((MATRIX_SYNC_CACHE_MAX_ENTRIES - 1) / 2);
@@ -22,96 +17,10 @@ const MATRIX_SYNC_CACHE_CHUNK_BYTES = 24_000;
 type MatrixSyncStoreCursor = {
   cursor: string;
   pathname: string;
-  source: "json" | "sqlite";
-  stateKey?: string;
+  stateKey: string;
 };
 
-async function readJsonFile(pathname: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(pathname, "utf8")) as unknown;
-}
-
-async function writeJsonFile(pathname: string, value: unknown) {
-  await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function findFilesByName(params: {
-  filename: string;
-  rootDir: string;
-  maxDepth?: number;
-}): Promise<string[]> {
-  const maxDepth = params.maxDepth ?? 8;
-  const matches: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > maxDepth) {
-      return;
-    }
-    let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === params.filename) {
-        matches.push(entryPath);
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await visit(entryPath, depth + 1);
-      }
-    }
-  }
-  await visit(params.rootDir, 0);
-  return matches.toSorted();
-}
-
-function readPersistedMatrixSyncCursor(parsed: unknown): string | null {
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const savedSync = parsed.savedSync;
-  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
-    return savedSync.nextBatch;
-  }
-  if (typeof parsed.next_batch === "string") {
-    return parsed.next_batch;
-  }
-  return null;
-}
-
-function writePersistedMatrixSyncCursor(parsed: unknown, cursor: string): unknown {
-  if (!isRecord(parsed)) {
-    throw new Error("Matrix sync store was not a JSON object");
-  }
-  const savedSync = parsed.savedSync;
-  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
-    return {
-      ...parsed,
-      savedSync: {
-        ...savedSync,
-        nextBatch: cursor,
-      },
-    };
-  }
-  if (typeof parsed.nextBatch === "string") {
-    return {
-      ...parsed,
-      nextBatch: cursor,
-    };
-  }
-  if (typeof parsed.next_batch === "string") {
-    return {
-      ...parsed,
-      next_batch: cursor,
-    };
-  }
-  throw new Error("Matrix sync store did not contain a persisted sync cursor");
-}
-
-async function readMatrixSyncStoreCursor(pathname: string): Promise<string | null> {
-  return readPersistedMatrixSyncCursor(await readJsonFile(pathname));
-}
+type MatrixStateIdentity = { accountId: string; userId: string };
 
 function parsePluginStateJson(raw: unknown): unknown {
   if (typeof raw !== "string") {
@@ -124,16 +33,18 @@ function parsePluginStateJson(raw: unknown): unknown {
   }
 }
 
-function readMatrixSyncCacheCursorFromRows(
-  rows: Array<{ entryKey?: unknown; valueJson?: unknown }>,
-): MatrixSyncStoreCursor[] {
+function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson?: unknown }>) {
   const rowsByKey = new Map<string, unknown>();
   for (const row of rows) {
     if (typeof row.entryKey === "string") {
       rowsByKey.set(row.entryKey, parsePluginStateJson(row.valueJson));
     }
   }
-  const cursors: MatrixSyncStoreCursor[] = [];
+  const entries: Array<{
+    cursor: string;
+    stateKey: string;
+    sync: Record<string, unknown>;
+  }> = [];
   for (const [entryKey, rawMeta] of rowsByKey) {
     if (!entryKey.endsWith(":meta") || !isRecord(rawMeta) || rawMeta.kind !== "meta") {
       continue;
@@ -159,35 +70,30 @@ function readMatrixSyncCacheCursorFromRows(
       continue;
     }
     try {
-      const cursor = readPersistedMatrixSyncCursor({
-        savedSync: JSON.parse(chunks.join("")) as unknown,
-      });
-      if (cursor) {
-        cursors.push({ cursor, pathname: "", source: "sqlite", stateKey });
+      const sync: unknown = JSON.parse(chunks.join(""));
+      if (isRecord(sync) && typeof sync.nextBatch === "string" && sync.nextBatch) {
+        entries.push({ cursor: sync.nextBatch, stateKey, sync });
       }
     } catch {
       continue;
     }
   }
-  return cursors;
+  return entries;
 }
 
-async function readMatrixSyncCacheCursorsFromSqlite(params: {
-  accountId?: string;
-  context: MatrixQaScenarioContext;
-  stateDir: string;
-  userId?: string;
-}): Promise<MatrixSyncStoreCursor[]> {
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
-  const cursors: Array<MatrixSyncStoreCursor & { score: number }> = [];
+async function readMatrixSyncCacheCursorsFromSqlite(
+  params: MatrixStateIdentity & { stateDir: string },
+): Promise<MatrixSyncStoreCursor[]> {
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
+  const cursors: MatrixSyncStoreCursor[] = [];
   for (const databasePath of databasePaths) {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
+        const metadata = readMatrixStorageMetadata(db);
+        if (!matchesMatrixStateIdentity(metadata, params)) {
+          continue;
+        }
         const rows = db
           .prepare(
             `SELECT entry_key AS entryKey, value_json AS valueJson
@@ -200,18 +106,8 @@ async function readMatrixSyncCacheCursorsFromSqlite(params: {
           entryKey?: unknown;
           valueJson?: unknown;
         }>;
-        for (const cursor of readMatrixSyncCacheCursorFromRows(rows)) {
-          const storageRootDir = path.dirname(path.dirname(databasePath));
-          cursors.push({
-            ...cursor,
-            pathname: databasePath,
-            score: await scoreMatrixStateFile({
-              context: params.context,
-              pathname: path.join(storageRootDir, MATRIX_SYNC_STORE_FILENAME),
-              ...(params.accountId ? { accountId: params.accountId } : {}),
-              ...(params.userId ? { userId: params.userId } : {}),
-            }),
-          });
+        for (const { cursor, stateKey } of readMatrixSyncCacheFromRows(rows)) {
+          cursors.push({ cursor, pathname: databasePath, stateKey });
         }
       } finally {
         db.close();
@@ -220,9 +116,7 @@ async function readMatrixSyncCacheCursorsFromSqlite(params: {
       continue;
     }
   }
-  return cursors
-    .toSorted((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname))
-    .map(({ score: _score, ...cursor }) => cursor);
+  return cursors;
 }
 
 function chunkMatrixSyncCacheJson(value: string): string[] {
@@ -245,11 +139,7 @@ function chunkMatrixSyncCacheJson(value: string): string[] {
   return chunks;
 }
 
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-async function rewriteMatrixSyncCacheRows(params: {
+export async function rewriteMatrixSyncStoreCursor(params: {
   cursor: string;
   pathname: string;
   stateKey: string;
@@ -274,31 +164,13 @@ async function rewriteMatrixSyncCacheRows(params: {
     if (!isRecord(meta)) {
       throw new Error("Matrix sync cache metadata row was missing");
     }
-    const cursorEntry = readMatrixSyncCacheCursorFromRows(rows)[0];
+    const cursorEntry = readMatrixSyncCacheFromRows(rows).find(
+      (entry) => entry.stateKey === params.stateKey,
+    );
     if (!cursorEntry) {
       throw new Error("Matrix sync cache did not contain a persisted sync cursor");
     }
-    const generation = typeof meta.generation === "string" ? meta.generation : "";
-    const chunkCount =
-      typeof meta.chunkCount === "number" &&
-      Number.isSafeInteger(meta.chunkCount) &&
-      meta.chunkCount <= MATRIX_SYNC_CACHE_MAX_CHUNKS
-        ? meta.chunkCount
-        : 0;
-    const chunks: string[] = [];
-    for (let index = 0; index < chunkCount; index += 1) {
-      const chunk = parsePluginStateJson(
-        rows.find((row) => row.entryKey === `${params.stateKey}:sync:${generation}:${index}`)
-          ?.valueJson,
-      );
-      if (!isRecord(chunk) || typeof chunk.data !== "string") {
-        throw new Error("Matrix sync cache chunk row was missing");
-      }
-      chunks.push(chunk.data);
-    }
-    const syncJson = JSON.stringify(
-      writePersistedMatrixSyncCursor(JSON.parse(chunks.join("")), params.cursor),
-    );
+    const syncJson = JSON.stringify({ ...cursorEntry.sync, nextBatch: params.cursor });
     const nextGeneration = randomUUID().replaceAll("-", "");
     const nextChunks = chunkMatrixSyncCacheJson(syncJson);
     const now = Date.now();
@@ -325,7 +197,7 @@ async function rewriteMatrixSyncCacheRows(params: {
         ...meta,
         generation: nextGeneration,
         chunkCount: nextChunks.length,
-        syncDigest: digestText(syncJson),
+        syncDigest: createHash("sha256").update(syncJson, "utf8").digest("hex"),
       }),
       now,
     );
@@ -346,32 +218,7 @@ async function rewriteMatrixSyncCacheRows(params: {
   }
 }
 
-export async function rewriteMatrixSyncStoreCursor(params: {
-  cursor: string;
-  pathname: string;
-  source?: "json" | "sqlite";
-  stateKey?: string;
-}) {
-  if (params.source === "sqlite" || params.stateKey) {
-    if (!params.stateKey) {
-      throw new Error("Matrix sync cache rewrite requires a state key");
-    }
-    await rewriteMatrixSyncCacheRows({
-      cursor: params.cursor,
-      pathname: params.pathname,
-      stateKey: params.stateKey,
-    });
-    return;
-  }
-  const parsed = await readJsonFile(params.pathname);
-  await writeJsonFile(params.pathname, writePersistedMatrixSyncCursor(parsed, params.cursor));
-}
-
 export async function deleteMatrixSyncStoreCursor(params: MatrixSyncStoreCursor) {
-  if (params.source !== "sqlite" || !params.stateKey) {
-    await fs.rm(params.pathname, { force: true });
-    return;
-  }
   const db = openNodeSqliteDatabase(params.pathname);
   try {
     db.prepare(
@@ -390,58 +237,23 @@ export async function deleteMatrixSyncStoreCursor(params: MatrixSyncStoreCursor)
   }
 }
 
-async function scoreMatrixStateFile(params: {
-  accountId?: string;
-  context: MatrixQaScenarioContext;
-  pathname: string;
-  userId?: string;
-}) {
-  let score = params.pathname.includes(`${path.sep}matrix${path.sep}`) ? 4 : 0;
-  const expectedUserId = params.userId ?? params.context.sutUserId;
-  const expectedAccountId = params.accountId ?? params.context.sutAccountId;
-  try {
-    const metadata = await readJsonFile(
-      path.join(path.dirname(params.pathname), "storage-meta.json"),
-    );
-    if (isRecord(metadata) && metadata.userId === expectedUserId) {
-      score += 16;
-    }
-    if (isRecord(metadata) && metadata.accountId === expectedAccountId) {
-      score += 8;
-    }
-  } catch {
-    // Missing metadata is allowed; the Matrix client may not have flushed it yet.
-  }
-  return score;
+function readMatrixStorageMetadata(db: ReturnType<typeof openNodeSqliteDatabase>): unknown {
+  const row = db
+    .prepare(
+      `SELECT value_json AS valueJson FROM plugin_state_entries
+          WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
+            AND (expires_at IS NULL OR expires_at > ?)`,
+    )
+    .get(MATRIX_PLUGIN_ID, "storage-meta", "current", Date.now());
+  return row ? parsePluginStateJson(row.valueJson) : undefined;
 }
 
-async function resolveBestMatrixStateFile(params: {
-  accountId?: string;
-  context: MatrixQaScenarioContext;
-  filename: string;
-  stateDir: string;
-  userId?: string;
-}) {
-  const candidates = await findFilesByName({
-    filename: params.filename,
-    rootDir: params.stateDir,
-  });
-  if (candidates.length === 0) {
-    return null;
-  }
-  const scored = await Promise.all(
-    candidates.map(async (pathname) => ({
-      pathname,
-      score: await scoreMatrixStateFile({
-        context: params.context,
-        pathname,
-        ...(params.accountId ? { accountId: params.accountId } : {}),
-        ...(params.userId ? { userId: params.userId } : {}),
-      }),
-    })),
+function matchesMatrixStateIdentity(metadata: unknown, identity: MatrixStateIdentity): boolean {
+  return (
+    isRecord(metadata) &&
+    metadata.accountId === identity.accountId &&
+    metadata.userId === identity.userId
   );
-  scored.sort((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname));
-  return scored[0]?.pathname ?? null;
 }
 
 export async function waitForMatrixSyncStoreWithCursor(params: {
@@ -452,79 +264,42 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
   userId?: string;
 }) {
   const startedAt = Date.now();
-  let lastPath: string | null = null;
+  const identity = {
+    accountId: params.accountId ?? params.context.sutAccountId ?? DEFAULT_ACCOUNT_ID,
+    userId: params.userId ?? params.context.sutUserId,
+  };
   while (Date.now() - startedAt < params.timeoutMs) {
-    const sqliteCursors = await readMatrixSyncCacheCursorsFromSqlite({
-      context: params.context,
+    const [sqliteCursor] = await readMatrixSyncCacheCursorsFromSqlite({
+      ...identity,
       stateDir: params.stateDir,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-      ...(params.userId ? { userId: params.userId } : {}),
     });
-    if (sqliteCursors.length > 0) {
-      const cursor = sqliteCursors[0];
-      if (cursor) {
-        return cursor;
-      }
-    }
-    const pathname = await resolveBestMatrixStateFile({
-      context: params.context,
-      filename: MATRIX_SYNC_STORE_FILENAME,
-      stateDir: params.stateDir,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-      ...(params.userId ? { userId: params.userId } : {}),
-    });
-    lastPath = pathname;
-    if (pathname) {
-      const cursor = await readMatrixSyncStoreCursor(pathname);
-      if (cursor) {
-        return { cursor, pathname, source: "json" as const };
-      }
+    if (sqliteCursor) {
+      return sqliteCursor;
     }
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
-  throw new Error(
-    `timed out waiting for Matrix sync store cursor under ${params.stateDir}; last path ${lastPath ?? "<none>"}`,
-  );
+  throw new Error(`timed out waiting for Matrix sync store cursor under ${params.stateDir}`);
 }
 
-async function hasPersistedMatrixPluginStateDedupeEntry(params: {
+async function hasPersistedMatrixIngressCompletion(params: {
+  accountId: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
 }): Promise<string | null> {
-  // Mirrors extensions/matrix monitor/inbound-dedupe.ts: the persisted entry
-  // value records the NUL-joined (account, room, event) dedupe key; suffix
-  // matching keeps the probe independent of the runtime account id.
-  const expectedKeySuffix = `\0${params.roomId.trim()}\0${params.eventId.trim()}`;
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
   for (const databasePath of databasePaths) {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        const rows = db
+        const completed = db
           .prepare(
-            `SELECT value_json AS valueJson
-               FROM plugin_state_entries
-              WHERE plugin_id = ?
-                AND namespace LIKE ?
-                AND (expires_at IS NULL OR expires_at > ?)`,
+            `SELECT 1 FROM channel_ingress_events
+              WHERE channel_id = ? AND account_id = ? AND event_id = ?
+                AND status = 'completed'
+              LIMIT 1`,
           )
-          .all(MATRIX_PLUGIN_ID, MATRIX_INBOUND_DEDUPE_NAMESPACE_LIKE, Date.now()) as Array<{
-          valueJson?: unknown;
-        }>;
-        const matched = rows.some((row) => {
-          const entry = parsePluginStateJson(row.valueJson);
-          return (
-            isRecord(entry) &&
-            typeof entry.key === "string" &&
-            entry.key.endsWith(expectedKeySuffix)
-          );
-        });
-        if (matched) {
+          .get(MATRIX_PLUGIN_ID, params.accountId, params.eventId);
+        if (completed) {
           return databasePath;
         }
       } finally {
@@ -537,17 +312,18 @@ async function hasPersistedMatrixPluginStateDedupeEntry(params: {
   return null;
 }
 
-export async function waitForMatrixInboundDedupeEntry(params: {
+export async function waitForMatrixIngressCompletion(params: {
+  accountId?: string;
   eventId: string;
-  roomId: string;
   stateDir: string;
   timeoutMs: number;
 }) {
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    const sqlitePath = await hasPersistedMatrixPluginStateDedupeEntry({
+    const sqlitePath = await hasPersistedMatrixIngressCompletion({
+      accountId,
       eventId: params.eventId,
-      roomId: params.roomId,
       stateDir: params.stateDir,
     });
     if (sqlitePath) {
@@ -556,6 +332,6 @@ export async function waitForMatrixInboundDedupeEntry(params: {
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
   throw new Error(
-    `timed out waiting for Matrix inbound dedupe commit for ${params.roomId}|${params.eventId}`,
+    `timed out waiting for Matrix ingress completion for ${accountId}|${params.eventId}`,
   );
 }

@@ -1,57 +1,53 @@
-import type { TemplateResult } from "lit";
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
-import type { BoardViewWidget } from "../view-types.ts";
-import type { BoardObserverContext } from "../view-types.ts";
-import { renderObserverWidget } from "./observer.ts";
+import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-document.ts";
+import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
+import type { BoardWidget } from "../types.ts";
 
-type BuiltinBoardWidgetRenderer = (context: {
-  observer?: BoardObserverContext;
-  sessionKey: string;
-}) => TemplateResult;
+registerBoardDocumentEnglish();
 
-export type PluginBoardWidgetRenderer = (props: {
-  widget: BoardViewWidget;
-  sessionKey: string;
-  canMutate: boolean;
-  requestUpdate: () => void;
-}) => TemplateResult;
-
-type PluginWidgetKindContribution = {
-  kind: string;
-  label: string;
-  loader: () => Promise<PluginBoardWidgetRenderer>;
-};
+registerSessionProgressEnglish();
 
 /**
- * Plugin renderers are trusted first-party Control UI code. They render in the
- * cell without an iframe or grants, receive only widget/session/capability/update
- * props, and use the standard gateway client for RPCs owned by their plugin.
+ * Core widget metadata stays independent of the lazy renderers. Preview-safe widgets consume
+ * only saved data; they never acquire live subscriptions or invoke Gateway methods.
  */
-const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribution> = {
-  "workboard:card": {
-    kind: "workboard:card",
-    label: t("workboard.widget.cardLabel"),
-    loader: async () => (await import("./workboard-card.ts")).renderWorkboardCardWidget,
+const CORE_BOARD_WIDGET_ELEMENTS = [
+  {
+    kind: "session:progress",
+    tagName: "openclaw-session-progress-widget",
+    get label() {
+      return t("sessionProgressCard.widgetLabel");
+    },
+    previewSafe: false,
   },
-  "workboard:mini": {
-    kind: "workboard:mini",
-    label: t("workboard.widget.summaryLabel"),
-    loader: async () => (await import("./workboard-mini.ts")).renderWorkboardMiniWidget,
+  {
+    kind: "session:report",
+    tagName: "openclaw-report-widget",
+    get label() {
+      return t("board.widget.kindReport");
+    },
+    previewSafe: true,
   },
-};
+  {
+    kind: "session:website",
+    tagName: "openclaw-website-widget",
+    get label() {
+      return t("board.widget.kindWebsite");
+    },
+    previewSafe: false,
+  },
+  {
+    kind: "browser:dashboard",
+    tagName: "openclaw-browser-dashboard-widget",
+    get label() {
+      return t("board.widget.kindBrowserDashboard");
+    },
+    previewSafe: false,
+  },
+] as const;
 
-const pluginRendererPromises = new Map<string, Promise<PluginBoardWidgetRenderer>>();
-
-const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinBoardWidgetRenderer> = {
-  observer: renderObserverWidget,
-};
-
-export function getBuiltinWidgetRenderer(
-  name: string | undefined,
-): BuiltinBoardWidgetRenderer | null {
-  return name ? (BUILTIN_WIDGET_RENDERERS[name] ?? null) : null;
-}
+type CoreBoardWidgetElement = (typeof CORE_BOARD_WIDGET_ELEMENTS)[number];
 
 export function pluginIdForWidgetKind(kind: string | undefined): string {
   return kind?.split(":", 1)[0]?.trim() || "unknown";
@@ -60,11 +56,11 @@ export function pluginIdForWidgetKind(kind: string | undefined): string {
 export function getPluginWidgetKindContribution(
   kind: string | undefined,
   activeKinds: readonly GatewayControlUiPluginWidgetKind[],
-): PluginWidgetKindContribution | null {
+): CoreBoardWidgetElement | null {
   if (!kind) {
     return null;
   }
-  const contribution = PLUGIN_WIDGET_KIND_CONTRIBUTIONS[kind];
+  const contribution = CORE_BOARD_WIDGET_ELEMENTS.find((entry) => entry.kind === kind);
   if (!contribution) {
     return null;
   }
@@ -74,19 +70,14 @@ export function getPluginWidgetKindContribution(
     : null;
 }
 
-export function loadPluginWidgetRenderer(
-  contribution: PluginWidgetKindContribution,
-): Promise<PluginBoardWidgetRenderer> {
-  const existing = pluginRendererPromises.get(contribution.kind);
-  if (existing) {
-    return existing;
-  }
-  const loaded = contribution.loader();
-  pluginRendererPromises.set(contribution.kind, loaded);
-  void loaded.catch(() => {
-    if (pluginRendererPromises.get(contribution.kind) === loaded) {
-      pluginRendererPromises.delete(contribution.kind);
-    }
-  });
-  return loaded;
+export function isPassiveBoardWidget(
+  widget: BoardWidget,
+  activeKinds: readonly GatewayControlUiPluginWidgetKind[],
+): boolean {
+  return (
+    widget.contentKind === "html" ||
+    (widget.contentKind === "plugin" &&
+      !widget.frameUrl &&
+      getPluginWidgetKindContribution(widget.pluginKind, activeKinds)?.previewSafe === true)
+  );
 }

@@ -1,27 +1,11 @@
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 const LEGACY_LOCK_STALE_MS = 60_000;
 
-function parseLockPayload(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Classify only retired-runtime owners whose age and process identity are provably stale. */
-export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
-  raw: string;
-  nowMs?: number;
-  isPidDefinitelyDead?: (pid: number) => boolean;
-  getProcessStartTime?: (pid: number) => number | null;
-}): boolean {
-  const payload = parseLockPayload(params.raw);
+export function isDefinitelyStaleLegacyMcpOAuthLock(params: { raw: string }): boolean {
+  const payload = safeParseJsonRecord(params.raw);
   if (!payload) {
     return false;
   }
@@ -39,7 +23,7 @@ export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
     return false;
   }
   const createdAtMs = Date.parse(createdAt);
-  const ageMs = (params.nowMs ?? Date.now()) - createdAtMs;
+  const ageMs = Date.now() - createdAtMs;
   if (
     !Number.isFinite(createdAtMs) ||
     new Date(createdAtMs).toISOString() !== createdAt ||
@@ -48,9 +32,5 @@ export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   ) {
     return false;
   }
-  return isLockOwnerDefinitelyStale({
-    payload,
-    isPidDefinitelyDead: params.isPidDefinitelyDead ?? isPidDefinitelyDead,
-    getProcessStartTime: params.getProcessStartTime ?? getFileLockProcessStartTime,
-  });
+  return isLockOwnerDefinitelyStale({ payload });
 }

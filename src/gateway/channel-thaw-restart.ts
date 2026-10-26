@@ -1,0 +1,95 @@
+// Host-thaw channel restart over the public ChannelManager surface.
+import type { ChannelId } from "../channels/plugins/index.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import type { ChannelManager } from "./server-channels.js";
+
+type ThawRestartManager = Pick<
+  ChannelManager,
+  "getRuntimeSnapshot" | "isManuallyStopped" | "isAccountListed" | "stopChannel" | "startChannel"
+>;
+
+export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
+
+function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[] {
+  return Object.entries(
+    manager.getRuntimeSnapshot({ inspectAccounts: false }).channelAccounts,
+  ).flatMap(([channelId, accounts]) =>
+    Object.entries(accounts ?? {})
+      .filter(
+        ([accountId, status]) =>
+          status?.running === true && manager.isAccountListed(channelId, accountId),
+      )
+      .map(([accountId]) => ({ channelId, accountId })),
+  );
+}
+
+/**
+ * Restarts running listed, non-manually-stopped channel accounts after a host
+ * thaw. Dead sockets from a freeze otherwise wait for the slow health sweep.
+ */
+export async function restartRunningChannelAccounts(
+  manager: ThawRestartManager,
+  opts: { shouldContinue: () => boolean; onError: (message: string) => void },
+  selection:
+    | { kind: "new-thaw"; pendingTargets?: readonly ThawRestartTarget[] }
+    | { kind: "deferred-retry"; targets: readonly ThawRestartTarget[] } = { kind: "new-thaw" },
+): Promise<ThawRestartTarget[]> {
+  const targets =
+    selection.kind === "new-thaw"
+      ? dedupeByKey(
+          [...(selection.pendingTargets ?? []), ...snapshotRunningTargets(manager)],
+          (target) => `${target.channelId}:${target.accountId}`,
+        )
+      : [...selection.targets];
+  const failedTargets: ThawRestartTarget[] = [];
+  for (const [index, target] of targets.entries()) {
+    const { channelId, accountId } = target;
+    if (manager.isManuallyStopped(channelId, accountId)) {
+      continue;
+    }
+    // A suspension can commit while an account stop is awaited; retain only
+    // unfinished targets so successful siblings are not disrupted again.
+    if (!opts.shouldContinue()) {
+      return [...failedTargets, ...targets.slice(index)];
+    }
+    try {
+      const snapshotOptions = { channelId, inspectAccounts: false };
+      let current =
+        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
+        continue;
+      }
+      await manager.stopChannel(channelId, accountId, { manual: false });
+      if (!opts.shouldContinue()) {
+        return [...failedTargets, target, ...targets.slice(index + 1)];
+      }
+      current = manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      if (!current || !manager.isAccountListed(channelId, accountId)) {
+        continue;
+      }
+      const startOutcomes = await manager.startChannel(channelId, accountId, {
+        reason: "host-thaw",
+        preserveManualStop: true,
+      });
+      const startOutcome = startOutcomes.get(accountId);
+      const restarted =
+        manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
+      // The channel manager owns all failures after handoff through its restart
+      // supervisor. Intentional configuration skips are complete; only a
+      // transient owner conflict remains this thaw's retry.
+      if (startOutcome?.status === "retry") {
+        failedTargets.push(target);
+        opts.onError(
+          `[${channelId}:${accountId}] host-thaw restart failed: replacement was not handed off (${startOutcome.reason})${restarted?.lastError ? `: ${restarted.lastError}` : ""}`,
+        );
+      }
+    } catch (error) {
+      failedTargets.push(target);
+      opts.onError(`[${channelId}:${accountId}] host-thaw restart failed: ${String(error)}`);
+    }
+    if (!opts.shouldContinue()) {
+      return [...failedTargets, ...targets.slice(index + 1)];
+    }
+  }
+  return failedTargets;
+}

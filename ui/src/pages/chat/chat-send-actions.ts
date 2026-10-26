@@ -1,148 +1,242 @@
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
+import {
+  chatQueueMovableSegments,
+  compareChatQueueOrder,
+  isMovableChatQueueItem,
+  reorderChatQueueItems,
+} from "../../lib/chat/chat-queue-order.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import {
-  flushStoredChatOutbox,
-  resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
-  scheduleStoredChatOutboxDrain,
-} from "./chat-outbox-drain.ts";
-import {
-  admitQueuedMessageForSession,
-  isVolatileQueuedMessage,
-  updateQueuedMessage,
-  updateVolatileQueuedMessage,
-} from "./chat-queue.ts";
-import type { ChatHost } from "./chat-send-contract.ts";
-import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
-import {
-  canSendVolatileQueueItem,
-  reconnectSafeQueuedSendState,
+  isExpiredIncognitoSession,
+  isInitialChatHistoryUnavailable,
   setChatError,
-} from "./chat-send-queue-state.ts";
+} from "./chat-history-state.ts";
+import type { QueuedChatSendOptions } from "./chat-outbox-drain.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { flushChatQueueForEvent } from "./chat-outbox-resume.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
+import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import { deliverChatQueueItem } from "./chat-send-delivery.ts";
+import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  resolveDisplayedLeafEntryId,
-} from "./chat-send-request.ts";
-import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import { formatConnectError } from "./connect-error.ts";
-import {
-  OFFLINE_QUEUE_STORAGE_ERROR,
-  steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
-  type SteerSendDependencies,
-} from "./steer-lifecycle.ts";
-import { isInflightSteer } from "./steered-chip.ts";
+  isQueuedMessageBeingEdited,
+  QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
+  QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
+  QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
+} from "./queued-message-edit.ts";
 
-export async function sendChatMessageWithGeneratedRunId(
-  state: ChatState,
-  message: string,
-  attachments?: ChatAttachment[],
-  options: Partial<Parameters<SteerSendDependencies["sendChatMessage"]>[3]> = {},
-) {
-  const msg = message.trim();
-  if (!state.client || !state.connected || (!msg && !attachments?.length)) {
-    return null;
-  }
-  const canApplyError = options.canApplyError ?? (() => true);
-  if (canApplyError()) {
-    setChatError(state, null);
-  }
-  const runId = options.runId ?? generateUUID();
-  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
-  try {
-    return await requestChatSend(state, {
-      message: msg,
-      attachments,
-      runId,
-      ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
-      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
-    });
-  } catch (err) {
-    if (canApplyError()) {
-      setChatError(
-        state,
-        isActiveLeafChangedError(err)
-          ? t("chat.sendErrors.activeLeafChanged")
-          : formatConnectError(err),
-      );
-      if (isActiveLeafChangedError(err)) {
-        void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-      }
-    }
-    return null;
-  }
-}
+export { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-outbox-resume.ts";
 
-function findStoredOutbox(host: ChatHost, id: string) {
-  return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
+registerChatGoalsEnglish();
+
+function hasAttemptedChatDelivery(entry: ChatQueueItem): boolean {
+  return Boolean(
+    entry.sendRunId &&
+    !entry.localCommandName &&
+    ((entry.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined),
+  );
 }
 
 const resetRetryState = (
   entry: ChatQueueItem,
   sendState: ChatQueueItem["sendState"],
-): ChatQueueItem => ({
-  ...entry,
-  sendAttempts: 0,
-  sendError: undefined,
-  sendRequestStartedAtMs: undefined,
-  sendRunId: entry.sendState === "failed" ? generateUUID() : entry.sendRunId,
-  sendState,
-});
-
-export const steerSendDependencies: SteerSendDependencies = {
-  loadChatHistory: (host) => void loadChatHistory(host as unknown as ChatState),
-  resumeRestoredOutbox: (host, itemId) => {
-    const restoredOutbox = findStoredOutbox(host as ChatHost, itemId);
-    if (!host.chatRunId && restoredOutbox) {
-      void scheduleStoredChatOutboxDrain(
-        host as ChatHost,
-        restoredOutbox,
-        chatOutboxDrainDependencies,
-      );
-    }
-  },
-  sendChatMessage: (host, message, attachments, options) =>
-    sendChatMessageWithGeneratedRunId(host as unknown as ChatState, message, attachments, options),
+  reviewedSessionId?: string,
+): ChatQueueItem => {
+  const renewAdmission =
+    !reviewedSessionId &&
+    entry.sendState === "failed" &&
+    !entry.attachmentStorageError &&
+    entry.queueMode !== "steer" &&
+    !entry.intent;
+  // An ID-less post-clear review barrier has no transport attempt to preserve.
+  const attempted = !renewAdmission && hasAttemptedChatDelivery(entry);
+  return {
+    ...entry,
+    // Local payload failure cannot erase an uncertain transport attempt. Keep its
+    // identity until the explicitly admitted retry actually reaches transport.
+    sendAttempts: attempted ? entry.sendAttempts : 0,
+    // A failed delivery keeps its diagnostic while an explicit retry waits for
+    // run admission; the transcript uses it to retain the same optimistic row.
+    sendError: entry.sendState === "failed" ? entry.sendError : undefined,
+    sendRequestStartedAtMs: attempted ? entry.sendRequestStartedAtMs : undefined,
+    sendRunId: renewAdmission ? generateUUID() : entry.sendRunId,
+    sessionId: renewAdmission ? undefined : (entry.sessionId ?? reviewedSessionId),
+    sendState,
+  };
 };
 
-export const steerQueuedChatMessage = (host: ChatHost, id: string) =>
-  steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
+export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
+  if (readQueuedMessageById(host, id)?.intent) {
+    setChatError(host, t("chat.goals.admissionImmutable"));
+    return;
+  }
+  if (isQueuedMessageBeingEdited(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_STEER_CONFLICT_ERROR);
+    return;
+  }
+  const item = updateQueuedMessage(host, id, (entry) => ({ ...entry, queueMode: "steer" }));
+  if (!item) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  await retryQueuedChatMessage(host, id);
+}
 
-export const resumeStoredChatOutboxes = (host: ChatHost) =>
-  resumeStoredChatOutboxesDrain(host, chatOutboxDrainDependencies);
+/**
+ * Moves a queued row to the target row's position in its own movable segment. A locked row
+ * ends that segment, so the move can never carry a message past work the drain
+ * is still waiting on. Every changed row commits as one durable unit, so a
+ * storage failure mid-permutation leaves the prior order intact instead of a
+ * partially reshuffled queue.
+ */
+type ChatQueueMoveResult = "moved" | "rejected" | "noop";
 
-export const flushChatQueueForEvent = (host: ChatHost) =>
-  flushStoredChatOutbox(host, chatOutboxDrainDependencies);
+export function moveQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  targetId: string,
+): ChatQueueMoveResult {
+  const owner = chatOutboxOwner(host);
+  const located = owner.locate(host, id);
+  if (!located || !isMovableChatQueueItem(located.item)) {
+    return "noop";
+  }
+  if (isQueuedMessageBeingEdited(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    return "rejected";
+  }
+  const scope = owner.snapshot(host, located.scope);
+  // Stable targets survive display filtering and intervening queue changes.
+  // Inspect edits before splitting so crossing a peer's edit remains a visible conflict.
+  const offeredSegment = chatQueueMovableSegments(scope).find((rows) =>
+    rows.some((row) => row.id === id),
+  );
+  const fromIndex = offeredSegment?.findIndex((row) => row.id === id) ?? -1;
+  const requestedIndex = offeredSegment?.findIndex((row) => row.id === targetId) ?? -1;
+  if (fromIndex < 0 || requestedIndex < 0 || fromIndex === requestedIndex) {
+    return "noop";
+  }
+  const crossedPeerEdit = offeredSegment!
+    .slice(Math.min(fromIndex, requestedIndex), Math.max(fromIndex, requestedIndex) + 1)
+    .some((row) => isQueuedMessageBeingEdited(host, row.id));
+  if (crossedPeerEdit) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
+    return "rejected";
+  }
+  const segment = chatQueueMovableSegments(
+    offeredSegment!,
+    (row) => !isQueuedMessageBeingEdited(host, row.id),
+  ).find((rows) => rows.some((row) => row.id === id));
+  const segmentTargetIndex = segment?.findIndex((row) => row.id === targetId) ?? -1;
+  const moves = reorderChatQueueItems(segment ?? [], id, segmentTargetIndex);
+  if (moves.length === 0) {
+    return "noop";
+  }
+  const movedById = new Map(moves.map((item) => [item.id, item]));
+  const segmentIds = new Set(segment!.map((item) => item.id));
+  const reordered = scope
+    .map((item) => movedById.get(item.id) ?? item)
+    .toSorted(compareChatQueueOrder);
+  // Expanding equal positions must not carry a row across a locked neighbor.
+  if (reordered.some((item, index) => !segmentIds.has(item.id) && scope[index]?.id !== item.id)) {
+    return "noop";
+  }
+  const applied = chatOutboxOwner(host).update(
+    host,
+    moves.map((moved) => ({
+      id: moved.id,
+      update: (entry: ChatQueueItem) => ({ ...entry, orderKey: moved.orderKey }),
+    })),
+  );
+  if (applied === null) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return "rejected";
+  }
+  for (const key of ["lastError", "chatError"] as const) {
+    if (host[key] === QUEUED_MESSAGE_REORDER_CONFLICT_ERROR) {
+      host[key] = null;
+    }
+  }
+  return "moved";
+}
 
-export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
-
-export async function retryQueuedChatMessage(host: ChatHost, id: string) {
+export async function retryQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  canDispatch?: () => boolean,
+) {
+  if (
+    chatProviderReviewRow(host)?.providerReview ||
+    isInitialChatHistoryUnavailable(host) ||
+    (canDispatch && !canDispatch())
+  ) {
+    return;
+  }
   const item = host.chatQueue.find((entry) => entry.id === id);
+  if (isExpiredIncognitoSession(host, item?.sessionKey ?? host.sessionKey)) {
+    return;
+  }
+  const retriesFailedDelivery = item?.sendState === "failed" && !item.localCommandName;
+  const retriesAttempted = item !== undefined && hasAttemptedChatDelivery(item);
+  if (isQueuedMessageBeingEdited(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
+    return;
+  }
   if (
     !item ||
     item.pendingRunId ||
     item.sendState === "executing-command" ||
-    isInflightSteer(item) ||
+    item.sendState === "submitting" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-model"
   ) {
     return;
   }
-  let outbox = findStoredOutbox(host, item.id);
-  if (!outbox) {
-    const wasVolatile = isVolatileQueuedMessage(host, item.id);
-    if (!admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)) {
+  const owner = chatOutboxOwner(host);
+  const located = owner.locate(host, item.id);
+  if (!located) {
+    return;
+  }
+  const needsReviewedBinding =
+    retriesAttempted &&
+    !item.sessionId &&
+    !item.intent &&
+    (item.sendState === "held" || Boolean(item.attachmentStorageError));
+  const reviewedSessionId =
+    needsReviewedBinding &&
+    visibleSessionMatches(host, located.scope.sessionKey, located.scope.agentId)
+      ? host.currentSessionId?.trim()
+      : undefined;
+  if (needsReviewedBinding && !reviewedSessionId) {
+    return;
+  }
+  if (!located.durable) {
+    const wasVolatile = chatOutboxOwner(host).hasVolatile(host, item.id);
+    const admission = {
+      ...captureChatOutboxAdmission(host, located.scope.sessionKey, located.scope.agentId),
+      scope: located.scope,
+    };
+    if (chatOutboxOwner(host).admit(host, admission, item) !== "admitted") {
       if (
         wasVolatile &&
         !item.localCommandName &&
         item.sendRunId &&
-        (item.sendState === "failed" || item.sendState === "unconfirmed") &&
+        (item.sendState === "failed" || item.sendState === "held") &&
         canSendVolatileQueueItem(host, item)
       ) {
-        const retry = updateVolatileQueuedMessage(host, id, (entry) =>
-          resetRetryState(entry, undefined),
+        const retry = chatOutboxOwner(host).change(host, id, (entry) =>
+          resetRetryState(entry, undefined, reviewedSessionId),
         );
         if (!retry) {
           setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
@@ -151,6 +245,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         await deliverChatQueueItem(host, retry, {
           routingSessionKey: retry.sessionKey ?? host.sessionKey,
           storageMode: "memory",
+          canDispatch,
         });
         return;
       }
@@ -159,24 +254,47 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     }
   }
   const retry = updateQueuedMessage(host, id, (entry) =>
-    resetRetryState(entry, reconnectSafeQueuedSendState(host)),
+    resetRetryState(entry, reconnectSafeQueuedSendState(host), reviewedSessionId),
   );
   if (!retry) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
-  outbox = findStoredOutbox(host, retry.id);
-  if (!outbox) {
+  const retried = owner.locate(host, retry.id);
+  if (!retried?.durable) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return;
   }
-  const drain = scheduleStoredChatOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+  const outbox = retried.scope;
+  const explicitAdmission = retry.queueMode || retriesFailedDelivery || retriesAttempted;
+  const options: QueuedChatSendOptions | undefined = explicitAdmission
+    ? {
+        routingSessionKey: host.sessionKey,
+        canDispatch,
+        ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
+      }
+    : undefined;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const [{ scheduleStoredChatOutboxDrain }, { chatOutboxDrainDependencies }] = await Promise.all([
+    import("./chat-outbox-drain.ts"),
+    import("./chat-send-delivery.runtime.ts"),
+  ]);
+  if (!connectionIsCurrent() || (canDispatch && !canDispatch())) {
+    return;
+  }
+  const drain = scheduleStoredChatOutboxDrain(
+    host,
+    outbox,
+    chatOutboxDrainDependencies,
+    explicitAdmission ? retry.id : undefined,
+    options,
+  );
   if (host.chatSending && host.chatSendingScopeKey === storedChatOutboxScopeKey(outbox)) {
     void drain;
     return;
   }
   await drain;
   if (!host.chatRunId) {
-    void flushStoredChatOutbox(host, chatOutboxDrainDependencies);
+    void flushChatQueueForEvent(host);
   }
 }

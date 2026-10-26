@@ -1,0 +1,72 @@
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
+import type { Static, TSchema } from "typebox";
+import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
+import { createFeishuToolClient } from "./tool-account.js";
+import { toolExecutionErrorResult } from "./tool-result.js";
+import { resolveToolsConfig } from "./tools-config.js";
+import type { FeishuToolsConfig } from "./types.js";
+
+export function registerFeishuTool<TSchemaType extends TSchema>(
+  api: OpenClawPluginApi,
+  tool: {
+    name: string;
+    label: string;
+    description: string;
+    family: keyof FeishuToolsConfig;
+    workspaceAccess?: boolean | "execute";
+    parameters: TSchemaType;
+    createExecute: (
+      ctx: OpenClawPluginToolContext,
+      cfg: OpenClawConfig,
+      createClient: (
+        params: { accountId?: string } | undefined,
+        label: string,
+      ) => ReturnType<typeof createFeishuToolClient>,
+    ) => (
+      params: Static<TSchemaType> & { accountId?: string },
+    ) => Promise<AgentToolResult<unknown>>;
+    onError?: (error: unknown) => AgentToolResult<unknown>;
+  },
+) {
+  api.registerTool(
+    (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (
+        !listEnabledFeishuAccounts(cfg).some(
+          (account) => resolveToolsConfig(account.config.tools)[tool.family],
+        )
+      ) {
+        return null;
+      }
+      const execute = tool.createExecute(ctx, cfg, (params, label) =>
+        createFeishuToolClient({
+          cfg,
+          executeParams: params,
+          defaultAccountId: ctx.agentAccountId,
+          requiredTool: { family: tool.family, label },
+        }),
+      );
+      return {
+        name: tool.name,
+        label: tool.label,
+        description: tool.description,
+        parameters: tool.parameters,
+        resultContentSource: "network",
+        async execute(_toolCallId, params) {
+          try {
+            // SAFETY: The schema and executor share TSchemaType; the plugin API erases that generic.
+            return await execute(params as Static<TSchemaType> & { accountId?: string });
+          } catch (error) {
+            return (tool.onError ?? toolExecutionErrorResult)(error);
+          }
+        },
+      };
+    },
+    {
+      name: tool.name,
+      ...(tool.workspaceAccess !== undefined ? { workspaceAccess: tool.workspaceAccess } : {}),
+    },
+  );
+}

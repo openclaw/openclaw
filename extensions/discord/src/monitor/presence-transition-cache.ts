@@ -1,4 +1,3 @@
-// Discord plugin module tracks recent presence baselines for online transitions.
 const DEFAULT_PRESENCE_BASELINE_MAX_ENTRIES = 75_000;
 
 export class DiscordPresenceBaselineCache {
@@ -31,19 +30,13 @@ export class DiscordPresenceBaselineCache {
   }
 
   observeOffline(scope: string, key: string): string | undefined {
-    this.deleteMarker(this.onlineByKey, scope, key);
+    this.onlineByKey.delete(key);
     return this.observe(this.offlineByKey, scope, key);
   }
 
   observeOnline(scope: string, key: string): string | undefined {
-    this.deleteMarker(this.offlineByKey, scope, key);
+    this.offlineByKey.delete(key);
     return this.observe(this.onlineByKey, scope, key);
-  }
-
-  private deleteMarker(markers: Map<string, string>, scope: string, key: string): void {
-    if (markers.get(key) === scope) {
-      markers.delete(key);
-    }
   }
 
   private observe(markers: Map<string, string>, scope: string, key: string): string | undefined {

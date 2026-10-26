@@ -1,4 +1,3 @@
-// Slack plugin module implements commands behavior.
 import type { SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -7,7 +6,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
  * normalized text. Use in both prepare and debounce gate for consistency.
  */
 export function stripSlackMentionsForCommandDetection(text: string): string {
-  return (text ?? "")
+  return text
     .replace(/<@[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

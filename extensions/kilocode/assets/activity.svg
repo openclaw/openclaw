@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+<!--
+Adapted from OpenClaw ui/public/provider-icons/ProviderIcon-kilo.svg.
+Source: https://github.com/steipete/CodexBar/blob/215efbd39ad58acb4b0cd637c407d63e6183bc8d/Sources/CodexBar/Resources/ProviderIcon-kilo.svg
+
+MIT License
+Copyright (c) 2026 Peter Steinberger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Names and marks remain the property of their respective owners.
+-->
+  <path fill="currentColor" stroke="none" transform="scale(0.75) translate(5, 6.5)" d="M27.9998324,34.6666921h6.6666279v5.3333023h-8.3809037l-3.6190266-3.6190266v-8.3809037h5.3333023v6.6666279ZM39.9997627,26.2857884l-3.6190266-3.6190266h-8.3809037v5.3333023h6.6666279v6.6666279h5.3333023v-8.3809037ZM17.3332326,22.6667578h-5.3333023v5.3333023h5.3333023v-5.3333023ZM0,36.3809638l3.6190266,3.6190266h13.714206v-5.3333023H5.3333023v-11.9999302H0v13.714206ZM33.9600959,11.9999247V3.619021L30.3410693-.0000056h-7.6745392v5.3333023h5.9602634v6.6666279h-5.9602634v5.3333023h17.3332326v-5.3333023h-6.0396668ZM5.3333023,0H0v17.3332326h5.3333023v-5.9999651h6.6666279v5.9999651h5.3333023v-5.9999651l-5.3333023-5.3333023h-6.6666279V0ZM17.3332326,0h-5.3333023v5.9999651h5.3333023V0Z" />
+</svg>

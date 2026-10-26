@@ -11,16 +11,9 @@ type AnsiSegment =
   | { kind: "text"; value: string };
 
 export function matchAnsiOscAt(input: string, index: number): string | undefined {
+  // Reset the sticky matcher when callers interleave segment iterators.
   ansiOscAtIndexRegex.lastIndex = index;
   return ansiOscAtIndexRegex.exec(input)?.[0];
-}
-
-function csiIntroducerLength(input: string, index: number): number {
-  const code = input.charCodeAt(index);
-  if (code === 0x9b) {
-    return 1;
-  }
-  return code === 0x1b && input.charCodeAt(index + 1) === 0x5b ? 2 : 0;
 }
 
 type AnsiCsiScan = {
@@ -28,8 +21,6 @@ type AnsiCsiScan = {
   ended: boolean;
   value: string;
 };
-
-type AnsiStripState = "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat";
 
 function isCompatPrefixCode(code: number): boolean {
   return (
@@ -72,10 +63,18 @@ function isCompatFinalCode(code: number): boolean {
  * or accumulate outside the caller's output limits.
  */
 export class AnsiSequenceStripper {
-  private state: AnsiStripState = "text";
+  private state: "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat" = "text";
   private csiCompatPrefixOnly = false;
-  private compatInParameters = false;
-  private compatParameterDigits = 0;
+  private compatParameterDigits: number | undefined;
+  private csi: string | undefined;
+
+  constructor(private readonly onCsi?: (sequence: string) => void) {}
+
+  private startCsi() {
+    this.state = "csi";
+    this.csiCompatPrefixOnly = true;
+    this.csi = this.onCsi ? "" : undefined;
+  }
 
   write(input: string): string {
     if (typeof input !== "string") {
@@ -95,37 +94,29 @@ export class AnsiSequenceStripper {
     while (index < input.length) {
       const code = input.charCodeAt(index);
 
-      if (this.state === "text") {
-        if (code === 0x1b) {
-          this.state = "escape";
-        } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
-        } else if (code === 0x9d) {
-          this.state = "osc";
+      if (this.state === "osc" || this.state === "osc-escape") {
+        if (code === 0x07 || code === 0x9c || (this.state === "osc-escape" && code === 0x5c)) {
+          this.state = "text";
         } else {
-          output.push(input.charAt(index));
+          this.state = code === 0x1b ? "osc-escape" : "osc";
         }
         index += 1;
         continue;
       }
 
-      if (this.state === "osc") {
-        if (code === 0x07 || code === 0x9c) {
-          this.state = "text";
-        } else if (code === 0x1b) {
-          this.state = "osc-escape";
+      // OSC payloads own their escape bytes; only other pending sequences restart.
+      if (code === 0x1b || code === 0x9b || code === 0x9d) {
+        if (code === 0x9b) {
+          this.startCsi();
+        } else {
+          this.state = code === 0x1b ? "escape" : "osc";
         }
         index += 1;
         continue;
       }
 
-      if (this.state === "osc-escape") {
-        if (code === 0x5c || code === 0x07 || code === 0x9c) {
-          this.state = "text";
-        } else if (code !== 0x1b) {
-          this.state = "osc";
-        }
+      if (this.state === "text") {
+        output.push(input.charAt(index));
         index += 1;
         continue;
       }
@@ -133,133 +124,91 @@ export class AnsiSequenceStripper {
       if (this.state === "csi") {
         if (code === 0x18 || code === 0x1a) {
           this.state = "text";
-          index += 1;
-        } else if (code === 0x1b) {
-          this.state = "escape";
-          index += 1;
-        } else if (code === 0x9b) {
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x9d) {
-          this.state = "osc";
-          index += 1;
         } else if (code <= 0x1f || code === 0x7f) {
           output.push(input.charAt(index));
-          index += 1;
         } else if (code >= 0x20 && code <= 0x3f) {
+          // Only retain bounded CSI metadata; oversized controls are still stripped
+          // through their final byte, but never dispatch a truncated command.
+          if (this.csi !== undefined) {
+            this.csi = this.csi.length < 64 ? this.csi + input.charAt(index) : undefined;
+          }
           if (!isCompatPrefixCode(code)) {
             this.csiCompatPrefixOnly = false;
           }
-          index += 1;
         } else if ((code === 0x5b || code === 0x5d) && this.csiCompatPrefixOnly) {
           // The compatibility grammar accepts bracket runs before parameters.
           // Keep them pending so a chunk split cannot expose the final byte.
           this.state = "compat";
-          this.compatInParameters = false;
-          this.compatParameterDigits = 0;
-          index += 1;
+          this.compatParameterDigits = undefined;
         } else if (code >= 0x40 && code <= 0x7e) {
+          if (this.csi !== undefined) {
+            this.onCsi?.(this.csi + input.charAt(index));
+          }
           this.state = "text";
-          index += 1;
         } else {
           this.state = "text";
+          continue;
         }
-        continue;
-      }
-
-      if (this.state === "escape") {
+      } else if (this.state === "escape") {
         if (code === 0x5d) {
           this.state = "osc";
-          index += 1;
         } else if (code === 0x5b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x1b) {
-          index += 1;
-        } else if (code === 0x9b) {
-          this.state = "csi";
-          this.csiCompatPrefixOnly = true;
-          index += 1;
-        } else if (code === 0x9d) {
-          this.state = "osc";
-          index += 1;
+          this.startCsi();
         } else if (isCompatPrefixCode(code)) {
           this.state = "compat";
-          this.compatInParameters = false;
-          this.compatParameterDigits = 0;
-          index += 1;
+          this.compatParameterDigits = undefined;
         } else if (isDigitCode(code)) {
           this.state = "compat";
-          this.compatInParameters = true;
           this.compatParameterDigits = 1;
-          index += 1;
         } else if (isCompatFinalCode(code)) {
           this.state = "text";
-          index += 1;
         } else {
           this.state = "text";
+          continue;
         }
-        continue;
-      }
-
-      if (code === 0x18 || code === 0x1a) {
+      } else if (code === 0x18 || code === 0x1a) {
         this.state = "text";
+      } else if (this.compatParameterDigits === undefined && isCompatPrefixCode(code)) {
         index += 1;
-      } else if (code === 0x1b) {
-        this.state = "escape";
-        index += 1;
-      } else if (code === 0x9b) {
-        this.state = "csi";
-        this.csiCompatPrefixOnly = true;
-        index += 1;
-      } else if (code === 0x9d) {
-        this.state = "osc";
-        index += 1;
-      } else if (!this.compatInParameters && isCompatPrefixCode(code)) {
-        index += 1;
-      } else if (!this.compatInParameters && isDigitCode(code)) {
-        this.compatInParameters = true;
+        continue;
+      } else if (this.compatParameterDigits === undefined && isDigitCode(code)) {
         this.compatParameterDigits = 1;
-        index += 1;
-      } else if (this.compatInParameters && isCompatParameterCode(code)) {
+      } else if (this.compatParameterDigits !== undefined && isCompatParameterCode(code)) {
         if (code === 0x3a || code === 0x3b) {
           this.compatParameterDigits = 0;
-          index += 1;
         } else if (this.compatParameterDigits < 4) {
           this.compatParameterDigits += 1;
-          index += 1;
         } else {
           this.state = "text";
-          index += 1;
         }
       } else if (isCompatFinalCode(code)) {
         this.state = "text";
-        index += 1;
       } else {
         this.state = "text";
+        continue;
       }
+      index += 1;
     }
     return output.join("");
   }
 
   finish(): string {
+    this.csi = undefined;
     this.state = "text";
     this.csiCompatPrefixOnly = false;
-    this.compatInParameters = false;
-    this.compatParameterDigits = 0;
+    this.compatParameterDigits = undefined;
     return "";
   }
 }
 
 /** Scan one CSI parser pass, retaining independently executed C0 controls. */
 export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undefined {
-  const introducerLength = csiIntroducerLength(input, index);
-  if (introducerLength === 0) {
+  const firstCode = input.charCodeAt(index);
+  if (firstCode !== 0x9b && (firstCode !== 0x1b || input.charCodeAt(index + 1) !== 0x5b)) {
     return undefined;
   }
 
-  let cursor = index + introducerLength;
+  let cursor = index + (firstCode === 0x9b ? 1 : 2);
   const controls: string[] = [];
   let ended = false;
   while (cursor < input.length) {
@@ -291,8 +240,7 @@ export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undef
   return { controls, ended, value: input.slice(index, cursor) };
 }
 
-export function splitAnsiSegments(input: string): AnsiSegment[] {
-  const segments: AnsiSegment[] = [];
+export function* iterateAnsiSegments(input: string): Generator<AnsiSegment, void> {
   let position = 0;
   let index = 0;
 
@@ -311,14 +259,13 @@ export function splitAnsiSegments(input: string): AnsiSegment[] {
       continue;
     }
     if (index > position) {
-      segments.push({ kind: "text", value: input.slice(position, index) });
+      yield { kind: "text", value: input.slice(position, index) };
     }
-    segments.push({ controls: csi?.controls ?? [], kind: "ansi", value });
+    yield { controls: csi?.controls ?? [], kind: "ansi", value };
     index += value.length;
     position = index;
   }
   if (position < input.length) {
-    segments.push({ kind: "text", value: input.slice(position) });
+    yield { kind: "text", value: input.slice(position) };
   }
-  return segments;
 }

@@ -1,118 +1,139 @@
-// Built-in OpenClaw harness tests cover logical thinking-mode boundaries.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import * as fixtures from "./lifecycle.test-support.js";
+import type { AgentHarnessIsolatedCompletionParamsV2 } from "./types.js";
 
 const runEmbeddedAttempt = vi.hoisted(() => vi.fn());
 const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
 
 vi.mock("../embedded-agent-runner/run/attempt.js", () => ({ runEmbeddedAttempt }));
-vi.mock("../simple-completion-runtime.js", () => ({ completeWithPreparedSimpleCompletionModel }));
+vi.mock("../simple-completion-execution.js", () => ({ completeWithPreparedSimpleCompletionModel }));
 
-import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
 
-describe("createOpenClawAgentHarness", () => {
-  beforeEach(() => {
-    runEmbeddedAttempt.mockReset();
-    runEmbeddedAttempt.mockResolvedValue({
-      terminal: { kind: "ok" },
-      sessionIdUsed: "session-1",
-      messagesSnapshot: [],
-      assistantTexts: ["done"],
-      toolMetas: [],
-      lastAssistant: undefined,
-      currentAttemptCompletedAssistant: {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-      },
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-      cloudCodeAssistFormatError: false,
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+const deadline = { kind: "bounded" as const, deadlineAtMs: 123_456 };
+const lifecycle = (phase: string) => ({ stream: "lifecycle", data: { phase } });
+
+let harness: ReturnType<typeof createOpenClawAgentHarness>;
+beforeEach(() => {
+  harness = createOpenClawAgentHarness();
+  runEmbeddedAttempt.mockReset().mockImplementation(async (params: EmbeddedRunAttemptParams) => {
+    params.onAttemptDeadlineChanged?.(deadline);
+    params.onAttemptTimeoutArmed?.();
+    await params.onAgentEvent?.(lifecycle("start"));
+    await params.onAgentEvent?.(lifecycle(params.deferTerminalLifecycle ? "finishing" : "end"));
+    return {
+      ...fixtures.createAttemptResult(),
+      currentAttemptCompletedAssistant: fixtures.createFinalAssistant(),
+    };
+  });
+  completeWithPreparedSimpleCompletionModel.mockReset();
+});
+
+it("brands only host-created instances as the built-in runtime", () => {
+  expect(isBuiltInOpenClawAgentHarness(harness)).toBe(true);
+  expect(isBuiltInOpenClawAgentHarness({ ...harness, label: "forged" })).toBe(false);
+});
+
+it.each([true, false])(
+  "captures live support=%s and invocation state in async custody",
+  async (liveSupport) => {
+    const scope = new AsyncLocalStorage<object>();
+    const owner = {};
+    const onAgentEvent = vi.fn(() => {
+      expect(scope.getStore()).toBe(owner);
     });
-    completeWithPreparedSimpleCompletionModel.mockReset();
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      stopReason: "stop",
-    });
-  });
-
-  it("preserves logical Ultra for the embedded attempt", async () => {
-    const params = { thinkLevel: "ultra" } as never;
-
-    await createOpenClawAgentHarness().runAttempt(params);
-
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
-  });
-
-  it("enforces a tool-free settled-turn finalization", async () => {
-    const attempt = {
-      prompt: "finalize",
-      disableTools: false,
-      extraSystemPrompt: "ambient system context",
-      skillsSnapshot: { prompt: "ambient skills" },
-      currentInboundContext: { text: "ambient inbound context" },
-      internalEvents: [{ type: "ambient-event" }],
-      trigger: "heartbeat",
-      onPartialReply: vi.fn(),
-    } as never;
-    const harness = createOpenClawAgentHarness();
-
-    await harness.finalizeSettledTurn?.({ attempt, settledAttempt: {} as never });
-
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "finalize",
-        disableTools: true,
-        disableTrajectory: true,
-        skipPreparedUserTurnMessage: true,
-        initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-        operation: "settled-tool-finalization",
-      }),
-    );
-    const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(finalizationAttempt).not.toHaveProperty("extraSystemPrompt");
-    expect(finalizationAttempt).not.toHaveProperty("skillsSnapshot");
-    expect(finalizationAttempt).not.toHaveProperty("currentInboundContext");
-    expect(finalizationAttempt).not.toHaveProperty("internalEvents");
-    expect(finalizationAttempt).not.toHaveProperty("trigger");
-    expect(finalizationAttempt).not.toHaveProperty("onPartialReply");
-  });
-
-  it("runs isolated completion through the prepared zero-tool transport", async () => {
+    harness.supportsTurnScopedToolRestrictions = liveSupport;
     const params = {
-      model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
-      auth: { apiKey: "secret", source: "profile:test", mode: "api-key" },
-      config: {},
-      systemPrompt: "system",
-      prompt: "user",
-      timeoutMs: 1_000,
-      provider: "openai",
-      modelId: "gpt-test",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    } as unknown as Parameters<
-      NonNullable<ReturnType<typeof createOpenClawAgentHarness>["runIsolatedCompletion"]>
-    >[0];
+      thinkLevel: "ultra",
+      onAgentEvent,
+      supportsTurnScopedToolRestrictions: true,
+    };
+    const pending = scope.run(owner, () => harness.runAttempt(params as never));
+    params.thinkLevel = "off";
+    harness.supportsTurnScopedToolRestrictions = !liveSupport;
+    await pending;
 
-    await expect(createOpenClawAgentHarness().runIsolatedCompletion?.(params)).resolves.toEqual({
-      assistant: expect.objectContaining({ stopReason: "stop" }),
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({
+      thinkLevel: "ultra",
+      onAgentEvent,
+      supportsTurnScopedToolRestrictions: liveSupport,
     });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: params.model,
-        auth: params.auth,
-        context: {
-          systemPrompt: "system",
-          messages: [expect.objectContaining({ role: "user", content: "user" })],
-          tools: [],
-        },
-      }),
-    );
-    expect(runEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
+  const onAttemptDeadlineChanged = vi.fn();
+  const onAttemptTimeoutArmed = vi.fn();
+  const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
+  const ambient = {
+    extraSystemPrompt: "ambient system context",
+    skillsSnapshot: { prompt: "ambient skills" },
+    currentInboundContext: { text: "ambient inbound context" },
+    internalEvents: [{ type: "ambient-event" }],
+    trigger: "heartbeat",
+    onPartialReply: vi.fn(),
+  };
+  const attempt = {
+    ...ambient,
+    prompt: "finalize",
+    sessionManager: { owner: "host" },
+    sessionPersistence: "detached",
+    disableTools: false,
+    prepareAssistantTranscriptMessage: vi.fn(),
+    onAttemptDeadlineChanged,
+    onAttemptTimeoutArmed,
+    onAgentEvent,
+    deferTerminalLifecycle: true,
+  };
+  const pending = harness.finalizeSettledTurn?.({
+    attempt: attempt as never,
+    settledAttempt: {} as never,
   });
+  attempt.prompt = "changed after invocation";
+  attempt.sessionManager = { owner: "other" };
+  attempt.onAgentEvent = vi.fn();
+  await pending;
+
+  expect(onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith(deadline);
+  expect(onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+  expect(onAgentEvent.mock.calls).toEqual([[lifecycle("start")], [lifecycle("finishing")]]);
+  const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
+  expect(finalizationAttempt).toMatchObject({
+    prompt: "finalize",
+    sessionManager: { owner: "host" },
+    sessionPersistence: "detached",
+    disableTools: true,
+    disableTrajectory: true,
+    skipPreparedUserTurnMessage: true,
+    suppressNextUserMessagePersistence: true,
+    initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
+    operation: "settled-tool-finalization",
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
+  });
+  for (const key of Object.keys(ambient)) {
+    expect(finalizationAttempt).not.toHaveProperty(key);
+  }
+});
+
+it("rejects harness-owned isolated authorization", async () => {
+  const params = {
+    ...fixtures.createAttemptParams(),
+    authorization: {
+      owner: "harness",
+      plan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
+      authProfileStore: { version: 1, profiles: {} },
+    },
+    config: {},
+    systemPrompt: "system",
+    agentId: "main",
+    agentDir: "/tmp/agent",
+  } satisfies AgentHarnessIsolatedCompletionParamsV2;
+
+  await expect(harness.runIsolatedCompletionV2?.(params)).rejects.toThrow(
+    "requires host-prepared authorization",
+  );
+  expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
 });

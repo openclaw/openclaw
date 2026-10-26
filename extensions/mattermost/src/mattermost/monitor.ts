@@ -1,29 +1,24 @@
-// Mattermost plugin module orchestrates monitor setup, ingress, and teardown.
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
-import {
-  createMattermostClient,
-  fetchMattermostMe,
-  normalizeMattermostBaseUrl,
-  type MattermostPost,
-  type MattermostUser,
-} from "./client.js";
+import { createMattermostAccountClient, resolveMattermostAccount } from "./accounts.js";
+import { fetchMattermostMe, type MattermostUser } from "./client.js";
 import {
   computeInteractionCallbackUrl,
   resolveInteractionCallbackPath,
   setInteractionCallbackUrl,
   setInteractionSecret,
 } from "./interactions.js";
+import { normalizeMention } from "./monitor-helpers.js";
 import {
   createMattermostIngressMonitor,
   type MattermostIngressLifecycle,
+  type MattermostIngressPost,
 } from "./monitor-ingress.js";
 import { registerMattermostInteractions } from "./monitor-interactions.js";
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
@@ -32,11 +27,7 @@ import { createMattermostReactionHandler } from "./monitor-reactions.js";
 import { createMattermostMonitorResources } from "./monitor-resources.js";
 import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  createMattermostConnectOnce,
-  type MattermostEventPayload,
-  type MattermostWebSocketFactory,
-} from "./monitor-websocket.js";
+import { createMattermostConnectOnce, type MattermostEventPayload } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import type { ChannelAccountSnapshot, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 import {
@@ -57,7 +48,6 @@ type MonitorMattermostOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
-  webSocketFactory?: MattermostWebSocketFactory;
 };
 
 function publishMattermostRecoveringStatus(
@@ -83,30 +73,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     } satisfies RuntimeEnv);
   const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    core.channel.debounce.resolveInboundDebounceMs({
+      cfg: readConfig(),
+      channel: "mattermost",
+    });
   const account = resolveMattermostAccount({ cfg, accountId: opts.accountId });
   const pairing = createChannelPairingController({
     core,
     channel: "mattermost",
     accountId: account.accountId,
   });
-  const botToken =
-    normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
-  if (!botToken) {
-    throw new Error(
-      `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
-    );
-  }
-  const baseUrl = normalizeMattermostBaseUrl(opts.baseUrl ?? account.baseUrl);
-  if (!baseUrl) {
-    throw new Error(
-      `Mattermost baseUrl missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.baseUrl or MATTERMOST_URL for default).`,
-    );
-  }
-  const client = createMattermostClient({
-    baseUrl,
-    botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
-  });
+  const { client, baseUrl, botToken } = createMattermostAccountClient(account, opts);
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
   // When a bot account is disabled and re-enabled, the session is invalidated
@@ -119,8 +98,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     {
       abortSignal: opts.abortSignal,
-      jitterRatio: 0.2,
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);
@@ -175,7 +153,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const mediaMaxBytes =
     resolveChannelMediaMaxBytes({
       cfg,
-      resolveChannelLimitMb: () => undefined,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
       accountId: account.accountId,
     }) ?? 8 * 1024 * 1024;
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -239,51 +217,68 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
-  const debouncer = core.channel.debounce.createInboundDebouncer<{
-    post: MattermostPost;
+  type DebounceEntry = {
+    post: MattermostIngressPost;
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
-  }>({
-    debounceMs: core.channel.debounce.resolveInboundDebounceMs({
-      cfg,
-      channel: "mattermost",
-    }),
-    buildKey: (entry) => {
-      const channelId =
-        entry.post.channel_id ??
-        entry.payload.data?.channel_id ??
-        entry.payload.broadcast?.channel_id;
-      if (!channelId) {
-        return null;
-      }
-      const threadId = normalizeOptionalString(entry.post.root_id);
-      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}`;
+  };
+  const pendingPosts = new Set<DebounceEntry>();
+  const cancellationSettlements: Promise<void>[] = [];
+  const shutdown = new AbortController();
+  const buildDebounceKey = (entry: DebounceEntry) => {
+    const channelId =
+      entry.post.channel_id ??
+      entry.payload.data?.channel_id ??
+      entry.payload.broadcast?.channel_id;
+    return channelId && entry.post.user_id ? `mattermost:${account.accountId}:${channelId}` : null;
+  };
+  const debouncer = core.channel.debounce.createInboundDebouncer<DebounceEntry>({
+    debounceMs: resolveDebounceMs(),
+    resolveDebounceMs,
+    buildKey: buildDebounceKey,
+    // One channel reserves admission order; only contiguous same-sender/thread posts merge.
+    canAppend: (entry, pending) => {
+      const last = pending.at(-1);
+      return (
+        last?.post.user_id === entry.post.user_id &&
+        normalizeOptionalString(last.post.root_id) === normalizeOptionalString(entry.post.root_id)
+      );
     },
+    serializeImmediate: true,
     shouldDebounce: (entry) => {
-      if (entry.post.file_ids?.length) {
+      // Typed posts are dropped downstream; batching would let their text or type affect a user post.
+      if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
         return false;
       }
       const text = normalizeOptionalString(entry.post.message) ?? "";
-      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
+      // Same mention-stripped view as the post handler, so "@bot /new" is never batched.
+      return (
+        Boolean(text) &&
+        !core.channel.commands.isControlCommandMessage(normalizeMention(text, botUsername), cfg)
+      );
     },
     onFlush: (entries, createFlush) => {
+      for (const entry of entries) {
+        pendingPosts.delete(entry);
+      }
       const last = entries.at(-1);
-      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+      const { lifecycle, settle, cancel } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
       return createFlush({
         lifecycle,
         dispatch: async (admissionLifecycle) => {
+          if (shutdown.signal.aborted || admissionLifecycle.abortSignal.aborted) {
+            await cancel();
+            return;
+          }
           if (!last) {
             return;
           }
-          try {
-            if (entries.length === 1) {
-              await handlePost(last.post, last.payload, admissionLifecycle);
-              await settle();
-              return;
-            }
-            const mergedPost: MattermostPost = {
+          if (entries.length === 1) {
+            await handlePost(last.post, last.payload, admissionLifecycle);
+          } else {
+            const mergedPost: MattermostIngressPost = {
               ...last.post,
               message: entries
                 .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
@@ -295,18 +290,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               mergedPost,
               last.payload,
               admissionLifecycle,
-              entries.map((entry) => entry.post.id),
+              entries.length > 1 ? entries.map((entry) => entry.post.id) : undefined,
             );
+          }
+          if (shutdown.signal.aborted || admissionLifecycle.abortSignal.aborted) {
+            await cancel();
+          } else {
             await settle();
-          } catch (error) {
-            await admissionLifecycle.onAbandoned();
-            throw error;
           }
         },
       });
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
+    },
+    onCancel: (entries) => {
+      for (const entry of entries) {
+        pendingPosts.delete(entry);
+      }
+      const settlement = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      ).cancel();
+      cancellationSettlements.push(settlement);
+      void settlement.catch((error: unknown) => {
+        runtime.error?.(`mattermost ingress cancellation failed: ${String(error)}`);
+      });
     },
   });
   const ingress = createMattermostIngressMonitor({
@@ -316,7 +324,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     dispatch: async (post, payload, turnAdoptionLifecycle) => {
       // Deferred claims settle through lifecycle callbacks, so terminal flush
       // errors spend the drain's bounded retry budget before dead-lettering.
-      await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });
+      if (shutdown.signal.aborted || turnAdoptionLifecycle.abortSignal.aborted) {
+        await fanInChannelIngressLifecycles([turnAdoptionLifecycle]).cancel();
+        return { kind: "deferred" };
+      }
+      const entry = { post, payload, turnAdoptionLifecycle };
+      pendingPosts.add(entry);
+      try {
+        await debouncer.enqueue(entry);
+      } catch (error) {
+        pendingPosts.delete(entry);
+        throw error;
+      }
       return { kind: "deferred" };
     },
   });
@@ -327,7 +346,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     abortSignal: opts.abortSignal,
     statusSink: opts.statusSink,
     runtime,
-    webSocketFactory: opts.webSocketFactory,
     nextSeq: () => sequence++,
     getBotUpdateAt: async () => (await fetchMattermostMe(client)).update_at ?? 0,
     onPosted: ingress.receive,
@@ -359,10 +377,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
   }
 
+  let connectionFailure: { error: unknown } | undefined;
+  let shutdownFailures: unknown[] = [];
   try {
     await runWithReconnect(connectOnce, {
       abortSignal: opts.abortSignal,
-      jitterRatio: 0.2,
       onError: (err) => {
         runtime.error?.(`mattermost connection failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);
@@ -371,12 +390,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
       },
     });
+  } catch (error) {
+    connectionFailure = { error };
   } finally {
-    await ingress.stop();
-    unregisterInteractions();
+    shutdown.abort();
+    const pendingKeys = new Set([...pendingPosts].map(buildDebounceKey));
+    for (const key of pendingKeys) {
+      if (key) {
+        debouncer.cancelKey(key);
+      }
+    }
+    try {
+      const stopped = await Promise.allSettled([ingress.stop(), debouncer.drain()]);
+      // Reserved immediate tasks can report cancellation while the collector drains.
+      const cancelled = await Promise.allSettled(cancellationSettlements);
+      shutdownFailures = [...stopped, ...cancelled].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+    } finally {
+      unregisterInteractions();
+    }
   }
-  const slashShutdownCleanupPromise = slashShutdownCleanup;
-  if (slashShutdownCleanupPromise) {
-    await Promise.resolve(slashShutdownCleanupPromise);
+  await Promise.resolve(slashShutdownCleanup);
+  if (shutdownFailures.length > 0) {
+    throw new AggregateError(shutdownFailures, "Mattermost monitor shutdown failed.", {
+      cause: connectionFailure?.error,
+    });
+  }
+  if (connectionFailure) {
+    throw connectionFailure.error;
   }
 }

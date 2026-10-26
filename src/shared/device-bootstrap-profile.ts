@@ -1,12 +1,11 @@
-// Device bootstrap profile helpers build profile claims for device onboarding.
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
-/** Closed purpose codes carried by specialized bootstrap tokens. */
 export type DeviceBootstrapPurpose =
   | "control-ui"
   | "control-ui-owner"
   | "mobile-full"
-  | "voice-node";
+  | "voice-node"
+  | "cloud-worker";
 
 /** Normalized roles/scopes carried by a bootstrap token during device handoff. */
 export type DeviceBootstrapProfile = {
@@ -21,6 +20,8 @@ export type DeviceBootstrapProfileInput = {
   scopes?: readonly string[];
   purpose?: DeviceBootstrapPurpose;
 };
+
+export type PairingSetupAccess = "full" | "limited" | "node";
 
 /** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
@@ -86,6 +87,13 @@ export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [],
 };
 
+/** Environment-owned node profile removed when its cloud lease is released. */
+export const CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  roles: ["node"],
+  scopes: [],
+  purpose: "cloud-worker",
+};
+
 /** Room/embedded voice profile: node capabilities plus least-privilege Talk RPCs. */
 export const VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
@@ -109,40 +117,40 @@ export function deviceBootstrapProfilesEqual(
   );
 }
 
-function matchesBootstrapProfile(
-  input: DeviceBootstrapProfileInput | undefined,
-  expected: DeviceBootstrapProfile,
-): boolean {
-  return deviceBootstrapProfilesEqual(input, expected);
-}
-
-/** Return whether an input matches either supported native-mobile setup profile. */
 export function isMobilePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
   return (
-    isPairingSetupBootstrapProfile(input) ||
-    matchesBootstrapProfile(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+    deviceBootstrapProfilesEqual(input, PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
   );
 }
 
-/** Return whether an input exactly matches the existing limited setup profile. */
-function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | undefined): boolean {
-  return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
-}
-
-/** Return whether an input exactly matches the node-only companion setup profile. */
 export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  return matchesBootstrapProfile(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+  return (
+    deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfilesEqual(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  );
 }
 
-/** Return whether an input exactly matches the embedded voice-node setup profile. */
+export function resolvePairingSetupAccess(
+  input: DeviceBootstrapProfileInput | undefined,
+): PairingSetupAccess {
+  if (deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+    return "full";
+  }
+  if (isNodePairingSetupBootstrapProfile(input)) {
+    return "node";
+  }
+  return "limited";
+}
+
 export function isVoiceNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  return matchesBootstrapProfile(input, VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
+  return deviceBootstrapProfilesEqual(input, VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 
 /** Resolve the subset of requested scopes a bootstrap profile may carry for one role. */
@@ -178,7 +186,6 @@ export function resolveBootstrapProfileScopesForRoles(
   );
 }
 
-/** Resolve one role's scopes directly from a normalized bootstrap profile. */
 export function resolveDeviceProfileRoleScopes(
   profile: DeviceBootstrapProfile,
   role: string,
@@ -187,7 +194,6 @@ export function resolveDeviceProfileRoleScopes(
   return resolveBootstrapProfileScopesForRole(role, scopes, profile.purpose);
 }
 
-/** Resolve role-set scopes directly from a normalized bootstrap profile. */
 export function resolveDeviceProfileScopes(
   profile: DeviceBootstrapProfile,
   roles: readonly string[],
@@ -231,7 +237,8 @@ export function normalizeDeviceBootstrapProfile(
     input?.purpose === "control-ui" ||
     input?.purpose === "control-ui-owner" ||
     input?.purpose === "mobile-full" ||
-    input?.purpose === "voice-node"
+    input?.purpose === "voice-node" ||
+    input?.purpose === "cloud-worker"
       ? input.purpose
       : undefined;
   return {

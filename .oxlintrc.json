@@ -1,13 +1,17 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["unicorn", "typescript", "oxc"],
+  "plugins": ["unicorn", "typescript", "oxc", "import"],
+  "jsPlugins": ["./scripts/oxlint-boundary-guards.mjs"],
+  "settings": { "solid": { "version": 2 } },
   "categories": {
     "correctness": "error",
     "perf": "error",
     "suspicious": "error"
   },
   "rules": {
+    "openclaw-boundaries/no-recursive-readdir": "error",
     "curly": "error",
+    "eslint/array-callback-return": "error",
     "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
@@ -16,13 +20,16 @@
     "eslint/no-div-regex": "error",
     "eslint/no-extra-label": "error",
     "eslint/no-empty-pattern": "error",
+    "eslint/no-label-var": "error",
     "eslint/no-lone-blocks": "error",
     "eslint/no-multi-str": "error",
     "eslint/no-new": "error",
     "eslint/no-object-constructor": "error",
     "eslint/no-param-reassign": "error",
     "eslint/no-proto": "error",
+    "eslint/no-prototype-builtins": "error",
     "eslint/no-promise-executor-return": "error",
+    "eslint/no-redeclare": "error",
     "eslint/no-regex-spaces": "error",
     "eslint/no-return-assign": "error",
     "eslint/no-sequences": "error",
@@ -50,17 +57,24 @@
     "eslint/prefer-const": "error",
     "eslint/prefer-numeric-literals": "error",
     "eslint/prefer-object-has-own": "error",
+    "eslint/prefer-promise-reject-errors": "error",
     "eslint/object-shorthand": "error",
     "eslint/prefer-rest-params": "error",
     "eslint/prefer-spread": "error",
     "eslint/radix": "error",
+    "eslint/symbol-description": "error",
     "eslint/unicode-bom": "error",
     "eslint/yoda": "error",
-    "import/no-absolute-path": "error",
+    "import/default": "off",
     "import/first": "error",
-    "import/no-empty-named-blocks": "error",
+    "import/namespace": "off",
+    "import/no-absolute-path": "error",
     "import/no-duplicates": "error",
+    "import/no-empty-named-blocks": "error",
+    "import/no-named-as-default": "off",
+    "import/no-named-as-default-member": "off",
     "import/no-self-import": "error",
+    "import/no-unassigned-import": "off",
     "node/no-exports-assign": "error",
     "eslint-plugin-unicorn/prefer-set-size": "error",
     "oxc/no-accumulating-spread": "error",
@@ -102,6 +116,7 @@
       { "considerDefaultExhaustiveForUnions": true }
     ],
     "typescript/prefer-as-const": "error",
+    "typescript/prefer-enum-initializers": "error",
     "typescript/prefer-namespace-keyword": "error",
     "typescript/prefer-return-this-type": "error",
     "typescript/prefer-find": "error",
@@ -118,6 +133,7 @@
     "unicorn/consistent-date-clone": "error",
     "unicorn/consistent-empty-array-spread": "error",
     "unicorn/consistent-function-scoping": "off",
+    "unicorn/explicit-timer-delay": "error",
     "unicorn/no-array-fill-with-reference-type": "error",
     "unicorn/no-console-spaces": "error",
     "unicorn/no-empty-file": "error",
@@ -127,6 +143,7 @@
     "unicorn/no-instanceof-array": "error",
     "unicorn/no-negation-in-equality-check": "error",
     "unicorn/no-new-buffer": "error",
+    "unicorn/no-this-assignment": "error",
     "unicorn/no-thenable": "error",
     "unicorn/no-typeof-undefined": "error",
     "unicorn/no-unreadable-array-destructuring": "error",
@@ -142,6 +159,7 @@
     "unicorn/prefer-keyboard-event-key": "error",
     "unicorn/prefer-array-flat": "error",
     "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-blob-reading-methods": "error",
     "unicorn/prefer-math-min-max": "error",
     "unicorn/prefer-node-protocol": "error",
     "unicorn/prefer-number-properties": "error",
@@ -154,7 +172,9 @@
     "unicorn/prefer-structured-clone": "error",
     "unicorn/prefer-string-starts-ends-with": "error",
     "unicorn/prefer-string-slice": "error",
+    "unicorn/prefer-string-trim-start-end": "error",
     "unicorn/require-array-join-separator": "error",
+    "unicorn/require-module-attributes": "error",
     "unicorn/require-number-to-fixed-digits-argument": "error",
     "unicorn/require-post-message-target-origin": "error",
     "unicorn/throw-new-error": "error",
@@ -209,12 +229,8 @@
   "ignorePatterns": [
     "dist/",
     "dist-runtime/",
-    "docs/_layouts/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
-    ".agents/skills/autoreview/tests/fixtures/**",
     "test/fixtures/oxlint-boundary-guards/**",
-    "**/a2ui.bundle.js",
-    "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -232,6 +248,79 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": [
+        "ui/**/*.tsx",
+        "ui/src/lib/reactive/**/*.ts",
+        "ui/src/components/solid/**/*.ts",
+        "ui/src/test-helpers/**/*.ts",
+        "extensions/*/browser/**/*.tsx",
+        "extensions/*/src/**/*.tsx"
+      ],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // Component analysis stays scoped to renderers and explicitly reactive helpers.
+      "rules": {
+        "solid/jsx-no-duplicate-props": "error",
+        "solid/jsx-no-undef": "error",
+        "solid/jsx-uses-vars": "error",
+        "solid/no-unknown-namespaces": "error",
+        "solid/no-innerhtml": "error",
+        "solid/jsx-no-script-url": "error",
+        "solid/components-return-once": "warn",
+        "solid/no-destructure": "error",
+        "solid/prefer-for": "error",
+        "solid/reactivity": "warn",
+        "solid/event-handlers": "error",
+        "solid/imports": "warn",
+        "solid/style-prop": "warn",
+        "solid/no-react-deps": "off",
+        "solid/no-react-specific-props": "error",
+        "solid/self-closing-comp": "warn",
+        "solid/no-array-handlers": "off",
+        "solid/prefer-show": "off",
+        "solid/no-proxy-apis": "off",
+        "solid/prefer-classlist": "off",
+        "solid/no-accessor-as-prop": "error",
+        "solid/no-boolean-enumerated-attribute": "error",
+        "solid/prefer-structured-class": "warn",
+        "solid/valid-use-server": "error",
+        "solid/require-async-server-function": "error",
+        "solid/no-invalid-server-capture": "error",
+        "solid/no-browser-globals-in-server-function": "error"
+      }
+    },
+    {
+      "files": [
+        "ui/**/*.{ts,tsx}",
+        "extensions/*/browser/**/*.{ts,tsx}",
+        "extensions/*/src/**/*.tsx"
+      ],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // Primitive contracts apply to domain helpers too, without treating props-named data as components.
+      "rules": {
+        "solid/removed-api": "error",
+        "solid/no-single-arg-create-effect": "error",
+        "solid/no-store-mutation-outside-setter": "error",
+        "solid/no-write-in-pure-computation": "error",
+        "solid/no-unused-signal": "warn"
+      }
+    },
+    {
+      "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:openclaw(?:/|$)|(?:\\.\\./){3,}src/)",
+                "message": "worker-runtime must remain independent of application src; supply host behavior through its runtime contracts."
+              }
+            ]
+          }
+        ]
+      }
+    },
     {
       "files": ["extensions/browser/src/browser/routes/*.ts"],
       "rules": {
@@ -263,8 +352,8 @@
     },
     {
       "files": [
-        "**/*.test.ts",
-        "**/*.test.tsx",
+        "**/*.{test,suite}.ts",
+        "**/*.{test,suite}.tsx",
         "**/*.e2e.test.ts",
         "**/*.live.test.ts",
         "**/*test-harness.ts",
@@ -272,7 +361,30 @@
         "**/*test-support.ts"
       ],
       "rules": {
+        // Vitest hoists mock setup above static imports, so this ordering is intentional in tests.
+        "import/first": "off",
         "typescript/no-explicit-any": "off"
+      }
+    },
+    {
+      "files": [
+        "src/cli/cli-process-diagnostics.test-support.cjs",
+        "scripts/perf/async-context-probe.cjs",
+        "scripts/perf/gateway-ui-rpc-preload.mjs",
+        "scripts/perf/session-delete-phases-loader.mjs",
+        "scripts/perf/sqlite-reply-census-preload.mjs"
+      ],
+      "rules": {
+        // Saved native methods always receive the original caller's receiver.
+        // JS semantic discovery varies by lint target set; an inline disable can appear unused.
+        "typescript/unbound-method": "off"
+      }
+    },
+    {
+      "files": ["src/agents/subagents/registry/subagent-registry.ts"],
+      "rules": {
+        // Preserve the explicit maintenance side-effect import's module-request order.
+        "import/first": "off"
       }
     },
     {
@@ -283,10 +395,10 @@
         "extensions/**/*.{js,ts,mts,cts}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -305,10 +417,10 @@
         "extensions/**/*.{jsx,tsx}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -327,10 +439,10 @@
         "extensions/**/*.{mjs,cjs}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -343,18 +455,15 @@
     },
     {
       "files": [
-        "src/**/*.test.*",
-        "src/**/*.spec.*",
-        "ui/src/**/*.test.*",
-        "ui/src/**/*.spec.*",
-        "packages/**/*.test.*",
-        "packages/**/*.spec.*",
-        "extensions/**/*.test.*",
-        "extensions/**/*.spec.*"
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*"
       ],
       "excludeFiles": [
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -375,6 +484,20 @@
       "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
       "rules": {
         "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["**/*.{ts,tsx,mts,cts}"],
+      "rules": {
+        // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.
+        "eslint/no-redeclare": "off"
+      }
+    },
+    {
+      "files": ["extensions/qa-lab/src/web-runtime.ts"],
+      "rules": {
+        // Scenario scripts need page-global declarations, unlike Playwright's expression evaluation.
+        "eslint/no-eval": ["error", { "allowIndirect": true }]
       }
     }
   ]

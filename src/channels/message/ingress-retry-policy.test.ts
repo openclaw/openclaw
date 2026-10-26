@@ -1,14 +1,93 @@
-// Retry policy: backoff, attempt floor + age gate for dead-letter.
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
+import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import {
+  createIngressRetryPolicy,
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
 
+const codedError = (message: string, code: string) => Object.assign(new Error(message), { code });
+const wrapError = (cause: Error) =>
+  Object.assign(new Error("BotError in middleware"), {
+    error: new Error("telegram spooled update processing failed", { cause }),
+  });
+
+function disposition(
+  err: unknown,
+  attempts: number,
+  options: Partial<Parameters<ReturnType<typeof createIngressRetryPolicy>["failure"]>[0]> = {},
+) {
+  return createIngressRetryPolicy({}).failure({
+    err,
+    event: { id: "input", receivedAt: 1_000, attempts },
+    formatError: coerceErrorMessage,
+    now: 2_000,
+    ...options,
+  });
+}
+
 describe("ingress retry policy", () => {
+  it("counts real recovery failures independently of other dispatch attempts", () => {
+    const policy = createIngressRetryPolicy({});
+    const error = wrapError(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));
+    const event = { id: "input", receivedAt: 1_000, attempts: 8 };
+    const fail = (err: unknown) =>
+      policy.failure({ err, event, formatError: coerceErrorMessage, now: 2_000 });
+    expect(fail(error)).toMatchObject({
+      kind: "release",
+      attempt: 9,
+      recordAttempt: true,
+    });
+    expect(fail(new Error("transient dispatch failure"))).toMatchObject({ kind: "release" });
+    expect(fail(error)).toMatchObject({
+      kind: "fail",
+      reason: "runtime-recovery-failed",
+    });
+    policy.clear(event.id);
+    expect(fail(error)).toMatchObject({ kind: "release" });
+  });
+
+  it("preserves backoff across drains of the same live queue without spending an attempt", () => {
+    const queue = {};
+    const policy = createIngressRetryPolicy(queue);
+    const event = { id: "input", receivedAt: 1_000, attempts: 1 };
+    const fail = (reason: "attempt-failed" | "backoff") =>
+      policy.failure({
+        err: new PreparedModelRuntimeRecoveryError("main", reason, 7_000),
+        event,
+        formatError: coerceErrorMessage,
+      });
+    expect(fail("attempt-failed")).toMatchObject({ kind: "release" });
+    expect(fail("backoff")).toMatchObject({ kind: "release", attempt: 1, recordAttempt: false });
+    const nextDrain = createIngressRetryPolicy(queue);
+    expect(nextDrain.delay(event, undefined, 2_000)).toBe(5_000);
+    expect(nextDrain.delay(event, undefined, 7_000)).toBe(0);
+    expect(fail("attempt-failed")).toMatchObject({
+      kind: "fail",
+      reason: "runtime-recovery-failed",
+    });
+  });
+
+  it("isolates queue owners and clears recovery state for completed rows", () => {
+    const policy = createIngressRetryPolicy({});
+    const event = { id: "input", receivedAt: 1_000 };
+    const params = {
+      err: new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000),
+      event,
+      formatError: coerceErrorMessage,
+    };
+    policy.failure(params);
+    expect(createIngressRetryPolicy({}).delay(event, undefined, 2_000)).toBe(0);
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+    expect(policy.failure(params)).toMatchObject({ kind: "release" });
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+  });
+
   it.each([
     {
       name: "default cap",
@@ -82,49 +161,29 @@ describe("ingress retry policy", () => {
     expect(resolveIngressRetryDelayMs(event, undefined, now)).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "attempts below floor",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
-      expected: false,
-    },
-    {
-      name: "age below gate",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
-      expected: false,
-    },
-    {
-      name: "both attempt floor and age met",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      expected: true,
-    },
-    {
-      name: "over floor and over age",
-      attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 3,
-      ageMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS * 2,
-      expected: true,
-    },
-  ])("dead-letter requires both gates: $name", ({ attempt, ageMs, expected }) => {
+  it("does not dead-letter an old event below the attempt floor", () => {
     const receivedAt = 1_000;
     expect(
-      shouldDeadLetterRetryableIngressEvent({ receivedAt }, attempt, undefined, receivedAt + ageMs),
-    ).toBe(expected);
+      shouldDeadLetterRetryableIngressEvent(
+        { receivedAt },
+        DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+        undefined,
+        receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS + 1,
+      ),
+    ).toBe(false);
   });
 
   it("disposition prefers non-retryable fail", () => {
-    const disposition = resolveIngressFailureDisposition({
-      err: new Error("missing harness"),
-      event: { receivedAt: Date.now() - 60_000, attempts: 0 },
-      formatError: (err) => String(err),
-      resolveNonRetryableFailure: () => ({
-        reason: "missing-agent-harness",
-        message: "missing harness",
+    expect(
+      disposition(new Error("missing harness"), 0, {
+        now: undefined,
+        formatError: (err) => String(err),
+        resolveNonRetryableFailure: () => ({
+          reason: "missing-agent-harness",
+          message: "missing harness",
+        }),
       }),
-    });
-    expect(disposition).toEqual({
+    ).toEqual({
       kind: "fail",
       reason: "missing-agent-harness",
       message: "missing harness",
@@ -133,33 +192,115 @@ describe("ingress retry policy", () => {
   });
 
   it("disposition dead-letters only when both gates pass", () => {
-    const receivedAt = 1_000;
-    // Attempt floor met, age gate not → keep retrying.
-    const young = resolveIngressFailureDisposition({
-      err: new Error("transient"),
-      event: {
-        receivedAt,
-        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
-      },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
-      now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
-    });
+    const attempt = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1;
+    const deadline = 1_000 + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS;
+    const young = disposition(new Error("transient"), attempt, { now: deadline - 1 });
     expect(young.kind).toBe("release");
-
-    // Both gates met → dead-letter.
-    const aged = resolveIngressFailureDisposition({
-      err: new Error("transient"),
-      event: {
-        receivedAt,
-        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
-      },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
-      now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-    });
+    const aged = disposition(new Error("transient"), attempt, { now: deadline });
     expect(aged).toMatchObject({
       kind: "fail",
       reason: "retry-limit-exceeded",
       attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
     });
+  });
+
+  it("dead-letters a restart tombstone by structured code instead of wording", () => {
+    const message = "This generation is terminal.";
+    const tombstone = codedError(message, "SESSION_RESTART_RECOVERY_TOMBSTONE");
+    const wrapped = wrapError(tombstone);
+    expect(
+      disposition(wrapped, 0, {
+        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message: wrapped.message,
+      attempt: 1,
+    });
+    expect(disposition(tombstone, 425)).toMatchObject({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 426,
+    });
+  });
+
+  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
+    "keeps tombstone-like text retryable without its code: %s",
+    (code) => {
+      const err = Object.assign(
+        new Error("Session ended during restart recovery. Use /new or /reset."),
+        { code },
+      );
+      expect(disposition(err, 0)).toEqual({ kind: "release", attempt: 1, message: err.message });
+    },
+  );
+
+  it.each(["code", "cause", "errors"])(
+    "releases a transient failure when its %s getter throws",
+    (field) => {
+      const err = Object.defineProperty(new Error("temporary failure"), field, {
+        get() {
+          throw new Error("unavailable diagnostic field");
+        },
+      });
+      expect(disposition(err, 0)).toEqual({
+        kind: "release",
+        attempt: 1,
+        message: "temporary failure",
+      });
+    },
+  );
+
+  it("finds the terminal code beside an inaccessible wrapper field", () => {
+    const err = Object.assign(new Error("reply admission refused"), {
+      error: Object.assign(new Error("terminal generation"), {
+        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+      }),
+    });
+    Object.defineProperty(err, "cause", {
+      get() {
+        throw new Error("unavailable diagnostic field");
+      },
+    });
+    expect(disposition(err, 0)).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 1,
+      message: "reply admission refused",
+    });
+  });
+
+  it("keeps wrapped session-start conflicts under both retry and age gates", () => {
+    const maxAttempts = 3;
+    const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
+    const wrapped = wrapError(codedError(message, "SESSION_WORK_START_CHANGED"));
+    const config = { maxAttempts };
+    const beforeLimit = disposition(wrapped, maxAttempts - 2, { config });
+    expect(beforeLimit).toMatchObject({
+      kind: "release",
+      attempt: maxAttempts - 1,
+    });
+    expect(disposition(new Error(message), maxAttempts - 1, { config })).toMatchObject({
+      kind: "release",
+      attempt: maxAttempts,
+    });
+    expect(
+      disposition(codedError(message, "SESSION_WORK_START_INVALIDATED"), maxAttempts - 1, {
+        config,
+      }),
+    ).toMatchObject({ kind: "release", attempt: maxAttempts });
+    const atLimit = disposition(wrapped, maxAttempts - 1, { config });
+    expect(atLimit).toEqual({
+      kind: "release",
+      message: wrapped.message,
+      attempt: maxAttempts,
+    });
+    expect(
+      disposition(wrapped, maxAttempts - 1, {
+        config: { maxAttempts },
+        now: 1_000 + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "retry-limit-exceeded", attempt: maxAttempts });
   });
 });

@@ -63,10 +63,8 @@ struct GatewayQuickSetupSheet: View {
                                 self.connecting = true
                                 Task {
                                     let err = await self.gatewayController.connectWithDiagnostics(candidate)
-                                    await MainActor.run {
-                                        self.connecting = false
-                                        self.connectError = err
-                                    }
+                                    self.connecting = false
+                                    self.connectError = err
                                 }
                             } label: {
                                 Group {
@@ -516,7 +514,6 @@ extension GatewayDiscoveryModel.DiscoveredGateway {
         lanHost: "openclaw.local",
         tailnetDns: nil,
         gatewayPort: 18789,
-        canvasPort: 18789,
         tlsEnabled: true,
         tlsFingerprintSha256: "preview",
         cliPath: "/opt/homebrew/bin/openclaw")

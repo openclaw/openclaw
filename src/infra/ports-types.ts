@@ -1,4 +1,3 @@
-// Port probe types are shared by lsof/netstat readers and CLI status formatters.
 /** Process metadata for one listener on a port. */
 export type PortListener = {
   pid?: number;
@@ -24,7 +23,6 @@ export type PortUsage = {
   status: PortUsageStatus;
   listeners: PortListener[];
   hints: string[];
-  detail?: string;
   errors?: string[];
 };
 
@@ -34,6 +32,4 @@ export type PortListenerKind = "gateway" | "ssh" | "non_gateway" | "unknown";
 export type PortConnections = {
   port: number;
   connections: PortConnection[];
-  detail?: string;
-  errors?: string[];
 };

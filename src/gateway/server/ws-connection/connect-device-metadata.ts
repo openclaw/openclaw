@@ -1,4 +1,5 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeDeviceMetadataForAuth } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -9,12 +10,13 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
   isMobilePairingSetupBootstrapProfile,
+  isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
+import { resolveGatewayClientPlatformIdentity } from "../../../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
-import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 
 export function resolvePairedAccessScopes(
   device: Pick<PairedDevice, "approvedScopes" | "scopes"> | null | undefined,
@@ -27,11 +29,9 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-function isSetupCodeMobileBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeMobileBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
@@ -43,12 +43,9 @@ function isSetupCodeMobileBootstrapClient(client: {
   return false;
 }
 
-/** Embedded voice nodes must prove the canonical node-host and ESP32 metadata tuple. */
-function isSetupCodeVoiceNodeBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeVoiceNodeBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   return (
@@ -58,7 +55,6 @@ function isSetupCodeVoiceNodeBootstrapClient(client: {
   );
 }
 
-/** Match a closed setup profile to the client metadata class allowed to redeem it silently. */
 export function isSetupCodeHandoffBootstrapClient(params: {
   profile: DeviceBootstrapProfile;
   client: { id?: string; platform?: string; deviceFamily?: string };
@@ -66,6 +62,8 @@ export function isSetupCodeHandoffBootstrapClient(params: {
   return (
     (isMobilePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeMobileBootstrapClient(params.client)) ||
+    (isNodePairingSetupBootstrapProfile(params.profile) &&
+      params.client.id === GATEWAY_CLIENT_IDS.NODE_HOST) ||
     (isVoiceNodePairingSetupBootstrapProfile(params.profile) &&
       isSetupCodeVoiceNodeBootstrapClient(params.client))
   );
@@ -137,50 +135,31 @@ export function isMobileNodeBootstrapConnect(params: {
   );
 }
 
-function pairedDeviceAllowsBootstrapRole(params: {
-  device: PairedDevice;
-  profile: DeviceBootstrapProfile;
-  role: string;
-}): boolean {
-  return (
-    hasEffectivePairedDeviceRole(params.device, params.role) &&
-    roleScopesAllow({
-      role: params.role,
-      requestedScopes: resolveBootstrapProfileScopesForRole(
-        params.role,
-        params.profile.scopes,
-        params.profile.purpose,
-      ),
-      allowedScopes: resolvePairedAccessScopes(params.device),
-    })
-  );
-}
-
-export function pairedDeviceAllowsBootstrapProfile(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
+export function pairedDeviceAllowsBootstrapProfile(
+  params: {
+    device: PairedDevice | null | undefined;
+    devicePublicKey: string;
+    profile: DeviceBootstrapProfile;
+  },
+  roles: readonly string[] = params.profile.roles,
+): boolean {
   const device = params.device;
   return Boolean(
     device &&
     device.publicKey === params.devicePublicKey &&
-    params.profile.roles.every((role) =>
-      pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role }),
+    roles.every(
+      (role) =>
+        hasEffectivePairedDeviceRole(device, role) &&
+        roleScopesAllow({
+          role,
+          requestedScopes: resolveBootstrapProfileScopesForRole(
+            role,
+            params.profile.scopes,
+            params.profile.purpose,
+          ),
+          allowedScopes: resolvePairedAccessScopes(device),
+        }),
     ),
-  );
-}
-
-export function pairedDeviceAllowsBootstrapOperator(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
-  const device = params.device;
-  return Boolean(
-    device &&
-    device.publicKey === params.devicePublicKey &&
-    pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role: "operator" }),
   );
 }
 
@@ -198,19 +177,6 @@ export function resolvePinnedClientMetadata(params: {
   pinnedDeviceFamily?: string;
   refreshPairedPlatform?: string;
 } {
-  function normalizeLegacyNodeHostPlatformPin(value: string): string {
-    switch (value) {
-      case "darwin":
-      case "macos":
-        return "macos";
-      case "win32":
-      case "windows":
-        return "windows";
-      default:
-        return value;
-    }
-  }
-
   function resolveNativeAppPlatformFamily(
     clientId: string | undefined,
     value: string,
@@ -220,6 +186,9 @@ export function resolvePinnedClientMetadata(params: {
     }
     if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
       return "android";
+    }
+    if (clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP && /^watchos \d+(?:\.\d+){0,2}$/.test(value)) {
+      return "watchos";
     }
     if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos \d+(?:\.\d+){0,2}$/.test(value)) {
       return "macos";
@@ -233,16 +202,28 @@ export function resolvePinnedClientMetadata(params: {
   const pairedDeviceFamily = normalizeDeviceMetadataForAuth(params.pairedDeviceFamily);
   const hasPinnedPlatform = pairedPlatform !== "";
   const hasPinnedDeviceFamily = pairedDeviceFamily !== "";
+  const pairedRuntimeIdentity = resolveGatewayClientPlatformIdentity(pairedPlatform);
   const isLegacyNodeHostPlatformPin =
     params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
     params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
-    normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
-      normalizeLegacyNodeHostPlatformPin(pairedPlatform);
-  const isNodeHostUsingMacAppPlatformPin =
-    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    resolveGatewayClientPlatformIdentity(claimedPlatform).platform ===
+      pairedRuntimeIdentity.platform;
+  // Legacy unpinned runtime aliases may adopt their exact canonical tuple.
+  // Other platform changes and conflicting family pins still require approval.
+  const isRuntimePlatformPin =
+    isLegacyNodeHostPlatformPin ||
+    (!hasPinnedDeviceFamily &&
+      pairedRuntimeIdentity.platform !== pairedPlatform &&
+      claimedPlatform === pairedRuntimeIdentity.platform &&
+      claimedDeviceFamily === normalizeDeviceMetadataForAuth(pairedRuntimeIdentity.deviceFamily));
+  const isRuntimeUsingMacAppPlatformPin =
+    ((params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+      params.clientMode === GATEWAY_CLIENT_MODES.NODE) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.CLI &&
+        (params.clientMode === GATEWAY_CLIENT_MODES.CLI ||
+          params.clientMode === GATEWAY_CLIENT_MODES.PROBE))) &&
     (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
     /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
@@ -265,20 +246,17 @@ export function resolvePinnedClientMetadata(params: {
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
-    !isLegacyNodeHostPlatformPin &&
-    !isNodeHostUsingMacAppPlatformPin &&
+    !isRuntimePlatformPin &&
+    !isRuntimeUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
-  const pinnedPlatform =
-    claimedPlatform === pairedPlatform
+  const pinnedPlatform = isRuntimePlatformPin
+    ? pairedRuntimeIdentity.platform
+    : claimedPlatform === pairedPlatform || isRuntimeUsingMacAppPlatformPin
       ? params.pairedPlatform
-      : isLegacyNodeHostPlatformPin
-        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isNodeHostUsingMacAppPlatformPin
-          ? params.pairedPlatform
-          : isNativeAppPlatformVersionRefresh
-            ? params.claimedPlatform
-            : undefined;
+      : isNativeAppPlatformVersionRefresh
+        ? params.claimedPlatform
+        : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,

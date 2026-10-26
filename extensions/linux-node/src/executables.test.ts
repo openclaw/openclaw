@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { resolveExecutable } from "./executables.js";
 
 describe("linux-node executable discovery", () => {
-  it("caches resolved executables per process environment", () => {
+  it("discovers executable changes on PATH", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-linux-node-exec-"));
     const command = `ffmpeg-${process.pid}-${Date.now()}`;
     const expected = join(dir, command);
@@ -14,7 +14,7 @@ describe("linux-node executable discovery", () => {
 
     expect(resolveExecutable(command, { PATH: dir })).toBe(expected);
     unlinkSync(expected);
-    expect(resolveExecutable(command, { PATH: dir })).toBe(expected);
+    expect(resolveExecutable(command, { PATH: dir })).toBeNull();
     rmSync(dir, { recursive: true, force: true });
   });
 

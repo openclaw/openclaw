@@ -1,187 +1,238 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createEffect, createMemo, onCleanup } from "solid-js";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import {
-  scopedSessionPullRequestKey,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  summarizeSessionPullRequests,
   sessionPullRequestsForGateway,
-  type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import {
-  resolveSessionPullRequestIndicatorState,
-  type SessionPullRequestIndicatorState,
-} from "./session-menu-work.ts";
 
 type IndicatorEntry = {
-  state: SessionPullRequestIndicatorState;
+  summary: SessionCatalogPullRequestSummary | undefined;
   worktreeId: string;
+  count: number | undefined;
+  branchKnown: boolean;
 };
 
-type SessionPullRequestIndicatorsOptions = {
+/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
+export function createSessionPullRequestIndicators(options: {
   getConnected: () => boolean;
+  getPresented: () => boolean;
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
-};
-
-/** Projects pushed PR snapshots for the currently visible worktree rows. */
-export class SessionPullRequestIndicatorsController implements ReactiveController {
-  private readonly states = new Map<string, IndicatorEntry>();
-  private gateway: ApplicationGateway | null = null;
-  private client: GatewayBrowserClient | null = null;
-  private agentId: string | null = null;
-  private store: SessionPullRequestSnapshotStore | null = null;
-  private stopStoreUpdates: (() => void) | null = null;
-  private connected = false;
-  private refreshScheduled = false;
-
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly options: SessionPullRequestIndicatorsOptions,
-  ) {
-    host.addController(this);
-  }
-
-  hostConnected(): void {
-    this.connected = true;
-  }
-
-  hostUpdated(): void {
-    this.scheduleRefresh();
-  }
-
-  hostDisconnected(): void {
-    this.connected = false;
-    this.releaseStore();
-    this.reset(false);
-  }
-
-  state(sessionKey: string, worktreeId: string): SessionPullRequestIndicatorState {
-    const entry = this.states.get(sessionKey);
-    return entry?.worktreeId === worktreeId ? entry.state : "none";
-  }
-
-  private scheduleRefresh(): void {
-    if (this.refreshScheduled) {
-      return;
-    }
-    this.refreshScheduled = true;
-    globalThis.setTimeout(() => {
-      this.refreshScheduled = false;
-      if (this.connected) {
-        this.refreshVisible();
-      }
-    }, 0);
-  }
-
-  private releaseStore(): void {
-    this.store?.unwatch(this);
-    this.stopStoreUpdates?.();
-    this.stopStoreUpdates = null;
-    this.store = null;
-    this.gateway = null;
-    this.client = null;
-    this.agentId = null;
-  }
-
-  private reset(requestUpdate: boolean): void {
-    if (this.states.size === 0) {
-      return;
-    }
-    this.states.clear();
-    if (requestUpdate) {
-      this.host.requestUpdate();
-    }
-  }
-
-  private eligibleRows(): readonly SidebarRecentSession[] {
-    return this.options.getRows().filter((session) => !session.isChild && session.worktreeId);
-  }
-
-  private scopedKey(sessionKey: string): string {
-    return scopedSessionPullRequestKey(
-      sessionKey,
-      parseAgentSessionKey(sessionKey)?.agentId ?? this.options.getSelectedAgentId(),
+  getSessions: () => SessionCapability | undefined;
+}) {
+  // Any admitted reader projects the shared store; the store itself issues passive sidebar reads only
+  // for broad readers, so a session-only reader sees snapshots its own conversation read delivered.
+  const readable = () => {
+    const gateway = options.getGateway();
+    return gateway &&
+      canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+      ? gateway
+      : null;
+  };
+  const broadRead = () => {
+    const gateway = options.getGateway();
+    return Boolean(
+      gateway &&
+      operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []),
     );
-  }
-
-  private applySnapshots(): void {
-    const store = this.store;
-    if (!store) {
-      return;
+  };
+  const rows = createMemo(() => options.getRows().filter((row) => !row.isChild));
+  const scope = createMemo(
+    () => {
+      const gateway = readable();
+      // Losing or gaining broad read rebinds the store so passive snapshots never outlive their scope.
+      return gateway && options.getConnected()
+        ? {
+            gateway,
+            client: gateway.snapshot.client,
+            agentId: options.getSelectedAgentId(),
+            sessions: options.getSessions(),
+            broad: broadRead(),
+          }
+        : null;
+    },
+    {
+      equals: (a, b) =>
+        a?.gateway === b?.gateway &&
+        a?.broad === b?.broad &&
+        a?.client === b?.client &&
+        a?.agentId === b?.agentId &&
+        a?.sessions === b?.sessions,
+    },
+  );
+  const binding = createMemo(() => {
+    const current = scope();
+    if (!current) {
+      return null;
     }
-    let changed = false;
-    for (const session of this.eligibleRows()) {
-      if (!session.worktreeId) {
-        continue;
+    const store = sessionPullRequestsForGateway(current.gateway);
+    const watchOwner = {};
+    const scopedKey = (key: string) =>
+      scopedSessionArtifactKey(key, parseAgentSessionKey(key)?.agentId ?? current.agentId);
+    let visible: readonly SidebarRecentSession[] = [];
+    // These receipts preserve synchronous canonical invalidation, not presentation state.
+    const seen = new Set<string>();
+    const reconcileRemoved = () => {
+      for (const row of visible) {
+        const snapshot = store.get(scopedKey(row.key));
+        if (!snapshot && seen.delete(row.key)) {
+          const sessions = current.sessions;
+          sessions?.setPullRequestSummary(
+            row.key,
+            undefined,
+            sessions.capturePullRequestEpoch(row.key),
+          );
+        } else if (
+          snapshot &&
+          (snapshot.status === "ready" ||
+            snapshot.pullRequests.length ||
+            snapshot.taskPullRequests?.length)
+        ) {
+          seen.add(row.key);
+        }
       }
-      const snapshot = store.get(this.scopedKey(session.key));
-      // Empty failure snapshots retain the rendered chip; snapshots carrying
-      // last-known PRs can also hydrate a newly mounted row.
-      if (!snapshot || (snapshot.status !== "ready" && snapshot.pullRequests.length === 0)) {
-        continue;
+    };
+    const projection = projectSource(store, {
+      read: (source) => source,
+      subscribe: (source, notify) =>
+        source.subscribe(() => {
+          reconcileRemoved();
+          notify();
+        }),
+      equality: "revision",
+    });
+    onCleanup(() => {
+      projection.dispose();
+      store.unwatch(watchOwner);
+    });
+    return {
+      projection,
+      scopedKey,
+      watch(next: readonly SidebarRecentSession[]) {
+        visible = next;
+        const keys = new Set(next.map((row) => row.key));
+        for (const key of seen) {
+          if (!keys.has(key)) {
+            seen.delete(key);
+          }
+        }
+        store.watch(
+          watchOwner,
+          next.map((row) => scopedKey(row.key)),
+          { passive: true },
+        );
+        reconcileRemoved();
+      },
+    };
+  });
+  // The external store's watch union follows committed visible rows; it never starts checkout polling.
+  createEffect(
+    () => {
+      const current = binding();
+      // Custody stays live while parked presentation drops its source dependencies.
+      current?.projection.revision();
+      return [current, rows()];
+    },
+    ([current, visible]) => current?.watch(visible),
+  );
+  const summaries = createMemo<{
+    binding: ReturnType<typeof binding>;
+    entries: Map<string, IndicatorEntry>;
+  }>((previous) => {
+    const current = binding();
+    const entries = new Map<string, IndicatorEntry>();
+    if (current) {
+      const store = current.projection.read();
+      for (const row of rows()) {
+        const snapshot = store.get(current.scopedKey(row.key));
+        const prior = previous?.binding === current ? previous.entries.get(row.key) : undefined;
+        if (!snapshot) {
+          continue;
+        }
+        if (
+          !snapshot.discardPrevious &&
+          snapshot.status !== "ready" &&
+          snapshot.pullRequests.length === 0 &&
+          !snapshot.taskPullRequests?.length
+        ) {
+          if (prior) {
+            entries.set(row.key, prior);
+          }
+          continue;
+        }
+        const branchKnown =
+          snapshot.discardPrevious ||
+          snapshot.branchRead !== false ||
+          snapshot.pullRequestCount !== undefined ||
+          snapshot.pullRequests.length > 0 ||
+          (prior?.worktreeId === (row.worktreeId ?? "") && prior.branchKnown);
+        entries.set(row.key, {
+          summary: summarizeSessionPullRequests(
+            [
+              ...snapshot.pullRequests,
+              ...(snapshot.taskPullRequests ?? []).flatMap((task) =>
+                task.pullRequest ? [task.pullRequest] : [],
+              ),
+            ],
+            prior?.summary,
+          ),
+          worktreeId: row.worktreeId ?? "",
+          branchKnown,
+          count:
+            !branchKnown && snapshot.pullRequests.length === 0 && !snapshot.taskPullRequestCount
+              ? undefined
+              : (snapshot.pullRequestCount ??
+                Math.max(
+                  new Set(
+                    [...snapshot.pullRequests, ...(snapshot.taskPullRequests ?? [])].map(
+                      (request) => request.url,
+                    ),
+                  ).size,
+                  snapshot.taskPullRequestCount ?? 0,
+                )),
+        });
       }
-      const entry = {
-        state: resolveSessionPullRequestIndicatorState(snapshot.pullRequests),
-        worktreeId: session.worktreeId,
-      };
-      const current = this.states.get(session.key);
-      if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {
-        this.states.set(session.key, entry);
-        changed = true;
+    }
+    return { binding: current, entries };
+  });
+  const presentation = createParkedProjection(
+    () => ({ readable: Boolean(readable()), broad: broadRead(), entries: summaries().entries }),
+    options.getPresented,
+  );
+  return {
+    count(sessionKey: string) {
+      const current = presentation();
+      return current.readable ? current.entries.get(sessionKey)?.count : undefined;
+    },
+    summary(sessionKey: string, worktreeId: string, initial?: SessionCatalogPullRequestSummary) {
+      const current = presentation();
+      if (!current.readable) {
+        // Catalog-only rows already carry an authorized summary; live PR access is separate.
+        return worktreeId ? undefined : initial;
       }
-    }
-    if (changed) {
-      this.host.requestUpdate();
-    }
-  }
-
-  private refreshVisible(): void {
-    const gateway = this.options.getGateway();
-    if (
-      !gateway ||
-      !this.options.getConnected() ||
-      isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !== true
-    ) {
-      this.releaseStore();
-      this.reset(true);
-      return;
-    }
-    if (gateway !== this.gateway) {
-      this.releaseStore();
-      this.gateway = gateway;
-      this.store = sessionPullRequestsForGateway(gateway);
-      this.stopStoreUpdates = this.store.subscribe(() => this.applySnapshots());
-    }
-    if (gateway.snapshot.client !== this.client) {
-      this.client = gateway.snapshot.client;
-      this.reset(true);
-    }
-    const selectedAgentId = this.options.getSelectedAgentId();
-    if (selectedAgentId !== this.agentId) {
-      this.agentId = selectedAgentId;
-      this.reset(true);
-    }
-
-    const eligibleRows = this.eligibleRows();
-    const eligibleKeys = new Set(eligibleRows.map((session) => session.key));
-    let removed = false;
-    for (const sessionKey of this.states.keys()) {
-      if (!eligibleKeys.has(sessionKey)) {
-        this.states.delete(sessionKey);
-        removed = true;
-      }
-    }
-    if (removed) {
-      this.host.requestUpdate();
-    }
-    this.store?.watch(
-      this,
-      eligibleRows.map((session) => this.scopedKey(session.key)),
-    );
-    this.applySnapshots();
-  }
+      // A session-only reader shows catalog facts for a checkout row only when its own read confirmed them.
+      const catalogSummary = current.broad || !worktreeId ? initial : undefined;
+      const entry = current.entries.get(sessionKey);
+      // Receipt-only hydration says nothing about a catalog branch summary.
+      return entry?.worktreeId === worktreeId
+        ? (entry.summary ?? (!entry.branchKnown ? catalogSummary : undefined))
+        : catalogSummary;
+    },
+  };
 }
+
+export type SessionPullRequestIndicators = ReturnType<typeof createSessionPullRequestIndicators>;

@@ -39,12 +39,12 @@ const programMocks = vi.hoisted(() => {
 });
 
 export const configureCommand = programMocks.configureCommand as AnyMock;
-export const setupCommand = programMocks.setupCommand as AnyMock;
-export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
-export const callGateway = programMocks.callGateway as AnyMock;
-export const runTui = programMocks.runTui as AnyMock;
-export const runSystemAgentWithInference = programMocks.runSystemAgentWithInference as AnyMock;
-export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
+export const setupCommandMock = programMocks.setupCommand as AnyMock;
+export const setupWizardCommandMock = programMocks.setupWizardCommand as AnyMock;
+export const programGatewayCallMock = programMocks.callGateway as AnyMock;
+export const tuiRunMock = programMocks.runTui as AnyMock;
+export const systemAgentRunMock = programMocks.runSystemAgentWithInference as AnyMock;
+export const ensureConfigReadyMock = programMocks.ensureConfigReady as AnyMock;
 
 export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;
@@ -57,7 +57,8 @@ export const runtime = programMocks.runtime as {
 // Keep these mocks at top level so Vitest does not warn about hoisted nested mocks.
 vi.mock("../commands/message.js", () => ({ messageCommand: programMocks.messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand: programMocks.statusCommand }));
-vi.mock("../commands/configure.js", () => ({
+vi.mock("../commands/configure.commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/configure.commands.js")>()),
   CONFIGURE_WIZARD_SECTIONS: [
     "workspace",
     "model",
@@ -70,12 +71,12 @@ vi.mock("../commands/configure.js", () => ({
   ],
   configureCommand: programMocks.configureCommand,
   configureCommandWithSections: programMocks.configureCommandWithSections,
-  configureCommandFromSectionsArg: (sections: unknown, runtimeLocal: unknown) => {
+  configureCommandFromSectionsArg: (sections: unknown) => {
     const resolved = Array.isArray(sections) ? sections : [];
     if (resolved.length > 0) {
-      return programMocks.configureCommandWithSections(resolved, runtimeLocal);
+      return programMocks.configureCommandWithSections(resolved, programMocks.runtime);
     }
-    return programMocks.configureCommand({}, runtimeLocal);
+    return programMocks.configureCommand({}, programMocks.runtime);
   },
 }));
 vi.mock("../commands/setup.js", () => ({ setupCommand: programMocks.setupCommand }));
@@ -83,7 +84,10 @@ vi.mock("../commands/onboard.js", () => ({
   onboardCommand: programMocks.onboardCommand,
   setupWizardCommand: programMocks.setupWizardCommand,
 }));
-vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: programMocks.runtime,
+}));
 vi.mock("./channel-auth.js", () => ({
   runChannelLogin: programMocks.runChannelLogin,
   runChannelLogout: programMocks.runChannelLogout,
@@ -94,6 +98,8 @@ vi.mock("../commands/system-agent-with-inference.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
+  GatewayStoredDeviceAuthUnavailableError: class extends Error {},
+  GatewayTransportError: class extends Error {},
   randomIdempotencyKey: () => "idem-test",
   buildGatewayConnectionDetails: () => ({
     url: "ws://127.0.0.1:1234",
@@ -102,7 +108,8 @@ vi.mock("../gateway/call.js", () => ({
   }),
 }));
 vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
-vi.mock("./plugin-registry.js", () => ({
+vi.mock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: programMocks.ensurePluginRegistryLoaded,
 }));
 vi.mock("../commands/doctor-config-flow.js", () => ({

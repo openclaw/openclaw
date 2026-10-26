@@ -1,7 +1,6 @@
-// Control UI module implements user identity behavior.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRenderableControlUiAvatarUrl, resolveChatAvatarRenderUrl } from "../lib/avatar.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 
 const MAX_LOCAL_USER_NAME = 50;
 const MAX_LOCAL_USER_TEXT_AVATAR = 16;
@@ -36,11 +35,8 @@ export function normalizeLocalUserIdentity(
   };
 }
 
-export function resolveLocalUserName(
-  input?: Partial<LocalUserIdentity> | null,
-  fallback = "You",
-): string {
-  return normalizeLocalUserIdentity(input).name ?? fallback;
+export function resolveLocalUserName(input?: Partial<LocalUserIdentity> | null): string {
+  return normalizeLocalUserIdentity(input).name ?? "You";
 }
 
 export function resolveLocalUserAvatarUrl(
@@ -58,7 +54,7 @@ export function resolveLocalUserAvatarText(
   input?: Partial<LocalUserIdentity> | null,
 ): string | null {
   const normalized = normalizeLocalUserIdentity(input);
-  const avatar = normalizeOptionalString(normalized.avatar);
+  const avatar = normalized.avatar;
   if (!avatar) {
     return null;
   }

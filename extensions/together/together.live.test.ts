@@ -1,13 +1,15 @@
 // Together tests cover together plugin behavior.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { extractNonEmptyAssistantText as extractAssistantText } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { TOGETHER_BASE_URL, TOGETHER_MODEL_CATALOG } from "./models.js";
 
 const TOGETHER_KEY = process.env.TOGETHER_API_KEY ?? "";
-const LIVE = ["LIVE", "OPENCLAW_LIVE_TEST", "TOGETHER_LIVE_TEST"].some((name) => {
-  const value = process.env[name]?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
-});
+const LIVE = ["LIVE", "OPENCLAW_LIVE_TEST", "TOGETHER_LIVE_TEST"].some((name) =>
+  isTruthyEnvValue(process.env[name]),
+);
 const TOGETHER_LIVE_TIMEOUT_MS = 45_000;
 
 const describeLive = LIVE && TOGETHER_KEY ? describe : describe.skip;
@@ -32,19 +34,6 @@ function buildLiveModel(model: (typeof TOGETHER_MODEL_CATALOG)[number]) {
   } satisfies Model<"openai-completions">;
 }
 
-function extractAssistantText(
-  content: Array<{
-    type?: string;
-    text?: string;
-  }>,
-) {
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text?.trim() ?? "")
-    .filter(Boolean)
-    .join(" ");
-}
-
 describeLive("together live catalog", () => {
   for (const catalogModel of TOGETHER_MODEL_CATALOG) {
     it(
@@ -52,13 +41,7 @@ describeLive("together live catalog", () => {
       async () => {
         const model = buildLiveModel(catalogModel);
         const context = {
-          messages: [
-            {
-              role: "user" as const,
-              content: "Reply with the word ok.",
-              timestamp: Date.now(),
-            },
-          ],
+          messages: [makeUserMessage("Reply with the word ok.", Date.now())],
         };
         let response = await completeSimple(model, context, {
           apiKey: TOGETHER_KEY,

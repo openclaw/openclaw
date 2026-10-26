@@ -1,86 +1,62 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
-import {
-  buildCliMemorySearchSessionKey,
-  formatAuditCounts,
-  formatExtraPaths,
-  resolveMemoryPluginConfig,
-  withMemoryCommand,
-  type MemoryManager,
-} from "./cli-runtime-common.js";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatErrorMessage,
-  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
   theme,
-  withProgressTotals,
-} from "./cli.host.runtime.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  resolveMemoryDreamingWorkspace,
+  resolveMemoryDeepDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
+import {
+  emitMemoryCoreSidecarNotice,
+  formatAuditCounts,
+  formatExtraPaths,
+  formatMemoryIndexOutcome,
+  resolveMemoryAgent,
+  resolveMemoryPluginConfig,
+  scanMemoryManagerSources,
+  syncMemoryWithProgress,
+  withMemoryCommand,
+} from "./cli-runtime-common.js";
+import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
+  MemoryForgetCommandOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { asRecord } from "./dreaming-shared.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
+import { forgetMemoryEntries } from "./memory-forget.js";
+import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
-  recordShortTermRecalls,
   resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
-function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
+function formatSourceLabel(source: string, workspaceDir: string): string {
   if (source === "memory") {
     return shortenHomeInString(
       `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`,
     );
   }
   if (source === "sessions") {
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    return shortenHomeInString(
-      `sessions (${path.join(stateDir, "agents", agentId, "sessions")}${path.sep}*.jsonl)`,
-    );
+    return "sessions (current transcripts + retained transcript artifacts)";
   }
   return source;
-}
-async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
-  const status = manager.status?.();
-  if (!status || status.backend !== "qmd") {
-    return null;
-  }
-  const dbPath = status.dbPath?.trim();
-  if (!dbPath) {
-    return null;
-  }
-  let stat: fsSync.Stats;
-  try {
-    stat = await fs.stat(dbPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      throw new Error(`QMD index file not found: ${shortenHomePath(dbPath)}`, { cause: err });
-    }
-    throw new Error(
-      `QMD index file check failed: ${shortenHomePath(dbPath)} (${code ?? "error"})`,
-      { cause: err },
-    );
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    throw new Error(`QMD index file is empty: ${shortenHomePath(dbPath)}`);
-  }
-  return `QMD index: ${shortenHomePath(dbPath)} (${stat.size} bytes)`;
 }
 export async function runMemoryIndex(
   opts: MemoryCommandOptions,
@@ -89,18 +65,19 @@ export async function runMemoryIndex(
   setVerbose(Boolean(opts.verbose));
   await withMemoryCommand({
     commandName: "memory index",
-    agent: opts.agent,
+    options: { agent: opts.agent },
     allAgents: true,
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       try {
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (opts.verbose) {
-          const status = manager.status();
+          const status = await readMemorySearchManagerStatus(manager);
           const label = (text: string) => muted(`${text}:`);
           const sourceLabels = (status.sources ?? []).map((source) =>
-            formatSourceLabel(source, status.workspaceDir ?? "", agentId),
+            formatSourceLabel(source, status.workspaceDir ?? ""),
           );
           const extraPaths = status.workspaceDir
             ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
@@ -122,68 +99,14 @@ export async function runMemoryIndex(
           defaultRuntime.log(lines.join("\n"));
           defaultRuntime.log("");
         }
-        const startedAt = Date.now();
-        let lastLabel = "Indexing memory…";
-        let lastCompleted = 0;
-        let lastTotal = 0;
-        const formatDuration = (elapsedMs: number) => {
-          const seconds = Math.floor(elapsedMs / 1000);
-          return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-        };
-        const buildLabel = () => {
-          const elapsedMs = Math.max(1, Date.now() - startedAt);
-          const elapsed = formatDuration(elapsedMs);
-          if (lastTotal <= 0 || lastCompleted <= 0) {
-            return `${lastLabel} · elapsed ${elapsed}`;
-          }
-          const remainingMs = Math.max(
-            0,
-            ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted,
-          );
-          return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
-        };
         if (!syncFn) {
           defaultRuntime.log("Memory backend does not support manual reindex.");
           return;
         }
-        await withProgressTotals(
-          {
-            label: "Indexing memory…",
-            total: 0,
-            fallback: opts.verbose ? "line" : undefined,
-          },
-          async (update, progress) => {
-            const interval = setInterval(() => {
-              progress.setLabel(buildLabel());
-            }, 1000);
-            try {
-              await syncFn({
-                reason: "cli",
-                force: Boolean(opts.force),
-                progress: (syncUpdate) => {
-                  if (syncUpdate.label) {
-                    lastLabel = syncUpdate.label;
-                  }
-                  lastCompleted = syncUpdate.completed;
-                  lastTotal = syncUpdate.total;
-                  update({
-                    completed: syncUpdate.completed,
-                    total: syncUpdate.total,
-                    label: buildLabel(),
-                  });
-                  progress.setLabel(buildLabel());
-                },
-              });
-            } finally {
-              clearInterval(interval);
-            }
-          },
-        );
-        const qmdIndexSummary = await summarizeQmdIndexArtifact(manager);
-        if (qmdIndexSummary) {
-          defaultRuntime.log(qmdIndexSummary);
-        }
-        let postIndexStatus = manager.status();
+        await syncMemoryWithProgress({ sync: syncFn, options: opts, elapsed: true });
+        let postIndexStatus = await readMemorySearchManagerStatus(manager);
+        const scan = await scanMemoryManagerSources(postIndexStatus);
+        const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
         const vectorStoreAvailable =
           postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
@@ -195,7 +118,7 @@ export async function runMemoryIndex(
           typeof manager.probeVectorAvailability === "function"
         ) {
           semanticVectorAvailable = await manager.probeVectorAvailability();
-          postIndexStatus = manager.status();
+          postIndexStatus = await readMemorySearchManagerStatus(manager);
           semanticVectorAvailable =
             postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
         }
@@ -206,14 +129,13 @@ export async function runMemoryIndex(
           postIndexStatus.vector?.available ??
           postIndexStatus.vector?.storeAvailable;
         const vectorLoadErr = postIndexStatus.vector?.loadError;
+        defaultRuntime.log(outcome);
         if (vectorEnabled && vectorAvailable === false) {
           // Indexing still persisted chunks/FTS state; keep the command successful but
           // emit a stderr warning so operators and scripts can detect degraded recall.
           defaultRuntime.error(
             `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
           );
-        } else {
-          defaultRuntime.log(`Memory index updated (${agentId}).`);
         }
       } catch (err) {
         const message = formatErrorMessage(err);
@@ -224,83 +146,102 @@ export async function runMemoryIndex(
   });
 }
 export async function runMemorySearch(
-  queryArg: string | undefined,
+  query: string,
   opts: MemorySearchCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const query = opts.query ?? queryArg;
-  if (!query) {
-    defaultRuntime.error("Missing search query. Provide a positional query or use --query <text>.");
-    process.exitCode = 1;
-    return;
-  }
   await withMemoryCommand({
     commandName: "memory search",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
+    options: opts,
+    requiresMemorySlot: true,
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-      const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+      const result = await searchMemoryForCli({
+        manager,
         cfg,
-      }).enabled;
-      const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: memoryPluginConfig,
-        cfg,
+        agentId,
+        query,
+        maxResults: opts.maxResults,
+        minScore: opts.minScore,
       });
-      const sessionKey = buildCliMemorySearchSessionKey(agentId);
-      let results: Awaited<ReturnType<typeof manager.search>>;
-      try {
-        results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-          sessionKey,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        defaultRuntime.error(`Memory search failed: ${message}`);
-        process.exitCode = 1;
-        return;
-      }
-      const status = manager.status();
-      const staleness = resolveMemorySearchStaleness(status, agentId);
-      const workspaceDir = status.workspaceDir;
-      if (dreamingEnabled) {
-        await recordShortTermRecalls({
-          workspaceDir,
-          query,
-          results,
-          timezone: dreaming.timezone,
-        }).catch(() => {
-          // Persistence is best-effort, but the short-lived CLI must await it
-          // so process exit cannot discard an in-flight recall write.
-        });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results, ...staleness });
-        return;
-      }
-      if (staleness) {
-        defaultRuntime.error(`${staleness.warning} ${staleness.action}`);
-      }
-      if (results.length === 0) {
-        defaultRuntime.log("No matches.");
-        return;
-      }
-      const lines: string[] = [];
-      for (const result of results) {
-        lines.push(
-          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
-        );
-        lines.push(muted(result.snippet));
-        lines.push("");
-      }
-      defaultRuntime.log(lines.join("\n").trim());
+      renderMemorySearch(result, opts.json);
     },
   });
 }
+
+export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
+  try {
+    const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+    const agentId = resolveMemoryAgent(cfg, opts.agent);
+    const slotOwner = resolveForeignMemorySlotOwner(cfg);
+    if (slotOwner) {
+      emitMemoryCoreSidecarNotice(slotOwner, { json: Boolean(opts.json) });
+    }
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId,
+      sessionIds: opts.session,
+      hookSources: opts.hookSource,
+      participants: opts.participant,
+      since: opts.since,
+      dryRun: Boolean(opts.dryRun),
+    });
+    if (opts.json) {
+      defaultRuntime.writeJson(report);
+      return;
+    }
+    const lines = [
+      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(`(${agentId})`)}`,
+      `${muted("Source sessions:")} ${report.sessionIds.length}`,
+      `${muted("Source transcripts retained:")} ${report.sessionIds.length}`,
+      `${muted("Deleted entries:")} ${report.entryKeys.length}`,
+      `${muted("Mixed-lineage entries deleted whole:")} ${report.mixedLineageEntryKeys.length}`,
+      `${muted("Entries without targetable provenance:")} ${report.untargetableEntryKeys.length}`,
+      `${muted("Curated writes retained:")} ${report.curatedWrites.length}`,
+      `${muted("Memory artifacts:")} ${report.artifacts.memoryFiles} files, ${report.artifacts.memoryEntries} entries, ${report.artifacts.memoryLines} quoted lines`,
+      `${muted("Session corpus:")} ${report.artifacts.sessionCorpusFiles} files, ${report.artifacts.sessionCorpusLines} lines`,
+      `${muted("Index artifacts:")} ${report.artifacts.indexChunks} chunks, ${report.artifacts.indexSources} sources, ${report.artifacts.ftsRows} full-text rows, ${report.artifacts.vectorRows} vector rows, ${report.artifacts.embeddingCacheRows} cached embeddings`,
+      `${muted("Plugin state:")} ${report.artifacts.shortTermEntries} short-term entries, ${report.artifacts.seenHashScopes} seen-hash scopes, ${report.artifacts.backups} backups`,
+      `${muted("Origin rows:")} ${report.artifacts.originRows}`,
+    ];
+    if (report.sessionIds.length > 0) {
+      lines.push(`${muted("Session IDs:")} ${report.sessionIds.join(", ")}`);
+    }
+    for (const session of report.sessionResolutions) {
+      lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+    }
+    for (const match of report.participantMatches) {
+      lines.push(
+        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+      );
+    }
+    if (report.mixedLineageEntryKeys.length > 0) {
+      lines.push(
+        `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,
+      );
+    }
+    if (report.untargetableEntryKeys.length > 0) {
+      lines.push(`${muted("Untargetable entry keys:")} ${report.untargetableEntryKeys.join(", ")}`);
+    }
+    for (const curatedWrite of report.curatedWrites) {
+      lines.push(
+        `${muted("Curated write retained:")} ${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`,
+      );
+    }
+    for (const refusal of report.refusals) {
+      lines.push(warn(`Refused: ${refusal}`));
+    }
+    if (report.dryRun) {
+      lines.push(muted("Dry run: no memory files, index rows, or plugin state were changed."));
+    }
+    defaultRuntime.log(lines.join("\n"));
+  } catch (error) {
+    throw new Error(`Memory forget failed: ${formatErrorMessage(error)}`, { cause: error });
+  }
+}
+
 function matchesPromotionSelector(
   candidate: {
     key: string;
@@ -314,55 +255,114 @@ function matchesPromotionSelector(
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
     candidate.key.toLowerCase().includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
   );
 }
-export async function runMemoryPromote(
+async function runMemoryPromotion(
   opts: MemoryPromoteCommandOptions,
-  hostOptions?: MemoryCoreRuntimeHost,
+  hostOptions: MemoryCoreRuntimeHost | undefined,
+  selector?: string,
 ) {
+  const explain = selector !== undefined;
+  const command = explain ? "promote-explain" : "promote";
   await withMemoryCommand({
-    commandName: "memory promote",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
+    commandName: `memory ${command}`,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
         cfg,
       });
       if (!workspaceDir) {
-        defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
+        throw new Error(`Memory ${command} requires a resolvable workspace directory.`);
       }
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
+        const gatherAllForApply = !explain && Boolean(opts.apply);
+        const unrestricted = explain || gatherAllForApply;
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
-          limit: opts.limit,
-          minScore: opts.minScore ?? dreaming.minScore,
-          minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
-          minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+          limit: unrestricted ? undefined : opts.limit,
+          minScore: unrestricted ? 0 : (opts.minScore ?? dreaming.minScore),
+          minRecallCount: unrestricted ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
+          minUniqueQueries: unrestricted ? 0 : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
+          maxAgeDays: gatherAllForApply ? undefined : dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
-        defaultRuntime.error(`Memory promote ranking failed: ${formatErrorMessage(err)}`);
-        process.exitCode = 1;
+        throw new Error(
+          `${explain ? "Memory promote-explain" : "Memory promote ranking"} failed: ${formatErrorMessage(err)}`,
+          {
+            cause: err,
+          },
+        );
+      }
+      if (selector !== undefined) {
+        const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
+        if (!candidate) {
+          throw new Error(`No promotion candidate matched "${selector}".`);
+        }
+        const thresholds = {
+          minScore: dreaming.minScore,
+          minRecallCount: dreaming.minRecallCount,
+          minUniqueQueries: dreaming.minUniqueQueries,
+          maxAgeDays: dreaming.maxAgeDays ?? null,
+        };
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            workspaceDir,
+            thresholds,
+            candidate,
+            passes: {
+              score: candidate.score >= thresholds.minScore,
+              // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+              recallCount: candidate.signalCount >= thresholds.minRecallCount,
+              uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
+              maxAge:
+                thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
+            },
+          });
+          return;
+        }
+        const lines = [
+          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
+          accent(candidate.key),
+          muted(
+            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+          ),
+          candidate.snippet,
+          muted(
+            `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          ),
+          muted(
+            `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+          ),
+          muted(
+            `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
+          ),
+        ];
+        if (candidate.conceptTags.length > 0) {
+          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+        }
+        defaultRuntime.log(lines.join("\n"));
         return;
       }
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
       if (opts.apply) {
         try {
+          const workspaceAgentIds = resolveMemoryDreamingWorkspace(cfg, workspaceDir)?.agentIds ?? [
+            agentId,
+          ];
           applyResult = await applyShortTermPromotions({
+            agentId,
+            workspaceAgentIds,
             workspaceDir,
             candidates,
             limit: opts.limit,
@@ -371,35 +371,45 @@ export async function runMemoryPromote(
             minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
             maxAgeDays: dreaming.maxAgeDays,
             maxPromotedSnippetTokens: dreaming.maxPromotedSnippetTokens,
+            maxPriorEntryLossFraction: dreaming.maxPriorEntryLossFraction,
+            memoryFileMaxChars: resolveMemoryPromotionFileMaxChars({
+              cfg,
+              agentIds: workspaceAgentIds,
+            }),
             timezone: dreaming.timezone,
           });
         } catch (err) {
-          defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);
-          process.exitCode = 1;
-          return;
+          throw new Error(`Memory promote apply failed: ${formatErrorMessage(err)}`, {
+            cause: err,
+          });
         }
       }
+      const outputLimit = resolveNonNegativeIntegerOption(opts.limit, candidates.length);
+      const rejectedCandidates = applyResult
+        ? applyResult.rejectedCandidates.slice(
+            0,
+            Math.max(0, outputLimit - applyResult.appliedCandidates.length),
+          )
+        : [];
+      const outputCandidateKeys = applyResult
+        ? new Set([
+            ...applyResult.appliedCandidates.map((candidate) => candidate.key),
+            ...rejectedCandidates.map((rejection) => rejection.candidate.key),
+          ])
+        : undefined;
+      const outputCandidates = outputCandidateKeys
+        ? candidates.filter((candidate) => outputCandidateKeys.has(candidate.key))
+        : candidates;
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const lockPath = resolveShortTermRecallLockPath(workspaceDir);
-      const customQmd = asRecord(asRecord(status.custom)?.qmd);
-      const audit = await auditShortTermPromotionArtifacts({
-        workspaceDir,
-        qmd:
-          status.backend === "qmd"
-            ? {
-                dbPath: status.dbPath,
-                collections:
-                  typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
-              }
-            : undefined,
-      });
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
       if (opts.json) {
         defaultRuntime.writeJson({
           workspaceDir,
           storePath,
           lockPath,
           audit,
-          candidates,
+          candidates: outputCandidates,
           apply: applyResult
             ? {
                 applied: applyResult.applied,
@@ -407,6 +417,7 @@ export async function runMemoryPromote(
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
+                rejectedCandidates,
               }
             : undefined,
         });
@@ -426,7 +437,7 @@ export async function runMemoryPromote(
       lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
       lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
       lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
-      for (const candidate of candidates) {
+      for (const candidate of outputCandidates) {
         lines.push(
           `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
         );
@@ -451,6 +462,11 @@ export async function runMemoryPromote(
         lines.push("");
       }
       if (applyResult) {
+        for (const rejection of rejectedCandidates) {
+          const candidate = rejection.candidate;
+          const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
+          lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
+        }
         if (applyResult.applied > 0) {
           lines.push(
             success(
@@ -462,7 +478,7 @@ export async function runMemoryPromote(
               `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
-        } else {
+        } else if (rejectedCandidates.length === 0) {
           lines.push(warn("No candidates met apply criteria."));
         }
       }
@@ -470,100 +486,17 @@ export async function runMemoryPromote(
     },
   });
 }
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreRuntimeHost,
+) {
+  await runMemoryPromotion(opts, hostOptions);
+}
+
 export async function runMemoryPromoteExplain(
-  selectorArg: string | undefined,
+  selector: string,
   opts: MemoryPromoteExplainOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const selector = selectorArg?.trim();
-  if (!selector) {
-    defaultRuntime.error("Memory promote-explain requires a non-empty selector.");
-    process.exitCode = 1;
-    return;
-  }
-  await withMemoryCommand({
-    commandName: "memory promote-explain",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    purpose: "status",
-    ...hostOptions,
-    run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
-      const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
-        cfg,
-      });
-      if (!workspaceDir) {
-        defaultRuntime.error("Memory promote-explain requires a resolvable workspace directory.");
-        process.exitCode = 1;
-        return;
-      }
-      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
-      try {
-        candidates = await rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          includePromoted: Boolean(opts.includePromoted),
-          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
-        });
-      } catch (err) {
-        defaultRuntime.error(`Memory promote-explain failed: ${formatErrorMessage(err)}`);
-        process.exitCode = 1;
-        return;
-      }
-      const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
-      if (!candidate) {
-        defaultRuntime.error(`No promotion candidate matched "${selector}".`);
-        process.exitCode = 1;
-        return;
-      }
-      const thresholds = {
-        minScore: dreaming.minScore,
-        minRecallCount: dreaming.minRecallCount,
-        minUniqueQueries: dreaming.minUniqueQueries,
-        maxAgeDays: dreaming.maxAgeDays ?? null,
-      };
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          workspaceDir,
-          thresholds,
-          candidate,
-          passes: {
-            score: candidate.score >= thresholds.minScore,
-            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
-            recallCount: candidate.signalCount >= thresholds.minRecallCount,
-            uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
-            maxAge:
-              thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
-          },
-        });
-        return;
-      }
-      const lines = [
-        `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-        accent(candidate.key),
-        muted(
-          `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
-        ),
-        candidate.snippet,
-        muted(
-          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
-        ),
-        muted(
-          `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
-        ),
-        muted(
-          `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
-        ),
-      ];
-      if (candidate.conceptTags.length > 0) {
-        lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
-      }
-      defaultRuntime.log(lines.join("\n"));
-    },
-  });
+  await runMemoryPromotion(opts, hostOptions, selector);
 }

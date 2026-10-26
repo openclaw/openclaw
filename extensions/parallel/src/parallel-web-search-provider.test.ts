@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+import {
+  cancelTrackedTextResponse,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 type EndpointCall = {
   url: string;
   timeoutSeconds: number;
@@ -8,12 +15,7 @@ type EndpointCall = {
   signal?: AbortSignal;
 };
 type JsonRecord = Record<string, unknown>;
-type ToolParameters = {
-  properties: Record<
-    string,
-    { type?: string; minimum?: number; maximum?: number; maxLength?: number }
-  >;
-};
+
 const endpointMockState = vi.hoisted(() => ({
   calls: [] as EndpointCall[],
   responses: [] as Response[],
@@ -34,20 +36,11 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
     ),
   };
 });
-import { testing } from "../test-api.js";
-import { createParallelWebSearchProvider as createContractParallelWebSearchProvider } from "../web-search-contract-api.js";
+import { createParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelFreeWebSearchProvider } from "./parallel-free-web-search-provider.js";
-import { runParallelMcpSearch } from "./parallel-mcp-search.runtime.js";
-import { createParallelWebSearchProvider } from "./parallel-web-search-provider.js";
 const EMPTY_SEARCH_RESPONSE = { search_id: "x", session_id: "y", results: [] };
-function jsonResponse(body: unknown, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json", ...headers },
-  });
-}
 function enqueueJson(body: unknown = EMPTY_SEARCH_RESPONSE): void {
-  endpointMockState.responses.push(jsonResponse(body));
+  endpointMockState.responses.push(Response.json(body));
 }
 function paidTool(searchConfig: Record<string, unknown> = { parallel: { apiKey: "par-secret" } }) {
   return expectDefined(
@@ -55,9 +48,9 @@ function paidTool(searchConfig: Record<string, unknown> = { parallel: { apiKey: 
     "Parallel tool definition",
   );
 }
-function freeTool() {
+function freeTool(searchConfig: Record<string, unknown> = {}) {
   return expectDefined(
-    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig: {} }),
+    createParallelFreeWebSearchProvider().createTool({ config: {}, searchConfig }),
     "Parallel free tool definition",
   );
 }
@@ -82,235 +75,171 @@ function pushMcpHandshake(
   protocolVersion: string | null = "2025-06-18",
 ): void {
   endpointMockState.responses.push(
-    jsonResponse(
+    Response.json(
       { jsonrpc: "2.0", id: "i", result: protocolVersion ? { protocolVersion } : {} },
-      { "mcp-session-id": sessionId },
+      { headers: { "mcp-session-id": sessionId } },
     ),
-    jsonResponse({ jsonrpc: "2.0" }),
-    jsonResponse({
+    Response.json({ jsonrpc: "2.0" }),
+    Response.json({
       jsonrpc: "2.0",
       id: "c",
-      result: { content: [{ type: "text", text: JSON.stringify(toolPayload) }] },
+      result: {
+        content: [
+          ...["{", "null", "[]", "42"].map((text) => ({ type: "text", text })),
+          { type: "text", text: JSON.stringify(toolPayload) },
+        ],
+      },
     }),
   );
 }
-function cancelTrackedResponse(text: string, init: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-type CacheKeyParams = Parameters<typeof testing.buildParallelCacheKey>[0];
-const CACHE_KEY_BASE: CacheKeyParams = {
-  endpoint: "https://api.parallel.ai/v1/search",
-  objective: "Find OpenClaw on GitHub",
-  searchQueries: ["openclaw github"],
-  count: 5,
-};
-const cacheKey = (overrides: Partial<CacheKeyParams> = {}) =>
-  testing.buildParallelCacheKey({ ...CACHE_KEY_BASE, ...overrides });
 beforeEach(() => {
   endpointMockState.calls = [];
   endpointMockState.responses = [];
 });
+describe("Parallel cache policy", () => {
+  it.each(["paid", "free"] as const)(
+    "keeps %s requests with a field delimiter collision in separate cache entries",
+    async (transport) => {
+      const enqueue = transport === "paid" ? enqueueJson : pushMcpHandshake;
+      const prefix = `parallel-${transport}-field-delimiter`;
+      const [firstArgs, secondArgs]: [JsonRecord, JsonRecord] = [
+        { objective: `${prefix}:a:b`, search_queries: ["c"] },
+        { objective: `${prefix}:a`, search_queries: ["b:c"] },
+      ];
+      const tool = transport === "paid" ? paidTool() : freeTool();
+      enqueue({ search_id: "first", results: [] });
+      enqueue({ search_id: "second", results: [] });
+
+      expect(await tool.execute(firstArgs)).toMatchObject({ searchId: "first" });
+      expect(await tool.execute(secondArgs)).toMatchObject({ searchId: "second" });
+      expect(await tool.execute(firstArgs)).toMatchObject({ searchId: "first", cached: true });
+      expect(await tool.execute(secondArgs)).toMatchObject({ searchId: "second", cached: true });
+      expect(endpointMockState.calls).toHaveLength(transport === "paid" ? 2 : 6);
+    },
+  );
+
+  it("caps returned and cached results when Parallel exceeds the requested count", async () => {
+    pushMcpHandshake({
+      search_id: "parallel-result-cap",
+      session_id: "parallel-cap-session",
+      results: [
+        { url: "https://example.com/first", title: "First", excerpts: ["first"] },
+        { url: "https://example.com/second", title: "Second", excerpts: ["second"] },
+        { url: "https://example.com/third", title: "Third", excerpts: ["third"] },
+      ],
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+    });
+    const tool = freeTool();
+    const args = {
+      search_queries: ["parallel free result count owner"],
+      session_id: "parallel-cap-session",
+      count: 1,
+    };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(3);
+    expect(callArguments()).toMatchObject({ session_id: args.session_id });
+    expect(first).toMatchObject({
+      provider: "parallel-free",
+      count: 1,
+      searchId: "parallel-result-cap",
+      sessionId: "parallel-cap-session",
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+      results: [{ url: "https://example.com/first" }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
+});
+
 describe("parallel web search provider", () => {
-  it("exposes the expected metadata and selection wiring", () => {
-    const provider = createParallelWebSearchProvider();
-    const applied = expectDefined(provider.applySelectionConfig, "applySelectionConfig")({});
-    expect(provider.id).toBe("parallel");
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
-    expect(provider.credentialPath).toBe("plugins.entries.parallel.config.webSearch.apiKey");
-    expect(expectDefined(applied.plugins?.entries?.parallel, "Parallel plugin entry").enabled).toBe(
-      true,
-    );
-  });
-  it("advertises count as an integer from 1 to 40", () => {
-    const countParam = (paidTool({}).parameters as ToolParameters).properties.count;
-    expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
-  });
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
-    const provider = createParallelWebSearchProvider();
-    const contractProvider = createContractParallelWebSearchProvider();
-    const applied = expectDefined(
-      contractProvider.applySelectionConfig,
-      "contract applySelectionConfig",
-    )({});
-    const keys = [
-      "id",
-      "label",
-      "hint",
-      "onboardingScopes",
-      "credentialLabel",
-      "envVars",
-      "placeholder",
-      "signupUrl",
-      "docsUrl",
-      "autoDetectOrder",
-      "credentialPath",
-    ] as const;
-    expect(Object.fromEntries(keys.map((key) => [key, contractProvider[key]]))).toEqual(
-      Object.fromEntries(keys.map((key) => [key, provider[key]])),
-    );
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    expect(expectDefined(applied.plugins?.entries?.parallel, "contract plugin entry").enabled).toBe(
-      true,
-    );
-  });
-  it("prefers scoped configured api keys over environment fallbacks", () => {
-    expect(testing.resolveParallelApiKey({ apiKey: "par-secret" })).toBe("par-secret");
-  });
-  it("resolves Parallel search base URL overrides", () => {
-    expect(testing.resolveParallelSearchEndpoint()).toEqual({
-      endpoint: "https://api.parallel.ai/v1/search",
-    });
-    expect(
-      testing.resolveParallelSearchEndpoint({ baseUrl: "https://proxy.example/parallel" }),
-    ).toEqual({ endpoint: "https://proxy.example/parallel/v1/search" });
-    expect(
-      testing.resolveParallelSearchEndpoint({ baseUrl: "proxy.example/parallel/v1/search/" }),
-    ).toEqual({ endpoint: "https://proxy.example/parallel/v1/search" });
-    expect(
-      testing.resolveParallelSearchEndpoint({ baseUrl: "ftp://proxy.example/parallel" }),
-    ).toEqual({
-      docs: "https://docs.openclaw.ai/tools/parallel-search",
-      error: "invalid_base_url",
-      message:
-        "plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/parallel",
-    });
-  });
-  it("partitions Parallel cache keys by resolved endpoint", () => {
-    expect(cacheKey()).not.toBe(cacheKey({ endpoint: "https://proxy.example/parallel/v1/search" }));
-  });
-  it("partitions Parallel cache keys by resolved result count", () => {
-    expect(cacheKey()).not.toBe(cacheKey({ count: 10 }));
-  });
-  it("partitions Parallel cache keys by objective and by search_queries set", () => {
-    expect(cacheKey()).not.toBe(cacheKey({ objective: "Find the OpenClaw release notes" }));
-    expect(cacheKey()).not.toBe(
-      cacheKey({ searchQueries: ["openclaw github", "openclaw repository"] }),
-    );
-  });
-  it("partitions Parallel cache keys by caller-provided session id", () => {
-    expect(cacheKey({ sessionId: "session-a" })).not.toBe(cacheKey({ sessionId: "session-b" }));
-    expect(cacheKey()).not.toBe(cacheKey({ sessionId: "session-a" }));
-  });
-  it("partitions Parallel cache keys by client_model so per-model results never bleed", () => {
-    expect(cacheKey({ clientModel: "claude-opus-4-7" })).not.toBe(
-      cacheKey({ clientModel: "gpt-5.5" }),
-    );
-    expect(cacheKey()).not.toBe(cacheKey({ clientModel: "claude-opus-4-7" }));
-  });
-  it("normalizes objectives by trimming and capping at 5000 chars", () => {
-    expect(testing.normalizeParallelObjective("  Find OpenClaw  ")).toBe("Find OpenClaw");
-    expect(testing.normalizeParallelObjective(undefined)).toBeUndefined();
-    expect(testing.normalizeParallelObjective("")).toBeUndefined();
-    expect((testing.normalizeParallelObjective("x".repeat(6000)) ?? "").length).toBe(5000);
-    expect(testing.normalizeParallelObjective(`${"x".repeat(4999)}🚀tail`)).toBe("x".repeat(4999));
-  });
-  it("normalizes search_queries: trim, drop blanks, dedupe, cap length, cap count", () => {
-    expect(
-      testing.normalizeParallelSearchQueries([
-        "openclaw github",
-        "  openclaw github  ",
-        "",
-        " ",
-        42,
-        "openclaw releases",
-      ]),
-    ).toEqual(["openclaw github", "openclaw releases"]);
-    expect(testing.normalizeParallelSearchQueries(undefined)).toEqual([]);
-    expect(testing.normalizeParallelSearchQueries("openclaw github")).toEqual([]);
-    expect(testing.normalizeParallelSearchQueries(["x".repeat(250)])).toEqual(["x".repeat(200)]);
-    expect(testing.normalizeParallelSearchQueries([`${"x".repeat(199)}🚀tail`])).toEqual([
-      "x".repeat(199),
-    ]);
-    expect(testing.normalizeParallelSearchQueries(["a", "b", "c", "d", "e", "f"])).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-    ]);
-  });
-  it("normalizes session ids, rejecting blanks and values past the given limit", () => {
-    expect(testing.normalizeParallelSessionId("session-abc", 1000)).toBe("session-abc");
-    expect(testing.normalizeParallelSessionId("  ", 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId(undefined, 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(1001), 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(101), 100)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(100), 100)).toBe("x".repeat(100));
-  });
-  it("normalizes client_model identifiers", () => {
-    expect(testing.normalizeParallelClientModel("claude-opus-4-7")).toBe("claude-opus-4-7");
-    expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");
-    expect(testing.normalizeParallelClientModel(undefined)).toBeUndefined();
-    expect((testing.normalizeParallelClientModel("a".repeat(200)) ?? "").length).toBe(100);
-    expect(testing.normalizeParallelClientModel(`${"m".repeat(99)}🚀tail`)).toBe("m".repeat(99));
-  });
-  it("normalizes the Parallel /v1/search response shape", () => {
-    expect(
-      testing.normalizeParallelResults({
-        results: [
-          {
-            url: "https://example.com/a",
-            title: "Sample",
-            publish_date: "2026-04-01",
-            excerpts: ["first", "second"],
-          },
-          "not-an-object",
-        ],
-      }),
-    ).toEqual([
-      {
-        url: "https://example.com/a",
-        title: "Sample",
-        publish_date: "2026-04-01",
-        excerpts: ["first", "second"],
-      },
-    ]);
-    expect(testing.normalizeParallelResults({})).toEqual([]);
-    expect(testing.normalizeParallelResults(null)).toEqual([]);
-  });
-  it("resolves configured counts while strictly validating the tool schema range", () => {
-    expect(testing.resolveParallelSearchCount({}, undefined)).toBe(5);
-    expect(testing.resolveParallelSearchCount({}, 120)).toBe(40);
-    expect(testing.resolveParallelSearchCount({}, 0)).toBe(1);
-    expect(testing.resolveParallelSearchCount({ count: 40 }, 5)).toBe(40);
-    for (const count of [0, 4.5, "3abc", 41]) {
-      expect(() => testing.resolveParallelSearchCount({ count }, 5)).toThrow(
-        "count must be an integer from 1 to 40.",
-      );
-    }
-  });
-  it("returns a stable missing-key payload that points at the real config path", () => {
-    expect(testing.missingParallelKeyPayload()).toEqual({
+  it("returns a stable missing-key payload that points at the real config path", async () => {
+    await expect(paidTool({}).execute({ search_queries: ["openclaw"] })).resolves.toEqual({
       error: "missing_parallel_api_key",
       message:
         "web_search (parallel) needs a Parallel API key. Set PARALLEL_API_KEY in the Gateway environment, or configure plugins.entries.parallel.config.webSearch.apiKey.",
       docs: "https://docs.openclaw.ai/tools/parallel-search",
     });
+    expect(endpointMockState.calls).toHaveLength(0);
   });
-  it("identifies the plugin via a versioned User-Agent header", () => {
-    expect(testing.USER_AGENT).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
-  });
-  it("treats objective as optional and omits it from the request when absent", async () => {
+  it("resolves and validates configured search endpoints at the request boundary", async () => {
     enqueueJson();
-    const result = await paidTool().execute({ search_queries: ["openclaw"] });
+    await paidTool({
+      parallel: { apiKey: "par-secret", baseUrl: "proxy.example/parallel/v1/search/" },
+    }).execute({ search_queries: ["openclaw"] });
+    expect(endpointCall(0).url).toBe("https://proxy.example/parallel/v1/search");
+    await expect(
+      paidTool({
+        parallel: { apiKey: "par-secret", baseUrl: "ftp://proxy.example/parallel" },
+      }).execute({ search_queries: ["openclaw"] }),
+    ).resolves.toMatchObject({ error: "invalid_base_url" });
     expect(endpointMockState.calls).toHaveLength(1);
-    const body = readBody();
-    expect(body).not.toHaveProperty("objective");
-    expect(body).toMatchObject({ search_queries: ["openclaw"] });
-    expect(result).not.toHaveProperty("objective");
-    expect(result).toMatchObject({ provider: "parallel" });
+  });
+  it.each([
+    "ftp://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+    "fixture-user:fixture-url-password@proxy.example:invalid/parallel?api_key=fixture-query-token",
+    "custom://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+  ])("redacts credentials from rejected custom endpoint %s", async (baseUrl) => {
+    const result = await paidTool({
+      parallel: { apiKey: "par-secret", baseUrl },
+    }).execute({ search_queries: ["invalid credential-bearing endpoint"] });
+    expect(result.message).not.toContain("fixture-url-password");
+    expect(result.message).not.toContain("fixture-query-token");
+    expect(result).toMatchObject({
+      error: "invalid_base_url",
+      message: expect.stringContaining("plugins.entries.parallel.config.webSearch.baseUrl"),
+    });
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
+  it("normalizes bounded request fields before sending them", async () => {
+    enqueueJson();
+    await paidTool().execute({
+      objective: `  ${"x".repeat(4999)}🚀tail  `,
+      search_queries: [
+        "  alpha  ",
+        "alpha",
+        "",
+        42,
+        `${"q".repeat(199)}🚀tail`,
+        "c",
+        "d",
+        "e",
+        "f",
+      ],
+      client_model: `  ${"m".repeat(99)}🚀tail  `,
+    });
+    expect(readBody()).toMatchObject({
+      objective: "x".repeat(4999),
+      search_queries: ["alpha", "q".repeat(199), "c", "d", "e"],
+      client_model: "m".repeat(99),
+    });
+  });
+  it("partitions cached searches by every request input", async () => {
+    const seed = `parallel-cache-key-${Date.now()}-${Math.random()}`;
+    const base = { objective: seed, search_queries: [seed], count: 5 };
+    const tool = paidTool();
+    enqueueJson();
+    await tool.execute(base);
+    await tool.execute(base);
+    for (const args of [
+      { ...base, count: 6 },
+      { ...base, objective: `${seed}-objective` },
+      { ...base, search_queries: [`${seed}-query`] },
+      { ...base, session_id: `${seed}-session` },
+      { ...base, client_model: `${seed}-model` },
+    ]) {
+      enqueueJson();
+      await tool.execute(args);
+    }
+    enqueueJson();
+    await paidTool({
+      parallel: { apiKey: "par-secret", baseUrl: "https://proxy.example/parallel" },
+    }).execute(base);
+    expect(endpointMockState.calls).toHaveLength(7);
   });
   it("forwards paid-search cancellation to the guarded endpoint", async () => {
     enqueueJson();
@@ -359,36 +288,11 @@ describe("parallel web search provider", () => {
     expect(result).not.toHaveProperty("objective");
     expect(result).toMatchObject({ provider: "parallel" });
   });
-  it("rejects invalid counts before calling Parallel", async () => {
-    const tool = paidTool();
-    for (const count of [4.5, "3abc", 41]) {
-      await expect(
-        tool.execute({
-          objective: "Count validation",
-          search_queries: ["count validation"],
-          count,
-        }),
-      ).rejects.toThrow("count must be an integer from 1 to 40.");
-    }
-    expect(endpointMockState.calls).toHaveLength(0);
-  });
-  it("prefers explicit objective+search_queries over the generic `query` fallback when all are present", async () => {
-    enqueueJson();
-    await paidTool().execute({
-      objective: "Native objective",
-      search_queries: ["native query"],
-      query: "legacy fallback",
-    });
-    expect(readBody()).toMatchObject({
-      objective: "Native objective",
-      search_queries: ["native query"],
-    });
-  });
   it("honors top-level web search settings and sends the native Parallel payload shape", async () => {
     enqueueJson({
       search_id: "search_test",
       session_id: "session_test",
-      results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }],
+      results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }, "invalid"],
     });
     const result = await paidTool({
       parallel: { apiKey: "par-secret" },
@@ -409,41 +313,22 @@ describe("parallel web search provider", () => {
     });
     const headers = (call.init.headers ?? {}) as Record<string, string>;
     expect(headers["x-api-key"]).toBe("par-secret");
-    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\//);
+    expect(headers["User-Agent"]).toMatch(/^openclaw-parallel\/\d+\.\d+\.\d+/);
     expect(result).toMatchObject({
       provider: "parallel",
       searchId: "search_test",
       sessionId: "session_test",
+      count: 1,
     });
-  });
-  it("threads caller-supplied session_id and client_model through to Parallel", async () => {
-    enqueueJson({ search_id: "search_test", session_id: "session-caller-supplied", results: [] });
-    const result = await paidTool().execute({
-      objective: "Find the OpenClaw repository on GitHub",
-      search_queries: ["openclaw github"],
-      session_id: "session-caller-supplied",
-      client_model: "claude-opus-4-7",
-    });
-    expect(readBody()).toMatchObject({
-      objective: "Find the OpenClaw repository on GitHub",
-      search_queries: ["openclaw github"],
-      session_id: "session-caller-supplied",
-      client_model: "claude-opus-4-7",
-    });
-    expect(result).toMatchObject({ sessionId: "session-caller-supplied" });
-  });
-  it("always sends max_results matching the OpenClaw web_search default when no count is provided", async () => {
-    enqueueJson();
-    await paidTool().execute({ objective: "Find OpenClaw", search_queries: ["openclaw"] });
-    expect(endpointMockState.calls).toHaveLength(1);
-    const body = readBody() as { advanced_settings?: { max_results?: number } };
-    expect(body.advanced_settings?.max_results).toBe(5);
   });
   it("bounds Parallel API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"parallel upstream unavailable ".repeat(1024)}tail`, {
-      status: 503,
-      headers: { "Content-Type": "text/plain" },
-    });
+    const tracked = cancelTrackedTextResponse(
+      `${"parallel upstream unavailable ".repeat(1024)}tail`,
+      {
+        status: 503,
+        headers: { "Content-Type": "text/plain" },
+      },
+    );
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     endpointMockState.responses.push(tracked.response);
     const error = await paidTool()
@@ -453,12 +338,72 @@ describe("parallel web search provider", () => {
       })
       .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ status: 503, statusCode: 503 });
     expect((error as Error).message).toMatch(
       /Parallel API error \(503\): parallel upstream unavailable/,
     );
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+  it("redacts credentials reflected in the statusText fallback when the body is empty", async () => {
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    endpointMockState.responses.push(
+      new Response("", {
+        status: 502,
+        statusText: `Bad Gateway reflected x-api-key: ${apiKey}`,
+      }),
+    );
+    const error = await paidTool({ parallel: { apiKey } })
+      .execute({
+        objective: `parallel-error-redact-reason-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Parallel API error (502)");
+    expect((error as Error).message).not.toContain(apiKey);
+  });
+  it("applies configured logging.redactPatterns to reflected Parallel error bodies", async () => {
+    // Organization-specific secret shape that no built-in pattern covers, plus a
+    // configured field-name pattern that would rewrite the x-api-key header name
+    // before the structured matcher can see it — the key value must stay masked.
+    const orgSecret = "acme-internal-bluefin-042";
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-redact-config-"));
+    const configPath = path.join(configDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        logging: { redactPatterns: ["acme-internal-[a-z0-9-]+", "api[_-]?key"] },
+      }),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      endpointMockState.responses.push(
+        new Response(
+          `<html><body>edge failure for ${orgSecret} on request with x-api-key: ${apiKey}</body></html>`,
+          {
+            status: 502,
+            statusText: "Bad Gateway",
+            headers: { "Content-Type": "text/html" },
+          },
+        ),
+      );
+      const error = await paidTool({ parallel: { apiKey } })
+        .execute({
+          objective: `parallel-error-redact-config-${Date.now()}`,
+          search_queries: ["openclaw"],
+        })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("Parallel API error (502)");
+      expect((error as Error).message).not.toContain(orgSecret);
+      expect((error as Error).message).not.toContain(apiKey);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(configDir, { force: true, recursive: true });
+    }
   });
   it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
     const streamed = createStreamingResponse({
@@ -476,51 +421,13 @@ describe("parallel web search provider", () => {
       .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(
-      new RegExp(
-        `Parallel API: JSON response exceeds ${testing.PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES} bytes`,
-      ),
+      new RegExp("Parallel API: JSON response exceeds 16777216 bytes"),
     );
     expect(streamed.getReadCount()).toBeLessThan(200);
     expect(streamed.wasCanceled()).toBe(true);
   });
-  it("parses a well-formed Parallel JSON body under the byte cap", async () => {
-    enqueueJson({
-      search_id: "ok",
-      session_id: "ok-session",
-      results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }],
-    });
-    const result = await paidTool().execute({
-      objective: `parallel-success-ok-${Date.now()}-${Math.random()}`,
-      search_queries: ["openclaw"],
-    });
-    expect(result).toMatchObject({ provider: "parallel", searchId: "ok", count: 1 });
-  });
-  it("does not surface a Parallel-generated sessionId on a cache hit", async () => {
-    const objective = `parallel-cache-isolation-${Date.now()}-${Math.random()}`;
-    enqueueJson({ search_id: "first", session_id: "session-generated-by-parallel", results: [] });
-    const tool = paidTool();
-    const firstResult = await tool.execute({ objective, search_queries: ["openclaw github"] });
-    expect(firstResult.sessionId).toBe("session-generated-by-parallel");
-    const secondResult = await tool.execute({ objective, search_queries: ["openclaw github"] });
-    expect(endpointMockState.calls).toHaveLength(1);
-    expect(secondResult.sessionId).toBeUndefined();
-  });
-  it("preserves caller-supplied sessionId across cache hits", async () => {
-    const objective = `parallel-cache-session-${Date.now()}-${Math.random()}`;
-    const sessionId = `session-${Date.now()}`;
-    enqueueJson({ search_id: "first", session_id: sessionId, results: [] });
-    const tool = paidTool();
-    await tool.execute({ objective, search_queries: ["openclaw github"], session_id: sessionId });
-    const cached = await tool.execute({
-      objective,
-      search_queries: ["openclaw github"],
-      session_id: sessionId,
-    });
-    expect(endpointMockState.calls).toHaveLength(1);
-    expect(cached.sessionId).toBe(sessionId);
-  });
 });
-describe("runParallelMcpSearch", () => {
+describe("parallel-free MCP transport", () => {
   it("handles SSE notifications, multiline events, JSON batches, and structured payloads", async () => {
     endpointMockState.responses.push(
       new Response(
@@ -533,8 +440,8 @@ describe("runParallelMcpSearch", () => {
         ].join("\n"),
         { status: 200, headers: { "Content-Type": "text/event-stream" } },
       ),
-      jsonResponse({ jsonrpc: "2.0" }),
-      jsonResponse([
+      Response.json({ jsonrpc: "2.0" }),
+      Response.json([
         { jsonrpc: "2.0", method: "notifications/progress" },
         {
           jsonrpc: "2.0",
@@ -548,33 +455,38 @@ describe("runParallelMcpSearch", () => {
         },
       ]),
     );
-    await expect(
-      runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 }),
-    ).resolves.toMatchObject({
-      search_id: "search_sse",
-      results: [{ url: "https://example.com", title: "Example" }],
+    const response = await freeTool().execute({ search_queries: ["parallel multiline SSE"] });
+    expect(response).toMatchObject({
+      provider: "parallel-free",
+      searchId: "search_sse",
+      results: [
+        {
+          url: "https://example.com",
+          title: expect.stringContaining("\n---\nExample\n<<<END_EXTERNAL_UNTRUSTED_CONTENT"),
+        },
+      ],
     });
+    expect(response.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(callArguments().session_id).toBe(response.sessionId);
+    expect(headerOf(endpointCall(1), "Mcp-Session-Id")).toBeUndefined();
+    expect(headerOf(endpointCall(2), "Mcp-Session-Id")).toBeUndefined();
   });
   it.each([
-    [{ error: { code: -1, message: "boom" } }, "Parallel MCP error"],
     [{ result: { isError: true } }, "Parallel MCP tool error"],
     [{ result: { content: [] } }, "Parallel MCP returned no parseable content"],
   ])("surfaces bounded tool-envelope failures", async (envelope, expectedPrefix) => {
     const detail = `${"x".repeat(600)}😀tail`;
-    const detailedEnvelope =
-      "error" in envelope
-        ? { error: { ...envelope.error, detail } }
-        : { result: { ...envelope.result, detail } };
     endpointMockState.responses.push(
-      jsonResponse({ result: { protocolVersion: "2025-06-18" } }),
-      jsonResponse({}),
-      jsonResponse(detailedEnvelope),
+      Response.json({ result: { protocolVersion: "2025-06-18" } }),
+      Response.json({}),
+      Response.json({ result: { ...envelope.result, detail } }),
     );
-    await expect(runParallelMcpSearch({ searchQueries: ["test"], maxResults: 5 })).rejects.toThrow(
-      expectedPrefix,
-    );
+    await expect(
+      freeTool().execute({ search_queries: [`parallel envelope ${expectedPrefix}`] }),
+    ).rejects.toThrow(expectedPrefix);
   });
-  it("runs the 3-step handshake and maps results into the REST-compatible shape", async () => {
+  it("runs the handshake and skips invalid text blocks before mapping the public result", async () => {
+    const callerSessionId = `sess-${"a".repeat(40)}`;
     pushMcpHandshake(
       {
         search_id: "search_abc",
@@ -589,12 +501,14 @@ describe("runParallelMcpSearch", () => {
         ],
       },
       "server-session-1",
+      "2025-03-26",
     );
-    const response = await runParallelMcpSearch({
+    const response = await freeTool({ timeoutSeconds: 7 }).execute({
       objective: "find examples",
-      searchQueries: ["example query"],
-      maxResults: 1,
-      modelName: "claude-opus-4-8",
+      search_queries: ["example query"],
+      count: 1,
+      client_model: "claude-opus-4-8",
+      session_id: callerSessionId,
     });
     expect(endpointMockState.calls.map((call) => readBody(call).method)).toEqual([
       "initialize",
@@ -603,75 +517,79 @@ describe("runParallelMcpSearch", () => {
     ]);
     expect(headerOf(endpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
     expect(headerOf(endpointCall(2), "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointCall(2), "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(readBody(endpointCall(0))).toMatchObject({
+      params: { protocolVersion: "2025-06-18" },
+    });
+    expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-03-26");
+    expect(headerOf(endpointCall(2), "MCP-Protocol-Version")).toBe("2025-03-26");
     expect(headerOf(endpointCall(0), "Authorization")).toBeUndefined();
+    expect(endpointCall(1).init.body).toBe(
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+    );
+    expect(endpointCall(2).init.body).toBe(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: readBody(endpointCall(2)).id,
+        method: "tools/call",
+        params: {
+          name: "web_search",
+          arguments: {
+            objective: "find examples",
+            search_queries: ["example query"],
+            session_id: callerSessionId,
+            model_name: "claude-opus-4-8",
+          },
+        },
+      }),
+    );
     for (const call of endpointMockState.calls) {
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
+      expect(call.timeoutSeconds).toBe(7);
     }
-    const args = callArguments();
-    expect(args).toMatchObject({
-      objective: "find examples",
-      search_queries: ["example query"],
-      model_name: "claude-opus-4-8",
-    });
-    expect(typeof args.session_id).toBe("string");
-    expect(response.search_id).toBe("search_abc");
+    expect(response.searchId).toBe("search_abc");
+    expect(response.sessionId).toBe(callerSessionId);
     expect(response.results).toHaveLength(1);
-    expect(response.results[0]).toMatchObject({ url: "https://example.com", title: "Example" });
+    expect(response.results).toEqual([
+      expect.objectContaining({
+        url: "https://example.com",
+        title: expect.stringContaining("\n---\nExample\n<<<END_EXTERNAL_UNTRUSTED_CONTENT"),
+        published: "2024-01-01",
+      }),
+    ]);
   });
   it("uses the search queries as the objective when none was supplied", async () => {
     pushMcpHandshake({ results: [] }, "s", null);
-    await runParallelMcpSearch({ searchQueries: ["alpha", "beta"], maxResults: 5 });
+    await freeTool().execute({ search_queries: ["alpha", "beta"] });
     expect(callArguments().objective).toBe("alpha beta");
     expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
-  it("forwards a caller-supplied session id verbatim (no re-minting)", async () => {
-    pushMcpHandshake({ results: [] }, "s");
-    const callerSessionId = `sess-${"a".repeat(40)}`;
-    const response = await runParallelMcpSearch({
-      searchQueries: ["x"],
-      maxResults: 5,
-      sessionId: callerSessionId,
-    });
-    expect(callArguments().session_id).toBe(callerSessionId);
-    expect(response.session_id).toBe(callerSessionId);
-  });
-  it("throws when initialize fails", async () => {
-    endpointMockState.responses.push(new Response("nope", { status: 500 }));
-    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
-      /initialize failed \(500\)/,
-    );
-  });
-  it("throws when the initialized acknowledgement fails", async () => {
+  it("preserves HTTP status when tools/call fails", async () => {
     endpointMockState.responses.push(
-      jsonResponse(
-        { jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } },
-        { "mcp-session-id": "server-session-1" },
-      ),
-      new Response("ack nope", { status: 500 }),
+      Response.json({ jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } }),
+      new Response(null, { status: 202 }),
+      new Response("call rejected", { status: 401 }),
     );
-    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
-      /notifications\/initialized failed \(500\): ack nope/,
-    );
-    expect(endpointMockState.calls.map((call) => readBody(call).method)).toEqual([
-      "initialize",
-      "notifications/initialized",
-    ]);
-    expect(headerOf(endpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
+    await expect(
+      freeTool().execute({ search_queries: ["parallel tools call rejected"] }),
+    ).rejects.toMatchObject({
+      status: 401,
+      statusCode: 401,
+      message: expect.stringContaining("tools/call failed (401): call rejected"),
+    });
   });
   it("bounds initialize error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "Content-Type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     endpointMockState.responses.push(tracked.response);
-    const error = await runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }).catch(
-      (cause: unknown) => cause,
-    );
+    const error = await freeTool()
+      .execute({ search_queries: ["parallel initialize bounded error"] })
+      .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/initialize failed \(503\): parallel mcp unavailable/);
+    expect(error).toMatchObject({ status: 503, statusCode: 503 });
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
@@ -685,9 +603,9 @@ describe("runParallelMcpSearch", () => {
     });
     const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
     endpointMockState.responses.push(streamed.response);
-    const error = await runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 }).catch(
-      (cause: unknown) => cause,
-    );
+    const error = await freeTool()
+      .execute({ search_queries: ["parallel initialize bounded success"] })
+      .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain(
       "Parallel MCP: text response exceeds 16777216 bytes",
@@ -711,25 +629,6 @@ describe("parallel-free web search provider", () => {
     expect(endpointMockState.calls.every((call) => call.signal === controller.signal)).toBe(true);
   });
 
-  it("exposes keyless metadata without claiming auto-detect fallback", () => {
-    const provider = createParallelFreeWebSearchProvider();
-    expect(provider.id).toBe("parallel-free");
-    expect(provider.label).toBe("Parallel Search (Free)");
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.envVars).toEqual([]);
-    expect(provider.autoDetectOrder).toBeUndefined();
-  });
-  it("advertises the shared count contract and free MCP's tighter session_id cap", () => {
-    const parameters = freeTool().parameters as ToolParameters;
-    expect(expectDefined(parameters.properties.session_id, "session_id parameter").maxLength).toBe(
-      100,
-    );
-    expect(parameters.properties.count).toMatchObject({
-      type: "integer",
-      minimum: 1,
-      maximum: 40,
-    });
-  });
   it("searches via the free MCP and brands the result, with no API key", async () => {
     vi.stubEnv("PARALLEL_API_KEY", "par-should-be-ignored"); // pragma: allowlist secret
     pushMcpHandshake({
@@ -755,34 +654,5 @@ describe("parallel-free web search provider", () => {
     expect(Array.isArray(result.results)).toBe(true);
     expect((result.results as unknown[]).length).toBe(1);
     vi.unstubAllEnvs();
-  });
-  it("drops an over-limit caller session id and mints one within the free MCP's 100-char cap", async () => {
-    pushMcpHandshake({ search_id: "s1", results: [] });
-    await freeTool().execute({
-      objective: "session cap check",
-      search_queries: ["session cap"],
-      session_id: "x".repeat(150),
-    });
-    const sentSessionId = callArguments().session_id as string;
-    expect(sentSessionId).not.toBe("x".repeat(150));
-    expect(sentSessionId.length).toBeLessThanOrEqual(100);
-  });
-  it("returns a structured error when search_queries is missing", async () => {
-    const result = await freeTool().execute({ objective: "x" });
-    expect(result.error).toBe("invalid_search_queries");
-    expect(endpointMockState.calls).toHaveLength(0);
-  });
-  it("rejects invalid counts before calling the free MCP", async () => {
-    const tool = freeTool();
-    for (const count of [4.5, "3abc", 41]) {
-      await expect(
-        tool.execute({
-          objective: "Count validation",
-          search_queries: ["count validation"],
-          count,
-        }),
-      ).rejects.toThrow("count must be an integer from 1 to 40.");
-    }
-    expect(endpointMockState.calls).toHaveLength(0);
   });
 });

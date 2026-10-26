@@ -1,0 +1,149 @@
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import {
+  freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type AttemptToolRunFacts = Pick<
+  RunEmbeddedAgentParams,
+  | "clientCaps"
+  | "gatewayUiCommandTarget"
+  | "pinnedWidgetAuthoring"
+  | "toolBindings"
+  | "chatType"
+  | "agentAccountId"
+  | "messageTo"
+  | "messageThreadId"
+  | "chatId"
+  | "messageActionTurnCapability"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "memberRoleIds"
+  | "spawnedBy"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
+  | "scheduledToolPolicy"
+  | "approvalReviewerDeviceId"
+  | "currentChannelId"
+  | "currentMessagingTarget"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "replyToMode"
+  | "hasRepliedRef"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
+>;
+
+/**
+ * Builds the shared tool-run context for embedded and plugin harness attempts.
+ * Pass per-run overrides separately to avoid copying the complete attempt.
+ */
+export function buildEmbeddedAttemptToolRunContext(
+  params: AttemptToolRunFacts & {
+    model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
+    thinkLevel?: ThinkLevel;
+    thinkingExplicit?: boolean;
+    trigger?: EmbeddedRunTrigger;
+    jobId?: string;
+    memoryFlushWritePath?: string;
+    memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
+    toolsAllow?: string[];
+    forceMessageTool?: boolean;
+    swarmCollector?: boolean;
+    swarmOutputSchema?: Record<string, unknown>;
+    conversationToolPolicy?: GroupToolPolicyConfig;
+    trace?: DiagnosticTraceContext;
+    currentInboundAudio?: boolean;
+    sessionId?: string;
+    sessionKey?: string;
+    replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
+  },
+  overrides: { forceMessageTool?: boolean; trace?: DiagnosticTraceContext } = params,
+) {
+  const { currentInboundAudio } = params;
+  const currentOwner = getCurrentSessionControllerOwner();
+  const replyOperation =
+    params.replyOperation ??
+    (currentOwner?.sessionId === params.sessionId && currentOwner?.key === params.sessionKey
+      ? currentOwner
+      : undefined);
+  // Collector output is mandatory result transport, even on a narrowed tool surface.
+  const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+    forceMessageTool: overrides.forceMessageTool,
+    forceToolNames:
+      params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
+  });
+  return {
+    clientCaps: params.clientCaps,
+    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
+    toolBindings: params.toolBindings,
+    chatType: params.chatType,
+    agentAccountId: params.agentAccountId,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
+    nativeChannelId: params.chatId,
+    messageActionTurnCapability: params.messageActionTurnCapability,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    memberRoleIds: params.memberRoleIds,
+    spawnedBy: params.spawnedBy,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+    currentChannelId: params.currentChannelId,
+    currentMessagingTarget: params.currentMessagingTarget,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
+    hasRepliedRef: params.hasRepliedRef,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    requesterThinkingLevel: params.thinkLevel,
+    requesterThinkingExplicit: params.thinkingExplicit,
+    // modelId may still be a configured alias; children need the prepared identity.
+    requesterModel: params.model
+      ? { provider: params.model.provider, model: params.model.id }
+      : undefined,
+    trigger: params.trigger,
+    jobId: params.jobId,
+    memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
+    swarmCollector: params.swarmCollector,
+    swarmOutputSchema: params.swarmOutputSchema,
+    currentInboundAudio,
+    // Read accepted steering from the captured owner when the tool executes.
+    hasCurrentInboundAudio: () =>
+      currentInboundAudio === true || replyOperation?.acceptedSteeredInboundAudio === true,
+    ...(runtimeToolAllowlist ? { runtimeToolAllowlist } : {}),
+    ...(params.conversationToolPolicy
+      ? { conversationToolPolicy: params.conversationToolPolicy }
+      : {}),
+    // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
+    // rewrite the facts attached to tool calls already in flight.
+    ...(overrides.trace ? { trace: freezeDiagnosticTraceContext(overrides.trace) } : {}),
+  };
+}

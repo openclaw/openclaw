@@ -1,876 +1,458 @@
-import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
-import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { afterEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import {
-  ReefInboxConnection,
+  ReefProtocolCompatibilityError,
   ReefRelayError,
-  ReefTransportClient,
   createReefWebSocket,
   isRetryableReefRelayFailure,
-  type WebSocketLike,
 } from "./transport.js";
-import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
+import { createClient, ts } from "./transport.test-helpers.js";
+import type { RelayFriend } from "./types.js";
 
-const ts = 1_752_300_000;
-const signing = {
-  secretKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-  publicKey: "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
-};
-const keys: ReefKeys = {
-  signing,
-  encryption: {
-    secretKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  },
-  auditKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  replayKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  keyEpoch: 1,
-};
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({
+  captureFailure: undefined as Error | undefined,
+  current: undefined as EffectAuthority | undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority() {
+      if (effectInput.captureFailure) {
+        throw effectInput.captureFailure;
+      }
+      return effectInput.current ?? actual.captureEffectAuthority();
+    },
+  };
+});
 
-function createClient(
-  fetcher: typeof fetch,
-  clock: () => number = () => ts,
-  baseUrl = "https://relay.example",
-): ReefTransportClient {
-  return new ReefTransportClient(baseUrl, "alice", keys, fetcher, clock);
+const pendingFriend: RelayFriend = {
+  peer: "bob",
+  status: "pending",
+  initiated_by: "bob",
+  vouching_mutual: null,
+  ed25519_pub: "B".repeat(43),
+  x25519_pub: "C".repeat(43),
+  key_epoch: 2,
+};
+const activeFriend = { peer: "bob", status: "active" };
+
+function recordingClient(body: unknown, status = 200) {
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json(body, { status }));
+  return { client: createClient(fetcher), fetcher };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
+function expectFriendshipBody(init: RequestInit | undefined) {
+  expect(JSON.parse(new TextDecoder().decode(init?.body as Uint8Array))).toEqual({
+    peer: "bob",
+    accept: true,
+    expected_key_epoch: 2,
+    expected_ed25519_pub: "B".repeat(43),
+    expected_x25519_pub: "C".repeat(43),
+  });
+}
+
+function expectRedacted(error: unknown, secrets: string[]) {
+  expect(error).toMatchObject({
+    name: "ReefRelayError",
+    status: 401,
+    message: expect.stringContaining("relay rejected"),
+  });
+  for (const secret of secrets) {
+    expect((error as Error).message).not.toContain(secret);
+  }
+}
+
+const closeServers: Array<() => Promise<void>> = [];
+async function listen(server: http.Server | WebSocketServer) {
+  const peers = new Set<import("node:net").Socket>();
+  closeServers.push(async () => {
+    peers.forEach((peer) => peer.destroy());
+    if (server instanceof WebSocketServer) {
+      server.clients.forEach((socket) => socket.terminate());
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+  if (server instanceof http.Server) {
+    server.on("connection", (socket) => peers.add(socket));
+    return await listenOnLoopback(server);
+  }
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Reef test server did not bind a TCP port");
+  }
+  return address.port;
+}
+
+afterEach(async () => {
+  effectInput.captureFailure = undefined;
+  effectInput.current = undefined;
+  await Promise.all(closeServers.splice(0).map((close) => close()));
 });
 
-describe("isRetryableReefRelayFailure", () => {
-  it("accepts transient relay responses and timeouts", () => {
-    expect(isRetryableReefRelayFailure(new ReefRelayError(408, "timeout"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(429, "rate_limited"))).toBe(true);
-    expect(isRetryableReefRelayFailure(new ReefRelayError(503, "unavailable"))).toBe(true);
-    expect(
-      isRetryableReefRelayFailure(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
-    ).toBe(true);
-  });
-
-  it("rejects definitive relay and local failures", () => {
-    expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
-    expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
-  });
+it("rejects definitive relay and local failures", () => {
+  expect(isRetryableReefRelayFailure(new ReefRelayError(401, "unauthorized"))).toBe(false);
+  expect(isRetryableReefRelayFailure(new Error("approval store unavailable"))).toBe(false);
 });
 
-describe("ReefTransportClient network failures", () => {
-  it("normalizes fetch failures without swallowing the cause", async () => {
-    const cause = new TypeError("fetch failed");
-    const client = createClient(async () => {
-      throw cause;
-    });
-
-    const error = await client.listFriends().catch((failure: unknown) => failure);
-    expect(error).toMatchObject({
-      name: "ReefRelayUnavailableError",
-      message: "fetch failed",
-      cause,
-    });
-    expect(isRetryableReefRelayFailure(error)).toBe(true);
-  });
-
-  it("normalizes connection loss while reading a successful response body", async () => {
-    const cause = new TypeError("terminated");
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(cause);
+it.each(["capture", "peer"] as const)(
+  "does not fetch after %s authority refusal",
+  async (stage) => {
+    const refusal = new Error(`${stage} authority refused`);
+    let current = true;
+    if (stage === "capture") {
+      effectInput.captureFailure = refusal;
+    } else {
+      effectInput.current = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          await Promise.resolve();
+          current = false;
+          return effect();
         },
-      }),
-    );
-    const client = createClient(async () => response);
+      };
+    }
+    const fetcher = vi.fn<typeof fetch>();
+    const recheck = () => {
+      if (!current) {
+        throw refusal;
+      }
+    };
+    const client = createClient(fetcher);
+    const completion =
+      stage === "capture"
+        ? client.listFriends()
+        : client.signed("POST", "/v1/mail/bob", undefined, undefined, [], recheck);
+    await expect(completion).rejects.toBe(refusal);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+  },
+);
 
-    await expect(client.listFriends()).rejects.toMatchObject({
-      name: "ReefRelayUnavailableError",
-      message: "terminated",
-      cause,
+it.each([false, true])(
+  "keeps authority refusal outside transport retries (allowed=%s)",
+  async (allowed) => {
+    const preparing = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    const response = createDeferred<Response>();
+    const requested = createDeferred<void>();
+    const refusal = new Error("message use refused");
+    let initiating = false;
+    let handedOff = false;
+    effectInput.current = {
+      active: true,
+      run: (run) => run(),
+      async initiate(effect) {
+        preparing.resolve();
+        await prepared.promise;
+        if (!allowed) {
+          throw refusal;
+        }
+        initiating = true;
+        try {
+          return effect();
+        } finally {
+          initiating = false;
+          handedOff = true;
+        }
+      },
+    };
+    const fetcher = vi.fn(() => {
+      expect(initiating).toBe(true);
+      requested.resolve();
+      return response.promise;
     });
-  });
-});
+    const completion = createClient(fetcher).listFriends();
+    try {
+      await awaitGateBeforeSettlement(
+        preparing.promise,
+        Promise.race([completion, requested.promise]),
+        "Fetch skipped preparation",
+      );
+      expect(fetcher).not.toHaveBeenCalled();
+      prepared.resolve();
+      if (!allowed) {
+        await expect(completion).rejects.toBe(refusal);
+        expect(isRetryableReefRelayFailure(refusal)).toBe(false);
+        expect(fetcher).not.toHaveBeenCalled();
+        return;
+      }
+      await awaitGateBeforeSettlement(requested.promise, completion, "Fetch was not initiated");
+      expect(handedOff).toBe(true);
+      response.resolve(Response.json({ friendships: [] }));
+      await expect(completion).resolves.toEqual({ friendships: [] });
+    } finally {
+      prepared.resolve();
+      response.resolve(Response.json({ friendships: [] }));
+      await completion.catch(() => {});
+    }
+  },
+);
 
-function verifyRelaySignature(
-  signature: string,
-  input: { method: string; path: string; ts: number; bodySha256: string },
-): boolean {
-  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
-  const publicKey = createPublicKey({
-    key: Buffer.concat([spkiPrefix, Buffer.from(fromBase64url(signing.publicKey))]),
-    format: "der",
-    type: "spki",
-  });
-  return verifySignature(
-    null,
-    canonicalBytes(input),
-    publicKey,
-    Buffer.from(fromBase64url(signature)),
+it("normalizes connection loss while reading a successful response body", async () => {
+  const cause = new TypeError("terminated");
+  const response = new Response(
+    new ReadableStream({ start: (controller) => controller.error(cause) }),
   );
-}
+  await expect(createClient(async () => response).listFriends()).rejects.toMatchObject({
+    name: "ReefRelayUnavailableError",
+    message: "terminated",
+    cause,
+  });
+});
+it("signs the relay canonical REST path including its query and emits auth headers", async () => {
+  const { client, fetcher } = recordingClient({ entries: [], cursor: 5 });
 
-describe("ReefTransportClient device authentication", () => {
-  it("signs the relay canonical REST path including its query and emits auth headers", async () => {
-    const calls: Array<[URL | RequestInfo, RequestInit | undefined]> = [];
-    const fetcher: typeof fetch = async (input, init) => {
-      calls.push([input, init]);
-      return Response.json({ entries: [], cursor: 5 });
-    };
-    const client = createClient(fetcher);
+  await expect(client.pull(5)).resolves.toEqual({ entries: [], cursor: 5 });
 
-    await expect(client.pull(5)).resolves.toEqual({ entries: [], cursor: 5 });
-
-    const [requestUrl, init] = calls[0]!;
-    expect(requestUrl instanceof URL ? requestUrl.href : requestUrl).toBe(
-      "https://relay.example/v1/mail?after=5",
-    );
-    expect(init?.method).toBe("GET");
-    const headers = new Headers(init?.headers);
-    expect(headers.get("x-reef-handle")).toBe("alice");
-    expect(headers.get("x-reef-ts")).toBe(String(ts));
-    expect(headers.get("x-reef-sig")).toBe(
+  const [requestUrl, init] = fetcher.mock.calls[0]!;
+  expect(requestUrl instanceof URL ? requestUrl.href : requestUrl).toBe(
+    "https://relay.example/v1/mail?after=5",
+  );
+  expect(init?.method).toBe("GET");
+  const headers = new Headers(init?.headers);
+  expect(Object.fromEntries(headers)).toMatchObject({
+    "x-reef-handle": "alice",
+    "x-reef-ts": String(ts),
+    "x-reef-sig":
       "1Zx-WD8JygVzq8pdTWULPiEZyoLuoJ1zyokkDRGlPWu_6fAKxEfJHPZkCQaZ8DIS4LERDqeh2z6-qlw7BtcoDw",
-    );
-
-    const canonical = {
-      method: "GET",
-      path: "/v1/mail?after=5",
-      ts,
-      bodySha256: sha256Hex(new Uint8Array()),
-    };
-    expect(new TextDecoder().decode(canonicalBytes(canonical))).toBe(
-      '{"bodySha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","method":"GET","path":"/v1/mail?after=5","ts":1752300000}',
-    );
-    expect(verifyRelaySignature(headers.get("x-reef-sig")!, canonical)).toBe(true);
-  });
-
-  it("puts WebSocket auth in the query but signs the bare relay path", () => {
-    const client = createClient(vi.fn() as typeof fetch);
-    const url = new URL(client.websocketUrl());
-
-    expect(url.protocol).toBe("wss:");
-    expect(url.pathname).toBe("/v1/mail/ws");
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      handle: "alice",
-      ts: String(ts),
-      sig: "teC4QkpLUCMghGA-PkBGBMZFPxNeERmNfGCivaxpYhL8q81v6ReHRKEq2ZVvOd-FG3d3BbMjk-FcvoKjW5kwAA",
-    });
-    expect(
-      verifyRelaySignature(url.searchParams.get("sig")!, {
-        method: "GET",
-        path: "/v1/mail/ws",
-        ts,
-        bodySha256: sha256Hex(new Uint8Array()),
-      }),
-    ).toBe(true);
-  });
-
-  it("binds friendship responses to the exact listed peer key snapshot", async () => {
-    const calls: RequestInit[] = [];
-    const fetcher: typeof fetch = async (_input, init) => {
-      calls.push(init ?? {});
-      return Response.json({ peer: "bob", status: "active" });
-    };
-    const client = createClient(fetcher);
-    const friend: RelayFriend = {
-      peer: "bob",
-      status: "pending",
-      initiated_by: "bob",
-      vouching_mutual: null,
-      ed25519_pub: "B".repeat(43),
-      x25519_pub: "C".repeat(43),
-      key_epoch: 2,
-    };
-
-    await expect(client.respondFriend(friend, true)).resolves.toEqual({
-      peer: "bob",
-      status: "active",
-    });
-    expect(JSON.parse(new TextDecoder().decode(calls[0]?.body as Uint8Array))).toEqual({
-      peer: "bob",
-      accept: true,
-      expected_key_epoch: 2,
-      expected_ed25519_pub: "B".repeat(43),
-      expected_x25519_pub: "C".repeat(43),
-    });
-  });
-
-  it("bumps ts monotonically so identical same-second requests never share a replay key", async () => {
-    const seenTs: string[] = [];
-    const fetcher: typeof fetch = async (_input, init) => {
-      seenTs.push(new Headers(init?.headers).get("x-reef-ts")!);
-      return Response.json({ friendships: [] });
-    };
-    const client = createClient(fetcher);
-
-    await client.listFriends();
-    await client.listFriends();
-    await client.listFriends();
-
-    expect(seenTs).toEqual([String(ts), String(ts + 1), String(ts + 2)]);
-    expect(new Set(seenTs).size).toBe(3);
   });
 });
 
+it("puts WebSocket auth in the query but signs the bare relay path", () => {
+  const url = new URL(createClient(vi.fn<typeof fetch>()).websocketUrl());
+
+  expect(url).toMatchObject({ protocol: "wss:", pathname: "/v1/mail/ws" });
+  expect(Object.fromEntries(url.searchParams)).toEqual({
+    handle: "alice",
+    ts: String(ts),
+    sig: "teC4QkpLUCMghGA-PkBGBMZFPxNeERmNfGCivaxpYhL8q81v6ReHRKEq2ZVvOd-FG3d3BbMjk-FcvoKjW5kwAA",
+  });
+});
+
+it("binds friendship responses to the exact listed peer key snapshot", async () => {
+  const { client, fetcher } = recordingClient({ ...activeFriend, future: "ignored" });
+  await expect(client.respondFriend(pendingFriend, true)).resolves.toEqual(activeFriend);
+  expectFriendshipBody(fetcher.mock.calls[0]?.[1]);
+});
+
+it.each([
+  [400, "invalid_request", "reef-relay"],
+  [409, "client_upgrade_required", "openclaw-client"],
+] as const)(
+  "diagnoses HTTP %i compatibility failure without retrying or downgrading",
+  async (status, code, upgradeRequired) => {
+    const { client, fetcher } = recordingClient({ error: code }, status);
+    const error = await client.respondFriend(pendingFriend, true).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ReefRelayError);
+    expect(error).toBeInstanceOf(ReefProtocolCompatibilityError);
+    expect(error).toMatchObject({
+      status,
+      code,
+      upgradeRequired,
+      message: expect.stringContaining("approve the fresh pairing challenge again"),
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expectFriendshipBody(fetcher.mock.calls[0]?.[1]);
+  },
+);
+
+it.each([
+  ["an empty 204", () => new Response(null, { status: 204 }), true],
+  ["a different peer", () => Response.json({ peer: "mallory", status: "active" }), true],
+  ["the wrong accepted status", () => Response.json({ peer: "bob", status: "blocked" }), true],
+  ["the wrong rejected status", () => Response.json(activeFriend), false],
+] as const)("rejects %s before friendship trust can be committed", async (_, response, accept) => {
+  await expect(
+    createClient(async () => response()).respondFriend(pendingFriend, accept),
+  ).rejects.toThrow("invalid Reef relay friendship response");
+});
+
+it("bumps ts monotonically so identical same-second requests never share a replay key", async () => {
+  const { client, fetcher } = recordingClient({ friendships: [] });
+
+  await client.listFriends();
+  await client.listFriends();
+  await client.listFriends();
+
+  const seenTs = fetcher.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-reef-ts"));
+  expect(seenTs).toEqual([String(ts), String(ts + 1), String(ts + 2)]);
+});
 const SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
 
-function jsonObjectBodyAtSize(bytes: number, field: "pad" | "error"): string {
-  const prefix = `{"${field}":"`;
-  const suffix = `"}`;
-  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
-}
-
-function createTrackedResponse(params: { status: number; chunks: Uint8Array[] }): {
-  response: Response;
-  state: { emittedBytes: number; cancelled: boolean };
-} {
+function createTrackedResponse(status: number, sizes: number[]) {
   const state = { emittedBytes: 0, cancelled: false };
   let index = 0;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
-      const chunk = params.chunks[index++];
-      if (!chunk) {
+      const size = sizes[index++];
+      if (size === undefined) {
         controller.close();
         return;
       }
-      state.emittedBytes += chunk.byteLength;
-      controller.enqueue(chunk);
+      state.emittedBytes += size;
+      controller.enqueue(new Uint8Array(size).fill(0x78));
     },
     cancel() {
       state.cancelled = true;
     },
   });
   return {
-    response: new Response(body, {
-      status: params.status,
-      headers: { "content-type": "application/json" },
-    }),
+    response: new Response(body, { status, headers: { "content-type": "application/json" } }),
     state,
   };
 }
 
-describe("ReefTransportClient response body bounds", () => {
-  it("accepts success JSON exactly at the byte limit", async () => {
-    const body = jsonObjectBodyAtSize(SUCCESS_RESPONSE_MAX_BYTES, "pad");
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(body));
-          controller.close();
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-    const client = createClient(async () => response);
+it("cancels success JSON when a chunk crosses the byte limit", async () => {
+  const offered = createTrackedResponse(200, [SUCCESS_RESPONSE_MAX_BYTES - 1, 2, 1024, 1024]);
+  const client = createClient(async () => offered.response);
 
-    const result = await client.pull(0);
-    const pad = (result as unknown as { pad: string }).pad;
-    expect(pad).toHaveLength(SUCCESS_RESPONSE_MAX_BYTES - 10);
-    expect(pad[0]).toBe("x");
-    expect(pad.at(-1)).toBe("x");
-    expect(Buffer.byteLength(body)).toBe(SUCCESS_RESPONSE_MAX_BYTES);
-    expect(cancelled).toBe(false);
-  });
-
-  it("cancels success JSON when a chunk crosses the byte limit", async () => {
-    const offered = createTrackedResponse({
-      status: 200,
-      chunks: [
-        new Uint8Array(SUCCESS_RESPONSE_MAX_BYTES - 1).fill(0x78),
-        new Uint8Array(2).fill(0x78),
-        new Uint8Array(1024).fill(0x78),
-        new Uint8Array(1024).fill(0x78),
-      ],
-    });
-    const client = createClient(async () => offered.response);
-
-    await expect(client.pull(0)).rejects.toThrow(
-      /reef\.relay: JSON response exceeds 16777216 bytes/,
-    );
-    expect(offered.state.cancelled).toBe(true);
-    expect(offered.state.emittedBytes).toBeGreaterThan(SUCCESS_RESPONSE_MAX_BYTES);
-    expect(offered.state.emittedBytes).toBeLessThan(SUCCESS_RESPONSE_MAX_BYTES + 1 + 2048);
-  });
-
-  it("surfaces relay error JSON exactly at the error byte limit", async () => {
-    const body = jsonObjectBodyAtSize(ERROR_RESPONSE_MAX_BYTES, "error");
-    const client = createClient(async () => new Response(body, { status: 400 }));
-
-    const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(ReefRelayError);
-    expect(error).toMatchObject({ status: 400 });
-    expect((error as Error).message).toHaveLength(ERROR_RESPONSE_MAX_BYTES - 12);
-    expect(Buffer.byteLength(body)).toBe(ERROR_RESPONSE_MAX_BYTES);
-  });
-
-  it("keeps status fallback and cancels oversized error bodies", async () => {
-    const offered = createTrackedResponse({
-      status: 503,
-      chunks: Array.from({ length: 16 }, () => new Uint8Array(8 * 1024).fill(0x78)),
-    });
-    const client = createClient(async () => offered.response);
-
-    await expect(client.listFriends()).rejects.toMatchObject({
-      name: "ReefRelayError",
-      status: 503,
-      message: "relay HTTP 503",
-    });
-    expect(offered.state.cancelled).toBe(true);
-    expect(offered.state.emittedBytes).toBeGreaterThan(64 * 1024);
-    expect(offered.state.emittedBytes).toBeLessThan(128 * 1024);
-  });
-
-  it("keeps the typed status fallback for malformed error JSON", async () => {
-    const client = createClient(async () => new Response("{", { status: 502 }));
-
-    await expect(client.requestFriend("bob", "code")).rejects.toMatchObject({
-      name: "ReefRelayError",
-      status: 502,
-      message: "relay HTTP 502",
-    });
-  });
+  await expect(client.pull(0)).rejects.toThrow(/reef\.relay: JSON response exceeds 16777216 bytes/);
+  expect(offered.state.cancelled).toBe(true);
+  expect(offered.state.emittedBytes).toBeGreaterThan(SUCCESS_RESPONSE_MAX_BYTES);
+  expect(offered.state.emittedBytes).toBeLessThan(SUCCESS_RESPONSE_MAX_BYTES + 1 + 2048);
 });
 
-const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
+it("keeps status fallback and cancels oversized error bodies", async () => {
+  const offered = createTrackedResponse(503, Array<number>(16).fill(8 * 1024));
+  const client = createClient(async () => offered.response);
 
-class ControlledSocket {
-  private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
-  private closed = false;
-
-  addEventListener(type: string, listener: (event: unknown) => void): void {
-    const listeners = this.listeners.get(type) ?? [];
-    listeners.push(listener);
-    this.listeners.set(type, listeners);
-  }
-
-  close(): void {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.emit("close");
-  }
-
-  emit(type: string, event: unknown = {}): void {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
-}
-
-function receiptEntry(seq: number): InboxEntry {
-  return {
-    seq,
-    peer: "bob",
-    id: `01ARZ3NDEKTSV4RRFFQ69G5F${String(seq).padStart(2, "0")}`,
-    kind: "receipt",
-    receipt: { id: `receipt-${seq}` } as never,
-    ts,
-  };
-}
-
-function parseRequestUrl(input: URL | RequestInfo): URL {
-  if (input instanceof URL) {
-    return input;
-  }
-  return new URL(typeof input === "string" ? input : input.url);
-}
-
-describe("ReefInboxConnection recovery", () => {
-  it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const processed: number[] = [];
-    const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      requestedAfter.push(after);
-      return after === 7
-        ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
-        : Response.json({ entries: [], cursor: after });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7, 8]);
-    expect(processed).toEqual([8]);
-    expect(persisted).toEqual([8]);
+  await expect(client.listFriends()).rejects.toMatchObject({
+    name: "ReefRelayError",
+    status: 503,
+    message: "relay HTTP 503",
+    code: undefined,
   });
+  expect(offered.state.cancelled).toBe(true);
+  expect(offered.state.emittedBytes).toBeGreaterThan(64 * 1024);
+  expect(offered.state.emittedBytes).toBeLessThan(128 * 1024);
+});
 
-  it("does not advance past an entry that failed processing", async () => {
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async ([entry]) => {
-        if (entry?.seq === 9) {
-          throw new Error("entry failed");
-        }
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
+it("keeps the status fallback when parsed error JSON has no relay code", async () => {
+  const client = createClient(async () => Response.json({ detail: "ignored" }, { status: 400 }));
 
-    await expect(inbox.drain()).rejects.toThrow("entry failed");
-    expect(persisted).toEqual([8]);
+  await expect(client.requestFriend("bob")).rejects.toMatchObject({
+    name: "ReefRelayError",
+    status: 400,
+    message: "relay HTTP 400",
+    code: undefined,
   });
-
-  it("rejects an inconsistent REST page before dispatch or persistence", async () => {
-    const processed: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(9)], cursor: 8 }),
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await expect(inbox.drain()).rejects.toThrow(
-      "Reef relay inbox cursor does not match its entries",
-    );
-    expect(processed).toEqual([]);
-    expect(persisted).toEqual([]);
-  });
-
-  it("persists cursor-only progress when retained entries have expired", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async (input) => {
-      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
-      return Response.json({ entries: [], cursor: 12 });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        initialCursor: 7,
-        persistCursor: (cursor) => persisted.push(cursor),
-      },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7]);
-    expect(persisted).toEqual([12]);
-  });
-
-  it("reports connected before a slow REST catch-up completes", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    expect(states).toEqual(["connected"]);
-
-    releasePull();
-    abort.abort();
-    await running;
-    expect(states).toEqual(["connected", "disconnected"]);
-  });
-
-  it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {
-    const socket = new ControlledSocket();
-    const processed: number[] = [];
-    const persisted: number[] = [];
-    let releaseFirstPull!: () => void;
-    const firstPullGate = new Promise<void>((resolve) => {
-      releaseFirstPull = resolve;
-    });
-    const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      if (after === 0) {
-        await firstPullGate;
-        return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
+});
+it("redacts setup tokens and bearer sessions from loopback relay errors", async () => {
+  const setupToken = "reef.token[abc]+?/";
+  const session = `reef-session-${"a".repeat(96)}-tail`;
+  const receivedAuthorization: string[] = [];
+  const receivedSignatures: string[] = [];
+  const receivedTokens: string[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      const authorization = request.headers.authorization ?? "";
+      receivedAuthorization.push(authorization);
+      const signature = String(request.headers["x-reef-sig"] ?? "");
+      if (signature) {
+        receivedSignatures.push(signature);
       }
-      return Response.json({ entries: [], cursor: after });
+      const token = body ? (JSON.parse(body) as { token?: string }).token : undefined;
+      if (token) {
+        receivedTokens.push(token);
+      }
+      const reflectedCredential = authorization || token || signature;
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ error: `${reflectedCredential} relay rejected`, marker: "safe" }),
+      );
     });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
-      },
-      () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
-    releaseFirstPull();
-    await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
-
-    expect(persisted).toEqual([1, 2, 3]);
-    abort.abort();
-    await running;
   });
-
-  it("reports a socket close immediately while catch-up is still pending", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    socket.emit("close");
-    await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
-
-    abort.abort();
-    releasePull();
-    await running;
-  });
-
-  it("reports unexpected socket close details before retrying", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const errors: string[] = [];
-    const client = createClient(async () => Response.json({ entries: [], cursor: 0 }));
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onState: (state) => states.push(state),
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    socket.emit("close", { code: 1008, reason: "policy" });
-    await running;
-
-    expect(states).toEqual(["connected", "disconnected"]);
-    expect(errors).toEqual(["reef inbox socket closed unexpectedly code=1008 reason=policy"]);
-  });
-
-  it("resets reconnect backoff after a socket completes catch-up", async () => {
-    vi.useFakeTimers();
-    const sockets: ControlledSocket[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async () => Response.json({ entries: [], cursor: 1 }));
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => {
-        const socket = new ControlledSocket();
-        sockets.push(socket);
-        return socket as unknown as WebSocketLike;
-      },
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    const running = inbox.start(abort.signal);
-    sockets[0]!.emit("close");
-    await vi.advanceTimersByTimeAsync(250);
-    expect(sockets).toHaveLength(2);
-
-    sockets[1]!.emit("open");
-    await vi.waitFor(() => expect(persisted).toEqual([1]));
-    await Promise.resolve();
-    sockets[1]!.emit("close");
-
-    await vi.advanceTimersByTimeAsync(249);
-    expect(sockets).toHaveLength(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(sockets).toHaveLength(3);
-
-    abort.abort();
-    await running;
-  });
-
-  it("waits for an in-flight handler before completing channel abort", async () => {
-    const socket = new ControlledSocket();
-    const persisted: number[] = [];
-    let releaseHandler!: () => void;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let handlerStarted = false;
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
-    );
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {
-        handlerStarted = true;
-        await handlerGate;
-      },
-      () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    let finished = false;
-    const running = inbox.start(abort.signal).then(() => {
-      finished = true;
-    });
-    socket.emit("open");
-    await vi.waitFor(() => expect(handlerStarted).toBe(true));
-    abort.abort();
-    await Promise.resolve();
-    expect(finished).toBe(false);
-
-    releaseHandler();
-    await running;
-    expect(persisted).toEqual([1]);
-  });
-
-  it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
-    const socket = new ControlledSocket();
-    const errors: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    for (let seq = 1; seq <= 257; seq += 1) {
-      socket.emit("message", {
-        data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
-      });
-    }
-    releasePull();
-    await running;
-
-    expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
-  });
-
-  it("surfaces catch-up failures to channel diagnostics", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const errors: string[] = [];
-    const abort = new AbortController();
-    const client = createClient(async () => {
-      throw new Error("relay catch-up failed");
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      {
-        onState: (state) => states.push(state),
-        onError: (error) => {
-          errors.push(error.message);
-          abort.abort();
-        },
-      },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await running;
-
-    expect(states).toEqual(["connected", "disconnected"]);
-    expect(errors).toEqual(["relay catch-up failed"]);
-  });
+  const port = await listen(server);
+  const client = createClient(fetch, () => ts, `http://127.0.0.1:${port}`);
+  expectRedacted(await client.authComplete(setupToken).catch((error: unknown) => error), [
+    setupToken,
+  ]);
+  const sessionSecrets = [session, session.slice(0, 6), session.slice(-4)];
+  for (const request of [
+    () => client.createHandle(session, "approve"),
+    () => client.listOwnHandles(session),
+  ]) {
+    expectRedacted(await request().catch((error: unknown) => error), sessionSecrets);
+  }
+  const signedError = await client.listFriends().catch((error: unknown) => error);
+  expect(receivedAuthorization).toContain(`Bearer ${session}`);
+  expect(receivedSignatures).toHaveLength(1);
+  expectRedacted(signedError, [receivedSignatures[0]!]);
+  expect(receivedTokens).toContain(setupToken);
 });
 
-function inboxFrameAtSize(bytes: number): string {
+it("redacts signed body credentials across bounded error text", async () => {
+  const code = "friend.code[123]+?/";
+  const receivedBodies: string[] = [];
+  const client = createClient(async (_url, init) => {
+    receivedBodies.push(await new Response(init?.body).text());
+    const responseBody = JSON.stringify({
+      error: `${"x".repeat(32_760)}${code}${"y".repeat(32)}`,
+    });
+    const splitAt = responseBody.indexOf(code) + Math.floor(code.length / 2);
+    return new Response(
+      createClosedChunkStream(
+        [responseBody.slice(0, splitAt), responseBody.slice(splitAt)].map((part) =>
+          new TextEncoder().encode(part),
+        ),
+      ),
+      { status: 401, headers: { "content-type": "application/json" } },
+    );
+  });
+
+  const error = await client.requestFriend("bob", code).catch((failure: unknown) => failure);
+
+  expect(error).toMatchObject({ name: "ReefRelayError", status: 401 });
+  expect(receivedBodies).toHaveLength(1);
+  expect(receivedBodies[0]).toContain(`"code":"${code}"`);
+  expect((error as Error).message).not.toContain(code);
+});
+it("rejects a relay frame above the payload limit before dispatch", async () => {
+  const bytes = 64 * 1024 + 1;
   const prefix =
     '{"type":"entry","entry":{"seq":1,"peer":"bob","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","kind":"receipt","receipt":{"pad":"';
   const suffix = '"},"ts":1752300000}}';
-  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
-}
-
-async function deliverInboxFrame(frame: string): Promise<{
-  entries: unknown[];
-  states: string[];
-}> {
+  const frame = `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("WebSocket test server did not bind a TCP port");
-  }
-  const entries: unknown[] = [];
-  const states: string[] = [];
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), 2_000);
+  const port = await listen(server);
   server.once("connection", (socket) => socket.send(frame));
-  const client = createClient(
-    async () => Response.json({ entries: [], cursor: 0 }),
-    () => ts,
-    `http://127.0.0.1:${address.port}`,
-  );
-  const inbox = new ReefInboxConnection(
-    client,
-    async (received) => {
-      entries.push(...received);
-      abort.abort();
-    },
-    createReefWebSocket,
-    {
-      onState: (state) => {
-        states.push(state);
-        if (state === "disconnected") {
-          abort.abort();
-        }
-      },
-    },
-  );
-
-  try {
-    await inbox.start(abort.signal);
-  } finally {
-    clearTimeout(timeout);
-    for (const socket of server.clients) {
-      socket.terminate();
-    }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
-  }
-  return { entries, states };
-}
-
-describe("ReefInboxConnection response frame bounds", () => {
-  it("accepts a relay frame exactly at the payload limit", async () => {
-    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-
-    const result = await deliverInboxFrame(frame);
-
-    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
-    expect(result.entries).toHaveLength(1);
-    expect(result.states).toContain("connected");
-  });
-
-  it("rejects a relay frame above the payload limit before dispatch", async () => {
-    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
-
-    const result = await deliverInboxFrame(frame);
-
-    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
-    expect(result.entries).toEqual([]);
-    expect(result.states).toEqual(["connected", "disconnected"]);
-  });
+  const socket = createReefWebSocket(`ws://127.0.0.1:${port}`) as WebSocket;
+  const received: unknown[] = [];
+  socket.on("message", (message) => received.push(message));
+  const [error] = await once(socket, "error", { signal: AbortSignal.timeout(2_000) });
+  expect(Buffer.byteLength(frame)).toBe(bytes);
+  expect(error).toMatchObject({ message: "Max payload size exceeded" });
+  expect(received).toEqual([]);
 });
 
-describe("createReefWebSocket handshake deadline", () => {
-  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
-    const peers = new Set<import("node:net").Socket>();
-    const server = http.createServer();
-    server.on("connection", (socket) => {
-      peers.add(socket);
-      socket.once("close", () => peers.delete(socket));
-    });
-    server.on("upgrade", () => {
-      // Leave the HTTP upgrade pending until the client deadline aborts it.
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const { port } = server.address() as AddressInfo;
-      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
-        handshakeTimeoutMs: 50,
-      }) as WebSocket;
-      const [error] = await once(socket, "error");
-
-      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
-    } finally {
-      for (const peer of peers) {
-        peer.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+it("errors when the relay accepts TCP but never completes the upgrade", async () => {
+  const server = http.createServer();
+  server.on("upgrade", () => {
+    // Leave the HTTP upgrade pending until the client deadline aborts it.
   });
+  const port = await listen(server);
+
+  const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
+    handshakeTimeoutMs: 50,
+  }) as WebSocket;
+  const [error] = await once(socket, "error");
+
+  expect(error).toMatchObject({ message: "Opening handshake has timed out" });
 });

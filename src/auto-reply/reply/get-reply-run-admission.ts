@@ -1,73 +1,75 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
+  resolveSessionStorePathCore,
 } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { logVerbose } from "../../globals.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
+import { replyRunInterruptTargetOperation } from "../../sessions/session-controller.contracts.js";
+import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  getSessionControllerOperation,
+  interruptReplyRunTarget,
+  waitForReplyOperationOwnerSettlement,
+} from "../../sessions/session-controller.js";
+import { interruptSessionControllerEffects } from "../../sessions/session-controller.lifecycle.js";
+import {
+  updateSessionControllerSourcePolicy,
+  bindSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../../sessions/session-controller.native-runtime.js";
+import {
+  getReplyOperationSessionReader,
+  getSessionControllerEntryForOperation,
+} from "../../sessions/session-controller.state.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   normalizeThinkLevel,
-  resolveSupportedThinkingLevel,
+  resolveThinkingSelectionForModel,
 } from "../thinking.js";
+import { removeDirectiveSpan } from "./directive-parsing.js";
 import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
 import {
+  finishReplyPreparation,
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
+import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import {
-  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  abortReplyRunBySessionId,
-  isReplyRunActiveForSessionId,
-  isReplyRunStreamingForSessionId,
-  resolveActiveReplyRunThreadId,
-  resolveActiveReplyRunSessionId,
-  waitForReplyRunEndBySessionId,
-} from "./reply-run-registry.js";
-import { admitReplyTurn } from "./reply-turn-admission.js";
+import { hasPendingFollowupQueueWork } from "./queue/state.js";
+import { readReplySourceInput } from "./reply-source-binding.js";
 import {
   isSlackDirectRoutedThreadTurn,
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
     params,
     traceRunPhase,
     inboundEventKind,
-    sourceReplyDeliveryMode,
     useFastReplyRuntime,
     thinkingRuntime,
     isFirstTurnInSession,
-    baseBodyFinal,
-    hasUserBody,
-    isBareSessionReset,
-    startupAction,
-    startupContextPrelude,
-    softResetTail,
-    workspaceDir,
     isMainSession,
-    inboundUserContextPromptJoiner,
-    heartbeatRunScope,
     effectiveQueueMode,
     effectiveResetTriggered,
     explicitThinkingLevelOverride,
@@ -93,18 +95,86 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle,
     sessionStore,
   } = params;
+  const assertPreparationActive = composeSessionSourceAssertion(
+    [
+      opts?.operatorAuthority?.assertCurrent,
+      opts?.internalEventExecution?.assertCurrent,
+      opts?.scheduledAutomation?.assertCurrent,
+    ],
+    (assertSourceCurrent) => {
+      opts?.abortSignal?.throwIfAborted();
+      opts?.replyOperation?.abortSignal.throwIfAborted();
+      assertSourceCurrent();
+      if (opts?.replyOperation?.result) {
+        throw new Error("Reply operation ended during preparation");
+      }
+    },
+  );
   let { sessionEntry, prefixedBodyBase } = context;
+  const isRoomEvent = inboundEventKind === "room_event";
+  const sourceInput = readReplySourceInput(opts);
+  const target =
+    !sourceInput && sessionKey
+      ? captureSessionTarget({
+          storeScope: storePath ?? resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          sessionKey,
+          agentId,
+        })
+      : undefined;
+  const resolveControllerOwner = () => {
+    if (sourceInput) {
+      return sourceInput.mailbox.owner;
+    }
+    const operation = sessionKey ? getSessionControllerOperation(sessionKey, target) : undefined;
+    return operation ? getSessionControllerEntryForOperation(operation) : undefined;
+  };
+  const resolvedQueue =
+    sourceInput?.policy ??
+    (useFastReplyRuntime
+      ? { mode: "collect" as const, debounceMs: 0, cap: 1, dropPolicy: "summarize" as const }
+      : resolveQueueSettings({
+          cfg,
+          channel: sessionCtx.Provider,
+          sessionEntry,
+          inlineMode: effectiveQueueMode,
+          inlineOptions: perMessageQueueOptions,
+        }));
+  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
+  const prioritySource =
+    activeRunQueueMode === "interrupt" && !isRoomEvent ? sourceInput : undefined;
+  // Priority precedes runtime loading and every abort/settlement await. It is
+  // the same source captured at ingress, never a second interrupt-only input.
+  if (sourceInput) {
+    updateSessionControllerSourcePolicy(sourceInput, {
+      ...resolvedQueue,
+      mode: isRoomEvent ? "followup" : activeRunQueueMode,
+    });
+  }
+  // Keep the physical owner through preparation; IDs can overlap across stores.
+  const capturedOwner = resolveControllerOwner();
+  const capturedInterruptOperation = capturedOwner?.active;
+  const activeRunInterruptTarget =
+    activeRunQueueMode === "interrupt" &&
+    !isRoomEvent &&
+    capturedInterruptOperation &&
+    capturedInterruptOperation !== opts?.replyOperation
+      ? { [replyRunInterruptTargetOperation]: capturedInterruptOperation }
+      : undefined;
   let { resolvedThinkLevel } = params;
+  let thinkLevelOverride =
+    explicitThinkingLevelOverride ??
+    directives.thinkLevel ??
+    (directives.clearThinkLevel ? ("default" as const) : undefined);
 
   // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
+  // If done after, the System: prefix becomes the first token and silently shadows any
   // low|medium|high shorthand the user typed.
   if (!resolvedThinkLevel && prefixedBodyBase) {
-    const parts = prefixedBodyBase.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
+    const firstToken = prefixedBodyBase.split(/\s+/, 1)[0] ?? "";
+    const maybeLevel = normalizeThinkLevel(firstToken);
     const thinkingCatalog = maybeLevel
       ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
-          modelState.resolveThinkingCatalog(),
+          modelState.resolveThinkingCatalog({ provider, model }),
         )
       : undefined;
     if (
@@ -118,10 +188,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       })
     ) {
       resolvedThinkLevel = maybeLevel;
-      prefixedBodyBase = parts.slice(1).join(" ").trim();
+      thinkLevelOverride = maybeLevel;
+      prefixedBodyBase = removeDirectiveSpan(prefixedBodyBase, 0, firstToken.length);
     }
   }
-  const prefixedBodyCore = prefixedBodyBase;
   const threadStarterBody = normalizeOptionalString(ctx.ThreadStarterBody);
   const threadHistoryBody = normalizeOptionalString(ctx.ThreadHistoryBody);
   const threadContextNote = threadHistoryBody
@@ -130,41 +200,45 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const eventContext = getReplySystemEventContext(opts);
+    const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      if (systemEventSessionKey === undefined) {
+        continue;
+      }
+      const isCurrentSession = systemEventSessionKey === sessionKey;
+      assertPreparationActive();
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
-        sessionKey,
-        isMainSession,
-        isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        agentId,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
+        // Producer-owned turns consume only their captured occurrence selection.
+        events: opts?.internalEventExecution ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
-    const { activeGoalContext, inboundUserContext } = context.getInboundContext();
-    return buildReplyPromptEnvelope({
-      ctx,
-      sessionCtx,
-      baseBody: baseBodyFinal,
-      prefixedBody: prefixedBodyCore,
-      hasUserBody,
-      inboundUserContext,
-      activeGoalContext,
-      inboundUserContextPromptJoiner,
-      isBareSessionReset,
-      startupAction,
-      startupContextPrelude,
-      softResetTail,
-      isHeartbeat: context.isHeartbeat,
-      inboundEventKind,
-      sourceReplyDeliveryMode,
-      threadContextNote,
-      systemEventBlocks: drainedSystemEventBlocks,
-      media: opts?.media,
-    });
   };
+  const rebuildPromptBodies = () =>
+    traceRunPhase("reply.build_prompt_bodies", () =>
+      context.buildPromptBodies({
+        prefixedBody: prefixedBodyBase,
+        threadContextNote,
+        systemEventBlocks: drainedSystemEventBlocks,
+        media: opts?.media,
+      }),
+    );
   const skillResult = isFastTestRuntimeEnv()
     ? {
         sessionEntry,
@@ -173,6 +247,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
         const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
         return await ensureSkillSnapshot({
+          agentId,
+          // Command continuations prepare the target before adopting its run slot below.
+          reader:
+            opts?.replyOperation && opts.replyOperation.key === sessionKey
+              ? getReplyOperationSessionReader(opts.replyOperation)
+              : undefined,
           sessionEntry,
           sessionEntryHandle,
           sessionStore,
@@ -180,11 +260,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           storePath,
           sessionId,
           isFirstTurnInSession,
-          workspaceDir,
+          workspaceDir: context.skillsWorkspaceDir,
+          executionWorkspaceDir: context.workspaceDir,
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
           skillOverrides: opts?.skillOverrides,
+          assertCurrent: assertPreparationActive,
         });
       });
   sessionEntry = skillResult.sessionEntry;
@@ -192,31 +274,24 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let {
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    media: promptMedia,
-    currentInboundContext,
-  } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
-  const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
-      modelState.resolveDefaultThinkingLevel(),
+      modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime: thinkingRuntime }),
     );
   }
   const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
   let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
-  let thinkingLevelSupported = isThinkingLevelSupported({
-    provider,
-    model,
-    level: resolvedThinkLevel,
-    catalog: thinkingCatalog,
-    agentRuntime: thinkingRuntime,
-  });
+  const resolveCurrentThinkingSelection = () =>
+    resolveThinkingSelectionForModel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+      agentRuntime: thinkingRuntime,
+    });
+  let thinkingSelection = resolveCurrentThinkingSelection();
   const shouldHydrateThinkingCatalog =
-    !thinkingLevelSupported ||
+    !thinkingSelection.supported ||
     (resolvedThinkLevel !== "off" &&
       !hasResolvedThinkingCatalogEntry({ catalog: thinkingCatalog, provider, model }));
   if (shouldHydrateThinkingCatalog) {
@@ -225,79 +300,36 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     // catalog load was a 14s+ reply-blocking cost for known Codex models that
     // already publish authoritative thinking metadata.
     thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
-      modelState.resolveThinkingCatalog(),
+      modelState.resolveThinkingCatalog({ provider, model }),
     );
-    thinkingLevelSupported = isThinkingLevelSupported({
-      provider,
-      model,
-      level: resolvedThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    });
+    thinkingSelection = resolveCurrentThinkingSelection();
   }
-  if (!thinkingLevelSupported) {
+  if (!thinkingSelection.supported) {
     const explicitThink =
       (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
       explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
-      typing.cleanup();
-      return {
-        kind: "reply",
-        reply: {
-          text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
-        },
-      } as const;
-    }
-    const fallbackThinkLevel = resolveSupportedThinkingLevel({
-      provider,
-      model,
-      level: resolvedThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    });
-    if (fallbackThinkLevel !== resolvedThinkLevel) {
-      // Execution fallbacks are turn-local; directive/model persistence owns
-      // durable thinking remaps so explicit session overrides survive replies.
-      resolvedThinkLevel = fallbackThinkLevel;
+      return finishReplyPreparation(typing, () => ({
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
+      }));
     }
   }
 
   const providedReplyOperation = opts?.replyOperation;
-  // Native command turns reserve their operation under the slash SOURCE key so
-  // commands never contend with the target's active run (#104144). When such a
-  // turn continues into a full agent turn (/steer fallback, /goal, /learn,
-  // unhandled body), it mutates the TARGET session: it must adopt the target's
-  // run slot before running or concurrent target inbounds double-admit and
-  // split the session (#104844).
-  const commandTurnContinuationTargetKey =
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionKey !== undefined &&
-    providedReplyOperation.key !== sessionKey &&
-    resolveCommandTurnTargetSessionKey(ctx) !== undefined
-      ? sessionKey
-      : undefined;
-  if (
-    commandTurnContinuationTargetKey === undefined &&
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionId !== undefined &&
-    sessionId !== providedReplyOperation.sessionId
-  ) {
-    // Dispatch reserves a queued operation before session init. If stale init
-    // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run. Command-turn continuations
-    // rebind after slot adoption below: rebinding first would collide with a
-    // still-active target operation that owns the same session ID.
-    providedReplyOperation.updateSessionId(sessionId);
-  }
-  const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    candidateSessionId === providedReplyOperation.sessionId;
+  const isProvidedOperationQueued = () =>
+    providedReplyOperation?.result === null && providedReplyOperation.phase === "queued";
+  // Command continuations move their unclaimed source before context preparation.
+  const rebindProvidedReplyOperation = (nextSessionId: string) => {
+    if (
+      providedReplyOperation !== undefined &&
+      isProvidedOperationQueued() &&
+      nextSessionId !== providedReplyOperation.sessionId
+    ) {
+      // Dispatch can reserve a queued operation before session init discovers the
+      // authoritative row. Keep steer/abort and durable admission on that session.
+      providedReplyOperation.updateSessionId(nextSessionId);
+    }
+  };
   const sessionIdFinal = sessionId ?? providedReplyOperation?.sessionId ?? crypto.randomUUID();
   const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
   const resolvePreparedSessionState = (): {
@@ -305,116 +337,98 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionId: string;
     sessionFile: string;
   } => {
-    // Working-set exact key first; disk alias resolve only when storePath known.
-    // No whole-map scan — that encodes the store layout the accessor hides.
+    // Admission and in-process publications own this turn’s working entry.
     const latestSessionEntry =
-      sessionStore && sessionKey
-        ? (sessionStore[sessionKey] ??
-          (storePath
-            ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
-            : undefined) ??
-          sessionEntry)
-        : sessionEntry;
+      sessionStore && sessionKey ? (sessionStore[sessionKey] ?? sessionEntry) : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
-    opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
-    const sessionFile = storePath
-      ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
-      : resolveSessionFilePath(latestSessionId, latestSessionEntry, sessionFilePathOptions);
+    rebindProvidedReplyOperation(latestSessionId);
+    opts?.onSessionPrepared?.({
+      sessionKey,
+      sessionId: latestSessionId,
+      lifecycleRevision: latestSessionEntry?.lifecycleRevision,
+      storePath,
+    });
+    // Queued admission uses the scoped key too. A legacy marker for the same
+    // transcript would make unchanged tool authority fail the steering check.
+    const sessionFile =
+      normalizeOptionalString(sessionKey) ??
+      (storePath
+        ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })
+        : resolveSessionFilePathCore(latestSessionId, latestSessionEntry, sessionFilePathOptions));
     return { sessionEntry: latestSessionEntry, sessionId: latestSessionId, sessionFile };
   };
   let preparedSessionState = resolvePreparedSessionState();
-  const resolvedQueue = useFastReplyRuntime
-    ? { mode: "collect" as const, debounceMs: 0, cap: 1, dropPolicy: "summarize" as const }
-    : resolveQueueSettings({
-        cfg,
-        channel: sessionCtx.Provider,
-        sessionEntry,
-        inlineMode: effectiveQueueMode,
-        inlineOptions: perMessageQueueOptions,
-      });
+  const queueKey = sessionKey ?? sessionIdFinal;
   const embeddedAgentRuntime = useFastReplyRuntime
     ? null
     : await traceRunPhase("reply.load_embedded_agent_runtime", () => loadEmbeddedAgentRuntime());
-  const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
-    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
-    embeddedAgentRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
-  const sessionLaneKey = embeddedAgentRuntime
-    ? embeddedAgentRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
-    : undefined;
-  const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
-  const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
-  const rawActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
-  const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
-    rawActiveSessionIdForInterrupt,
-  )
-    ? undefined
-    : rawActiveSessionIdForInterrupt;
-  if (
-    activeRunQueueMode === "interrupt" &&
-    !isRoomEvent &&
-    sessionLaneKey &&
-    (laneSize > 0 || activeSessionIdForInterrupt)
-  ) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = embeddedAgentRuntime?.abortEmbeddedAgentRun(
-      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
-    );
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
-  }
-  const agentHarnessPolicy = useFastReplyRuntime
-    ? undefined
-    : resolveAgentHarnessPolicy({
-        provider,
-        modelId: model,
-        config: cfg,
-        agentId,
-        sessionKey: context.runtimePolicySessionKey,
-      });
-  const resolveAcceptedAuthProfileProviders = () =>
-    agentHarnessPolicy
-      ? listOpenAIAuthProfileProvidersForAgentRuntime({
-          provider,
-          harnessRuntime: agentHarnessPolicy.runtime,
-          config: cfg,
-        })
-      : [provider];
+  const resolveSessionlessNativeAttachment = () =>
+    !sourceInput && !sessionKey
+      ? embeddedAgentRuntime?.resolveActiveEmbeddedRunBySessionFile(
+          preparedSessionState.sessionFile,
+        )
+      : undefined;
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime) {
+    const binding = opts?.scheduledAutomation?.job.inferenceBinding;
+    if (binding) {
+      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
+    }
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.operatorModelOverride &&
+      !opts?.scheduledAutomation
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
+          preparedSessionState.sessionEntry,
+        ),
       };
     }
-    const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
+    const shouldUseEphemeralSession =
+      params.autoFallbackPrimaryProbe !== undefined ||
+      params.configuredProfileId !== undefined ||
+      opts?.scheduledAutomation !== undefined ||
+      modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
-    const authSessionEntry =
-      shouldUseEphemeralSession && preparedSessionState.sessionEntry
-        ? { ...preparedSessionState.sessionEntry }
-        : preparedSessionState.sessionEntry;
+    const authSessionEntry = preparedSessionState.sessionEntry
+      ? { ...preparedSessionState.sessionEntry }
+      : undefined;
     if (params.autoFallbackPrimaryProbe && authSessionEntry) {
       clearAutoFallbackPrimaryProbeSelection(authSessionEntry);
     }
     const authSessionStore =
-      shouldUseEphemeralSession && authSessionEntry
+      shouldUseEphemeralSession && authSessionEntry && authSessionKey !== undefined
         ? { [authSessionKey]: authSessionEntry }
         : sessionStore;
-    const resolvedAuthProfileId = await resolveSessionAuthProfileOverride({
+    if (authSessionStore && authSessionEntry && authSessionKey !== undefined) {
+      authSessionStore[authSessionKey] = authSessionEntry;
+    }
+    const selection = await resolveSessionAuthSelection({
       cfg,
       provider,
-      acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+      modelId: model,
+      agentId,
+      configuredProfileId: params.configuredProfileId,
       agentDir,
+      reader:
+        providedReplyOperation?.key === authSessionKey
+          ? getReplyOperationSessionReader(providedReplyOperation)
+          : undefined,
       sessionEntry: authSessionEntry,
       sessionStore: authSessionStore,
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      assertCommitAllowed: assertPreparationActive,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
-      authProfileId: resolvedAuthProfileId,
-      authProfileIdSource:
-        resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? authSessionEntry.authProfileOverrideSource
-          : undefined,
+      authProfileId: selection?.profileId,
+      authProfileIdSource: selection?.source,
     };
   };
   let { authProfileId, authProfileIdSource } = await traceRunPhase(
@@ -424,84 +438,52 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
     loadAgentRunnerRuntime(),
   );
-  const queueKey = sessionKey ?? sessionIdFinal;
+
   preparedSessionState = resolvePreparedSessionState();
   const currentRouteThreadId = resolveRoutedDeliveryThreadId({ ctx, sessionKey });
   const applySlackRouteThreadSteeringGuard = isSlackDirectRoutedThreadTurn(ctx);
-  const resolveActiveRunAcceptsCurrentThread = (busy: { isActive: boolean }) => {
-    if (!busy.isActive || !sessionKey || !applySlackRouteThreadSteeringGuard) {
-      return true;
-    }
-    return routeThreadIdsMatch(resolveActiveReplyRunThreadId(sessionKey), currentRouteThreadId);
-  };
-  const resolveActiveReplyOperationSessionId = () =>
-    sessionKey ? resolveActiveReplyRunSessionId(sessionKey) : undefined;
-  const resolveActiveQueueSessionId = () =>
-    resolveActiveEmbeddedSessionId() ??
-    resolveActiveReplyOperationSessionId() ??
-    preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
-    const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
-    const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
-    const activeSessionId =
-      embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
-    if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
-    }
-    if (isOwnPreDispatchOperationSession(activeSessionId)) {
-      return { activeSessionId, isActive: false, isStreaming: false };
-    }
-    const replyOperationActive =
-      replyOperationActiveSessionId != null &&
-      isReplyRunActiveForSessionId(replyOperationActiveSessionId);
+    const owner = resolveControllerOwner();
+    const activeOperation = owner?.active;
+    const attachment = owner?.attachment;
+    const nativeAttachment =
+      activeOperation &&
+      attachment &&
+      "handle" in attachment &&
+      attachment.operation === activeOperation
+        ? attachment
+        : resolveSessionlessNativeAttachment();
+    const activeSessionId = activeOperation?.sessionId ?? nativeAttachment?.sessionId;
+    const isOwnPreDispatchOperation =
+      activeOperation !== undefined &&
+      activeOperation === providedReplyOperation &&
+      isProvidedOperationQueued();
     return {
       activeSessionId,
-      isActive:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
-      isStreaming:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
-        (replyOperationActiveSessionId != null &&
-          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
+      activeOperation,
+      isActive: !isOwnPreDispatchOperation && Boolean(activeOperation || nativeAttachment),
+      nativeAttachment,
+      terminalProducerBlocked: activeOperation?.terminalProducerBlocked,
     };
   };
-  if (commandTurnContinuationTargetKey && providedReplyOperation) {
-    const adoption = await admitReplyTurn({
-      sessionKey: commandTurnContinuationTargetKey,
-      sessionId: providedReplyOperation.sessionId,
-      expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
-      storePath,
-      kind: "visible",
-      resetTriggered: effectiveResetTriggered,
-      routeThreadId: currentRouteThreadId,
-      upstreamAbortSignal: opts?.abortSignal,
-      // Never wait on the target's active turn: a blocked continuation would
-      // re-create the #104142 command-lane wedge. When the slot is owned, the
-      // queue policy below sees the target-keyed owner and steers/queues this
-      // turn instead of running it concurrently.
-      waitForActive: false,
-      adoptOperation: providedReplyOperation,
-    });
-    if (adoption.status === "skipped" && adoption.reason === "aborted") {
-      typing.cleanup();
-      return { kind: "reply", reply: undefined } as const;
-    }
-    if (
-      adoption.status === "owned" &&
-      sessionId !== undefined &&
-      sessionId !== providedReplyOperation.sessionId
-    ) {
-      providedReplyOperation.updateSessionId(sessionId);
-    }
-  }
-  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+  const { activeSessionId, activeOperation, isActive, nativeAttachment } = resolveQueueBusyState();
+  const hasQueuedFollowups =
+    sourceInput?.claim?.operation === providedReplyOperation && providedReplyOperation
+      ? false
+      : sourceInput
+        ? sourceInput.mailbox.entries.some(
+            (entry) => entry !== sourceInput && entry.phase !== "consumed",
+          ) || sourceInput.mailbox.droppedCount > 0
+        : hasPendingFollowupQueueWork([queueKey], target);
+  const activeRunAcceptsCurrentThread =
+    !isActive ||
+    !sessionKey ||
+    !applySlackRouteThreadSteeringGuard ||
+    routeThreadIdsMatch(activeOperation?.routeThreadId, currentRouteThreadId);
+
   const shouldSteer =
     !isRoomEvent &&
     activeRunAcceptsCurrentThread &&
-    !context.isHeartbeat &&
     !effectiveResetTriggered &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
@@ -511,81 +493,112 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
+    hasQueuedFollowups,
+    interrupt: activeRunQueueMode === "interrupt" && !isRoomEvent,
     isActive,
-    isHeartbeat: context.isHeartbeat,
     shouldFollowup,
-    queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const queueState = await resolvePreparedReplyQueueState({
-      activeRunQueueAction,
-      activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
+    const queueReply = await waitForPreparedReplyQueue({
+      activeSessionId: activeSessionId ?? preparedSessionState.sessionId,
       queueMode: activeRunQueueMode,
-      sessionKey,
-      sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) => {
-        const embeddedAborted =
-          embeddedAgentRuntime?.abortEmbeddedAgentRun(activeRunSessionId) ?? false;
-        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
-        return embeddedAborted || replyOperationAborted;
+      interruptActiveRun: async () => {
+        assertPreparationActive();
+        if (activeRunInterruptTarget) {
+          const captured = activeRunInterruptTarget[replyRunInterruptTargetOperation];
+          const outcome = await interruptReplyRunTarget(
+            activeRunInterruptTarget,
+            REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+          );
+          if (!outcome.aborted && !outcome.settled) {
+            // Finishing cannot be aborted. Keep the reserved newest successor until
+            // this exact owner settles, rather than letting older backlog leapfrog.
+            await racePromiseWithAbortSignal(captured.ownerSettlement, opts?.abortSignal);
+            return true;
+          }
+          return outcome.settled;
+        }
+        // A source captured with no operation cannot cancel an owner installed
+        // while preparation awaited. The legacy sessionless adapter alone uses
+        // its physical effect scope.
+        if (sourceInput || sessionKey || !storePath) {
+          return false;
+        }
+        const interrupted = await interruptSessionControllerEffects({
+          scope: storePath,
+          identities: [sessionKey, activeSessionId, preparedSessionState.sessionId],
+          timeoutMs: REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+        });
+        return (
+          interrupted &&
+          (await waitForCapturedSessionNativeAttemptEnd(
+            activeSessionId ?? preparedSessionState.sessionId,
+            REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            nativeAttachment,
+          ))
+        );
       },
       waitForActiveRunEnd: (activeRunSessionId) =>
-        isReplyRunActiveForSessionId(activeRunSessionId)
-          ? waitForReplyRunEndBySessionId(activeRunSessionId, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
-          : (embeddedAgentRuntime?.waitForEmbeddedAgentRunEnd(activeRunSessionId) ??
-            Promise.resolve(undefined)),
+        Promise.all([
+          waitForCapturedSessionNativeAttemptEnd(
+            activeRunSessionId,
+            REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            nativeAttachment,
+          ),
+          activeOperation &&
+            waitForReplyOperationOwnerSettlement(activeOperation, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS),
+        ]),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
-        await refreshInboundContextAfterAdmissionWait();
-        sessionEntry = context.getSessionEntry();
-        ({
-          prefixedCommandBody,
-          queuedBody,
-          transcriptBody,
-          transcriptCommandBody,
-          media: promptMedia,
-          currentInboundContext,
-        } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+        refreshInboundContextAfterAdmissionWait();
       },
       resolveBusyState: resolveQueueBusyState,
     });
-    if (queueState.kind === "reply") {
+    if (queueReply) {
+      if (prioritySource) {
+        retireSessionControllerInput(prioritySource);
+      }
       typing.cleanup();
-      return { kind: "reply", reply: queueState.reply } as const;
+      return { kind: "reply", reply: queueReply } as const;
     }
   }
+  await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+  const promptBodies = await rebuildPromptBodies();
 
   return {
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
-    sessionEntry,
     skillsSnapshot,
-    prefixedCommandBody,
-    queuedBody,
-    transcriptBody,
-    transcriptCommandBody,
-    promptMedia,
-    currentInboundContext,
+    promptBodies,
     isRoomEvent,
     providedReplyOperation,
-    sessionIdFinal,
     preparedSessionState,
     resolvedQueue,
-    embeddedAgentRuntime,
-    resolveActiveEmbeddedSessionId,
-    resolvePreparedSessionState,
-    runReplyAgent,
+    isRunActive: async () => {
+      preparedSessionState = resolvePreparedSessionState();
+      return Boolean(
+        embeddedAgentRuntime &&
+        (resolveControllerOwner()?.active || resolveSessionlessNativeAttachment()),
+      );
+    },
+    runReplyAgent: sourceInput
+      ? (input: Parameters<typeof runReplyAgent>[0]) => {
+          bindSessionControllerSource(sourceInput, input.followupRun);
+          return runReplyAgent(input);
+        }
+      : runReplyAgent,
     queueKey,
     shouldSteer,
     shouldFollowup,
+    hasQueuedFollowups,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } as const;

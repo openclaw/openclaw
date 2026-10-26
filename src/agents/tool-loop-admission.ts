@@ -1,14 +1,26 @@
-import type { InternalToolBatchCall, ToolLoopIntervention } from "@openclaw/agent-core";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type {
+  InternalBeforeToolBatchResult,
+  InternalToolBatchCall,
+  ToolLoopIntervention,
+  ToolLoopWarning,
+} from "@openclaw/agent-core";
+import {
+  isIncognitoDiagnosticSession,
+  type SessionState,
+} from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
   shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import { recordBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
+import {
+  recordBatchAdmittedToolCall,
+  releaseBatchAdmittedToolCalls,
+} from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
   toolName: string;
@@ -16,46 +28,51 @@ type ToolLoopCall = {
   toolCallId?: string;
 };
 
-async function evaluateToolLoopCall(
+type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+};
+
+type ToolLoopRuntime = Awaited<ReturnType<typeof loadBeforeToolCallRuntime>>;
+
+function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
+  runtime: ToolLoopRuntime,
   stateOverride?: SessionState,
-): Promise<ToolLoopIntervention | undefined> {
-  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
-  }
-  const toolName = normalizeToolName(call.toolName || "tool");
-  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
-    await loadBeforeToolCallRuntime();
-  const sessionState =
-    stateOverride ??
-    getDiagnosticSessionState({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-    });
+): ToolLoopIntervention | ToolLoopWarning | undefined {
+  const toolName = normalizeToolPolicyName(call.toolName || "tool");
+  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } = runtime;
+  // Project history for atomic admission, but keep warning buckets on the session owner.
+  const sessionState = getDiagnosticSessionState({
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+  });
   const result = detectToolCallLoop(
-    sessionState,
+    stateOverride ?? sessionState,
     toolName,
     call.params,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
     return undefined;
   }
+  const diagnostic = {
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+    toolName,
+    level: result.level,
+    detector: result.detector,
+    count: result.count,
+    message: result.message,
+    pairedToolName: result.pairedToolName,
+  };
   if (result.level === "critical") {
-    log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      toolName,
-      level: "critical",
-      action: "block",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    if (!isIncognitoDiagnosticSession(sessionState)) {
+      log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
+    }
+    logToolLoopAction({ ...diagnostic, action: "block" });
     return {
       kind: "critical-tool-loop",
       toolCallId: call.toolCallId ?? "",
@@ -69,61 +86,64 @@ async function evaluateToolLoopCall(
   const baseWarningKey = result.warningKey ?? `${result.detector}:${toolName}`;
   const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
   if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
-    log.warn(`Loop warning for ${toolName}: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      toolName,
-      level: "warning",
-      action: "warn",
-      detector: result.detector,
+    if (!isIncognitoDiagnosticSession(sessionState)) {
+      log.warn(`Loop warning for ${toolName}: ${result.message}`);
+    }
+    logToolLoopAction({ ...diagnostic, action: "warn" });
+    return {
+      kind: "tool-loop-warning",
+      toolCallId: call.toolCallId ?? "",
       count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    };
   }
   return undefined;
-}
-
-async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise<void> {
-  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return;
-  }
-  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
-  recordToolCall(
-    getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
-    normalizeToolName(call.toolName || "tool"),
-    call.params,
-    call.toolCallId,
-    ctx.loopDetection,
-    ctx.runId ? { runId: ctx.runId } : undefined,
-  );
 }
 
 /** Preserve the existing single-call admission path for harnesses without batch control. */
 export async function admitSingleToolCallLoop(
   call: ToolLoopCall,
   ctx: HookContext,
-): Promise<ToolLoopIntervention | undefined> {
-  const intervention = await evaluateToolLoopCall(call, ctx);
-  if (!intervention) {
-    await recordToolLoopCall(call, ctx);
+): Promise<ToolLoopIntervention | ToolLoopWarning | undefined> {
+  if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  const runtime = await loadBeforeToolCallRuntime();
+  const intervention = evaluateToolLoopCall(call, ctx, runtime);
+  if (intervention?.kind !== "critical-tool-loop") {
+    runtime.recordToolCall(
+      runtime.getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
+      normalizeToolPolicyName(call.toolName || "tool"),
+      call.params,
+      call.toolCallId,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
   }
   return intervention;
 }
 
 /**
- * Admit an assistant tool batch atomically. Calls are only recorded after every
- * sibling passes detection, so no side effect can start before a later veto.
+ * Admit an assistant tool batch atomically. Successful prepared calls reserve
+ * exact markers here; calls rejected by argument validation never reach the
+ * wrapper and reserve none. Agent-core commits both in assistant order at the
+ * final launch boundary, and a released call is dropped. A later veto still
+ * records only denial evidence.
  */
 export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
   ctx: HookContext,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<ToolLoopBatchAdmission> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
+    return {};
   }
-  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
+  const runtime = await loadBeforeToolCallRuntime();
+  const {
+    getDiagnosticSessionState,
+    markDiagnosticArgumentChurnObservation,
+    reconcileToolCallExecutionParams,
+    recordToolCall,
+    recordToolCallOutcome,
+  } = runtime;
+  const warningThreshold = TOOL_LOOP_WARNING_THRESHOLD;
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -135,10 +155,9 @@ export async function admitToolCallBatch(
   const recordLoopVeto = (state: SessionState, call: InternalToolBatchCall) => {
     recordToolCall(
       state,
-      normalizeToolName(call.toolCall.name || "tool"),
+      normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     const projectedCall = state.toolCallHistory?.at(-1);
@@ -161,45 +180,120 @@ export async function admitToolCallBatch(
       projectedState.toolCallHistory?.push(projectedCall);
     }
   };
+  const warnings: ToolLoopWarning[] = [];
   for (const call of calls) {
-    const toolName = normalizeToolName(call.toolCall.name || "tool");
-    const intervention = await evaluateToolLoopCall(
+    const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
+    const intervention = evaluateToolLoopCall(
       {
         toolName,
         params: call.args,
         toolCallId: call.toolCall.id,
       },
       ctx,
+      runtime,
       projectedState,
     );
-    if (intervention) {
+    if (intervention?.kind === "critical-tool-loop") {
       // Preserve only denial evidence. No call in this batch executed, but a
       // recovery retry must still see same-action siblings that crossed the
       // threshold. Unrelated skipped actions remain valid recovery choices.
       for (const rejectedCall of calls) {
         const rejectedActionKey = hashToolCall(
-          normalizeToolName(rejectedCall.toolCall.name || "tool"),
+          normalizeToolPolicyName(rejectedCall.toolCall.name || "tool"),
           rejectedCall.args,
         );
         if (rejectedActionKey === intervention.actionKey) {
           recordLoopVeto(sessionState, rejectedCall);
         }
       }
-      return intervention;
+      return { intervention };
+    }
+    if (intervention) {
+      warnings.push(intervention);
     }
     // A later sibling must assume this candidate makes no progress.
     projectLoopVeto(call);
   }
   for (const call of calls) {
-    await recordToolLoopCall(
-      {
-        toolName: call.toolCall.name,
-        params: call.args,
-        toolCallId: call.toolCall.id,
-      },
-      ctx,
-    );
-    recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
+    if (!call.validationFailure) {
+      recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
+    }
   }
-  return undefined;
+  const admittedById = new Map(
+    calls.map((call) => [
+      call.toolCall.id,
+      {
+        toolName: normalizeToolPolicyName(call.toolCall.name || "tool"),
+        validationFailure: call.validationFailure,
+      },
+    ]),
+  );
+  const committedIds = new Set<string>();
+  const commitReadyCall = (readyCall: { toolCallId: string; args: unknown }) => {
+    const admitted = admittedById.get(readyCall.toolCallId);
+    if (!admitted || committedIds.has(readyCall.toolCallId)) {
+      return;
+    }
+    recordToolCall(
+      sessionState,
+      admitted.toolName,
+      readyCall.args,
+      readyCall.toolCallId,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
+    if (admitted.validationFailure) {
+      // The call never executes: its validation error is the whole outcome.
+      committedIds.add(readyCall.toolCallId);
+      const record = recordToolCallOutcome(sessionState, {
+        toolName: admitted.toolName,
+        toolParams: readyCall.args,
+        toolCallId: readyCall.toolCallId,
+        result: admitted.validationFailure,
+        runId: ctx.runId,
+      });
+      if (record) {
+        record.outcomeKind = "argument-validation";
+      }
+      return;
+    }
+    const active = reconcileToolCallExecutionParams(sessionState, {
+      toolName: admitted.toolName,
+      toolParams: readyCall.args,
+      toolCallId: readyCall.toolCallId,
+      runId: ctx.runId,
+      warningThreshold,
+    });
+    markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: ctx.watchdogAttempt,
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      runId: ctx.runId,
+      active,
+    });
+    committedIds.add(readyCall.toolCallId);
+  };
+  return {
+    warnings,
+    commitReadyCalls(readyCalls) {
+      if (readyCalls.length === 1 && readyCalls[0]) {
+        commitReadyCall(readyCalls[0]);
+        return;
+      }
+      const readyById = new Map(readyCalls.map((call) => [call.toolCallId, call]));
+      for (const call of calls) {
+        const readyCall = readyById.get(call.toolCall.id);
+        if (readyCall) {
+          commitReadyCall(readyCall);
+        }
+      }
+    },
+    releaseSkippedCalls(toolCallIds) {
+      // Agent-core supplies admitted calls that will not launch; skipped rejected
+      // calls are dropped here so they never count as repeats.
+      for (const toolCallId of toolCallIds) {
+        admittedById.delete(toolCallId);
+      }
+      releaseBatchAdmittedToolCalls(toolCallIds, ctx.runId);
+    },
+  };
 }

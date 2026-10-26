@@ -1,0 +1,582 @@
+import { once } from "node:events";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import {
+  ensureCodexSandboxExecServerEnvironment,
+  releaseCodexSandboxExecServerEnvironment,
+} from "./sandbox-exec-server.js";
+import {
+  createClient,
+  createSandboxContext,
+  execServerUrlFromClient,
+  openSocket,
+  waitForSocketClose,
+} from "./sandbox-exec-server.test-helpers.js";
+
+const customLoggingPattern = vi.hoisted(() => ({ value: "" }));
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    redactToolPayloadText: (text: string) => {
+      const redacted = actual.redactToolPayloadText(text);
+      return customLoggingPattern.value
+        ? redacted.replaceAll(customLoggingPattern.value, "[redacted]")
+        : redacted;
+    },
+  };
+});
+
+const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
+
+type NodeChannel = Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
+
+function createNodeChannel() {
+  let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
+  let channelClosed = false;
+  const {
+    promise: closed,
+    resolve: resolveClosed,
+    reject: rejectClosed,
+  } = Promise.withResolvers<unknown>();
+  const channel = {
+    send: vi.fn<NodeChannel["send"]>(async () => {
+      if (channelClosed) {
+        throw new Error("execution channel closed");
+      }
+    }),
+    onMessage: vi.fn<NodeChannel["onMessage"]>((listener) => {
+      receive = listener;
+      return () => {
+        receive = undefined;
+      };
+    }),
+    closed,
+    close: vi.fn<NodeChannel["close"]>(() => {
+      channelClosed = true;
+      resolveClosed({ ok: true });
+    }),
+  } satisfies NodeChannel;
+  return {
+    channel,
+    disconnect: () => resolveClosed({ ok: false, error: "device disconnected" }),
+    fail: (error: Error) => rejectClosed(error),
+    receive: async (message: Uint8Array) => await receive?.(message),
+  };
+}
+
+function createNodeSandbox() {
+  return {
+    ...createSandboxContext({}),
+    backendId: "node",
+    backend: undefined,
+    fsBridge: undefined,
+    placementExecutionMode: "remote-exec" as const,
+    placementNodeId: "paired-device-1",
+    placementEnvironmentId: "environment-paired-device-1",
+    placementSessionId: "session-paired-device-1",
+    placementOwnerEpoch: 7,
+    containerWorkdir: "/remote/managed-workspace",
+  };
+}
+
+function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): PluginRuntime {
+  return { nodes: { openDuplex } } as PluginRuntime;
+}
+
+function nodeRelayFixture(sandbox = createNodeSandbox(), client = createClient()) {
+  const transport = createNodeChannel();
+  const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+  const attempt = new AbortController();
+  return {
+    transport,
+    sandbox,
+    client,
+    openDuplex,
+    attempt,
+    register: (onExecutionDisconnect?: (error: Error) => void) =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime: createNodeRuntime(openDuplex),
+        signal: attempt.signal,
+        onExecutionDisconnect,
+      }),
+  };
+}
+
+async function registerNodeRelay(onExecutionDisconnect?: (error: Error) => void) {
+  const fixture = nodeRelayFixture();
+  return { ...fixture, environment: await fixture.register(onExecutionDisconnect) };
+}
+
+function encodeHttpBody(contentType: string, body: string) {
+  return {
+    headers: [{ name: "Content-Type", value: contentType }],
+    bodyBase64: Buffer.from(body).toString("base64"),
+  };
+}
+
+const header = (name: string, value = "synthetic-canary") => ({ name, value });
+const urlParams = (url: string) => ({ url });
+const jsonBody = (body: string) => encodeHttpBody("application/json", body);
+
+async function expectPairedNodeHttpCredentialRejection(params: {
+  url?: string;
+  headers?: Array<{ name: string; value: string }>;
+  bodyBase64?: string;
+}): Promise<void> {
+  const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+  const { transport, client } = await registerNodeRelay(onExecutionDisconnect);
+  const socket = await openSocket(execServerUrlFromClient(client));
+  const { promise: forwarded, resolve: resolveForwarded } = Promise.withResolvers<void>();
+  transport.channel.send.mockImplementation(async () => resolveForwarded());
+  const outcome = Promise.race([
+    once(socket, "message").then(([message]) => ({
+      kind: "rejected" as const,
+      message: JSON.parse(Buffer.from(message as Buffer).toString()) as {
+        id: number;
+        error: { code: number; message: string };
+      },
+    })),
+    forwarded.then(() => ({ kind: "forwarded" as const })),
+  ]);
+
+  socket.send(
+    JSON.stringify({
+      id: 13,
+      method: "http/request",
+      params: {
+        method: "POST",
+        url: "https://example.test",
+        headers: [],
+        ...params,
+        requestId: "request-13",
+      },
+    }),
+  );
+
+  const result = await outcome;
+  expect(result.kind).toBe("rejected");
+  if (result.kind !== "rejected") {
+    return;
+  }
+  expect(result.message.id).toBe(13);
+  expect(result.message.error).toEqual({
+    code: -32602,
+    message: expect.stringMatching(/authenticated remote HTTP.*Gateway.*credential-free/i),
+  });
+  expect(JSON.stringify(result.message)).not.toContain("synthetic-canary");
+  expect(transport.channel.send).not.toHaveBeenCalled();
+  expect(onExecutionDisconnect).not.toHaveBeenCalled();
+}
+
+useIsolatedStateGuard();
+
+afterEach(async () => {
+  customLoggingPattern.value = "";
+  await sandboxExecServerRegistry.closeAll();
+});
+
+describe("Codex paired-device exec-server relay", () => {
+  it("authorizes one bounded attempt-owned node channel before registering the local environment", async () => {
+    const { openDuplex, sandbox, client, attempt, register } = nodeRelayFixture();
+    const environment = await register();
+
+    expect(environment).toEqual({
+      environmentId: expect.stringMatching(/^openclaw-node-/),
+      cwd: "/remote/managed-workspace",
+    });
+    expect(environment?.environmentId.length).toBeLessThanOrEqual(64);
+    expect(openDuplex).toHaveBeenCalledWith({
+      nodeId: "paired-device-1",
+      command: "codex.exec-server.stdio.v1",
+      params: {
+        cwd: "/remote/managed-workspace",
+        environmentId: "environment-paired-device-1",
+        sessionId: "session-paired-device-1",
+        ownerEpoch: 7,
+        sessionKey: sandbox.sessionKey,
+      },
+      sessionKey: sandbox.sessionKey,
+      timeoutMs: 0,
+      maxMessageBytes: MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES,
+      maxOutstandingDeliveryBytes: MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES + 2 * 1024 * 1024,
+      signal: attempt.signal,
+    });
+    expect(openDuplex.mock.invocationCallOrder[0]).toBeLessThan(
+      client.request.mock.invocationCallOrder[0] ?? Infinity,
+    );
+    expect(execServerUrlFromClient(client)).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/openclaw-/);
+  });
+
+  it.each([
+    ["missing environment", { placementEnvironmentId: "" }],
+    ["invalid session", { placementSessionId: " session " }],
+    ["zero owner epoch", { placementOwnerEpoch: 0 }],
+    ["missing session key", { sessionKey: "" }],
+  ])(
+    "rejects a node workspace with %s before opening a channel",
+    async (_label, invalidIdentity) => {
+      const { client, openDuplex, register } = nodeRelayFixture({
+        ...createNodeSandbox(),
+        ...invalidIdentity,
+      });
+      openDuplex.mockImplementation(vi.fn<PluginRuntime["nodes"]["openDuplex"]>());
+      await expect(register()).rejects.toThrow("exact placement workspace identity");
+
+      expect(openDuplex).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves versionless and reverse JSON-RPC while scrubbing both process environment maps", async () => {
+    const { transport, sandbox, client, environment } = await registerNodeRelay();
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const initialize = '{"id":1,"method":"initialize","params":{"clientName":"codex"}}';
+    socket.send(initialize);
+    await vi.waitFor(() => expect(transport.channel.send).toHaveBeenCalledTimes(1));
+    expect(Buffer.from(transport.channel.send.mock.calls[0]![0]).toString()).toBe(initialize);
+
+    socket.send(
+      JSON.stringify({
+        id: 2,
+        method: "process/start",
+        params: {
+          env: {
+            OPENAI_API_KEY: "secret-canary", // pragma: allowlist secret
+            GH_TOKEN: "token-canary", // pragma: allowlist secret
+            HTTPS_PROXY: ["https://user", "proxy-canary@proxy.example"].join(":"),
+            SAFE_CANARY: "ordinary-env",
+            URL: "https://x/e",
+          },
+          envPolicy: {
+            inherit: "none",
+            set: {
+              OPENAI_API_KEY: "policy-secret-canary", // pragma: allowlist secret
+              GITHUB_TOKEN: "policy-token-canary", // pragma: allowlist secret
+              DATABASE_URL: ["postgres://user", "database-canary@db.example/app"].join(":"),
+              SAFE_POLICY: "ordinary-policy",
+              U: "https://x/p",
+            },
+          },
+          unknownFutureField: { preserved: true },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(transport.channel.send).toHaveBeenCalledTimes(2));
+    const forwarded = JSON.parse(
+      Buffer.from(transport.channel.send.mock.calls[1]![0]).toString(),
+    ) as { params: { env: unknown; envPolicy: { set: unknown }; unknownFutureField: unknown } };
+    const { params } = forwarded;
+    expect(params.env).toEqual({ SAFE_CANARY: "ordinary-env", URL: "https://x/e" });
+    expect(params.envPolicy.set).toEqual({ SAFE_POLICY: "ordinary-policy", U: "https://x/p" });
+    expect(params.unknownFutureField).toEqual({ preserved: true });
+
+    const reverseRequest = JSON.stringify({
+      id: 7,
+      method: "network/policyRequest",
+      params: {
+        processId: "policy-proof",
+        request: { protocol: "https_connect", host: "example.test", port: 443 },
+      },
+    });
+    const received = once(socket, "message");
+    await transport.receive(Buffer.from(reverseRequest));
+    const [message] = await received;
+    expect(Buffer.from(message as Buffer).toString()).toBe(reverseRequest);
+    const reverseResponse = '{"id":7,"result":{"decision":{"type":"allow"}}}';
+    socket.send(reverseResponse);
+    await vi.waitFor(() => expect(transport.channel.send).toHaveBeenCalledTimes(3));
+    expect(Buffer.from(transport.channel.send.mock.calls[2]![0]).toString()).toBe(reverseResponse);
+
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["mixed-case proxy authorization", [header("pRoXy-AuThOrIzAtIoN", "Bearer synthetic-canary")]],
+    ["request cookie", [header("Cookie", "session=synthetic-canary")]],
+    ["request signature", [header("X-Request-Signature")]],
+    [
+      "credential after repeated safe headers",
+      [
+        header("X-Trace", "first"),
+        header("x-trace", "second"),
+        header("aUtHoRiZaTiOn", "Bearer synthetic-canary"),
+      ],
+    ],
+  ])(
+    "rejects %s before forwarding any credential to the paired device",
+    async (_label, headers) => await expectPairedNodeHttpCredentialRejection({ headers }),
+  );
+
+  it.each([
+    ["URL Basic credentials", urlParams("https://user:synthetic-canary@example.test/path")],
+    ["OAuth URL access token", urlParams("https://x/?access_token=synthetic-canary")],
+    ["session identity", urlParams("https://x/?sessionId=synthetic-canary")],
+    ["encoded matrix", urlParams("https://x/p%3Bjsessionid%3Dsynthetic-canary")],
+    ["nested matrix", urlParams("https://x/a;region=west/b;session_id=synthetic-canary")],
+    ["nested fragment MFA", urlParams("https://x/#/callback?mfa_code=123456")],
+    ["direct access-token fragment", urlParams("https://x/#access_token=synthetic-canary")],
+    ["nested encoded MFA", urlParams("https://x/callback%253Fmfa_code%253D123456")],
+    ["SAML assertion", urlParams("https://x/?SAMLResponse=synthetic-canary")],
+    ["OAuth consumer key", urlParams("https://x/?oauth_consumer_key=synthetic-canary")],
+    ["encoded token", urlParams(`https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}`)],
+    ["encoded nested credential", urlParams("https://x/?u%255Bpassword%255D=synthetic-canary")],
+    [
+      "OAuth form body",
+      encodeHttpBody(
+        "application/x-www-form-urlencoded",
+        "grant_type=authorization_code&client_secret=synthetic-canary",
+      ),
+    ],
+    ["OAuth PKCE JSON", jsonBody('{"code_verifier":"synthetic-canary"}')],
+    [
+      "duplicate escaped JSON",
+      jsonBody('{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}'),
+    ],
+    ["oversized JSON", jsonBody(`{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`)],
+    ["invalid JSON body", jsonBody('{"client_assertion":"synthetic-canary"')],
+    [
+      "unsupported XML body",
+      encodeHttpBody("application/xml", "<credential>synthetic-canary</credential>"),
+    ],
+    ["unsupported opaque body", { bodyBase64: Buffer.from("synthetic-canary").toString("base64") }],
+    [
+      "XML disguised as plain text",
+      encodeHttpBody("text/plain", "<credential>synthetic-canary</credential>"),
+    ],
+    ["invalid UTF-8 body", { bodyBase64: Buffer.from([0xff, 0xfe]).toString("base64") }],
+    [
+      "canonical Slack webhook URL",
+      urlParams(
+        new URL(
+          ["services", `T${"1".repeat(10)}`, `B${"2".repeat(10)}`, "x".repeat(25)].join("%252F"),
+          "https://hooks.slack.com/",
+        ).toString(),
+      ),
+    ],
+    [
+      "canonical Discord webhook URL",
+      urlParams(
+        new URL(
+          ["api", "webhooks", "1".repeat(18), "x".repeat(68)].join("/"),
+          "https://discord.com/",
+        ).toString(),
+      ),
+    ],
+  ])(
+    "rejects %s before forwarding any credential to the paired device",
+    async (_label, params) => await expectPairedNodeHttpCredentialRejection(params),
+  );
+
+  it("honors operator-configured custom logging patterns in decoded values", async () => {
+    customLoggingPattern.value = "tenant-pattern-canary";
+    await expectPairedNodeHttpCredentialRejection({
+      url: `https://example.test/?safe=${customLoggingPattern.value.replaceAll("-", "%252D")}`,
+    });
+    await expectPairedNodeHttpCredentialRejection(
+      jsonBody('{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}'),
+    );
+  });
+
+  it.each([
+    [
+      "JSON nested routing",
+      "application/json",
+      JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
+      "https://x/stream;region=west#/callback?view=summary",
+    ],
+    ["ordinary plain text", "text/plain", "ordinary body", "https://x/c%3Fv%3Ds"],
+    ["bracketed plain text", "text/plain", "[INFO] deployment completed", "https://x/"],
+    ["large plain text", "text/plain", "x".repeat(1024 * 1024 + 1), "https://x/"],
+  ])("forwards credential-free %s byte-for-byte", async (_label, contentType, body, url) => {
+    const { transport, client } = await registerNodeRelay();
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const request = JSON.stringify({
+      id: 14,
+      method: "http/request",
+      params: {
+        method: "POST",
+        url,
+        headers: [
+          { name: "X-Trace", value: "first" },
+          { name: "x-trace", value: "second" },
+          { name: "Content-Type", value: contentType },
+        ],
+        bodyBase64: Buffer.from(body).toString("base64"),
+        redirectPolicy: "follow",
+        requestId: "request-14",
+        streamResponse: true,
+      },
+    });
+
+    socket.send(request);
+
+    await vi.waitFor(() => expect(transport.channel.send).toHaveBeenCalledOnce());
+    expect(Buffer.from(transport.channel.send.mock.calls[0]![0]).toString()).toBe(request);
+  });
+
+  it("rejects replay of a claimed channel and binds simultaneous leases to fresh exact channels", async () => {
+    const channels = [createNodeChannel(), createNodeChannel()];
+    let nextChannel = 0;
+    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(
+      async () => channels[nextChannel++]!.channel,
+    );
+    const sandbox = createNodeSandbox();
+    const firstClient = createClient();
+    const secondClient = createClient();
+    const firstDisconnected = vi.fn<(error: Error) => void>();
+    const secondDisconnected = vi.fn<(error: Error) => void>();
+    const runtime = createNodeRuntime(openDuplex);
+    const register = (
+      client: ReturnType<typeof createClient>,
+      onExecutionDisconnect: (error: Error) => void,
+    ) =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime,
+        signal: new AbortController().signal,
+        onExecutionDisconnect,
+      });
+    const first = await register(firstClient, firstDisconnected);
+    const second = await register(secondClient, secondDisconnected);
+    expect(first?.environmentId).not.toBe(second?.environmentId);
+    expect(firstClient.request).toHaveBeenCalledWith(
+      "environment/add",
+      expect.objectContaining({ environmentId: first?.environmentId }),
+      expect.any(Object),
+    );
+    expect(secondClient.request).toHaveBeenCalledWith(
+      "environment/add",
+      expect.objectContaining({ environmentId: second?.environmentId }),
+      expect.any(Object),
+    );
+    const firstSocket = await openSocket(execServerUrlFromClient(firstClient));
+    const secondSocket = await openSocket(execServerUrlFromClient(secondClient));
+    firstSocket.send('{"id":1,"method":"environment/info"}');
+    secondSocket.send('{"id":2,"method":"environment/status"}');
+    await vi.waitFor(() => {
+      expect(channels[0]!.channel.send).toHaveBeenCalledTimes(1);
+      expect(channels[1]!.channel.send).toHaveBeenCalledTimes(1);
+    });
+
+    const replay = await openSocket(execServerUrlFromClient(firstClient));
+    await expect(waitForSocketClose(replay)).resolves.toEqual({ code: 1008 });
+    const firstSocketClosed = waitForSocketClose(firstSocket);
+    await releaseCodexSandboxExecServerEnvironment(sandbox, first);
+    expect(channels[0]!.channel.close).toHaveBeenCalledTimes(1);
+    expect(channels[1]!.channel.close).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(firstSocket.readyState).toBe(firstSocket.CLOSED));
+    await expect(firstSocketClosed).resolves.toEqual({ code: 1001 });
+    expect(firstDisconnected).not.toHaveBeenCalled();
+    expect(secondDisconnected).not.toHaveBeenCalled();
+    secondSocket.send('{"id":3,"method":"environment/info"}');
+    await vi.waitFor(() => expect(channels[1]!.channel.send).toHaveBeenCalledTimes(2));
+    const secondReply = once(secondSocket, "message");
+    await channels[1]!.receive(Buffer.from('{"id":3,"result":{"ok":true}}'));
+    await expect(secondReply).resolves.toEqual([
+      Buffer.from('{"id":3,"result":{"ok":true}}'),
+      false,
+    ]);
+    const server = await sandboxExecServerRegistry.servers.get(sandbox.runtimeId);
+    expect(server?.cleanupTasks.size).toBe(1);
+    const secondSocketClosed = waitForSocketClose(secondSocket);
+    await releaseCodexSandboxExecServerEnvironment(sandbox, second);
+    expect(channels[1]!.channel.close).toHaveBeenCalledTimes(1);
+    await expect(secondSocketClosed).resolves.toEqual({ code: 1001 });
+    expect(server?.cleanupTasks.size).toBe(0);
+    expect(firstDisconnected).not.toHaveBeenCalled();
+    expect(secondDisconnected).not.toHaveBeenCalled();
+  });
+
+  it("makes a node disconnect terminal and closes its transport exactly once", async () => {
+    const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+    const { transport, sandbox, client, environment } =
+      await registerNodeRelay(onExecutionDisconnect);
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const socketClosed = waitForSocketClose(socket);
+    transport.disconnect();
+    await expect(socketClosed).resolves.toEqual({ code: 1001 });
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
+    expect(onExecutionDisconnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "CodexNodeExecServerDisconnectedError",
+        code: "codex_node_disconnected",
+        message: expect.stringContaining("start a fresh attempt"),
+      }),
+    );
+    await expect(transport.channel.send(Buffer.from("{}"))).rejects.toThrow(
+      "execution channel closed",
+    );
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails an unclaimed node channel immediately before its loopback socket connects", async () => {
+    const { transport, sandbox, client, attempt, register } = nodeRelayFixture();
+    const { promise: registration, reject: rejectRegistration } =
+      Promise.withResolvers<Record<string, never>>();
+    client.request.mockImplementation(async () => await registration);
+    const onExecutionDisconnect = vi.fn((error: Error) => {
+      attempt.abort(error);
+      rejectRegistration(error);
+    });
+    const environment = register(onExecutionDisconnect);
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
+    const fakeSecret = "sk-1234567890abcdef";
+
+    transport.fail(new Error(`exec-server exited: OPENAI_API_KEY=${fakeSecret}`));
+
+    await expect(environment).rejects.toThrow("exec-server exited");
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).not.toContain(fakeSecret);
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
+  });
+
+  it("surfaces bounded node-command failures without exposing credentials", async () => {
+    const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+    const { transport, sandbox, client, environment } =
+      await registerNodeRelay(onExecutionDisconnect);
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const socketClosed = waitForSocketClose(socket);
+    const fakeSecret = "sk-1234567890abcdef";
+
+    transport.fail(
+      new Error(`exec-server launch failed: OPENAI_API_KEY=${fakeSecret} ${"x".repeat(300)}`),
+    );
+
+    await expect(socketClosed).resolves.toEqual({ code: 1011 });
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
+    const failure = onExecutionDisconnect.mock.calls[0]?.[0];
+    expect(failure?.message).toContain("exec-server launch failed");
+    expect(failure?.message).not.toContain(fakeSecret);
+    expect(failure?.message.length).toBeLessThan(360);
+    await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects device frames above the upstream 64 MiB JSON-RPC ceiling", async () => {
+    const { transport, client } = await registerNodeRelay();
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const socketClosed = waitForSocketClose(socket);
+    await transport.receive(new Uint8Array(MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES + 1));
+    await expect(socketClosed).resolves.toEqual({ code: 1009 });
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("never registers an environment when paired-device authorization is denied", async () => {
+    const { sandbox, client, openDuplex, register } = nodeRelayFixture();
+    openDuplex.mockImplementation(async () => {
+      throw new Error("paired-device approval denied");
+    });
+    await expect(register()).rejects.toThrow("paired-device approval denied");
+    expect(client.request).not.toHaveBeenCalled();
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
+  });
+});

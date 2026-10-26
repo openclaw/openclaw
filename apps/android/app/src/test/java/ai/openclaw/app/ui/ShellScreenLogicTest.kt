@@ -6,22 +6,20 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
-import ai.openclaw.app.GatewaySkillWorkshopProposal
-import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.gatewayConnectionDisplay
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,13 +30,6 @@ import java.util.Locale
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ShellScreenLogicTest {
-  @Test
-  fun bottomNavHidesForKeyboardAndCommandPalette() {
-    assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
-  }
-
   @Test
   fun localizedUppercaseUsesTheSelectedAppLocale() {
     assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
@@ -57,11 +48,8 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun appearanceThemeLabelsRoundTripFromSettingsOptions() {
-    assertEquals(listOf("System", "Dark", "Light"), appearanceThemeOptions())
-    assertEquals(AppearanceThemeMode.System, appearanceThemeModeForLabel("System"))
-    assertEquals(AppearanceThemeMode.Dark, appearanceThemeModeForLabel("Dark"))
-    assertEquals(AppearanceThemeMode.Light, appearanceThemeModeForLabel("Light"))
+  fun appearanceThemeLabelsFollowSettingsOptionOrder() {
+    assertEquals(listOf("System", "Dark", "Light"), AppearanceThemeMode.entries.map(::appearanceThemeSummary))
   }
 
   @Test
@@ -75,7 +63,7 @@ class ShellScreenLogicTest {
   @Test
   fun settingsRouteOpenedCrossTabReturnsToOriginTab() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Gateway)
     assertEquals(Tab.Settings, nav.activeTab)
     assertEquals(SettingsRoute.Gateway, nav.settingsRoute)
@@ -100,7 +88,7 @@ class ShellScreenLogicTest {
   @Test
   fun tabBarSettingsSelectionOpensHomeAndBacksToOverview() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Voice)
     nav.selectTab(Tab.Settings)
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
@@ -112,7 +100,7 @@ class ShellScreenLogicTest {
   @Test
   fun settingsDetailOpenedFromHomeUnwindsToHomeBeforeLeavingSettings() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Home)
     nav.openSettingsRouteFromHome(SettingsRoute.Gateway)
 
@@ -132,7 +120,7 @@ class ShellScreenLogicTest {
     nav.back()
     assertEquals(Tab.Chat, nav.activeTab)
 
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openDetailTab(Tab.ProvidersModels)
     nav.back()
     assertEquals(Tab.Chat, nav.activeTab)
@@ -156,7 +144,7 @@ class ShellScreenLogicTest {
     val nav = ShellNavigation()
     nav.selectTab(Tab.Chat)
     nav.openDetailTab(Tab.Sessions)
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.back()
     assertEquals(Tab.Overview, nav.activeTab)
   }
@@ -164,7 +152,7 @@ class ShellScreenLogicTest {
   @Test
   fun shellNavigationSaverRoundTripsCrossTabState() {
     val nav = ShellNavigation()
-    nav.selectTab(Tab.Voice)
+    nav.selectTab(Tab.Chat)
     nav.openSettingsRoute(SettingsRoute.Gateway)
 
     val saveAnything = SaverScope { true }
@@ -175,6 +163,20 @@ class ShellScreenLogicTest {
     assertEquals(SettingsRoute.Gateway, restored.settingsRoute)
     restored.back()
     assertEquals(Tab.Chat, restored.activeTab)
+  }
+
+  @Test
+  fun shellNavigationSaverRestoresLegacyVoiceDestinationsToChat() {
+    val activeVoice = ShellNavigation.Saver.restore(listOf("Voice", "Home", "", "false", "main"))!!
+    assertEquals(Tab.Chat, activeVoice.activeTab)
+
+    val returnToVoice = ShellNavigation.Saver.restore(listOf("Settings", "Gateway", "Voice", "false", "main"))!!
+    returnToVoice.back()
+    assertEquals(Tab.Chat, returnToVoice.activeTab)
+
+    val saveAnything = SaverScope { true }
+    val saved = with(ShellNavigation.Saver) { saveAnything.save(returnToVoice) }!!
+    assertEquals(listOf("Chat", "Home", "", "false", "main"), saved)
   }
 
   @Test
@@ -237,7 +239,6 @@ class ShellScreenLogicTest {
 
     assertEquals(listOf("Approvals", "Channels", "Nodes & Devices", "Providers"), rows.map { it.title })
     val providersRow = rows.single { it.title == "Providers" }
-    assertEquals(Tab.Settings, providersRow.tab)
     assertEquals(SettingsRoute.ProvidersModels, providersRow.settingsRoute)
   }
 
@@ -271,122 +272,6 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
-    assertEquals(
-      "2 pending",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(
-          proposals =
-            listOf(
-              skillWorkshopProposal("one", "pending"),
-              skillWorkshopProposal("two", "pending"),
-              skillWorkshopProposal("three", "applied"),
-            ),
-        ),
-      ),
-    )
-    assertEquals(
-      "1 held",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
-      ),
-    )
-    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
-    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
-    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
-  }
-
-  @Test
-  fun skillWorkshopFilteringMatchesHeldAndSearchText() {
-    val proposals =
-      listOf(
-        skillWorkshopProposal("pending", "pending", title = "Browser Playbook", skillKey = "browser-playbook"),
-        skillWorkshopProposal("stale", "stale", title = "Old Draft", skillKey = "old-draft"),
-        skillWorkshopProposal("quarantine", "quarantined", title = "Risky Skill", skillKey = "risky-skill"),
-      )
-
-    assertEquals(listOf("stale", "quarantine"), skillWorkshopFilteredProposals(proposals, "held", "").map { it.id })
-    assertEquals(listOf("pending"), skillWorkshopFilteredProposals(proposals, "all", "browser").map { it.id })
-    assertTrue(skillWorkshopStatusMatchesFilter("stale", "held"))
-    assertFalse(skillWorkshopStatusMatchesFilter("applied", "held"))
-  }
-
-  @Test
-  fun skillWorkshopStatusLabelsMapKnownCodesAndPreserveUnknownValues() {
-    assertEquals("Pending", skillWorkshopStatusLabel("pending"))
-    assertEquals("Held", skillWorkshopStatusLabel("quarantined"))
-    assertEquals("Held", skillWorkshopStatusLabel("stale"))
-    assertEquals("Applied", skillWorkshopStatusLabel("applied"))
-    assertEquals("Rejected", skillWorkshopStatusLabel("rejected"))
-    assertEquals("Loading", skillWorkshopStatusLabel("loading"))
-    assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
-  }
-
-  @Test
-  fun skillWorkshopVisibleProposalsAreKeyedBySelectedAgentScope() {
-    val mainProposal = skillWorkshopProposal("main-proposal", "pending")
-    val opsProposal = skillWorkshopProposal("ops-proposal", "pending")
-
-    assertEquals(
-      listOf("main-proposal"),
-      skillWorkshopVisibleProposals(
-        GatewaySkillWorkshopSummary(agentId = "", proposals = listOf(mainProposal)),
-        selectedAgentId = null,
-      ).map { it.id },
-    )
-    assertEquals(
-      emptyList<String>(),
-      skillWorkshopVisibleProposals(
-        GatewaySkillWorkshopSummary(agentId = "main", proposals = listOf(mainProposal)),
-        selectedAgentId = "ops",
-      ).map { it.id },
-    )
-    assertEquals(
-      listOf("ops-proposal"),
-      skillWorkshopVisibleProposals(
-        GatewaySkillWorkshopSummary(agentId = "ops", proposals = listOf(opsProposal)),
-        selectedAgentId = " ops ",
-      ).map { it.id },
-    )
-  }
-
-  @Test
-  fun skillWorkshopProposalActionsRequireAdminScope() {
-    assertTrue(
-      skillWorkshopProposalActionEnabled(
-        isConnected = true,
-        operatorAdminScopeAvailable = true,
-        busy = false,
-        status = "pending",
-      ),
-    )
-    assertFalse(
-      skillWorkshopProposalActionEnabled(
-        isConnected = true,
-        operatorAdminScopeAvailable = false,
-        busy = false,
-        status = "pending",
-      ),
-    )
-    assertFalse(
-      skillWorkshopProposalActionEnabled(
-        isConnected = true,
-        operatorAdminScopeAvailable = true,
-        busy = true,
-        status = "pending",
-      ),
-    )
-    assertFalse(
-      skillWorkshopProposalActionEnabled(
-        isConnected = true,
-        operatorAdminScopeAvailable = true,
-        busy = false,
-        status = "applied",
-      ),
-    )
-  }
-
-  @Test
   fun operatorScopesNormalizeForStableAdminChecks() {
     assertEquals(
       listOf("operator.admin", "operator.read", "operator.write"),
@@ -415,8 +300,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingApproval,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.PendingApproval(null),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -445,8 +329,8 @@ class ShellScreenLogicTest {
       SettingsRoute.Approvals,
       overviewHeaderRoute(
         listOf(
-          HomeAttentionRow("Approvals", "2 pending", Icons.Default.Settings, Tab.Settings, SettingsRoute.Approvals),
-          HomeAttentionRow("Nodes & Devices", "Review node access", Icons.Default.Settings, Tab.Settings, SettingsRoute.NodesDevices),
+          HomeAttentionRow("Approvals", "2 pending", SettingsRoute.Approvals),
+          HomeAttentionRow("Nodes & Devices", "Review node access", SettingsRoute.NodesDevices),
         ),
       ),
     )
@@ -470,8 +354,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingReapproval,
-                  pendingRequestId = "node-request",
+                  approvalState = GatewayNodeCapabilityApproval.PendingReapproval("node-request"),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -486,10 +369,9 @@ class ShellScreenLogicTest {
     assertEquals(listOf("Gateway", "Nodes", "Approvals", "Threads", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
-    assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
+    assertNull(cards.single { it.title == "Nodes" }.value)
     assertEquals("Review node access", cards.single { it.title == "Nodes" }.subtitle)
     assertEquals(ClawStatus.Warning, cards.single { it.title == "Nodes" }.status)
-    assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
     assertEquals("4", cards.single { it.title == "Threads" }.value)
     assertEquals("Browse", cards.single { it.title == "Files" }.value)
@@ -503,7 +385,7 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
       }
 
-    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals(50, overviewRecentSessions(sessions).size)
     assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 
@@ -608,56 +490,72 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewNodeCardShowsRoundedOnlinePercentWhenNoNodeApprovalIsPending() {
-    val cards =
-      overviewMetricCardSpecs(
-        isConnected = true,
-        hasAttention = false,
-        nodesDevicesSummary =
-          GatewayNodesDevicesSummary(
-            nodes =
-              (1..3).map { index ->
-                GatewayNodeSummary(
-                  id = "node-$index",
-                  displayName = "Node $index",
-                  remoteIp = null,
-                  version = null,
-                  deviceFamily = null,
-                  paired = true,
-                  connected = index <= 2,
-                  approvalState = GatewayNodeApprovalState.Approved,
-                  pendingRequestId = null,
-                  capabilities = emptyList(),
-                  commands = emptyList(),
-                )
-              },
-            pendingDevices = emptyList(),
-            pairedDevices = emptyList(),
-          ),
-        pendingApprovals = 0,
-        sessionCount = 0,
-      )
+  fun overviewNodeCardSummarizesOnlineNodesOnceWhenNoApprovalIsPending() {
+    for ((online, total, expected) in listOf(
+      Triple(8, 9, "8 of 9 online"),
+      Triple(9, 9, "9 online"),
+      Triple(0, 9, "0 of 9 online"),
+      Triple(0, 0, "None paired"),
+      Triple(1, 1, "1 online"),
+    )) {
+      val cards =
+        overviewMetricCardSpecs(
+          isConnected = true,
+          hasAttention = false,
+          nodesDevicesSummary =
+            GatewayNodesDevicesSummary(
+              nodes =
+                (1..total).map { index ->
+                  GatewayNodeSummary(
+                    id = "node-$index",
+                    displayName = "Node $index",
+                    remoteIp = null,
+                    version = null,
+                    deviceFamily = null,
+                    paired = true,
+                    connected = index <= online,
+                    approvalState = GatewayNodeCapabilityApproval.Approved,
+                    capabilities = emptyList(),
+                    commands = emptyList(),
+                  )
+                },
+              pendingDevices = emptyList(),
+              pairedDevices = emptyList(),
+            ),
+          pendingApprovals = 0,
+          sessionCount = 0,
+        )
 
-    val nodes = cards.single { it.title == "Nodes" }
-    assertEquals("2/3", nodes.value)
-    assertEquals("67% online", nodes.subtitle)
-    assertEquals(2f / 3f, nodes.progressFraction ?: 0f, 0.001f)
+      val nodes = cards.single { it.title == "Nodes" }
+      assertNull(nodes.value)
+      assertEquals(expected, nodes.subtitle)
+      assertEquals(SettingsRoute.NodesDevices, nodes.settingsRoute)
+    }
   }
 
   @Test
-  fun overviewGatewayCardOnlyClaimsNominalWhenNoAttentionExists() {
+  fun overviewGatewayCardDoesNotClaimHealthWhenProviderAvailabilityIsUnknown() {
+    val attentionRows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
     val cards =
       overviewMetricCardSpecs(
         isConnected = true,
-        hasAttention = false,
+        hasAttention = attentionRows.isNotEmpty(),
         nodesDevicesSummary = emptyNodesDevices(),
         pendingApprovals = 0,
         sessionCount = 0,
       )
 
     val gateway = cards.single { it.title == "Gateway" }
-    assertEquals("Healthy", gateway.value)
-    assertEquals("All systems nominal", gateway.subtitle)
+    assertEquals("Online", gateway.value)
+    assertEquals("No highlighted items", gateway.subtitle)
     assertEquals(ClawStatus.Success, gateway.status)
   }
 
@@ -778,41 +676,33 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
-  }
-
-  @Test
-  fun settingsSectionsPreserveMeaningfulOrder() {
+  fun settingsSectionsSeparatePersonalConfigurationFromWorkspaceAndFeaturedRoutes() {
     val sections =
       settingsSections(
         listOf(
           settingsRow(SettingsRoute.Voice),
-          settingsRow(SettingsRoute.Agents),
+          settingsRow(SettingsRoute.SystemAgent),
           settingsRow(SettingsRoute.Gateway),
           settingsRow(SettingsRoute.Appearance),
+          settingsRow(SettingsRoute.ProvidersModels),
+          settingsRow(SettingsRoute.Approvals),
+          settingsRow(SettingsRoute.NodesDevices),
+          settingsRow(SettingsRoute.CronJobs),
+          settingsRow(SettingsRoute.PhoneCapabilities),
+          settingsRow(SettingsRoute.Notifications),
           settingsRow(SettingsRoute.Health),
         ),
       )
 
     assertEquals(
       listOf(
-        "Connection",
-        "Agents & automation",
-        "Phone context & privacy",
-        "Profile & device",
-        "Diagnostics",
+        "Profile & appearance" to listOf(SettingsRoute.Appearance),
+        "This phone" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Connections" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Configuration" to listOf(SettingsRoute.ProvidersModels, SettingsRoute.Approvals),
+        "System" to listOf(SettingsRoute.Health),
       ),
-      sections.map { it.title.resolveNativeText() },
+      sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )
   }
 
@@ -843,6 +733,21 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun gatewaySummaryPreservesNodeFailureWhileOperatorStaysConnected() {
+    val display =
+      gatewayConnectionDisplay(
+        operatorConnected = true,
+        nodeConnected = false,
+        operatorStatusText = "Connected",
+        nodeStatusText = "Gateway error: pairing required",
+        operatorProblem = null,
+        nodeProblem = authProblem("PAIRING_REQUIRED"),
+      )
+
+    assertEquals("Connected (node offline)", gatewaySummary(display))
+  }
+
+  @Test
   fun gatewaySummaryLeavesUnrelatedStatesUnaffectedByConnectionProblem() {
     val problem = authProblem("AUTH_TOKEN_MISSING")
     assertEquals("Online and ready", gatewaySummary("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
@@ -867,7 +772,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route, verbatimText("Value"))
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(
@@ -878,24 +783,5 @@ class ShellScreenLogicTest {
       recommendedNextStep = null,
       pauseReconnect = false,
       retryable = false,
-    )
-
-  private fun skillWorkshopProposal(
-    id: String,
-    status: String,
-    title: String = id,
-    skillKey: String = id,
-  ): GatewaySkillWorkshopProposal =
-    GatewaySkillWorkshopProposal(
-      id = id,
-      kind = "create",
-      status = status,
-      title = title,
-      description = null,
-      skillName = title,
-      skillKey = skillKey,
-      createdAt = "2026-07-08T00:00:00.000Z",
-      updatedAt = "2026-07-08T00:00:00.000Z",
-      scanState = null,
     )
 }

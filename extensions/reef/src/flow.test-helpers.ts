@@ -1,52 +1,113 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import {
   base64url,
-  composeOutbound,
+  seal,
   generateIdentity,
-  MemoryAuditStore,
   type GuardAdapter,
   type SignedReceipt,
+  type ReplayStore,
   type Verdict,
 } from "../protocol/index.js";
-import { ReefChannelConfigSchema } from "./config-schema.js";
-import { sameReefPeerIdentity, type ReefPeerIdentity, type ReefPeerTrust } from "./friend-types.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
+import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
+import { ReefMessageFlow } from "./flow.js";
+import type { ReefPeerTrust } from "./friend-types.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
+import { createRuntime } from "./state.test-support.js";
 import type { ReefTransportClient } from "./transport.js";
-import type { ReefTrustStore } from "./trust-store.js";
-import type { ReefKeys, ReefRejectionNoticeState } from "./types.js";
+import { openReefTrustStore } from "./trust-store.js";
+import type { InboxEntry, ReefKeys } from "./types.js";
 
 const model = "mock-2026-07-12";
 const stateDirs: string[] = [];
 
-export function resetFlowStoresForTests(): void {
+export async function resetFlowStoresForTests(): Promise<void> {
+  vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   for (const stateDir of stateDirs.splice(0)) {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
-export function flowStores() {
+export function flowStores(deliveredMaxEntries?: number, reviewsMaxEntries?: number) {
   const stateDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "reef-flow-"));
   stateDirs.push(stateDir);
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
+  const runtime = createRuntime(stateDir);
   return {
-    reviews: new ReviewApprovalStore(runtime),
-    delivered: new ReefDeliveredStore(runtime),
+    runtime,
+    stateDir,
+    reviews: new ReviewApprovalStore(runtime, reviewsMaxEntries),
+    delivered:
+      deliveredMaxEntries === undefined
+        ? new ReefDeliveredStore(runtime)
+        : new ReefDeliveredStore(runtime, deliveredMaxEntries),
   };
+}
+
+export async function workerFlowStores(
+  cfg: ReefChannelConfig,
+  peers: Record<string, ReefPeerTrust>,
+  options: { deliveredMaxEntries?: number } = {},
+) {
+  const stores = flowStores(options.deliveredMaxEntries);
+  const trusted = openReefTrustStore(stores.runtime, cfg);
+  for (const [peer, value] of Object.entries(peers)) {
+    await trusted.set(peer, value);
+  }
+  return {
+    ...stores,
+    trusted,
+    audit: openReefAuditStore(stores.runtime, new Uint8Array(32).fill(10)),
+  };
+}
+
+export async function createFlow({
+  handle = "bob",
+  peer = "alice",
+  verdicts = [allow],
+  replay = new MemoryReplayStore(),
+  onOwnerNotice = async () => {},
+}: {
+  handle?: string;
+  peer?: string;
+  verdicts?: Verdict[];
+  replay?: ReplayStore;
+  onOwnerNotice?: ConstructorParameters<typeof ReefMessageFlow>[0]["onOwnerNotice"];
+} = {}) {
+  const keys = reefKeys();
+  const peerKeys = generateIdentity();
+  const cfg = { ...config(), handle };
+  const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
+    [peer]: peerTrust(peerKeys),
+  });
+  const relay = transport();
+  const classifier = guard(...verdicts);
+  const onIngress = vi.fn<ConstructorParameters<typeof ReefMessageFlow>[0]["onIngress"]>(
+    async () => {},
+  );
+  const flow = new ReefMessageFlow({
+    config: cfg,
+    trust: trusted,
+    keys,
+    transport: relay as unknown as ReefTransportClient,
+    guard: classifier,
+    audit,
+    replay,
+    ...stores,
+    onIngress: async (message, assertCurrent) => {
+      assertCurrent();
+      await onIngress(message, assertCurrent);
+    },
+    onOwnerNotice,
+  });
+  return { keys, peerKeys, trusted, relay, stores, classifier, audit, onIngress, flow };
 }
 
 export const allow: Verdict = {
@@ -59,8 +120,10 @@ export const allow: Verdict = {
 
 export function guard(
   ...verdicts: Verdict[]
-): GuardAdapter & { classify: ReturnType<typeof vi.fn> } {
-  const classify = vi.fn(async () => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!);
+): GuardAdapter & { classify: ReturnType<typeof vi.fn<GuardAdapter["classify"]>> } {
+  const classify = vi.fn<GuardAdapter["classify"]>(
+    async (): Promise<Verdict> => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!,
+  );
   return { providerId: "mock", pinnedModel: model, classify };
 }
 
@@ -102,154 +165,6 @@ export function peerTrust(
   };
 }
 
-export function trust(initial: Record<string, ReefPeerTrust>) {
-  const values = new Map(Object.entries(initial));
-  const deliveries = new Map<
-    string,
-    {
-      bodyHash: string;
-      textHash?: string;
-      recipient: ReefPeerIdentity;
-      resendDisabled?: true;
-      overdueNotifiedAt?: number;
-      rejection?: {
-        category?: string;
-        notice?: ReefRejectionNoticeState;
-      };
-    }
-  >();
-  const rejectionNotices = new Map<string, ReefRejectionNoticeState>();
-  return {
-    values,
-    deliveries,
-    rejectionNotices,
-    store: {
-      get: (peer: string) => values.get(peer),
-      recordOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-        options: { resendDisabled?: true } = {},
-      ) => {
-        const key = `${peer}:${id}`;
-        if (deliveries.has(key)) {
-          throw new Error(`duplicate delivery ${id}`);
-        }
-        deliveries.set(key, { ...binding, ...options });
-      },
-      outboundDelivery: (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
-      consumeOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient) ||
-          current.rejection
-        ) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      discardOutboundDelivery: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient)
-        ) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      recordOutboundRejection: (
-        peer: string,
-        id: string,
-        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
-        category?: string,
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (
-          current?.bodyHash !== binding.bodyHash ||
-          current.textHash !== binding.textHash ||
-          !sameReefPeerIdentity(current.recipient, binding.recipient)
-        ) {
-          return false;
-        }
-        if (current.rejection) {
-          return true;
-        }
-        deliveries.set(key, {
-          ...current,
-          rejection: {
-            ...(category ? { category } : {}),
-            ...(current.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
-          },
-        });
-        return true;
-      },
-      reserveOutboundRejectionNotice: (
-        peer: string,
-        id: string,
-        recipient: ReefPeerIdentity,
-        noticeState: ReefRejectionNoticeState,
-      ) => {
-        const key = `${peer}:${id}`;
-        const current = deliveries.get(key);
-        if (!current?.rejection || !sameReefPeerIdentity(current.recipient, recipient)) {
-          throw new Error(`missing rejection ${id}`);
-        }
-        if (current.rejection.notice) {
-          return { kind: "existing" as const, state: current.rejection.notice };
-        }
-        deliveries.set(key, {
-          ...current,
-          rejection: {
-            ...current.rejection,
-            notice: noticeState,
-          },
-        });
-        return { kind: "reserved" as const };
-      },
-      completeOutboundRejection: (
-        peer: string,
-        id: string,
-        noticeState: ReefRejectionNoticeState,
-      ) => {
-        const key = `${peer}:${id}`;
-        const previous = rejectionNotices.get(peer);
-        rejectionNotices.set(peer, {
-          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, noticeState.lastRejectionAt),
-          ...(previous?.lastResendAt !== undefined || noticeState.lastResendAt !== undefined
-            ? {
-                lastResendAt: Math.max(previous?.lastResendAt ?? 0, noticeState.lastResendAt ?? 0),
-              }
-            : {}),
-        });
-        const current = deliveries.get(key);
-        if (!current) {
-          return true;
-        }
-        if (!current?.rejection?.notice) {
-          return false;
-        }
-        return deliveries.delete(key);
-      },
-      rejectionNoticeState: (peer: string) => rejectionNotices.get(peer),
-    } as unknown as ReefTrustStore,
-  };
-}
-
 export function transport() {
   return {
     acknowledge: vi.fn(async (_peer: string, _id: string, _receipt: SignedReceipt) => ({
@@ -270,17 +185,23 @@ export async function envelope(
   id: string,
   text: string,
 ) {
-  return (
-    await composeOutbound({
-      id,
-      from: "alice#1",
-      to: "bob#1",
-      body: { text },
-      senderSigningSecretKey: sender.signing.secretKey,
-      recipientEncryptionPublicKey: recipient.encryption.publicKey,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-      policyVersion: "v1",
-    })
-  ).envelope;
+  return seal({
+    id,
+    from: "alice#1",
+    to: "bob#1",
+    body: { text },
+    senderSigningSecretKey: sender.signing.secretKey,
+    recipientEncryptionPublicKey: recipient.encryption.publicKey,
+  });
+}
+
+export function inbox(message: NonNullable<InboxEntry["envelope"]>, seq = 1): InboxEntry {
+  return {
+    seq,
+    peer: "alice",
+    id: message.id,
+    kind: "message",
+    envelope: message,
+    ts: Math.floor(Date.now() / 1_000),
+  };
 }

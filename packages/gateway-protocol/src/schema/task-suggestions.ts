@@ -1,15 +1,25 @@
-// Gateway Protocol schema module defines ephemeral follow-up task suggestions.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+// Gateway Protocol schema module defines ephemeral follow-up task suggestions.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const TaskIdSchema = Type.String({ minLength: 1, maxLength: 128 });
-const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60 });
-const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768 });
-const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024 });
+const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60, pattern: "\\S" });
+const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768, pattern: "\\S" });
+const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024, pattern: "\\S" });
 const TaskCwdSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const TaskSessionKeySchema = Type.String({ minLength: 1, maxLength: 512 });
 const TaskAgentIdSchema = Type.String({ minLength: 1, maxLength: 128 });
+const TaskSuggestionAcceptanceModeSchema = Type.Enum(
+  {
+    WORKTREE: "worktree",
+    LOCAL: "local",
+    CLOUD: "cloud",
+    SESSION: "session",
+  } as const,
+  { type: "string" },
+);
 
 /** One model-proposed follow-up task waiting for operator action. */
 export const TaskSuggestionSchema = closedObject({
@@ -48,14 +58,20 @@ export const TaskSuggestionsCreateResultSchema = closedObject({
   suggestion: TaskSuggestionSchema,
 });
 
-export const TaskSuggestionResolutionSchema = Type.Union([
-  Type.Literal("dismissed"),
-  Type.Literal("accepted"),
-  Type.Literal("expired"),
+export const TaskSuggestionResolutionSchema = stringLiteralUnion([
+  "dismissed",
+  "accepted",
+  "expired",
 ]);
 
-/** Atomically claims a pending suggestion and starts its server-owned worktree session. */
-export const TaskSuggestionsAcceptParamsSchema = closedObject({ taskId: TaskIdSchema });
+/** Atomically claims a pending suggestion and starts it in the requested execution mode. */
+export const TaskSuggestionsAcceptParamsSchema = closedObject({
+  taskId: TaskIdSchema,
+  mode: Type.Optional(TaskSuggestionAcceptanceModeSchema),
+  cloudProfileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Explicit repository correction when starting a new worktree. */
+  cwd: Type.Optional(TaskCwdSchema),
+});
 
 export const TaskSuggestionsAcceptResultSchema = closedObject({
   taskId: TaskIdSchema,

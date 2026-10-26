@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
   info: vi.fn(),
+  isConfigReadOnly: false,
   isNixMode: false,
   mutateConfigFileWithRetry: vi.fn(),
   warn: vi.fn(),
@@ -18,14 +19,33 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  resolveIsConfigReadOnly: () => mocks.isConfigReadOnly,
   resolveIsNixMode: () => mocks.isNixMode,
 }));
 
 import { persistStickyModelSelectionBestEffort } from "./sticky-model-selection.js";
 
+const model = (primary: string, fallback = "openai/gpt-5.6-luna") => ({
+  primary,
+  fallbacks: [fallback],
+});
+const defaultModel = model("anthropic/claude-opus-4-6");
+const agentModel = model("anthropic/claude-sonnet-4-6", "google/gemini-3-pro");
+function config(defaults = defaultModel, work = agentModel): OpenClawConfig {
+  return { agents: { defaults: { model: defaults }, entries: { work: { model: work } } } };
+}
+function select(
+  agentId = "main",
+  selectedModel = "openai/gpt-5.6-sol",
+  target: "agent" | "defaults" = "defaults",
+) {
+  return persistStickyModelSelectionBestEffort({ agentId, model: selectedModel, target });
+}
+
 beforeEach(() => {
   mocks.info.mockReset();
   mocks.warn.mockReset();
+  mocks.isConfigReadOnly = false;
   mocks.isNixMode = false;
   mocks.mutateConfigFileWithRetry.mockReset().mockImplementation(async ({ mutate }) => {
     const draft = structuredClone(mocks.cfg);
@@ -36,65 +56,27 @@ beforeEach(() => {
 });
 
 describe("persistStickyModelSelection", () => {
-  it.each([
-    {
-      name: "shared default for an inheriting agent",
-      agentId: "main",
-      cfg: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["openai/gpt-5.6-luna"],
-            },
-          },
-          list: [{ id: "main", default: true }],
-        },
-      } satisfies OpenClawConfig,
-      target: "defaults" as const,
+  it.each(["defaults", "agent"] as const)(
+    "persists a normalized selection at %s scope",
+    async (target) => {
+      mocks.cfg = config();
+      expect(select("work", " openai/gpt-5.6-sol ", target)).toBe("requested");
+      await vi.waitFor(() =>
+        expect(mocks.info).toHaveBeenCalledWith(
+          `persisted sticky model selection agentId=work model=openai/gpt-5.6-sol target=${target}`,
+        ),
+      );
+      expect(mocks.cfg).toEqual(
+        config(
+          target === "defaults" ? { ...defaultModel, primary: "openai/gpt-5.6-sol" } : defaultModel,
+          target === "agent" ? { ...agentModel, primary: "openai/gpt-5.6-sol" } : agentModel,
+        ),
+      );
     },
-    {
-      name: "agent entry for an explicit agent model",
-      agentId: "work",
-      cfg: {
-        agents: {
-          defaults: { model: "anthropic/claude-opus-4-6" },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
-              model: {
-                primary: "anthropic/claude-sonnet-4-6",
-                fallbacks: ["openai/gpt-5.6-luna"],
-              },
-            },
-          ],
-        },
-      } satisfies OpenClawConfig,
-      target: "agent" as const,
-    },
-  ])("writes the $name", async ({ agentId, cfg, target }) => {
-    mocks.cfg = structuredClone(cfg);
-
-    persistStickyModelSelectionBestEffort({ agentId, model: " openai/gpt-5.6-sol " });
-    await vi.waitFor(() =>
-      expect(mocks.info).toHaveBeenCalledWith(
-        `persisted sticky model selection agentId=${agentId} model=openai/gpt-5.6-sol target=${target}`,
-      ),
-    );
-
-    const persistedPrimary =
-      target === "defaults"
-        ? mocks.cfg.agents?.defaults?.model
-        : mocks.cfg.agents?.list?.find((entry) => entry.id === agentId)?.model;
-    expect(persistedPrimary).toMatchObject({
-      primary: "openai/gpt-5.6-sol",
-      fallbacks: ["openai/gpt-5.6-luna"],
-    });
-  });
+  );
 
   it("rejects an empty model before starting a config mutation", async () => {
-    persistStickyModelSelectionBestEffort({ agentId: "main", model: "   " });
+    expect(select("main", "   ")).toBe("requested");
 
     await vi.waitFor(() =>
       expect(mocks.warn).toHaveBeenCalledWith(
@@ -107,9 +89,7 @@ describe("persistStickyModelSelection", () => {
   it("warns and absorbs asynchronous config write failures", async () => {
     mocks.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config is read-only"));
 
-    expect(
-      persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" }),
-    ).toBeUndefined();
+    expect(select()).toBe("requested");
 
     await vi.waitFor(() =>
       expect(mocks.warn).toHaveBeenCalledWith(
@@ -118,11 +98,12 @@ describe("persistStickyModelSelection", () => {
     );
   });
 
-  it("skips immutable Nix config and warns only once per process", () => {
+  it("skips Nix immutable config and warns only once per process", () => {
+    mocks.isConfigReadOnly = true;
     mocks.isNixMode = true;
 
-    persistStickyModelSelectionBestEffort({ agentId: "main", model: "openai/gpt-5.6-sol" });
-    persistStickyModelSelectionBestEffort({ agentId: "work", model: "openai/gpt-5.6-luna" });
+    expect(select()).toBe("skipped-immutable");
+    expect(select("work", "openai/gpt-5.6-luna", "agent")).toBe("skipped-immutable");
 
     expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledOnce();

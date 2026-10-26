@@ -1,8 +1,8 @@
-// Discord plugin module implements thread session close behavior.
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   deleteSessionEntry,
-  listSessionEntries,
+  listSessionEntriesAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,10 +14,9 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
-  accountId: string;
   threadId: string;
 }): Promise<number> {
-  const { cfg, accountId, threadId } = params;
+  const { cfg, threadId } = params;
 
   const normalizedThreadId = normalizeOptionalLowercaseString(threadId) ?? "";
   if (!normalizedThreadId) {
@@ -34,29 +33,34 @@ export async function closeDiscordThreadSessions(params: {
   //   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
   const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
 
-  function sessionKeyContainsThreadId(key: string): boolean {
-    return segmentRe.test(key);
-  }
-
-  // Resolve the store file. We pass `accountId` as `agentId` here to mirror
-  // how other Discord subsystems resolve their per-account sessions stores.
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
-
+  // Session keys are agent-scoped (agent:<agentId>:discord:...), so the store
+  // must resolve per routed agent — resolving with the channel account id
+  // would target a nonexistent agent's store and silently close nothing.
   let resetCount = 0;
 
-  for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
-    if (!sessionKeyContainsThreadId(sessionKey)) {
-      continue;
-    }
-    const deleted = await deleteSessionEntry({
-      archiveTranscript: true,
-      expectedSessionId: entry.sessionId ?? null,
-      expectedUpdatedAt: entry.updatedAt,
-      sessionKey,
+  for (const agentId of listAgentIds(cfg)) {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    // agentId selects the owner DB: with a fixed custom store every agent
+    // resolves the same storePath, so storePath alone re-reads the default
+    // owner. The read-only listing keeps this fleet-wide scan from creating or registering
+    // agent databases while handling a thread archive/delete event.
+    for (const { sessionKey, entry } of await listSessionEntriesAsync({
+      agentId,
       storePath,
-    });
-    if (deleted) {
-      resetCount += 1;
+    })) {
+      if (!segmentRe.test(sessionKey)) {
+        continue;
+      }
+      const deleted = await deleteSessionEntry({
+        archiveTranscript: true,
+        expectedSessionId: entry.sessionId ?? null,
+        expectedUpdatedAt: entry.updatedAt,
+        sessionKey,
+        storePath,
+      });
+      if (deleted) {
+        resetCount += 1;
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "./canvas.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -71,6 +72,11 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  contentOwner: Type.Optional(
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
+  ),
+  // Read-only v4 metadata from older Gateways; new stores never emit registered content.
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
@@ -95,6 +101,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -157,11 +164,15 @@ export const BoardOpSchema = Type.Union([
 ]);
 export type BoardOp = Static<typeof BoardOpSchema>;
 
-export const BoardGetParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const BoardGetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   ops: Type.Array(BoardOpSchema),
 });
 export type BoardUpdateParams = Static<typeof BoardUpdateParamsSchema>;
@@ -176,7 +187,7 @@ export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
-  html: Type.String({ maxLength: 262_144 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
 });
 export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
@@ -191,17 +202,24 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+// Keep retired v4 content wire-valid for older clients and Gateways. The put
+// handler reports its removal; this is never materialized or rendered.
+export const BoardWidgetRegisteredContentSchema = closedObject({
+  kind: Type.Literal("registered"),
+  contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
+  source: Type.String({ maxLength: 262_144 }),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
   | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
   | Static<typeof BoardWidgetPluginContentSchema>;
-
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
   docId: NonEmptyString,
@@ -212,12 +230,14 @@ export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
 
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
@@ -246,6 +266,7 @@ export type BoardWidgetPutResult = Static<typeof BoardWidgetPutResultSchema>;
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
   revision: Type.Integer({ minimum: 1 }),
@@ -255,6 +276,7 @@ export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>
 
 export const BoardWidgetAppViewParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   revision: Type.Integer({ minimum: 1 }),
   instanceId: NonEmptyString,
@@ -271,6 +293,7 @@ export const BoardViewTicketSchema = Type.String({ minLength: 1, maxLength: 2048
 
 export const BoardLegacyEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   widget: BoardWidgetNameSchema,
   payload: Type.Unknown(),
 });

@@ -3,21 +3,13 @@ import {
   nodeWakeOwnerBySignal,
   nodeWakeStateByOwner,
   nodeWakeStateKey,
+  type NodeWakeAttempt,
   type NodeWakeOwnerState,
 } from "./node-wake-state-store.js";
 
 export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;
-
-export type NodeWakeAttempt = {
-  available: boolean;
-  throttled: boolean;
-  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error" | "invalidated";
-  durationMs: number;
-  apnsStatus?: number;
-  apnsReason?: string;
-};
 
 export type NodeWakeNudgeAttempt = {
   sent: boolean;
@@ -47,8 +39,6 @@ function getOrCreateNodeWakeOwner(nodeId: string, pairingGeneration?: string): N
   const created: NodeWakeOwnerState = {
     nodeId: normalizedNodeId,
     stateKey,
-    lastWakeAtMs: 0,
-    lastNudgeAtMs: 0,
   };
   nodeWakeStateByOwner.set(stateKey, created);
   return created;
@@ -58,8 +48,8 @@ function deleteIdleNodeWakeOwner(owner: NodeWakeOwnerState): void {
   if (
     owner.lifecycle?.users ||
     owner.inFlightWake ||
-    owner.lastWakeAtMs > 0 ||
-    owner.lastNudgeAtMs > 0
+    owner.lastWakeAtMs !== undefined ||
+    owner.lastNudgeAtMs !== undefined
   ) {
     return;
   }
@@ -126,14 +116,14 @@ export async function runNodeWakeAttempt(params: {
   }
   if (
     !params.force &&
-    owner.lastWakeAtMs > 0 &&
-    Date.now() - owner.lastWakeAtMs < params.throttleMs
+    owner.lastWakeAtMs !== undefined &&
+    performance.now() - owner.lastWakeAtMs < params.throttleMs
   ) {
     return { available: true, throttled: true, path: "throttled", durationMs: 0 };
   }
 
   const attempt = params.attempt(() => {
-    owner.lastWakeAtMs = Date.now();
+    owner.lastWakeAtMs = performance.now();
   });
   owner.inFlightWake = attempt;
   try {
@@ -155,12 +145,15 @@ export async function runNodeWakeNudgeAttempt(params: {
   attempt: () => Promise<NodeWakeNudgeAttempt>;
 }): Promise<NodeWakeNudgeAttempt> {
   const owner = getOrCreateNodeWakeOwner(params.nodeId, params.pairingGeneration);
-  if (owner.lastNudgeAtMs > 0 && Date.now() - owner.lastNudgeAtMs < params.throttleMs) {
+  if (
+    owner.lastNudgeAtMs !== undefined &&
+    performance.now() - owner.lastNudgeAtMs < params.throttleMs
+  ) {
     return params.throttled();
   }
   const result = await params.attempt();
   if (result.reason === "sent") {
-    owner.lastNudgeAtMs = Date.now();
+    owner.lastNudgeAtMs = performance.now();
   }
   deleteIdleNodeWakeOwner(owner);
   return result;
@@ -172,9 +165,9 @@ export function clearNodeWakeState(nodeId: string): void {
     if (owner.nodeId !== normalizedNodeId) {
       continue;
     }
-    owner.lastWakeAtMs = 0;
+    owner.lastWakeAtMs = undefined;
     owner.inFlightWake = undefined;
-    owner.lastNudgeAtMs = 0;
+    owner.lastNudgeAtMs = undefined;
     deleteIdleNodeWakeOwner(owner);
   }
 }

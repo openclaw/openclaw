@@ -1,7 +1,4 @@
-// Voice Call plugin module implements http headers behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-// Case-insensitive HTTP header lookup for provider webhook handlers.
 
 type HttpHeaderMap = Record<string, string | string[] | undefined>;
 

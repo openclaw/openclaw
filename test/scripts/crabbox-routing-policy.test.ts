@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   crabboxProviderChain,
   normalizeCrabboxWorkload,
-  selectReadyCrabboxProvider,
-} from "../../scripts/crabbox-routing-policy.mjs";
+} from "../../scripts/crabbox-routing-policy.mts";
 
 const advertisedProviders = ["aws", "azure", "blacksmith-testbox", "daytona"];
 
@@ -75,20 +74,5 @@ describe("Crabbox routing policy", () => {
         advertisedProviders,
       }),
     ).toEqual(["aws"]);
-  });
-
-  it("selects the first ready provider without racing providers", () => {
-    const readiness = new Map([
-      ["blacksmith-testbox", { ready: false, reason: "queued" }],
-      ["daytona", { ready: true, reason: "broker-ready" }],
-      ["azure", { ready: true, reason: "broker-ready" }],
-    ]);
-
-    expect(
-      selectReadyCrabboxProvider(["blacksmith-testbox", "daytona", "azure"], readiness),
-    ).toEqual({
-      provider: "daytona",
-      readiness: { ready: true, reason: "broker-ready" },
-    });
   });
 });

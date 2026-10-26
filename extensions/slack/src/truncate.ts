@@ -1,18 +1,19 @@
-// Slack plugin module implements truncate behavior.
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { sliceUtf16Safe, truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export function truncateSlackText(value: string, max: number): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= max) {
-    return trimmed;
+export function truncateSlackText(
+  value: string,
+  max: number,
+  whitespace: "trim" | "preserve" = "trim",
+): string {
+  const text = whitespace === "preserve" ? value : value.trim();
+  if (text.length <= max) {
+    return text;
   }
-  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
-  // straddling the limit is dropped whole, instead of leaving a lone surrogate
-  // half that serializes to an invalid `\uD83D` in the Slack payload.
   if (max <= 1) {
-    return sliceUtf16Safe(trimmed, 0, max);
+    return sliceUtf16Safe(text, 0, max);
   }
-  return `${sliceUtf16Safe(trimmed, 0, max - 1)}…`;
+  return truncateWithMarker(text, max, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 export function countSlackTextUtf8Bytes(value: string): number {
@@ -32,15 +33,6 @@ export function truncateSlackTextByUtf8Bytes(value: string, maxBytes: number): s
   const suffix = "…";
   const suffixBytes = countSlackTextUtf8Bytes(suffix);
   const prefixBudget = maxBytes >= suffixBytes ? maxBytes - suffixBytes : maxBytes;
-  let prefix = "";
-  let prefixBytes = 0;
-  for (const character of trimmed) {
-    const characterBytes = countSlackTextUtf8Bytes(character);
-    if (prefixBytes + characterBytes > prefixBudget) {
-      break;
-    }
-    prefix += character;
-    prefixBytes += characterBytes;
-  }
+  const prefix = truncateUtf8Prefix(trimmed, prefixBudget);
   return maxBytes >= suffixBytes ? `${prefix}${suffix}` : prefix;
 }

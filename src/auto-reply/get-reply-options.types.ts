@@ -1,6 +1,16 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../config/sessions/session-source-authority.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -11,27 +21,61 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
+/** An accepted visible work session and its canonical Control UI link. */
+export type VisibleWorkSession = {
+  sessionKey: string;
+  url: string;
+  label?: string;
+  publicRead?: boolean;
+};
+
+/** A successful runtime append, independent of optional active-path projection anchors. */
+export type ReplyDispatchAssistantTranscript = Pick<
+  TranscriptEntryAnchor,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+> & {
+  messageId: string;
+  anchor?: TranscriptEntryAnchor;
+  idempotencyKey: string;
+};
+
+export type ReplyDispatchRun = {
+  completionSource: "reply-dispatch";
+  getResult: () => {
+    assistantTranscript?: ReplyDispatchAssistantTranscript;
+    terminalOutcome?: AgentRunTerminalOutcome;
+  };
+};
+
+/** Prepared transcript boundary; current run and writer authority remain caller-owned. */
+export type PreparedReplyTranscriptStart = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  generation: string | null;
+  maxSeq: number | null;
+};
+
+/** Run-start notification after the runtime has prepared its transcript boundary. */
+export type PreparedAgentRunStart = {
+  runId: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  options?: ReplyDispatchRun;
+  transcriptStart: PreparedReplyTranscriptStart | null;
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   /** Source assistant message index from the upstream stream, when available. */
   assistantMessageIndex?: number;
-};
-
-/** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
-  provider: string;
-  model: string;
-  thinkLevel: string | undefined;
+  /** @internal Stable durable outbound intent owned by the producing runtime. */
+  deliveryIntentId?: string;
 };
 
 /** Typing indicator class for channel-owned UX policy. */
-export type TypingPolicy =
-  | "auto"
-  | "user_message"
-  | "system_event"
-  | "internal_webchat"
-  | "heartbeat";
+export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
 /** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
@@ -44,7 +88,22 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  begin: () => (() => void) | void;
+  /** Source-owned suppression for origin-routed replies that bypass the dispatcher.
+   * A collected batch is suppressed only when all participating policies agree. */
+  shouldSuppressReply?: (payload: ReplyPayload) => boolean;
+  /** Called only after the origin transport confirms visible delivery. */
+  onReplyDelivered?: (payload: ReplyPayload) => void;
+  /** No settlement means a source retry or a separate source-owned delivery outcome. */
+  begin: () =>
+    | ((settlement?: {
+        visibleReplySent: boolean;
+        failed: boolean;
+        /** True only for a successfully completed execution, not cancellation. */
+        completed?: boolean;
+        /** Transport retained delivery without a callback to this source; clear activity UI. */
+        transportPending?: boolean;
+      }) => void)
+    | void;
 };
 
 /**
@@ -69,15 +128,21 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
+  onDeferredHeartbeat?: () => void;
+  /** Requested cadence for pre-adoption heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
-  onSettled?: () => void;
+  onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
   /** Stable cancellation owner for collect-mode batches. */
   ownerKey?: string;
   abortSignal?: AbortSignal;
+  /** Ephemeral fact: a direct local operator turn lost fresh cron authority when queued. */
+  cronCreatorAuthorityUnavailable?: "queued-local-operator";
 };
 
 /** Partial assistant payload emitted during streaming or replacement updates. */
@@ -92,42 +157,79 @@ export type PartialReplyPayload = {
   replace?: true;
 };
 
-type ReasoningStreamPayload = Pick<
+export type ReasoningStreamPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
 };
 
-type ReasoningProgressPayload = {
-  progressTokens: number;
-};
-
-/** Return false when a channel intentionally keeps a progress event out of user-visible UI. */
-type ProgressCallbackResult = false | void;
+/** Return false until the channel has accepted operator-visible progress. */
+type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Host-issued capability for the exact findings acknowledged by the current operator. */
+  providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
+  /** Channel-owned participant name encoding for source replies sent through message actions. */
+  groupThreadReplyFormatter?: (
+    text: string,
+    participant: { agentId: string; name: string },
+  ) => string;
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
   /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
+  /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
-  /** Notifies when an agent run actually starts (useful for webchat command handling). */
-  onAgentRunStart?: (runId: string) => void;
+  /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
+  onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
+  /**
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
+   * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
+   * completion ownership offered in options; all other legacy callback results are ignored.
+   */
+  onAgentRunStart?: (
+    runId: string,
+    executionIdentityToken?: ExecutionIdentityAdmissionToken,
+    options?: ReplyDispatchRun,
+    transcriptStart?: PreparedReplyTranscriptStart | null,
+  ) => unknown;
+  /** Reports the terminal agent-run classification to the shared dispatch owner. */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
+  onFollowupQueueDisposition?: (
+    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
+  ) => void;
+  /**
+   * Reports fresh visible children before their first turn and accepted spawns at settlement.
+   * Creation reports include the key even when no public session URL is configured.
+   * Awaited before child dispatch; a child may be reported again at settlement.
+   */
+  onVisibleWorkSessions?: (
+    sessions: readonly VisibleWorkSession[],
+    creation?: { createdSessionKey: string },
+  ) => void | Promise<void>;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Gateway-owned start-or-steer decision for this turn. */
+  messageInjectionDisposition?:
+    | "none"
+    | "accepted"
+    | "rejected"
+    | "collaborative-steering-disabled";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -136,13 +238,10 @@ export type GetReplyOptions = {
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
-  isHeartbeat?: boolean;
-  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  /** Policy-level typing control for run classes (user/system/internal). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
-  /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
-  heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */
@@ -151,23 +250,29 @@ export type GetReplyOptions = {
   fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
-  /** If true, suppress tool error warning payloads for this run. */
-  suppressToolErrorWarnings?: boolean;
-  /** Dynamic form used when verbose progress visibility can change mid-run. */
-  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
+  forceRestartSafeTools?: boolean;
+  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
+  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
-  forceHeartbeatTool?: boolean;
+  /**
+   * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
+   * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
+   * still pass it keep compiling; removed in the first stable release after 2026.10.
+   */
+  suppressToolErrorWarnings?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Keep automatic progress private for turns whose canonical reply expectation is optional. */
+  progressRequiresReply?: boolean;
+  /** Suppress standalone tool/progress text even when verbose progress is enabled. */
+  suppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
   allowToolLifecycleWhenProgressHidden?: boolean;
   /**
@@ -176,24 +281,41 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */
+  onVerboseProgressVisibilityAsync?: (isActive: () => Promise<boolean>) => Promise<void> | void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
-  onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
-  onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
+  onPartialReply?: (
+    payload: PartialReplyPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onReasoningStream?: (
+    payload: ReasoningStreamPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onReasoningProgress?: (payload: { progressTokens: number }) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
-  onReasoningEnd?: () => Promise<void> | void;
+  onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
-  onAssistantMessageStart?: () => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called synchronously when a block reply is logically emitted, before async
    * delivery drains. Useful for channels that need to rotate preview state at
    * block boundaries without waiting for transport acks. */
-  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReplyQueued?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  /** Receives a block whose producer has already resolved inline directives. */
+  onPreparedBlockReply?: (
+    plan: OutboundPayloadPlan,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
+  onToolResult?: (
+    payload: ReplyPayload,
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
     itemId?: string;
@@ -202,7 +324,7 @@ export type GetReplyOptions = {
     phase?: string;
     args?: Record<string, unknown>;
     detailMode?: "explain" | "raw";
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
@@ -215,9 +337,12 @@ export type GetReplyOptions = {
     summary?: string;
     progressText?: string;
     meta?: string;
+    commandBearing?: boolean;
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.
@@ -249,43 +374,34 @@ export type GetReplyOptions = {
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
+  /** Optional turn-frozen commentary owner; visibility is live by default.
+   * With the static opt-in and this callback, core freezes, evaluates once, and snapshots. */
+  shouldDeliverCommentaryPayloads?: () => boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;
     title?: string;
     explanation?: string;
+    /** Prepared literal text; unmarked explanations retain authored Markdown. */
+    explanationFormat?: "plain";
     steps?: AgentPlanStep[];
     source?: string;
-  }) => Promise<void> | void;
-  /** Called when an approval becomes pending or resolves. */
-  onApprovalEvent?: (payload: {
-    phase?: string;
-    kind?: string;
-    status?: string;
-    title?: string;
-    itemId?: string;
-    toolCallId?: string;
-    approvalId?: string;
-    approvalSlug?: string;
-    command?: string;
-    host?: string;
-    reason?: string;
-    scope?: "turn" | "session";
-    message?: string;
-  }) => Promise<void> | void;
-  /** Called when command output streams or completes. */
-  onCommandOutput?: (payload: {
-    itemId?: string;
-    phase?: string;
-    title?: string;
-    toolCallId?: string;
-    name?: string;
-    output?: string;
-    status?: string;
-    exitCode?: number | null;
-    durationMs?: number;
-    cwd?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when an approval becomes pending or resolves. */
+  onApprovalEvent?: (
+    payload: Partial<Omit<AgentApprovalEventData, "phase" | "kind" | "status">> & {
+      phase?: string;
+      kind?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when command output streams or completes. */
+  onCommandOutput?: (
+    payload: Partial<Omit<AgentCommandOutputEventFields, "phase" | "status">> & {
+      phase?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a patch completes with a file summary. */
   onPatchSummary?: (payload: {
     itemId?: string;
@@ -297,14 +413,21 @@ export type GetReplyOptions = {
     modified?: string[];
     deleted?: string[];
     summary?: string;
-  }) => Promise<void> | void;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
-  onCompactionStart?: () => Promise<void> | void;
-  /** Called when context auto-compaction completes. */
-  onCompactionEnd?: () => Promise<void> | void;
+  onCompactionStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when context auto-compaction ends; omitted outcome means completed for legacy callers. */
+  onCompactionEnd?: (payload?: {
+    completed: boolean;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
-  onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Context passed to onModelSelected callback with actual model used. */
+  onModelSelected?: (ctx: {
+    provider: string;
+    model: string;
+    thinkLevel: string | undefined;
+  }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible
@@ -335,4 +458,6 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Millisecond run timeout override; takes precedence over seconds (0 = no timeout). */
+  timeoutOverrideMs?: number;
 };

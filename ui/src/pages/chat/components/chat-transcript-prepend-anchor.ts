@@ -1,0 +1,191 @@
+import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import { extractTranscriptRange } from "./chat-transcript-range.ts";
+
+type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
+type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
+
+/** Own the message anchor across projection capture, measurement, and restoration. */
+export class TranscriptPrependAnchor {
+  messageKeys: TranscriptMessageKeys = new Set();
+  committedMessageRows: ReadonlyMap<string, string> = new Map();
+  private firstMessageKey: string | undefined;
+  private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
+
+  constructor(
+    private readonly messageElements: ReadonlyMap<string, HTMLElement>,
+    private readonly onLayoutCorrection: (before: number, after: number) => void,
+  ) {}
+
+  /** Stable message identity used to resolve its row in the committed projection. */
+  get messageKey(): string | null {
+    return this.pending?.messageKey ?? null;
+  }
+
+  /** Keep the retained bubble mounted against the committed, not candidate, row map. */
+  extractRange(
+    range: Range,
+    indexes: ReadonlyMap<string, number>,
+    focusedRowKey: string | null,
+  ): number[] {
+    const messageKey = this.messageKey;
+    const rowKey =
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
+      this.pending?.rowKey ??
+      null;
+    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
+  }
+
+  /** Whether the next projection inserts history before the committed first message. */
+  get hasPrepend(): boolean {
+    return Boolean(
+      this.firstMessageKey &&
+      this.firstMessageKey !== this.messageKeys.keys().next().value &&
+      this.messageKeys.has(this.firstMessageKey),
+    );
+  }
+
+  /** Retain a reader through committed history or row-projection changes. */
+  capture(
+    element: HTMLDivElement | null,
+    commanded: boolean,
+    readingProjectionChanged = false,
+  ): void {
+    // A second projection may commit before measurement settles. Keep the
+    // original reader target rather than recapturing an already shifted bubble.
+    const retained =
+      this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    const anchor =
+      !commanded && (this.hasPrepend || readingProjectionChanged)
+        ? (retained ??
+          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
+        : null;
+    if (anchor) {
+      this.pending = { ...anchor, measured: false };
+    }
+    this.firstMessageKey = this.messageKeys.keys().next().value;
+  }
+
+  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
+  update(
+    element: HTMLDivElement | null,
+    virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+    measureRows: () => boolean,
+  ): boolean {
+    const anchor = this.pending;
+    if (!anchor) {
+      return false;
+    }
+    const changed = measureRows();
+    const moved = restoreTranscriptPrependAnchor(
+      anchor,
+      element,
+      virtualizer,
+      this.messageElements.values(),
+      this.onLayoutCorrection,
+    );
+    if (anchor.measured && !changed && !moved) {
+      this.pending = null;
+    }
+    anchor.measured = true;
+    return true;
+  }
+
+  /** Carry the viewport target with native reader movement, not layout growth. */
+  moveWithReader(delta: number): void {
+    if (this.pending) {
+      this.pending.top -= delta;
+    }
+  }
+
+  /** Retire pending restoration when the reader or another command takes over. */
+  clear(): void {
+    this.pending = null;
+  }
+
+  /** Drop projection identity when the owning session is disposed. */
+  reset(): void {
+    this.clear();
+    this.firstMessageKey = undefined;
+    this.messageKeys = new Set();
+    this.committedMessageRows = new Map();
+  }
+}
+
+/** Capture a retained message before history or regrouping changes its row. */
+function captureTranscriptPrependAnchor(
+  scrollElement: HTMLDivElement | null,
+  next: TranscriptMessageKeys,
+  messageElements: Iterable<HTMLElement>,
+): ChatTranscriptPrependAnchor | null {
+  if (!scrollElement) {
+    return null;
+  }
+  const viewport = scrollElement.getBoundingClientRect();
+  // Only rendered, retained bubbles can anchor the reader; overscan above the
+  // viewport and messages removed by the new projection are not candidates.
+  // Prepended refs register after retained ones; choose by DOM order, not insertion order.
+  const bubbles = [...messageElements]
+    .filter((bubble) => scrollElement.contains(bubble))
+    .toSorted((left, right) => {
+      const position = left.compareDocumentPosition(right);
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
+        return -1;
+      }
+      return position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
+  for (const bubble of bubbles) {
+    const messageKey = bubble.dataset.messageId;
+    const rect = bubble.getBoundingClientRect();
+    if (
+      messageKey &&
+      next.has(messageKey) &&
+      rect.bottom > viewport.top &&
+      rect.top < viewport.bottom
+    ) {
+      return {
+        messageKey,
+        rowKey: bubble.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? null,
+        top: rect.top,
+      };
+    }
+  }
+  return null;
+}
+
+/** Reconcile the inner-message anchor after the virtualizer commits its row anchor. */
+function restoreTranscriptPrependAnchor(
+  anchor: ChatTranscriptPrependAnchor,
+  scrollElement: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  messageElements: Iterable<HTMLElement>,
+  onLayoutCorrection: (before: number, after: number) => void,
+): boolean {
+  if (!scrollElement) {
+    return false;
+  }
+  // Group renderers may replace the bubble at an array index during prepend;
+  // resolve its stable render key in the committed DOM, not an old element.
+  const bubble = [...messageElements].find(
+    (element) => scrollElement.contains(element) && element.dataset.messageId === anchor.messageKey,
+  );
+  if (!bubble) {
+    return false;
+  }
+  const delta = bubble.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) <= 1) {
+    return false;
+  }
+  const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+  const before = scrollElement.scrollTop;
+  const offset = Math.max(0, Math.min(maxOffset, before + delta));
+  // A retained message can become unreachable at an edge when provisional rows retire.
+  // Reissuing that clamped correction would keep the measurement loop alive forever.
+  if (Math.abs(offset - before) <= 1) {
+    return false;
+  }
+  // Commit one measured message target through the scroll owner. This also
+  // retires deferred row corrections already represented by the measured DOM.
+  virtualizer.scrollToOffset(offset, { behavior: "instant" });
+  onLayoutCorrection(before, scrollElement.scrollTop);
+  return true;
+}

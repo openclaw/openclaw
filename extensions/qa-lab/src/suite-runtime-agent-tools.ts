@@ -1,15 +1,15 @@
-// Qa Lab plugin module implements suite runtime agent tools behavior.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import {
   appendQaChildOutputTail,
   createQaChildOutputTail,
   formatQaChildOutputTail,
 } from "./child-output.js";
-import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import type {
   QaRuntimeActionHandlerEnv,
@@ -24,16 +24,14 @@ const MCP_REQUEST_TIMEOUT_MS = 180_000;
 
 async function resolvePluginToolsMcpArgs(repoRoot: string) {
   const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
-  try {
-    await fs.access(distEntry);
+  if (await canAccess(distEntry)) {
     return [distEntry];
-  } catch {
-    return [
-      "--import",
-      requireFromHere.resolve("tsx"),
-      path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
-    ];
   }
+  return [
+    "--import",
+    requireFromHere.resolve("tsx"),
+    path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
+  ];
 }
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
@@ -75,7 +73,9 @@ async function writeWorkspaceSkill(params: {
 }
 
 async function callPluginToolsMcp(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">;
+  env: Pick<QaSuiteRuntimeEnv, "repoRoot"> & {
+    gateway: Pick<QaSuiteRuntimeEnv["gateway"], "runtimeEnv">;
+  };
   toolName: string;
   args: Record<string, unknown>;
 }) {
@@ -93,16 +93,20 @@ async function callPluginToolsMcp(params: {
     env: transportEnv,
   });
   const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
-  const stderr = transport.stderr;
-  if (stderr && typeof stderr.on === "function") {
-    stderr.on("data", (chunk: unknown) => {
-      appendQaChildOutputTail(stderrTail, chunk);
-    });
-  }
-  const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
+  transport.stderr?.on("data", (chunk: unknown) => {
+    appendQaChildOutputTail(stderrTail, chunk);
+  });
+  const client = new Client(
+    { name: "openclaw-qa-suite", version: "0.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   try {
     await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
-    const listed = await client.listTools({}, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    // Preserve V1's single-page catalog and its one-request timeout budget.
+    const listed = await client.request(
+      { method: "tools/list", params: {} },
+      { timeout: MCP_REQUEST_TIMEOUT_MS },
+    );
     const tool = listed.tools.find((entry) => entry.name === params.toolName);
     if (!tool) {
       const availableTools = listed.tools
@@ -118,8 +122,7 @@ async function callPluginToolsMcp(params: {
         name: params.toolName,
         arguments: params.args,
       },
-      undefined,
-      { timeout: MCP_REQUEST_TIMEOUT_MS },
+      { timeout: MCP_REQUEST_TIMEOUT_MS, toolDefinition: tool },
     );
   } catch (error) {
     const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();

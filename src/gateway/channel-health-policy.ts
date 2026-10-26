@@ -1,46 +1,81 @@
-// Gateway channel health policy.
-// Evaluates channel lifecycle snapshots for restart/readiness decisions.
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  asFiniteNumber,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
-type ChannelHealthSnapshot = {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-  linked?: boolean;
-  restartPending?: boolean;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  lastEventAt?: number | null;
-  lastConnectedAt?: number | null;
-  lastTransportActivityAt?: number | null;
-  lastStartAt?: number | null;
-  reconnectAttempts?: number;
-  mode?: string;
-  ingressUnavailable?: true;
-  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
-  healthState?: string;
-  terminalDisconnect?: boolean;
+type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
+
+type HealthMonitorConfig = {
+  healthMonitor?: {
+    enabled?: boolean;
+  };
 };
 
-type ChannelHealthEvaluationReason =
-  | "healthy"
-  | "unmanaged"
-  | "not-running"
-  | "terminal-disconnect"
-  | "blocked"
-  | "busy"
-  | "stuck"
-  | "startup-connect-grace"
-  | "disconnected"
-  | "stale-socket"
-  | "ingress-unavailable";
+type ChannelHealthMonitorConfig = HealthMonitorConfig & {
+  accounts?: Record<string, HealthMonitorConfig>;
+};
+
+function resolveAccountHealthMonitorOverride(
+  channelConfig: ChannelHealthMonitorConfig | undefined,
+  channelId: ChannelId,
+  accountId: string,
+): boolean | undefined {
+  if (!channelConfig?.accounts) {
+    return undefined;
+  }
+  const direct = resolveChannelAccountEntry(channelConfig.accounts, accountId, channelId);
+  if (typeof direct?.healthMonitor?.enabled === "boolean") {
+    return direct.healthMonitor.enabled;
+  }
+  const normalizedAccountId = normalizeOptionalAccountId(accountId);
+  if (!normalizedAccountId) {
+    return undefined;
+  }
+  const match = resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizedAccountId,
+    channelId,
+    normalizeAccountId,
+  );
+  if (typeof match?.healthMonitor?.enabled !== "boolean") {
+    return undefined;
+  }
+  return match.healthMonitor.enabled;
+}
+
+export function resolveChannelHealthMonitorEnabled(
+  cfg: OpenClawConfig,
+  channelId: ChannelId,
+  accountId: string,
+): boolean {
+  // SAFETY: Open-world plugin fields are optional; enabled values are checked as booleans.
+  const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
+  const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, channelId, accountId);
+  const channelOverride = channelConfig?.healthMonitor?.enabled;
+
+  return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
+}
 
 export type ChannelHealthEvaluation = {
   healthy: boolean;
-  reason: ChannelHealthEvaluationReason;
+  reason:
+    | "healthy"
+    | "unmanaged"
+    | "not-running"
+    | "terminal-disconnect"
+    | "blocked"
+    | "busy"
+    | "stuck"
+    | "startup-connect-grace"
+    | "reconnect-grace"
+    | "disconnected"
+    | "stale-socket"
+    | "ingress-unavailable";
 };
 
 export type ChannelHealthPolicy = {
@@ -53,26 +88,16 @@ export type ChannelHealthPolicy = {
 /** Keep channel-authored terminal detail above the shared unhealthy projection. */
 export function resolveChannelHealthState(
   snapshot: ChannelHealthSnapshot,
-  evaluation: ChannelHealthEvaluation,
+  policy: ChannelHealthPolicy,
 ): string | undefined {
+  const evaluation = evaluateChannelHealth(snapshot, policy);
   return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
     ? evaluation.reason
     : snapshot.healthState;
 }
 
-type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected"
-  | "ingress-unavailable";
-
-function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
-}
-
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+const CHANNEL_RECONNECT_GRACE_MS = 120_000;
 // Keep these shared between the background health monitor and on-demand readiness
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
@@ -82,11 +107,14 @@ export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
 ): ChannelHealthEvaluation {
-  if (!isManagedAccount(snapshot)) {
+  if (snapshot.enabled === false || snapshot.configured === false) {
     return { healthy: true, reason: "unmanaged" };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };
+  }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
   }
   // Transport liveness and inbound admission are independent failure domains: a
   // channel can hold a healthy socket and still admit nothing. This outranks the
@@ -97,78 +125,71 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
-  if (snapshot.lifecycle === "blocked") {
-    return { healthy: false, reason: "blocked" };
+  // Ordinary unlinked accounts need no recovery, but losing linkage cannot hide
+  // an already recorded failure (for example, a terminal session logout).
+  if (snapshot.linked === false) {
+    return { healthy: true, reason: "unmanaged" };
   }
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
+  const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
   // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
   if (
     (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
-    lastStartAt != null &&
+    lastStartAt !== null &&
     policy.now - lastStartAt < policy.channelConnectGraceMs
   ) {
     return { healthy: true, reason: "startup-connect-grace" };
   }
-  if (snapshot.lifecycle === "stopped") {
+  if (snapshot.lifecycle === "stopped" || !snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
-  if (!snapshot.running) {
-    return { healthy: false, reason: "not-running" };
-  }
-  const activeRuns =
-    typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
-      ? Math.max(0, Math.trunc(snapshot.activeRuns))
-      : 0;
+  const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastRunActivityAt =
-    typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
-      ? snapshot.lastRunActivityAt
-      : null;
-  const activeRunStartedAt =
-    typeof snapshot.activeRunStartedAt === "number" && Number.isFinite(snapshot.activeRunStartedAt)
-      ? snapshot.activeRunStartedAt
-      : null;
-  const lastTransportActivityAt =
-    typeof snapshot.lastTransportActivityAt === "number" &&
-    Number.isFinite(snapshot.lastTransportActivityAt)
-      ? snapshot.lastTransportActivityAt
-      : null;
+  const lastRunActivityAt = asFiniteNumber(snapshot.lastRunActivityAt) ?? null;
+  const activeRunStartedAt = asFiniteNumber(snapshot.activeRunStartedAt) ?? null;
+  const lastTransportActivityAt = asFiniteNumber(snapshot.lastTransportActivityAt) ?? null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
 
   // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
   // inherit stale busy fields from the previous instance. Ignore busy short-circuit
   // until run activity is known to belong to the current lifecycle.
-  if (isBusy) {
-    if (!busyStateInitializedForLifecycle) {
-      // Fall through to normal startup/disconnect checks below.
-    } else {
-      const runActivityAge =
-        lastRunActivityAt == null
-          ? Number.POSITIVE_INFINITY
-          : Math.max(0, policy.now - lastRunActivityAt);
-      const disconnectedRunStartAge =
-        snapshot.connected === false && activeRunStartedAt != null
-          ? Math.max(0, policy.now - activeRunStartedAt)
-          : 0;
-      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
-      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
-        return { healthy: true, reason: "busy" };
-      }
-      return { healthy: false, reason: "stuck" };
+  if (isBusy && busyStateInitializedForLifecycle) {
+    const runActivityAge =
+      lastRunActivityAt == null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, policy.now - lastRunActivityAt);
+    const disconnectedRunStartAge =
+      snapshot.connected === false && activeRunStartedAt != null
+        ? Math.max(0, policy.now - activeRunStartedAt)
+        : 0;
+    const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
+    if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      return { healthy: true, reason: "busy" };
     }
+    return { healthy: false, reason: "stuck" };
   }
-  if (snapshot.lifecycle === undefined && lastStartAt != null) {
+  if (snapshot.lifecycle === undefined && lastStartAt !== null) {
     const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }
   }
   if (snapshot.connected === false) {
+    const lastDisconnectAt =
+      snapshot.lastDisconnect && typeof snapshot.lastDisconnect !== "string"
+        ? (asFiniteNumber(snapshot.lastDisconnect.at) ?? null)
+        : null;
+    // A disconnect is current only when its producer recorded it inside this
+    // account lifecycle; patch-merged timestamps from prior runs grant no grace.
+    const disconnectBelongsToLifecycle =
+      lastDisconnectAt != null && (lastStartAt == null || lastDisconnectAt >= lastStartAt);
+    if (
+      disconnectBelongsToLifecycle &&
+      Math.max(0, policy.now - lastDisconnectAt) < CHANNEL_RECONNECT_GRACE_MS
+    ) {
+      return { healthy: true, reason: "reconnect-grace" };
+    }
     return { healthy: false, reason: "disconnected" };
   }
   // App-level events are not socket liveness: quiet Slack/Discord workspaces can
@@ -176,8 +197,7 @@ export function evaluateChannelHealth(
   const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
-      const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
-      if (lifecycleEventGap <= policy.staleEventThresholdMs) {
+      if (policy.now - lastStartAt <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };
@@ -193,23 +213,18 @@ export function evaluateChannelHealth(
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
-): ChannelRestartReason {
+): "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected" | "ingress-unavailable" {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.
-  if (evaluation.reason === "stale-socket") {
-    return "stale-socket";
-  }
-  // Restarting is also the only way to re-prove ingress: `ingressUnavailable`
-  // describes the last start attempt and is cleared by the next one. Naming the
-  // reason keeps a repeating restart readable as dead inbound rather than "stuck".
-  if (evaluation.reason === "ingress-unavailable") {
-    return "ingress-unavailable";
+  if (
+    evaluation.reason === "stale-socket" ||
+    evaluation.reason === "ingress-unavailable" ||
+    evaluation.reason === "disconnected"
+  ) {
+    return evaluation.reason;
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";
-  }
-  if (evaluation.reason === "disconnected") {
-    return "disconnected";
   }
   return "stuck";
 }

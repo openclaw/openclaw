@@ -1,40 +1,75 @@
-/**
- * Shared transport-stream normalization helpers.
- *
- * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
- */
-import type { Usage } from "@openclaw/llm-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type {
+  AssistantMessage,
+  Model,
+  ModelRequestHeaders,
+  ProviderResponse,
+  StreamOptions,
+  Usage,
+} from "@openclaw/llm-core";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
+import { getAiTransportHost } from "../host.js";
+import {
+  appendAssistantMessageDiagnostic,
+  createAssistantMessageDiagnostic,
+  projectDiagnosticValue,
+} from "../utils/diagnostics.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { shortHash } from "../utils/hash.js";
+import { headersToRecord } from "../utils/headers.js";
+import { repairJson } from "../utils/json-parse.js";
+import {
+  projectProviderError,
+  readTransportDiagnosticLabel,
+  type ProviderErrorProjection,
+} from "../utils/provider-error.js";
+import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { redactSensitiveText } from "./transport-utils.js";
+import { createZeroUsage } from "../utils/usage.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  assertWithinLimit?: (pending: string) => void,
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // CRLF remains one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
+  for (;;) {
+    const { done, value } = await read();
+    buffer += decoder.decode(value, { stream: !done });
+    delimiter.lastIndex = scanOffset;
+    for (;;) {
+      const boundary = delimiter.exec(buffer);
+      if (!boundary && (!done || !buffer)) {
+        break;
+      }
+      const frameEnd = boundary?.index ?? buffer.length;
+      const frame = buffer.slice(0, frameEnd);
+      assertWithinLimit?.(frame);
+      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+      delimiter.lastIndex = 0;
+      yield { frame, terminated: boundary !== null };
+    }
+    assertWithinLimit?.(buffer);
+    if (done) {
+      return;
+    }
+    scanOffset = Math.max(0, buffer.length - 3);
+  }
+}
 
-type TransportUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-};
-
-export type WritableTransportStream = {
-  push(event: unknown): void;
-  end(): void;
-};
-
-type TransportOutputShape = {
-  stopReason: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
-};
+export type WritableTransportStream = Pick<
+  ReturnType<typeof createAssistantMessageEventStream>,
+  "push" | "end"
+>;
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
+  "Provider completed tool call with malformed JSON arguments";
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
@@ -51,15 +86,13 @@ export function sanitizeNonEmptyTransportPayloadText(
 }
 
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
-  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
-    return argumentsValue as Record<string, unknown>;
+  const argumentsRecord = asOptionalRecord(argumentsValue);
+  if (argumentsRecord) {
+    return argumentsRecord;
   }
   if (typeof argumentsValue === "string") {
     try {
-      const parsed = JSON.parse(argumentsValue);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNonArrayRecord(JSON.parse(argumentsValue));
     } catch {
       // Preserve malformed strings in stored history, but send object-shaped payloads to
       // providers that require structured tool-call arguments.
@@ -68,54 +101,125 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
+/** Stable terminal fact: presentation must not infer unfinished calls from provider prose. */
+export class IncompleteToolCallError extends Error {
+  readonly code = "incomplete_tool_call";
+}
+
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
+
+/**
+ * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
+ * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
+ * control characters or invalid escapes inside string values. Only string-literal repairs
+ * are applied and every valid escape is preserved as written; truncated or non-object
+ * buffers stay rejected so a cut-off write never executes with partial arguments.
+ */
+function repairTerminalToolCallArguments(value: string): Record<string, unknown> | null {
+  const repaired = repairJson(value, { preserveValidControlEscapes: true });
+  if (repaired === value) {
+    return null;
+  }
+  return parseJsonObjectPreservingUnsafeIntegers(repaired);
+}
+
+/**
+ * Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only.
+ * `repairStringLiterals` opts a stream whose provider may deliver unvalidated tool input into
+ * string-literal repair before rejection.
+ */
+export function parseTerminalToolCallArguments(
+  value: unknown,
+  errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
+  options?: { repairStringLiterals?: boolean },
+): Record<string, unknown> {
+  const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
+  if (parsed) {
+    return parsed;
+  }
+  const repairStringLiterals = options?.repairStringLiterals === true && typeof value === "string";
+  if (repairStringLiterals) {
+    const repaired = repairTerminalToolCallArguments(value);
+    if (repaired) {
+      return repaired;
+    }
+  }
+  const text = typeof value === "string" ? value : undefined;
+  /**
+   * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+   * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+   * `projectProviderError` surfaces them on the terminal assistant message.
+   */
+  const diagnostics: {
+    code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+    argumentChars: number;
+    argumentHash: string;
+    repairAttempted: boolean;
+  } = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted: repairStringLiterals,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  throw error;
+}
+
+/** Validate a complete sibling set before mutating any call into executable state. */
+export function finalizeTerminalToolCallArguments<T extends { arguments: Record<string, unknown> }>(
+  calls: readonly T[],
+  readArguments: (call: T) => unknown,
+  errorMessage?: string,
+  options?: { repairStringLiterals?: boolean },
+): void {
+  const validated = calls.map(
+    (call) =>
+      [call, parseTerminalToolCallArguments(readArguments(call), errorMessage, options)] as const,
+  );
+  for (const [call, argumentsValue] of validated) {
+    call.arguments = argumentsValue;
+  }
+}
+
 export function mergeTransportHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
+  ...headerSources: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  const merged: ModelRequestHeaders = {};
+  const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      // HTTP header names are case-insensitive. Remove the earlier spelling so
+      // fetch cannot combine a protected replacement with its stale value.
+      const lowercaseName = name.toLowerCase();
+      const previousName = namesByLowercase.get(lowercaseName);
+      if (previousName && previousName !== name) {
+        delete merged[previousName];
+      }
+      merged[name] = value;
+      namesByLowercase.set(lowercaseName, name);
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function mergeTransportMetadata<T extends Record<string, unknown>>(
-  payload: T,
-  metadata?: Record<string, string>,
-): T {
-  if (!metadata || Object.keys(metadata).length === 0) {
-    return payload;
-  }
-  const existingMetadata =
-    payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
-      ? (payload.metadata as Record<string, string>)
-      : undefined;
-  return {
-    ...payload,
-    metadata: {
-      ...existingMetadata,
-      ...metadata,
-    },
-  };
-}
-
-export function createEmptyTransportUsage(): TransportUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+export function createEmptyTransportUsage(): Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
+} {
+  return createZeroUsage();
 }
 
 export function createWritableTransportEventStream() {
   const eventStream = createAssistantMessageEventStream();
   return {
     eventStream,
-    stream: eventStream as unknown as WritableTransportStream,
+    stream: eventStream,
   };
 }
 
@@ -136,9 +240,279 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
+let streamTurnStartedAt = 0;
+let nextStreamTurn: Promise<void> | undefined;
+
+export function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+}
+
+function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
+  throwIfModelStreamAborted(signal);
+  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // spend a fresh per-stream budget in the same microtask burst.
+  if (
+    nextStreamTurn &&
+    (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
+      Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+  ) {
+    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
+  }
+  if (!nextStreamTurn) {
+    streamTurnStartedAt = Date.now();
+    nextStreamTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        streamWorkThisTurn = 0;
+        nextStreamTurn = undefined;
+        resolve();
+      }, 0);
+    });
+  }
+  streamWorkThisTurn += work;
+  return undefined;
+}
+
+/** Keep ready provider events from monopolizing the main loop, including ignored events. */
+export async function* iterateModelStream<T>(
+  events: AsyncIterable<T> | Iterable<T>,
+  signal?: AbortSignal,
+): AsyncGenerator<T> {
+  for await (const event of events) {
+    const wait = waitForModelStreamTurn(signal);
+    if (wait) {
+      await wait;
+    }
+    yield event;
+    throwIfModelStreamAborted(signal);
+  }
+}
+
+export type ProviderAcceptance =
+  | {
+      kind: "http_response";
+      status: number;
+      headers: Record<string, string>;
+    }
+  | { kind: "provider_stream_opened" };
+
+type ProviderAcceptanceObserver = (acceptance: ProviderAcceptance) => void;
+type ProviderAcceptanceOptions = Pick<StreamOptions, "onResponse" | "signal">;
+type ProviderStreamCancel = (reason: Error) => void | Promise<void>;
+
+const providerAcceptanceObserver: unique symbol = Symbol("openclaw.providerAcceptanceObserver");
+
+function readProviderAcceptanceObserver(options: unknown): ProviderAcceptanceObserver | undefined {
+  if (options === null || typeof options !== "object") {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(options, providerAcceptanceObserver);
+  const value: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  return isProviderAcceptanceObserver(value) ? value : undefined;
+}
+
+function isProviderAcceptanceObserver(value: unknown): value is ProviderAcceptanceObserver {
+  return typeof value === "function";
+}
+
+function writeProviderAcceptanceObserver<T extends object>(
+  options: T,
+  observer: ProviderAcceptanceObserver,
+): T {
+  // Keep this enumerable so normal option spreads preserve the private per-call observer.
+  Object.defineProperty(options, providerAcceptanceObserver, {
+    configurable: true,
+    enumerable: true,
+    value: observer,
+  });
+  return options;
+}
+
+/** Attach an OpenClaw-internal provider acceptance observer to one model call. */
+export function withProviderAcceptanceObserver<T extends object>(
+  options: T,
+  observer: ProviderAcceptanceObserver,
+): T {
+  const existing = readProviderAcceptanceObserver(options);
+  return writeProviderAcceptanceObserver(
+    options,
+    existing
+      ? (acceptance) => {
+          observer(acceptance);
+          existing(acceptance);
+        }
+      : observer,
+  );
+}
+
+/** Preserve the private provider acceptance observer when a built-in wrapper rebuilds options. */
+export function copyProviderAcceptanceObserver<T extends object>(source: unknown, target: T): T {
+  const observer = readProviderAcceptanceObserver(source);
+  return observer ? writeProviderAcceptanceObserver(target, observer) : target;
+}
+
+async function awaitProviderLifecycleCallback(
+  callback: (() => void | Promise<void>) | undefined,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+  if (!callback) {
+    return;
+  }
+  const callbackPromise = Promise.resolve().then(callback);
+  getAiTransportHost().observePendingProviderWork?.(callbackPromise);
+  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+}
+
+function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, error: unknown): void {
+  const reason = error instanceof Error ? error : new Error(String(error));
+  try {
+    // The lifecycle failure remains authoritative. Cleanup must not delay or replace it.
+    const pending = Promise.resolve(cancelStream(reason));
+    void pending.catch(() => undefined);
+    getAiTransportHost().observePendingProviderWork?.(pending);
+  } catch {
+    // A synchronous cleanup failure cannot replace the lifecycle failure either.
+  }
+}
+
+async function awaitProviderLifecycleWithCleanup(params: {
+  run: () => Promise<void>;
+  cancelStream: ProviderStreamCancel;
+}): Promise<void> {
+  try {
+    await params.run();
+  } catch (error) {
+    startProviderStreamCancellation(params.cancelStream, error);
+    throw error;
+  }
+}
+
+/** Report observed HTTP metadata; rejected responses use only onResponse. */
+export async function notifyProviderHttpMetadata(params: {
+  options?: ProviderAcceptanceOptions;
+  response: ProviderResponse;
+  model: Model;
+  cancelStream: ProviderStreamCancel;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const observer = readProviderAcceptanceObserver(params.options);
+  if (!observer && !params.options?.onResponse) {
+    return;
+  }
+  const { status, headers } = params.response;
+  const signal = params.signal ?? params.options?.signal;
+  const accepted = status >= 200 && status < 300;
+  await awaitProviderLifecycleWithCleanup({
+    cancelStream: params.cancelStream,
+    run: async () => {
+      await awaitProviderLifecycleCallback(
+        accepted && observer
+          ? () => observer({ kind: "http_response", status, headers })
+          : undefined,
+        signal,
+      );
+      await awaitProviderLifecycleCallback(
+        params.options?.onResponse
+          ? () => params.options?.onResponse?.({ status, headers }, params.model)
+          : undefined,
+        signal,
+      );
+    },
+  });
+}
+
+/** Report a real HTTP response before body consumption. */
+export async function notifyProviderHttpResponse(params: {
+  options?: ProviderAcceptanceOptions;
+  response: Response;
+  model: Model;
+  cancelStream?: ProviderStreamCancel;
+  signal?: AbortSignal;
+}): Promise<void> {
+  await notifyProviderHttpMetadata({
+    options: params.options,
+    response: {
+      status: params.response.status,
+      headers: headersToRecord(params.response.headers),
+    },
+    model: params.model,
+    signal: params.signal,
+    cancelStream: (reason) => {
+      if (params.cancelStream) {
+        startProviderStreamCancellation(params.cancelStream, reason);
+      }
+      return params.response.body?.cancel(reason);
+    },
+  });
+}
+
+/** Report an accepted SDK stream when the SDK does not expose HTTP metadata. */
+export async function notifyProviderStreamOpened(params: {
+  options?: Pick<StreamOptions, "signal">;
+  cancelStream: ProviderStreamCancel;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const observer = readProviderAcceptanceObserver(params.options);
+  if (!observer) {
+    return;
+  }
+  await awaitProviderLifecycleWithCleanup({
+    cancelStream: params.cancelStream,
+    run: () =>
+      awaitProviderLifecycleCallback(
+        () => observer({ kind: "provider_stream_opened" }),
+        params.signal ?? params.options?.signal,
+      ),
+  });
+}
+
+/** Run a provider-response hook before start/body consumption inside the first-event deadline. */
+export function withProviderResponseHook<T = never>(params: {
+  stream?: AsyncIterable<T>;
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  hook?: () => void | Promise<void>;
+  onReady?: () => void;
+}): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      try {
+        await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        if (wait) {
+          await wait;
+        }
+      } catch (error) {
+        params.abort(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      }
+      if (params.signal.aborted) {
+        throw transportAbortError(params.signal);
+      }
+      params.onReady?.();
+      if (params.stream) {
+        yield* params.stream;
+      }
+    },
+  };
+}
+
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
 }): void {
   const { stream, output, signal } = params;
@@ -148,144 +522,82 @@ export function finalizeTransportStream(params: {
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
-  stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+  stream.push({ type: "done", reason: output.stopReason, message: output });
   stream.end();
 }
 
-type TransportErrorDetails = {
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
-};
-
-const MAX_TRANSPORT_ERROR_CAUSE_DEPTH = 8;
-
-function readStringLikeProperty(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
-}
-
-function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : undefined;
-}
-
-function readCauseChainErrorCode(value: unknown): string | undefined {
-  const seen = new Set<Record<string, unknown>>();
-  let cause = readObjectProperty(value, "cause");
-  for (
-    let depth = 0;
-    cause && depth < MAX_TRANSPORT_ERROR_CAUSE_DEPTH && !seen.has(cause);
-    depth += 1
-  ) {
-    seen.add(cause);
-    const code = readStringLikeProperty(cause, "code");
-    if (code) {
-      return code;
-    }
-    cause = readObjectProperty(cause, "cause");
-  }
-  return undefined;
-}
-
-function stringifyErrorBody(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function stringifyTransportErrorMessage(value: unknown): string | undefined {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  const encoded = stringifyErrorBody(value);
-  if (encoded !== undefined) {
-    return encoded;
-  }
-  try {
-    return String(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeTransportErrorBody(value: unknown): string | undefined {
-  const text = stringifyErrorBody(value);
-  if (!text?.trim()) {
-    return undefined;
-  }
-  const redacted = redactSensitiveText(text);
-  return redacted.length > 500 ? `${truncateUtf16Safe(redacted, 499)}…` : redacted;
-}
-
-function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
-  const errorObject = error && typeof error === "object" ? error : undefined;
-  const nestedError = readObjectProperty(errorObject, "error");
-  const errorCode =
-    readStringLikeProperty(errorObject, "errorCode") ??
-    readStringLikeProperty(errorObject, "code") ??
-    readStringLikeProperty(nestedError, "code") ??
-    readCauseChainErrorCode(errorObject);
-  const errorType =
-    readStringLikeProperty(errorObject, "errorType") ??
-    readStringLikeProperty(errorObject, "type") ??
-    readStringLikeProperty(nestedError, "type");
-  const errorBody =
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "errorBody")) ??
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(nestedError);
-
-  return {
-    ...(errorCode ? { errorCode } : {}),
-    ...(errorType ? { errorType } : {}),
-    ...(errorBody ? { errorBody } : {}),
-  };
-}
-
+/** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
-  output: TransportOutputShape,
+  output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
-): void {
-  output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = stringifyTransportErrorMessage(error);
-  Object.assign(output, extractTransportErrorDetails(error));
+): ProviderErrorProjection {
+  if (!signal?.aborted) {
+    // Provider prose and response bodies can echo prompts and tool results.
+    try {
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const cause = asOptionalRecord(record?.cause);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+        provider: output.provider,
+        model: output.model,
+        status: readTransportDiagnosticLabel(
+          record?.status ?? record?.statusCode ?? response?.status,
+        ),
+        code: readTransportDiagnosticLabel(record?.errorCode ?? record?.code ?? detail?.code),
+        type: readTransportDiagnosticLabel(record?.errorType ?? detail?.type ?? record?.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+        requestId: readTransportDiagnosticLabel(record?.request_id ?? record?.requestId),
+        responseId: readTransportDiagnosticLabel(
+          record?.responseId ?? response?.id ?? output.responseId,
+        ),
+      });
+    } catch {
+      // Diagnostic accessors and log sinks cannot replace the original failure.
+    }
+  }
+  const projection = projectProviderError(error, signal);
+  Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
+  if (
+    projection.stopReason === "error" &&
+    output.content.length === 0 &&
+    isTransientNetworkError(projectDiagnosticValue(error)) &&
+    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+  ) {
+    // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
+    // redacted terminal message so diagnostics cannot expose the original throw.
+    appendAssistantMessageDiagnostic(
+      output,
+      createAssistantMessageDiagnostic("provider_transport_failure", projection.errorMessage, {
+        eventsEmitted: false,
+        phase: "before_message_stream_start",
+      }),
+    );
+  }
+  return projection;
 }
 
 export function failTransportStream(params: {
   stream: WritableTransportStream;
-  output: TransportOutputShape;
+  output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
+  const projection = assignTransportErrorDetails(output, error, signal);
   cleanup?.();
-  assignTransportErrorDetails(output, error, signal);
-  stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+  stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

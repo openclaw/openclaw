@@ -1,8 +1,8 @@
-// Prunes superseded silent device pairings after a fresh silent auto-approval.
 import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
+import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -12,6 +12,8 @@ type PruneContext = Pick<
   | "hasConnectedClientsForDevice"
   | "invalidateClientsForDevice"
   | "disconnectClientsForDevice"
+  | "workerEnvironmentService"
+  | "workerPlacementDispatchService"
 > & {
   logGateway: Pick<GatewayRequestContext["logGateway"], "info" | "warn">;
   nodeRegistry: Pick<GatewayRequestContext["nodeRegistry"], "updateSurface">;
@@ -25,17 +27,20 @@ type PruneContext = Pick<
  */
 export async function pruneSupersededSilentPairingsAfterApproval(params: {
   deviceId: string;
+  connectedDeviceIds: readonly string[];
   context: PruneContext;
-  baseDir?: string;
-  nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
   const { context } = params;
   const pruned = await pruneSupersededSilentPairedDevices({
     deviceId: params.deviceId,
-    baseDir: params.baseDir,
-    nowMs: params.nowMs,
+    protectedDeviceIds: params.connectedDeviceIds,
     isDeviceConnected: (deviceId) => context.hasConnectedClientsForDevice?.(deviceId) ?? false,
   });
+  // The whole batch is already deleted. Retire every retained authority before
+  // worker cleanup can yield or fail on an earlier device.
+  for (const entry of pruned) {
+    context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
+  }
   for (const entry of pruned) {
     context.logGateway.info(
       `device pairing pruned superseded silent pairing device=${entry.deviceId} roles=${entry.roles.join(",") || "none"}`,
@@ -45,9 +50,7 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
       // queues, wake lifecycles, and runtime metadata before session teardown.
       clearRemovedNodeRuntimeState({ nodeId: entry.deviceId, context });
     }
-    // Invalidate before disconnect so buffered frames from a racing reconnect
-    // fail authorization, mirroring device.pair.remove ordering.
-    context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
+    await reconcileRevokedDeviceWorker(context, entry.deviceId);
     if (entry.roles.includes("node")) {
       context.broadcast(
         "node.pair.resolved",

@@ -1,102 +1,201 @@
-// Session group catalog mutations.
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
+  missingScopeErrorShape,
+  validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
   validateSessionsGroupsPutParams,
   validateSessionsGroupsRenameParams,
+  validateSessionsGroupsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-group-catalog.js";
+import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
-  listSidebarSectionOrder,
-  listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  SessionGroupNotEmptyError,
+  SessionGroupNotFoundError,
+  updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
+import {
+  isWorkspacePathContainmentCurrent,
+  resolveWorkspacePathContainment,
+} from "./workspace-path-containment.js";
+
+function sessionGroupMutationError(
+  error: unknown,
+  inputError?: typeof SessionGroupNotEmptyError | typeof SessionGroupNotFoundError,
+) {
+  if (error instanceof SessionMutationAuthorizationChangedError) {
+    throw error;
+  }
+  return inputError && error instanceof inputError
+    ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
+    : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+}
 
 export const sessionGroupHandlers: GatewayRequestHandlers = {
-  "sessions.groups.list": async ({ params, respond }) => {
-    if (
-      !assertValidParams(params, validateSessionsGroupsListParams, "sessions.groups.list", respond)
-    ) {
-      return;
-    }
-    respond(
-      true,
-      { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
-      undefined,
-    );
-  },
-  "sessions.groups.put": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateSessionsGroupsPutParams, "sessions.groups.put", respond)
-    ) {
-      return;
-    }
-    const groups = putSessionGroups(params.names, params.sectionOrder);
-    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
-    // Catalog-only changes still need to reach other open clients.
-    emitSessionsChanged(context, { reason: "groups" });
-  },
-  "sessions.groups.rename": async ({ params, respond, context, sessionMutationAuthorization }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsGroupsRenameParams,
-        "sessions.groups.rename",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      const result = await renameSessionGroup({
+  "sessions.groups.list": defineValidatedGatewayHandler(
+    "sessions.groups.list",
+    validateSessionsGroupsListParams,
+    async ({ respond }) => {
+      await ensureSessionGroupCatalog();
+      const { groups, sectionOrder } = readSessionGroupCatalog();
+      respond(true, { groups, sectionOrder }, undefined);
+    },
+  ),
+  "sessions.groups.defaults": defineValidatedGatewayHandler(
+    "sessions.groups.defaults",
+    validateSessionsGroupsDefaultsParams,
+    async ({ respond, client, context }) => {
+      await ensureSessionGroupCatalog();
+      const defaults = await filterMutableSessionGroupRecords({
+        client,
+        context,
+        records: () => readSessionGroupCatalog().defaults,
+      });
+      respond(true, { defaults }, undefined);
+    },
+  ),
+  "sessions.groups.put": defineValidatedGatewayHandler(
+    "sessions.groups.put",
+    validateSessionsGroupsPutParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
-        name: params.name,
-        to: params.to,
+        names: params.names,
+        sectionOrder: params.sectionOrder,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
-      respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
-    } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        throw error;
+      respond(
+        true,
+        { ok: true, groups, sectionOrder: readSessionGroupCatalog().sectionOrder },
+        undefined,
+      );
+      // Catalog-only changes still need to reach other open clients.
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
+    },
+    (error) => sessionGroupMutationError(error, SessionGroupNotEmptyError),
+  ),
+  "sessions.groups.rename": defineValidatedGatewayHandler(
+    "sessions.groups.rename",
+    validateSessionsGroupsRenameParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      try {
+        const result = await renameSessionGroup({
+          cfg: context.getRuntimeConfig(),
+          name: params.name,
+          to: params.to,
+          assertCurrent: sessionMutationAuthorization?.assertCurrent,
+          assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
+        });
+        respond(true, { ok: true, ...result }, undefined);
+      } catch (error) {
+        respond(false, undefined, sessionGroupMutationError(error, SessionGroupNotFoundError));
+      } finally {
+        // Interrupted sweeps can retain catalog entries and committed member moves.
+        emitSessionsChanged(context, { reason: "groups" });
       }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
-  "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionsGroupsDeleteParams,
-        "sessions.groups.delete",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      const result = await deleteSessionGroup({
-        cfg: context.getRuntimeConfig(),
-        name: params.name,
-        assertCurrent: sessionMutationAuthorization?.assertCurrent,
-        assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
-      });
-      respond(true, { ok: true, ...result }, undefined);
-      emitSessionsChanged(context, { reason: "groups" });
-    } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        throw error;
+    },
+  ),
+  "sessions.groups.update": defineValidatedGatewayHandler(
+    "sessions.groups.update",
+    validateSessionsGroupsUpdateParams,
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+      if (params.cwd && !path.isAbsolute(params.cwd)) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute");
+        return;
       }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+      const name = normalizeOptionalString(params.name);
+      if (!name) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group name must not be empty");
+        return;
+      }
+      let cwd = params.cwd;
+      const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+      if (cwd && !clientScopes.includes(ADMIN_SCOPE)) {
+        const containment = await resolveWorkspacePathContainment(cwd, context.getRuntimeConfig());
+        if (
+          !containment ||
+          !isWorkspacePathContainmentCurrent(containment, context.getRuntimeConfig())
+        ) {
+          respond(
+            false,
+            undefined,
+            missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+          );
+          return;
+        }
+        cwd = containment.path;
+      }
+      const assertCurrent = (
+        currentTargets?: readonly { sessionKey: string; agentId?: string }[],
+      ) => {
+        sessionMutationAuthorization?.assertCurrent();
+        if (sessionMutationAuthorization) {
+          for (const target of currentTargets ?? []) {
+            sessionMutationAuthorization.assertTargetCurrent(target);
+          }
+        }
+      };
+      const defaults = await updateSessionGroupDefaults(
+        name,
+        {
+          cwd,
+          worktree: params.worktree,
+        },
+        process.env,
+        assertCurrent,
+        context.getRuntimeConfig(),
+      );
+      if (!defaults) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`);
+        return;
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          defaults: await filterMutableSessionGroupRecords({
+            client,
+            context,
+            records: () => readSessionGroupCatalog().defaults,
+          }),
+        },
+        undefined,
+      );
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
+    },
+  ),
+  "sessions.groups.delete": defineValidatedGatewayHandler(
+    "sessions.groups.delete",
+    validateSessionsGroupsDeleteParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      try {
+        const result = await deleteSessionGroup({
+          cfg: context.getRuntimeConfig(),
+          name: params.name,
+          assertCurrent: sessionMutationAuthorization?.assertCurrent,
+          assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
+        });
+        respond(true, { ok: true, ...result }, undefined);
+      } catch (error) {
+        respond(false, undefined, sessionGroupMutationError(error));
+      } finally {
+        emitSessionsChanged(context, { reason: "groups" });
+      }
+    },
+  ),
 };

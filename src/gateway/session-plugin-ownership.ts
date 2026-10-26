@@ -6,11 +6,9 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 
-export type PluginSessionOwnershipAction = "adopt" | "delete" | "fork" | "link" | "patch" | "reset";
-
 /** Plugin callers may access an existing session only when they own its exact row. */
 export function resolvePluginSessionOwnershipError(params: {
-  action: PluginSessionOwnershipAction;
+  action: "adopt" | "delete" | "fork" | "link" | "patch" | "recover" | "reset";
   entry: SessionEntry | undefined;
   key: string;
   pluginOwnerId: string | null | undefined;

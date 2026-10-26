@@ -1,713 +1,457 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
+import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
-  isToolCallContentType,
-  isToolResultContentType,
-} from "../../../../src/chat/tool-content.js";
-import type { ChatItem, MessageGroup, ToolCard } from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
+  readChatThreadMessageIdentity,
+  userTurnRunId,
+} from "../../lib/chat/history-message-identity.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
+import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
-  resolveMessageToolUseId,
-  resolveToolBlockId,
-  safeNormalizeMessage,
-} from "./chat-thread-items.ts";
+  senderIdentityKey,
+  sessionParticipantIdentityKey,
+  type SenderIdentity,
+} from "../../lib/chat/sender-label.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
+import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
+import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
+import {
+  assistantGroupIsIndependentBoundary,
+  assistantMessageIsAutomationResult,
+  chatItemStartsDisplayTurn,
+  chatItemStartsUserTurn,
+  hasForwardedSource,
+  isInterSessionMessage,
+  readAutomationRun,
+} from "./chat-turn-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import type { ChatReasoning } from "./tool-stream-contract.ts";
 
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
-  const record = asRecord(message);
-  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
+type ReplyState = {
+  sender?: MessageGroup["sender"];
+  message?: MessageGroup["replyToMessage"];
+  turnSource?: MessageGroup["replyTurnSource"];
+};
+
+/** Transcript facts that outlive the rendered subset of rows. */
+export type ReplyAttributionContext = {
+  /** Every transcript row, including those a search hides from `items`. */
+  items?: ChatItem[];
+  /** People the session row lists, keyed by `sessionParticipantIdentityKey`. */
+  people?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  localPerson?: string;
+};
+
+const groupedSegments = new WeakMap<
+  object,
+  { inputs: unknown[]; items: Array<ChatItem | MessageGroup> }
+>();
+
+/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
+function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
+  const visible = new Set(items.map((item) => item.key));
+  const rows = new Set<string>();
+  let hiddenTurn = false;
+  for (const item of context) {
+    if (!visible.has(item.key)) {
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
+    } else if (hiddenTurn) {
+      rows.add(item.key);
+      hiddenTurn = false;
+    }
   }
-  const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+  return rows;
 }
 
-function stampReplyAttribution(
-  items: Array<ChatItem | MessageGroup>,
+function groupChatItems(
+  items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
-  const userSenderKeys = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "group" || item.role !== "user" || !item.sender) {
+  const reasoningKey = JSON.stringify([...visibleReasoning]);
+  const result: Array<ChatItem | MessageGroup> = [];
+  let source: Array<Extract<ChatItem, { kind: "message" }>> = [];
+  const flush = () => {
+    if (source.length === 0) {
+      return;
+    }
+    const owner = asRecord(source[0]?.message);
+    const inputs: unknown[] = [reasoningKey, showReasoning];
+    for (const item of source) {
+      inputs.push(
+        item.key,
+        item.message,
+        normalizeMessage(item.message),
+        item.duplicateCount,
+        item.startsTurn,
+        rowsAfterHiddenTurn?.has(item.key) === true,
+      );
+    }
+    const cached = owner && groupedSegments.get(owner);
+    // Duplicate collapse annotates wrappers, never the retained cache inputs.
+    const grouped =
+      cached &&
+      cached.inputs.length === inputs.length &&
+      inputs.every((input, index) => input === cached.inputs[index])
+        ? cached.items
+        : groupChatItemSegment(
+            source.map((item) => ({ ...item })),
+            visibleReasoning,
+            rowsAfterHiddenTurn,
+            showReasoning,
+          );
+    if (grouped !== cached?.items) {
+      const segment = { inputs, items: grouped };
+      // Hidden or retained source objects must not keep overlapping old snapshots alive.
+      for (const item of source) {
+        const message = asRecord(item.message);
+        if (message) {
+          const previous = groupedSegments.get(message);
+          if (previous && previous !== segment && previous.inputs.length > 0) {
+            previous.inputs = [];
+            previous.items = [];
+          }
+          groupedSegments.set(message, segment);
+        }
+      }
+    }
+    // Attribution is transcript-wide and must never annotate cached local groups.
+    for (const item of grouped) {
+      result.push(item.kind === "group" ? { ...item } : item);
+    }
+    source = [];
+  };
+  for (const [index, item] of items.entries()) {
+    if (item.kind !== "message") {
+      flush();
+      result.push(item);
       continue;
     }
-    const senderKey = senderIdentityKey(item.sender);
-    if (senderKey) {
-      userSenderKeys.add(senderKey);
+    const previous = items[index - 1];
+    if (
+      previous?.kind === "message" &&
+      normalizeRoleForGrouping(normalizeMessage(item.message).role) === "user"
+    ) {
+      const normalized = normalizeMessage(previous.message);
+      const role = normalizeRoleForGrouping(normalized.role);
+      // A visible non-user row guarantees a grouping and duplicate boundary.
+      // Keep hidden rows and consecutive inputs together for the canonical grouper.
+      if (
+        role !== "user" &&
+        (role !== "assistant" ||
+          resolveMessageVisibleContent(previous.message, normalized) === "non-text" ||
+          resolveMessageDisplayMarkdown(previous.message, normalized).trim())
+      ) {
+        flush();
+      }
     }
+    source.push(item);
   }
-  if (userSenderKeys.size < 2) {
-    return items;
-  }
+  flush();
+  return result;
+}
 
-  let latestUserSender: MessageGroup["sender"];
-  for (const item of items) {
+export function groupMessages(
+  items: ChatItem[],
+  replyContext: ReplyAttributionContext = {},
+  reasoning?: ChatReasoning | null,
+  showReasoning = false,
+): Array<ChatItem | MessageGroup> {
+  const visibleReasoning = new Set(
+    reasoning?.items.flatMap(({ receipt }) =>
+      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
+    ),
+  );
+  const result = groupChatItems(
+    items,
+    visibleReasoning,
+    replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
+  );
+  const context = replyContext.items
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
+    : result;
+  /**
+   * Reply context comes from the full transcript, not the rendered rows: search
+   * renders a subset that can drop the other speaker or the prompt a reply answers.
+   */
+  const { people: sessionPeople, localPerson } = replyContext;
+  const people = new Set(sessionPeople);
+  const untypedSenders: SenderIdentity[] = [];
+  // reply_to_current names the prompt that started the run. Only the persisted
+  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
+  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const stateBefore = new Map<string, ReplyState>();
+  let state: ReplyState = {};
+  for (const item of context) {
+    // System notices and projected/forwarded inputs own turns too. Clear the
+    // previous prompt before recording reply state for their output.
+    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
+      state = {};
+    }
+    if (item.kind === "stream") {
+      stateBefore.set(item.key, state);
+    }
     if (item.kind !== "group") {
       continue;
     }
+    for (const source of item.messages) {
+      stateBefore.set(source.key, state);
+    }
     if (item.role === "user") {
+      for (const source of item.messages) {
+        const runId = userTurnRunId(source.message);
+        if (runId) {
+          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+        }
+      }
+      // A local message carries no sender metadata: its author is the signed-in
+      // viewer, one person for counting, never a name for this message.
+      if (item.sender?.identity) {
+        people.add(sessionParticipantIdentityKey(item.sender.identity));
+      } else if (item.sender) {
+        untypedSenders.push(item.sender);
+      } else if (!item.senderSession && localPerson) {
+        people.add(localPerson);
+      }
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
-      latestUserSender = item.sender;
-    } else if (item.role === "assistant" && latestUserSender) {
-      item.replyToSender = latestUserSender;
+      const last = item.messages.at(-1);
+      state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
+    } else if (
+      item.role === "assistant" &&
+      (hasForwardedSource(item) || assistantGroupIsIndependentBoundary(item))
+    ) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      state = {};
     }
   }
-  return items;
+  // Untyped senders resolve after every typed person is known, so order never splits one.
+  /**
+   * Keys a sender without a typed identity by its id alone; names change, ids do
+   * not. The Gateway stores a profile user's id as `senderId` (typed identities
+   * persist only when their id equals it), so an untyped id that matches a
+   * counted profile is that person. Any other untyped id is its own person.
+   */
+  for (const sender of untypedSenders) {
+    if (!sender.id) {
+      people.add(JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]));
+      continue;
+    }
+    const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+    people.add(
+      people.has(profile) || profile === localPerson
+        ? profile
+        : JSON.stringify(["sender", sender.id]),
+    );
+  }
+  // Automatic attribution is only useful when several people share the thread.
+  const shared = people.size >= 2;
+
+  // Rows outside the context (live output) take the state of the next row that
+  // has one, or the transcript end.
+  const states: ReplyState[] = [];
+  let next = state;
+  for (let index = result.length - 1; index >= 0; index -= 1) {
+    const item = result[index]!;
+    const known =
+      item.kind === "group"
+        ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
+        : item.kind === "stream"
+          ? stateBefore.get(item.key)
+          : undefined;
+    next = known ?? next;
+    states[index] = next;
+  }
+  for (const [index, item] of result.entries()) {
+    const { sender, message, turnSource } = states[index]!;
+    if (item.kind === "group") {
+      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
+      if (shared) {
+        item.replyShared = true;
+      }
+      if (
+        item.role !== "assistant" ||
+        hasForwardedSource(item) ||
+        assistantGroupIsIndependentBoundary(item)
+      ) {
+        continue;
+      }
+      const currentSource =
+        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
+          ? runPrompts.get(item.runId)
+          : undefined;
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+    } else if (item.kind !== "stream") {
+      continue;
+    }
+    if (shared && (item.kind === "stream" || sender)) {
+      item.replyToSender = sender;
+      item.replyToMessage = message;
+    }
+  }
+  return result;
 }
-export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+
+function groupChatItemSegment(
+  items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
+): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
+  let currentUserTurnIdentity: string | null = null;
+  let currentReplyTargetKey: string | null = null;
 
-  for (const item of items) {
-    if (item.kind !== "message") {
+  for (const prepared of prepareMessagesForGrouping(items)) {
+    if (prepared.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
       }
-      result.push(item);
+      result.push(prepared);
       continue;
     }
 
-    const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
+    const { item, normalized } = prepared;
+    const record = asRecord(item.message);
+    const identity = visibleReasoning.size ? readChatThreadMessageIdentity(item.message) : null;
+    const hasVisibleReasoning =
+      identity?.role === "assistant" &&
+      !identity.isImported &&
+      visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
+      Boolean(extractThinkingCached(item.message));
+    const hasAssistantText =
+      record?.role === "assistant" &&
+      record.stopReason === "toolUse" &&
+      Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
+    // Saved reasoning stays visible until its live owner retires the receipts.
+    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Classify after content projection; prepared outcomes may outlive their blocks.
+    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
+    const hasPreparedActivity =
+      normalizedRole === "assistant" &&
+      visibleContent === "none" &&
+      hasVisiblePreparedActivity(item.message);
+    const role =
+      hasAssistantText || hasVisibleReasoning
+        ? "assistant"
+        : hasPreparedActivity
+          ? "tool"
+          : normalizedRole;
+    const source = {
+      message: item.message,
+      key: item.key,
+      duplicateCount: item.duplicateCount,
+      ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
+      hasVisibleContent:
+        hasVisibleReasoning ||
+        (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
+        visibleContent === "non-text" ||
+        Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
+    };
+    // Projection can remove the last tool block, leaving only hidden thinking.
+    // Keep recorded interruptions/errors, which have their own visible outcome.
+    if (
+      role === "assistant" &&
+      !source.hasVisibleContent &&
+      !assistantMessageIsInterrupted(item.message) &&
+      record?.stopReason !== "error"
+    ) {
+      continue;
+    }
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
+    const runId =
+      role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
+    // Independent sends own separate elapsed boundaries; consecutive steers
+    // before any output keep their target run's original start. Do not stamp
+    // user runIds onto groups: reply-less activity pooling uses that field.
+    const steerTarget = role === "user" ? persistedSteerTargetRunId(item.message) : null;
+    const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
+    const replyTargetKey =
+      role === "assistant" ? JSON.stringify(normalized.replyTarget ?? null) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
+      item.startsTurn === true ||
+      rowsAfterHiddenTurn?.has(item.key) === true ||
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
-    const splitsAssistantCommentary =
+    const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
-      isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
-        isKeyedAssistantStreamFallbackMessage(item.message);
+      assistantMessageKind(currentGroup.messages[0]?.message, currentGroup.visibleContent) !==
+        assistantMessageKind(item.message, visibleContent);
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
+      // Each automation input owns a turn, including old rows without a projected marker.
+      Boolean(
+        readAutomationRun(item.message) ||
+        readAutomationRun(currentGroup.messages[0]?.message) ||
+        assistantMessageIsAutomationResult(item.message) ||
+        assistantMessageIsAutomationResult(currentGroup.messages[0]?.message),
+      ) ||
+      (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
-      splitsAssistantCommentary ||
+      currentGroup.runId !== runId ||
+      isInterSessionMessage(currentGroup.messages[0]?.message) !==
+        isInterSessionMessage(item.message) ||
+      currentUserTurnIdentity !== userTurnIdentity ||
+      (role === "assistant" && currentReplyTargetKey !== replyTargetKey) ||
+      splitsAssistantKind ||
+      messageClientSourcesKey(currentGroup.sourceClients ?? []) !==
+        messageClientSourcesKey(normalized.sourceClients ?? []) ||
       (shouldSplitBySender &&
-        (currentGroup.senderLabel !== senderLabel ||
+        ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
+          currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
+          currentGroup.senderSession?.label !== normalized.senderSession?.label ||
+          currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
+      currentUserTurnIdentity = userTurnIdentity;
+      currentReplyTargetKey = replyTargetKey;
       currentGroup = {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
-        messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
+        ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
+        messages: [source],
+        visibleContent,
         timestamp,
         isStreaming: false,
+        ...(runId ? { runId } : {}),
       };
     } else {
-      currentGroup.messages.push({
-        message: item.message,
-        key: item.key,
-        duplicateCount: item.duplicateCount,
-      });
+      if (visibleContent === "non-text" || currentGroup.visibleContent === "none") {
+        currentGroup.visibleContent = visibleContent;
+      }
+      currentGroup.messages.push(source);
     }
   }
 
   if (currentGroup) {
     result.push(currentGroup);
-  }
-  return stampReplyAttribution(result);
-}
-
-function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
-  if (callItem.kind !== "message" || resultItem.kind !== "message") {
-    return null;
-  }
-  const callMessage = asRecord(callItem.message);
-  const resultMessage = asRecord(resultItem.message);
-  if (!callMessage || !resultMessage) {
-    return null;
-  }
-  const callRole = typeof callMessage.role === "string" ? callMessage.role.toLowerCase() : "";
-  const normalizedResult = safeNormalizeMessage(resultItem.message);
-  const resultRole = normalizedResult ? normalizeRoleForGrouping(normalizedResult.role) : "unknown";
-  if (callRole !== "assistant" || resultRole !== "tool" || !Array.isArray(callMessage.content)) {
-    return null;
-  }
-  const hasToolCallBlock = callMessage.content.some((block) =>
-    isToolCallContentType(asRecord(block)?.type),
-  );
-  if (!hasToolCallBlock) {
-    return null;
-  }
-
-  const callCards = extractToolCardsCached(callItem.message, `${callItem.key}:activity-call`);
-  const resultCards = extractToolCardsCached(
-    resultItem.message,
-    `${resultItem.key}:activity-result`,
-  );
-  if (callCards.length === 0 || resultCards.length === 0) {
-    return null;
-  }
-  const rawResultContent = Array.isArray(resultMessage.content) ? resultMessage.content : [];
-  if (rawResultContent.some((block) => isToolCallContentType(asRecord(block)?.type))) {
-    return null;
-  }
-  const resultOnlyContent = rawResultContent.filter(
-    (block) => !isToolCallContentType(asRecord(block)?.type),
-  );
-  const hasToolResultBlock = resultOnlyContent.some((block) =>
-    isToolResultContentType(asRecord(block)?.type),
-  );
-  const hasToolResult =
-    hasToolResultBlock ||
-    resultCards.some((card) => card.outputText !== undefined || card.isError !== undefined);
-  if (!hasToolResult) {
-    return null;
-  }
-
-  const unresolvedCallIds = unresolvedToolCallIds(callItem);
-  const matchedResults = new Map<string, { resultCard: ToolCard; resultName: string }>();
-  for (const resultCard of resultCards) {
-    const callId = resultCard.callId;
-    if (!callId || !unresolvedCallIds.has(callId) || matchedResults.has(callId)) {
-      return null;
-    }
-    const callCard = callCards.find((card) => card.callId === callId);
-    if (!callCard) {
-      return null;
-    }
-    const resultName = resultCard.name === "tool" ? callCard.name : resultCard.name;
-    if (
-      normalizeLowercaseStringOrEmpty(callCard.name) !== normalizeLowercaseStringOrEmpty(resultName)
-    ) {
-      return null;
-    }
-    matchedResults.set(callId, { resultCard, resultName });
-  }
-
-  const preservedResultContent = resultOnlyContent.filter(
-    (block) => asRecord(block)?.type !== "text",
-  );
-  // Raw transcript result blocks usually carry the call id and tool name on the
-  // message, not the block. Stamp both onto the merged blocks (plus message-level
-  // details) so card extraction pairs them with the call instead of rendering a
-  // second bare "Tool" card.
-  const resultContent = hasToolResultBlock
-    ? resultOnlyContent.map((block) => {
-        const record = asRecord(block);
-        if (!record || !isToolResultContentType(record.type)) {
-          return block;
-        }
-        const callId = resolveToolBlockId(record, resultMessage);
-        const matched = callId ? matchedResults.get(callId) : undefined;
-        if (!matched) {
-          return block;
-        }
-        const stamped: Record<string, unknown> = Object.assign({}, record);
-        stamped.id = callId;
-        stamped.name =
-          typeof record.name === "string" && record.name.trim() ? record.name : matched.resultName;
-        if (record.details === undefined && resultMessage.details !== undefined) {
-          stamped.details = resultMessage.details;
-        }
-        if (
-          record.isError === undefined &&
-          record.is_error === undefined &&
-          matched.resultCard.isError !== undefined
-        ) {
-          stamped.isError = matched.resultCard.isError;
-        }
-        return stamped;
-      })
-    : (() => {
-        const [matched] = matchedResults.values();
-        if (!matched) {
-          return preservedResultContent;
-        }
-        return [
-          {
-            type: "tool_result",
-            id: matched.resultCard.callId,
-            name: matched.resultName,
-            text: matched.resultCard.outputText ?? "",
-            ...(matched.resultCard.details !== undefined
-              ? { details: matched.resultCard.details }
-              : {}),
-            ...(matched.resultCard.isError !== undefined
-              ? { isError: matched.resultCard.isError }
-              : {}),
-          },
-          ...preservedResultContent,
-        ];
-      })();
-  return {
-    ...callItem,
-    message: {
-      ...callMessage,
-      content: [...callMessage.content, ...resultContent],
-    },
-  };
-}
-
-function unresolvedToolCallIds(item: ChatItem): Set<string> {
-  const unresolved = new Set<string>();
-  if (item.kind !== "message") {
-    return unresolved;
-  }
-  const message = asRecord(item.message);
-  if (
-    !message ||
-    typeof message.role !== "string" ||
-    message.role.toLowerCase() !== "assistant" ||
-    !Array.isArray(message.content)
-  ) {
-    return unresolved;
-  }
-  for (const block of message.content) {
-    const record = asRecord(block);
-    if (!record) {
-      continue;
-    }
-    const callId = resolveToolBlockId(record, message);
-    if (!callId) {
-      continue;
-    }
-    if (isToolCallContentType(record.type)) {
-      unresolved.add(callId);
-    } else if (isToolResultContentType(record.type)) {
-      unresolved.delete(callId);
-    }
-  }
-  return unresolved;
-}
-
-function isToolTimelineItem(item: ChatItem): boolean {
-  if (item.kind !== "message") {
-    return false;
-  }
-  const normalized = safeNormalizeMessage(item.message);
-  return normalized ? normalizeRoleForGrouping(normalized.role) === "tool" : false;
-}
-
-function splitBundledToolResultItems(item: ChatItem): ChatItem[] {
-  if (item.kind !== "message") {
-    return [item];
-  }
-  const message = asRecord(item.message);
-  if (!message || !Array.isArray(message.content) || message.content.length < 2) {
-    return [item];
-  }
-  const blocksByCallId = new Map<string, unknown[]>();
-  for (const block of message.content) {
-    const record = asRecord(block);
-    if (!record || !isToolResultContentType(record.type)) {
-      return [item];
-    }
-    const callId = resolveToolBlockId(record, message);
-    if (!callId) {
-      return [item];
-    }
-    const blocks = blocksByCallId.get(callId) ?? [];
-    blocks.push(block);
-    blocksByCallId.set(callId, blocks);
-  }
-  if (blocksByCallId.size < 2) {
-    return [item];
-  }
-  return Array.from(blocksByCallId.values(), (content, index) => ({
-    ...item,
-    key: `${item.key}:result:${index}`,
-    message: { ...message, content },
-  }));
-}
-
-function resolveToolResultCallId(item: ChatItem): string | undefined {
-  if (item.kind !== "message") {
-    return undefined;
-  }
-  const message = asRecord(item.message);
-  if (!message) {
-    return undefined;
-  }
-  const content = Array.isArray(message.content) ? message.content : [];
-  if (content.some((block) => isToolCallContentType(asRecord(block)?.type))) {
-    return undefined;
-  }
-  const resultIds = new Set<string>();
-  for (const block of content) {
-    const record = asRecord(block);
-    if (record && isToolResultContentType(record.type)) {
-      const callId = resolveToolBlockId(record, message);
-      if (callId) {
-        resultIds.add(callId);
-      }
-    }
-  }
-  if (resultIds.size > 1) {
-    return undefined;
-  }
-  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
-}
-
-function refreshOpenCallIds(
-  openCallIndexes: Map<string, number>,
-  coalesced: ChatItem[],
-  callIndex: number,
-) {
-  for (const [callId, index] of openCallIndexes) {
-    if (index === callIndex) {
-      openCallIndexes.delete(callId);
-    }
-  }
-  const item = coalesced[callIndex];
-  if (!item) {
-    return;
-  }
-  for (const callId of unresolvedToolCallIds(item)) {
-    openCallIndexes.set(callId, callIndex);
-  }
-}
-
-export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
-  const coalesced: ChatItem[] = [];
-  // Parallel calls can outnumber any fixed lookback window, so each unresolved
-  // call id owns its current transcript item until a non-tool boundary.
-  const openCallIndexes = new Map<string, number>();
-  for (const item of items) {
-    const resultItems = splitBundledToolResultItems(item);
-    const unmatchedResultItems: ChatItem[] = [];
-    let mergedResult = false;
-    for (const resultItem of resultItems) {
-      const callId = resolveToolResultCallId(resultItem);
-      const callIndex = callId ? openCallIndexes.get(callId) : undefined;
-      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
-      const merged =
-        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
-      if (!merged || callIndex === undefined) {
-        unmatchedResultItems.push(resultItem);
-        continue;
-      }
-      coalesced[callIndex] = merged;
-      refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
-      mergedResult = true;
-    }
-    if (mergedResult) {
-      for (const unmatched of unmatchedResultItems) {
-        coalesced.push(unmatched);
-      }
-      continue;
-    }
-
-    const unresolvedCallIds = unresolvedToolCallIds(item);
-    if (unresolvedCallIds.size === 1) {
-      const callId = unresolvedCallIds.values().next().value;
-      const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
-      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
-      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
-        coalesced[previousIndex] = item;
-        refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
-        continue;
-      }
-    }
-
-    coalesced.push(item);
-    if (unresolvedCallIds.size > 0) {
-      const callIndex = coalesced.length - 1;
-      for (const callId of unresolvedCallIds) {
-        openCallIndexes.set(callId, callIndex);
-      }
-      continue;
-    }
-    if (isToolTimelineItem(item)) {
-      // Orphan results keep the window open for later siblings.
-      continue;
-    }
-    // Any other content (user text, assistant reply, dividers) closes the run.
-    openCallIndexes.clear();
-  }
-  return coalesced;
-}
-
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
-  });
-}
-
-function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
-}
-
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
-export function annotateToolTurnOutcome(
-  items: Array<ChatItem | MessageGroup>,
-): Array<ChatItem | MessageGroup> {
-  let sawAssistantReply = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item || item.kind !== "group") {
-      continue;
-    }
-    const role = item.role.toLowerCase();
-    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
-    if (role === "user") {
-      sawAssistantReply = false;
-    } else if (role === "assistant") {
-      if (forwardedBoundary) {
-        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
-        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
-        sawAssistantReply = false;
-      } else if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
-      }
-    } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
-    }
-    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
-      // This group belongs to the new hidden-input turn. Reset only after
-      // processing it so replies from this turn cannot classify older tools.
-      sawAssistantReply = false;
-    }
-  }
-  return items;
-}
-
-type RenderChatItem = ChatItem | MessageGroup;
-type StreamRunRenderItem = {
-  kind: "stream-run";
-  key: string;
-  parts: Array<
-    Extract<
-      ChatItem,
-      { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
-    >
-  >;
-};
-
-export function coalesceStreamRuns(
-  items: RenderChatItem[],
-): Array<RenderChatItem | StreamRunRenderItem> {
-  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
-  let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream, plan, and reading-indicator items render under one
-  // assistant avatar; messages, groups, and dividers intentionally break the run.
-  const flush = () => {
-    const [first] = run;
-    if (first) {
-      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
-      run = [];
-    }
-  };
-  for (const item of items) {
-    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
-      run.push(item);
-      continue;
-    }
-    flush();
-    result.push(item);
-  }
-  flush();
-  return result;
-}
-/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-type WorkGroupRenderItem = {
-  kind: "work-group";
-  key: string;
-  groups: MessageGroup[];
-  durationMs: number | null;
-  hasError: boolean;
-};
-
-type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
-
-function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
-  if (item.kind !== "group") {
-    return false;
-  }
-  // sessions_send projections start a new autonomous turn, same contract as
-  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return messageGroupStartsTurnBoundary(item);
-}
-
-function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
-    return false;
-  }
-  const role = item.role.toLowerCase();
-  return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
-}
-
-// Attachment/canvas/media-only replies carry no text but are still the turn's
-// visible outcome; they must never fold into the work rollup. Normalized
-// content passes unknown block types through (e.g. raw image blocks), so
-// anything that is not a tool block counts as visible reply content.
-function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    const content = safeNormalizeMessage(message)?.content ?? [];
-    return content.some((block) => {
-      if (block.type === "text") {
-        return Boolean(block.text?.trim());
-      }
-      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
-    });
-  });
-}
-
-export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
-  return (
-    group.role.toLowerCase() === "assistant" &&
-    !assistantGroupIsForwardedBoundary(group) &&
-    assistantGroupHasVisibleReplyContent(group)
-  );
-}
-
-function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
-  const role = group.role.toLowerCase();
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(group) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(group))
-  );
-}
-
-// History carries no final-vs-commentary marker (commentary exists only as
-// live stream segments), so the last assistant group with visible content
-// stands in for the final reply. Turns whose last content is commentary
-// merely collapse less; the visible reply is never folded away.
-function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
-  );
-}
-
-function workGroupHasError(groups: MessageGroup[]): boolean {
-  return groups.some(
-    (group) =>
-      group.role.toLowerCase() === "tool" &&
-      group.turnSucceeded !== true &&
-      group.messages.some((entry) =>
-        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
-      ),
-  );
-}
-
-/**
- * Once a turn is done, its intermediate work (tool groups and assistant
- * commentary before the final reply) collapses behind one "Worked for X"
- * disclosure so the thread reads final-output-first. Live turns stay fully
- * expanded; the collapse itself is the done signal.
- */
-export function collapseCompletedTurnWork(
-  items: TurnRenderItem[],
-  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
-): Array<TurnRenderItem | WorkGroupRenderItem> {
-  const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
-    opts.sessionKey,
-  ).split(":");
-  const isDashboardSession =
-    scope === "agent" &&
-    Boolean(agentId) &&
-    kind === "dashboard" &&
-    Boolean(sessionId) &&
-    extraParts.length === 0;
-  // Channel sessions can also be opened in the Control UI, but their full
-  // transcript remains the canonical presentation on message surfaces.
-  if (!isDashboardSession || opts.searchActive) {
-    return items;
-  }
-  const turns: TurnRenderItem[][] = [];
-  let currentTurn: TurnRenderItem[] = [];
-  for (const item of items) {
-    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
-      turns.push(currentTurn);
-      currentTurn = [];
-    }
-    currentTurn.push(item);
-  }
-  if (currentTurn.length > 0) {
-    turns.push(currentTurn);
-  }
-
-  const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
-  for (const [turnIndex, turn] of turns.entries()) {
-    // In-flight content (stream runs, streaming groups) marks the turn live.
-    // While the run works, the trailing turn also stays expanded so activity
-    // is watchable until the terminal rebuild collapses it.
-    const isLive =
-      (opts.runWorking && turnIndex === turns.length - 1) ||
-      turn.some(
-        (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
-      );
-    if (isLive) {
-      result.push(...turn);
-      continue;
-    }
-    let finalReplyIndex = -1;
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        finalReplyIndex = index;
-        break;
-      }
-    }
-    // Without a final reply, the tool rows are the turn's only visible result.
-    // Keep them exposed instead of replacing the result with an opaque rollup.
-    if (finalReplyIndex === -1) {
-      result.push(...turn);
-      continue;
-    }
-    const segmentEnd = finalReplyIndex - 1;
-    let segmentStart = segmentEnd + 1;
-    for (let index = segmentEnd; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
-        break;
-      }
-      segmentStart = index;
-    }
-    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
-    const firstGroup = groups[0];
-    if (!firstGroup) {
-      result.push(...turn);
-      continue;
-    }
-    const boundary = turn[0];
-    const startTimestamp =
-      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
-        ? boundary.timestamp
-        : firstGroup.timestamp;
-    const finalReply = turn[finalReplyIndex] as MessageGroup;
-    const endTimestamp = finalReply.timestamp;
-    const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
-    result.push(...turn.slice(0, segmentStart));
-    result.push({
-      kind: "work-group",
-      // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${finalReply.key}`,
-      groups,
-      durationMs,
-      hasError: workGroupHasError(groups),
-    });
-    result.push(...turn.slice(segmentEnd + 1));
   }
   return result;
 }

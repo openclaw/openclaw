@@ -1,71 +1,78 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  readAgentRunTerminalOutcome,
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Telegram plugin module wires inbound turn execution to Telegram delivery controllers.
 import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
-import type { TelegramDraftController } from "./bot-message-dispatch-draft.js";
-import type { TelegramProgressController } from "./bot-message-dispatch-progress.js";
-import type { TelegramReplyDelivery } from "./bot-message-dispatch-reply.js";
-import type { TelegramDispatchTurnState } from "./bot-message-dispatch.types.js";
-import type { TelegramStreamMode } from "./bot/types.js";
+import { sendPayload } from "./bot-message-dispatch-delivery.js";
+import {
+  beginDraftQueuedFollowup,
+  cleanupDrafts,
+  enqueueDraftEvent,
+  dropQueuedAnswerBlockRotation,
+  ingestDraftLaneSegments,
+  prepareQueuedAnswerBlock,
+  repositionLaneForNewMessage,
+  resetLaneState,
+  rotateLaneForNewMessage,
+} from "./bot-message-dispatch-draft.js";
+import { formatTelegramGroupThreadReply } from "./bot-message-dispatch-payload.js";
+import {
+  canPushToolProgress,
+  handleCompactionEnd,
+  handleCompactionStart,
+  handleItemEvent,
+  handlePlanUpdate,
+  handleToolStart,
+  pushThinkingTokenProgress,
+  pushToolProgress,
+} from "./bot-message-dispatch-progress.js";
+import {
+  deliverReply,
+  deliverPreparedReply,
+  handleReplyError,
+  handleReplySkip,
+  resetReasoningStepState,
+} from "./bot-message-dispatch-reply.js";
+import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
-export async function runTelegramDispatchTurn(params: {
-  cfg: OpenClawConfig;
-  context: TelegramMessageContext;
-  delivery: TelegramDeliveryController;
-  draft: TelegramDraftController;
-  /** Pre-adoption abort + lifecycle from durable ingress (optional for non-spooled). */
-  turnAdoptionLifecycle?: {
-    admission?: "exclusive" | "cancel-only";
-    onAdopted: () => void | Promise<void>;
-    onDeferred?: () => void;
-    onAbandoned?: () => void;
-    abortSignal?: AbortSignal;
-  };
-  isSuperseded: () => boolean;
-  progress: TelegramProgressController;
-  reply: TelegramReplyDelivery;
-  state: TelegramDispatchTurnState;
-  statusReactionController: TelegramMessageContext["statusReactionController"];
-  streamMode: TelegramStreamMode;
-  telegramCfg: TelegramAccountConfig;
-  telegramDeps: TelegramBotDeps;
-}) {
-  const { context } = params;
+export async function runTelegramDispatchTurn(turn: Turn) {
+  const { context } = turn;
+  const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
+  // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
+  const toolProgressEnabled =
+    turn.streamMode !== "off" &&
+    resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode);
   const beginDeliveryCorrelation = () =>
     telegramInboundEventDelivery.begin(
       context.ctxPayload.SessionKey,
       {
         outboundTo: context.historyKey || String(context.chatId),
         outboundAccountId: context.route.accountId,
-        markInboundEventDelivered: params.delivery.markDelivered,
+        markInboundEventDelivered: turn.deliveryState.markDelivered,
       },
       { inboundEventKind: context.ctxPayload.InboundEventKind },
     );
   const endDeliveryCorrelation = beginDeliveryCorrelation();
-  let splitReasoningOnNextStream = false;
+  const queueDraftProgress = (task: () => Promise<void>) =>
+    enqueueDraftEvent(turn, task).then(() => false);
 
   try {
-    const { onModelSelected, ...replyPipeline } = (
-      params.telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
-    )({
-      cfg: params.cfg,
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+      cfg: turn.cfg,
       agentId: context.route.agentId,
       channel: "telegram",
       accountId: context.route.accountId,
@@ -86,13 +93,6 @@ export async function runTelegramDispatchTurn(params: {
         },
       },
     });
-    const handleDeliveryError = async (err: unknown, info: { kind: string }) => {
-      await Promise.resolve(
-        params.reply.onError(err, info as Parameters<typeof params.reply.onError>[1]),
-      ).catch((callbackError: unknown) => {
-        logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
-      });
-    };
     const turnResult = await runChannelInboundEvent({
       channel: "telegram",
       accountId: context.route.accountId,
@@ -110,7 +110,7 @@ export async function runTelegramDispatchTurn(params: {
           raw: context,
         }),
         resolveTurn: (): ChannelInboundTurnPlan<"provider_message_sending"> => ({
-          cfg: params.cfg,
+          cfg: turn.cfg,
           channel: "telegram",
           accountId: context.route.accountId,
           route: {
@@ -119,32 +119,55 @@ export async function runTelegramDispatchTurn(params: {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
+          dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
-            deliverWithProviderMessageSending: async (payload, info) => {
-              return await params.reply.deliver(payload, info);
+            // Delivery owns its full draft mutation, including native questions and receipts.
+            deliverWithProviderMessageSending: (payload, info) =>
+              enqueueDraftEvent(turn, () => deliverReply(turn, payload, info), "delivery"),
+            deliverPreparedWithProviderMessageSending: (plan, info) =>
+              enqueueDraftEvent(turn, () => deliverPreparedReply(turn, plan, info), "delivery"),
+            onError: (err, info) => handleReplyError(turn, err, info),
+            onDelivered: (_payload, info, result) => {
+              const reason = result?.suppression?.reason;
+              if (
+                info.kind === "final" &&
+                !turn.previewLifecycle.finalFailed &&
+                (reason === "cancelled_by_reply_payload_sending_hook" ||
+                  reason === "empty_after_reply_payload_sending_hook")
+              ) {
+                turn.previewLifecycle.observeSuppression();
+              }
             },
-            // The shipped SDK declaration stays void; core still awaits the runtime promise.
-            onError: handleDeliveryError as NonNullable<
-              ChannelInboundTurnPlan["delivery"]["onError"]
-            >,
           },
           dispatcherOptions: {
             ...replyPipeline,
+            humanDelay: resolveHumanDelayConfig(turn.cfg, context.route.agentId),
             beforeDeliver: async (payload) => payload,
-            onBeforeDeliverCancelled: params.reply.onBeforeDeliverCancelled,
-            onSkip: params.reply.onSkip,
+            onBeforeDeliverCancelled: (payload, info) =>
+              info.kind === "block"
+                ? enqueueDraftEvent(turn, async () => {
+                    dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+                  })
+                : undefined,
+            onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            hasRepliedRef,
+            onPreparedAgentRunStart: ({ runId }) => {
+              turn.transcriptMirrorRunId = runId;
+            },
+            ...(context.ctxPayload.CommandSource === "native"
+              ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
+              : {}),
+            groupThreadReplyFormatter: formatTelegramGroupThreadReply,
             skillFilter: context.skillFilter,
-            disableBlockStreaming: params.draft.disableBlockStreaming,
-            abortSignal: params.turnAdoptionLifecycle?.abortSignal,
-            turnAdoptionLifecycle: params.turnAdoptionLifecycle
+            disableBlockStreaming: turn.disableBlockStreaming,
+            preserveProgressCallbackStartOrder: true,
+            abortSignal: turn.turnAdoptionLifecycle?.abortSignal,
+            turnAdoptionLifecycle: turn.turnAdoptionLifecycle
               ? {
-                  admission: params.turnAdoptionLifecycle.admission ?? "exclusive",
-                  onAdopted: params.turnAdoptionLifecycle.onAdopted,
-                  onDeferred: params.turnAdoptionLifecycle.onDeferred,
-                  onAbandoned: params.turnAdoptionLifecycle.onAbandoned,
-                  abortSignal: params.turnAdoptionLifecycle.abortSignal,
+                  ...turn.turnAdoptionLifecycle,
+                  admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
                 }
               : undefined,
             sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
@@ -152,130 +175,159 @@ export async function runTelegramDispatchTurn(params: {
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
             suppressTyping: isRoomEvent,
+            onObservedReplyDelivery: async () => {
+              turn.previewLifecycle.beginFinalDelivery();
+              await turn.draftEventQueue;
+              turn.deliveryState.markDelivered();
+              await turn.previewLifecycle.observeDelivery({ visibleReplySent: true });
+            },
             onPartialReply:
-              params.draft.answerLane.stream || params.draft.reasoningLane.stream
-                ? (payload) =>
-                    params.draft.enqueueEvent(async () => {
-                      await params.draft.ingestDraftLaneSegments(payload);
-                    })
+              turn.answerLane.stream || turn.reasoningLane.stream
+                ? (payload) => {
+                    const queued = enqueueDraftEvent(turn, async () => {
+                      await ingestDraftLaneSegments(turn, payload);
+                    });
+                    // Queue settlement records draft intent; a numeric provider message ID
+                    // proves operator visibility for terminal recovery.
+                    return queued.then(async () => {
+                      const answerStream = turn.answerLane.stream;
+                      await answerStream?.waitForInFlight();
+                      const providerMessageId = answerStream?.messageId();
+                      return (
+                        typeof providerMessageId === "number" && Number.isFinite(providerMessageId)
+                      );
+                    });
+                  }
                 : undefined,
-            onBlockReplyQueued: params.draft.answerLane.stream
+            onBlockReplyQueued: turn.answerLane.stream
               ? (payload, blockContext) =>
-                  params.draft.enqueueEvent(async () => {
-                    await params.draft.prepareQueuedAnswerBlock(payload, blockContext);
-                  })
+                  queueDraftProgress(() => prepareQueuedAnswerBlock(turn, payload, blockContext))
               : undefined,
-            onReasoningStream: params.draft.reasoningLane.stream
+            onReasoningStream: turn.reasoningLane.stream
               ? (payload) =>
-                  params.draft.enqueueEvent(async () => {
-                    if (splitReasoningOnNextStream) {
-                      params.draft.repositionLaneForNewMessage(params.draft.reasoningLane);
-                      splitReasoningOnNextStream = false;
+                  queueDraftProgress(async () => {
+                    if (turn.splitReasoningOnNextStream) {
+                      repositionLaneForNewMessage(turn, turn.reasoningLane);
+                      turn.splitReasoningOnNextStream = false;
                     }
-                    await params.draft.ingestDraftLaneSegments(payload, true);
+                    await ingestDraftLaneSegments(turn, payload, true);
                   })
-              : params.draft.streamReasoningInProgressDraft
+              : turn.streamReasoningInProgressDraft
                 ? (payload) =>
-                    params.draft.enqueueEvent(async () => {
-                      await params.progress.pushReasoningProgress(payload);
+                    queueDraftProgress(async () => {
+                      await turn.progressCompositor.pushReasoningProgress(payload.text, {
+                        snapshot: payload.isReasoningSnapshot === true,
+                      });
                     })
                 : undefined,
-            onReasoningProgress: params.draft.answerLane.stream
+            onReasoningProgress: turn.answerLane.stream
               ? (payload) =>
-                  params.draft.enqueueEvent(async () => {
-                    await params.progress.pushThinkingTokenProgress(payload.progressTokens);
+                  enqueueDraftEvent(turn, async () => {
+                    await pushThinkingTokenProgress(turn, payload.progressTokens);
                   })
               : undefined,
-            onAssistantMessageStart: params.draft.answerLane.stream
+            onAssistantMessageStart: turn.answerLane.stream
               ? () =>
-                  params.draft.enqueueEvent(async () => {
-                    params.reply.reasoningStepState.resetForNextStep();
-                    params.progress.setFinalAnswerDelivered(false);
-                    if (params.streamMode !== "progress") {
-                      params.progress.reset();
-                    }
-                    if (params.draft.answerLane.finalized) {
-                      await params.draft.rotateLaneForNewMessage(params.draft.answerLane);
-                      params.draft.setRotateWhenQueuedBlocksSettle(false);
+                  queueDraftProgress(async () => {
+                    resetReasoningStepState(turn);
+                    const previousAnswerDelivered = turn.previewLifecycle.finalDelivered;
+                    turn.previewLifecycle.reset();
+                    turn.finalDispatchClaimed = false;
+                    turn.progressCompositor.beginAssistantMessage();
+                    if (turn.answerLane.finalized) {
+                      await rotateLaneForNewMessage(turn, turn.answerLane);
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
+                    } else if (previousAnswerDelivered) {
+                      // A fresh final may have used the durable sender without leaving a draft ID.
+                      turn.answerLane.stream?.forceNewMessage();
+                      resetLaneState(turn, turn.answerLane);
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
                     } else if (
-                      params.draft.answerLane.hasStreamedMessage &&
-                      !params.draft.isAnswerToolProgressOnly()
+                      turn.answerLane.hasStreamedMessage &&
+                      !turn.activeAnswerDraftIsToolProgressOnly &&
+                      (turn.activeAnswerBlockDelivery || turn.queuedAnswerBlockRotations.length > 0)
                     ) {
-                      params.draft.setRotateWhenQueuedBlocksSettle(true);
+                      // Only accepted blocks need a new message. A provider retry must
+                      // keep editing its unfinished preview instead of retaining it as final.
+                      turn.rotateAnswerLaneWhenQueuedBlocksSettle = true;
                     }
                   })
               : undefined,
-            onReasoningEnd: params.draft.reasoningLane.stream
+            onReasoningEnd: turn.reasoningLane.stream
               ? () =>
-                  params.draft.enqueueEvent(async () => {
-                    params.progress.closeReasoningBurst();
-                    splitReasoningOnNextStream = params.draft.reasoningLane.hasStreamedMessage;
-                    params.progress.reset();
+                  queueDraftProgress(async () => {
+                    turn.splitReasoningOnNextStream = turn.reasoningLane.hasStreamedMessage;
+                    turn.progressCompositor.resetReasoningProgress();
                   })
-              : () => params.progress.closeReasoningBurst(),
+              : () => false,
             onQueuedFollowupAdmitted: () => {
-              params.draft.beginQueuedFollowup();
-              params.progress.beginQueuedFollowup();
+              hasRepliedRef.value = false;
+              beginDraftQueuedFollowup(turn);
+              turn.previewLifecycle.reset();
+              turn.finalDispatchClaimed = false;
+              turn.progressCompositor.beginNewTurn({ force: true });
             },
             onQueuedFollowupSettled: async () => {
-              params.progress.cancel();
-              await params.draft.waitForEvents();
-              await params.draft.cleanup(params.isSuperseded());
+              turn.progressCompositor.cancel();
+              await turn.draftEventQueue;
+              await cleanupDrafts(turn, turn.isSuperseded());
             },
             suppressDefaultToolProgressMessages:
-              !params.draft.streamDeliveryEnabled || Boolean(params.draft.answerLane.stream),
-            forceToolResultProgress:
-              params.streamMode === "progress" &&
-              resolveChannelStreamingPreviewToolProgress(
-                params.telegramCfg,
-                true,
-                params.streamMode,
-              ),
+              !turn.streamDeliveryEnabled || Boolean(turn.answerLane.stream),
+            progressRequiresReply: turn.streamMode === "progress" ? true : undefined,
+            suppressToolProgressMessages: !toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
-              !isRoomEvent && Boolean(params.draft.answerLane.stream),
-            onVerboseProgressVisibility: (isActive) => {
-              params.progress.setVerboseProgressActive(isActive);
+              !isRoomEvent && Boolean(turn.answerLane.stream),
+            onVerboseProgressVisibilityAsync: (isActive) => {
+              turn.verboseProgressActive = isActive;
             },
             commentaryProgressEnabled:
-              params.streamMode === "progress"
-                ? params.progress.commentaryProgressEnabled
-                : undefined,
-            progressPreambleEnabled: params.progress.progressPreambleEnabled,
-            commentaryPayloadsEnabled: params.progress.progressPreambleEnabled,
-            reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
-            onToolStart: params.progress.handleToolStart,
-            onItemEvent: params.progress.handleItemEvent,
-            onPlanUpdate: params.progress.handlePlanUpdate,
-            onApprovalEvent: params.progress.handleApprovalEvent,
-            onToolResult: async (payload) => {
-              const text = payload.text?.trim();
-              if (!text) {
-                return;
-              }
-              const updatedDraft = await params.progress.pushToolProgress(text, {
-                startImmediately: true,
-              });
-              if (
-                !updatedDraft &&
-                isFastModeAutoProgressPayload(payload) &&
-                !params.progress.canPushToolProgress()
-              ) {
-                await params.delivery.sendPayload(payload);
-              }
-            },
-            onCommandOutput: params.progress.handleCommandOutput,
-            onPatchSummary: params.progress.handlePatchSummary,
-            onCompactionStart: params.statusReactionController
-              ? async () => {
-                  await params.statusReactionController?.setCompacting();
+              turn.streamMode === "progress" ? turn.commentaryProgressEnabled : undefined,
+            progressPreambleEnabled: turn.progressPreambleEnabled,
+            commentaryPayloadsEnabled: turn.progressPreambleEnabled,
+            // The progress draft is the only commentary owner and retires before
+            // the clean final. A durable copy would restore the queue burst this
+            // owner boundary prevents; verbose still controls durable tool output.
+            shouldDeliverCommentaryPayloads:
+              turn.progressPreambleEnabled === true ? () => false : undefined,
+            reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
+            onToolStart: (payload) => enqueueDraftEvent(turn, () => handleToolStart(turn, payload)),
+            onItemEvent: (payload) => handleItemEvent(turn, payload),
+            onPlanUpdate: (payload) =>
+              enqueueDraftEvent(turn, () => handlePlanUpdate(turn, payload)),
+            onApprovalEvent: (payload) =>
+              enqueueDraftEvent(turn, async () =>
+                (await canPushToolProgress(turn))
+                  ? await turn.progressCompositor.pushApprovalEvent(payload)
+                  : false,
+              ),
+            onToolResult: (payload) =>
+              enqueueDraftEvent(turn, async () => {
+                const text = payload.text?.trim();
+                if (!text) {
+                  return false;
                 }
-              : undefined,
-            onCompactionEnd: params.statusReactionController
-              ? async () => {
-                  params.statusReactionController?.cancelPending();
-                  await params.statusReactionController?.setThinking();
+                const progressId = payload.channelData?.openclawToolProgressId;
+                const updatedDraft = await pushToolProgress(turn, text, {
+                  startImmediately: true,
+                  id: typeof progressId === "string" ? progressId : undefined,
+                });
+                if (updatedDraft) {
+                  return true;
                 }
-              : undefined,
+                if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
+                  return (await sendPayload(turn, payload)).visibleReplySent;
+                }
+                return false;
+              }),
+            // Ambient room events are intentionally invisible, including reactions.
+            // User requests in group chats are not room_event turns and retain these callbacks.
+            onCompactionStart: isRoomEvent
+              ? undefined
+              : () => enqueueDraftEvent(turn, () => handleCompactionStart(turn)),
+            onCompactionEnd: isRoomEvent
+              ? undefined
+              : (payload) => enqueueDraftEvent(turn, () => handleCompactionEnd(turn, payload)),
             onModelSelected,
           },
         }),
@@ -284,14 +336,19 @@ export async function runTelegramDispatchTurn(params: {
     if (!turnResult.dispatched) {
       return false;
     }
-    params.state.queuedFinal = turnResult.dispatchResult.queuedFinal;
-    params.state.noVisibleReplyFallbackEligible =
+    // Dispatch custody prevents replay, but only provider acceptance proves visibility.
+    turn.finalDispatchClaimed ||=
+      turnResult.dispatchResult.queuedFinal ||
+      (turnResult.dispatchResult.settledReceipt?.counts.final.failedAfterSend ?? 0) > 0;
+    turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
+    turn.sendPolicyDenied = turnResult.dispatchResult.sendPolicyDenied === true;
+    turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
-    if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
-      params.progress.markSawFinal();
-    }
-    params.state.suppressSilentReplyFallback =
+    turn.suppressSilentReplyFallback ||=
       turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+    if (turnResult.dispatchResult.deliberateSilentTerminalReply) {
+      turn.previewLifecycle.observeSuppression();
+    }
     return true;
   } finally {
     endDeliveryCorrelation();

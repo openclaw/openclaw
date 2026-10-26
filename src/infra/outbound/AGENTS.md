@@ -1,8 +1,22 @@
-# Outbound Test Performance
+# Outbound Delivery
 
-Outbound helpers sit on hot reply, action, media, and channel contract paths.
-Keep argument and payload tests narrow unless they are intentionally exercising
-real delivery.
+## Durable Delivery Ownership
+
+- Shared durable delivery records progress at queue custody and platform-send
+  boundaries. For queued sends, only the owner that canonically settles or
+  removes custody may publish terminal completion or audit facts; identityless
+  and crash-ambiguous sends remain with recovery/reconciliation, so live
+  delivery and recovery never both publish a terminal outcome.
+
+## Current-Source Completion
+
+- An eligible message action completes the current source only when its
+  requested or implicit destination matches that source and every
+  transport-reported delivered recipient normalizes to it. Requested routing
+  never overrides contradictory or mixed receipt data; inspect every physical
+  part of an aggregate result. Missing recipient metadata preserves the
+  existing plugin result contract. Completion eligibility does not widen
+  transcript-mirror or restart-receipt ownership.
 
 ## Guardrails
 
@@ -18,7 +32,5 @@ real delivery.
 
 ## Verification
 
-- Benchmark the affected outbound test file before/after with
-  `pnpm test <file>`.
-- Run the closest media/action/payload contract test when changing a shared
-  outbound helper.
+- Shared helper change: run `src/channels/plugins/contracts/outbound-payload.contract.test.ts`
+  and `src/infra/outbound/message-action-execution*.test.ts`.

@@ -1,62 +1,85 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sql } from "kysely";
+import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type {
-  SessionEntryStatus,
-  SessionEntrySummary,
-} from "./session-accessor.sqlite-contract.js";
 import {
-  hasValidSqliteSessionEntryIdentity,
-  parseSqliteSessionEntryRecord,
+  hasSqliteSessionOwnerColumns,
+  projectSqliteSessionOwner,
+  type SqliteSessionOwnerRow,
+} from "./session-accessor.sqlite-owner-projection.js";
+import {
+  hasValidSessionEntryIdentity,
+  parseCanonicalSqliteSessionEntry,
 } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import {
+  attachSessionEntrySnapshots,
+  type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
+import {
+  sessionEntrySnapshotColumnsForKeys,
+  type SessionEntrySnapshotRow,
+} from "./session-entry-snapshots.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
+export function selectSessionEntryRows(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  projection: SessionEntryProjection,
+  fullEntryKeys: readonly string[] = [],
+) {
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+    .selectFrom("session_nodes")
+    .select("session_key")
+    .select("entry_json")
+    .$if(projection !== "list" || fullEntryKeys.length > 0, (query) =>
+      query.select(
+        projection === "list"
+          ? sessionEntrySnapshotColumnsForKeys(fullEntryKeys)
+          : sessionEntrySnapshotColumnsForKeys(undefined, projection),
+      ),
+    )
+    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
+      query.select([
+        "owner_actor_type",
+        "owner_actor_id",
+        "owner_assigned_by_type",
+        "owner_assigned_by_id",
+        "owner_assigned_at",
+      ]),
+    );
+}
 
-export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null {
-  return value === "running" ||
-    value === "done" ||
-    value === "failed" ||
-    value === "killed" ||
-    value === "timeout"
+// Canonical writers persist validated entry identity. Inventory readers need
+// no payload for settled rows, but must retain parser semantics for pending/retained rows.
+export const sessionEntryInventoryJson =
+  /* kysely-allow-raw: reuse the writer-owned validity projection without loading saved prompts. */ sql<
+    string | null
+  >`CASE WHEN entry_valid = 1 THEN NULL ELSE entry_json END`.as("entry_json");
+
+export function normalizeStatus(value: unknown): NonNullable<SessionEntry["status"]> | null {
+  // Keep canonical interruption distinct without changing the derived status index schema.
+  if (value === "interrupted") {
+    return "failed";
+  }
+  return value === "done" || value === "failed" || value === "killed" || value === "timeout"
     ? value
     : null;
 }
 
-export { hasValidSqliteSessionEntryIdentity };
+export { hasValidSessionEntryIdentity };
 
-export function parseSqliteSessionEntryJson(row: {
-  current_session_id?: string;
-  entry_json: string;
-  updated_at?: number;
-}): SessionEntry | null {
-  const record = parseSqliteSessionEntryRecord(row);
-  return record ? projectCanonicalSessionEntryShape(record) : null;
-}
-
-export function readSqliteSessionEntriesByStatus(
-  database: OpenClawAgentDatabase,
-  statuses: readonly SessionEntryStatus[],
-  sessionKeys?: readonly string[],
-): SessionEntrySummary[] {
-  const selectedStatuses = [...new Set(statuses)];
-  const selectedSessionKeys = sessionKeys ? [...new Set(sessionKeys)] : undefined;
-  if (selectedStatuses.length === 0 || selectedSessionKeys?.length === 0) {
-    return [];
+export function parseSessionEntryJson(
+  row: {
+    current_session_id?: string;
+    entry_json: string;
+    updated_at?: number;
+  } & SqliteSessionOwnerRow &
+    SessionEntrySnapshotRow,
+  projection: SessionEntryProjection = "full",
+): SessionEntry | null {
+  const record = parseCanonicalSqliteSessionEntry(row);
+  if (!record) {
+    return null;
   }
-  const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
-  let query = db
-    .selectFrom("session_nodes")
-    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-    .where("status", "in", selectedStatuses);
-  if (selectedSessionKeys) {
-    query = query.where("session_key", "in", selectedSessionKeys);
-  }
-  return executeSqliteQuerySync(database.db, query)
-    .rows.flatMap((row) => {
-      const entry = parseSqliteSessionEntryJson(row);
-      return entry ? [{ entry, sessionKey: row.session_key }] : [];
-    })
-    .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
+  attachSessionEntrySnapshots(record, row, projection);
+  return projectSqliteSessionOwner(record, row);
 }

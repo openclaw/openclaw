@@ -1,25 +1,40 @@
 // Windows Git script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import type { WindowsGuest } from "./guest-transports.ts";
 import { die, run, say } from "./host-command.ts";
 import { psSingleQuote } from "./powershell.ts";
 import type { HostServer } from "./types.ts";
 
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
 export async function prepareMinGitZip(tgzDir: string): Promise<string> {
-  const metadata = run(
-    "python3",
-    [
-      "-c",
-      String.raw`import json
+  const metadata = run("python3", [
+    "-c",
+    String.raw`import json
+import re
 import urllib.request
 
 preferred_names = [
-    "MinGit-2.55.0.3-64-bit.zip",
-    "MinGit-2.55.0.3-arm64.zip",
+    "MinGit-2.56.0.2-64-bit.zip",
+    "MinGit-2.56.0.2-arm64.zip",
 ]
-fallback_urls = {
-    "MinGit-2.55.0.3-arm64.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-arm64.zip",
-    "MinGit-2.55.0.3-64-bit.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
+fallback_assets = {
+    "MinGit-2.56.0.2-arm64.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-arm64.zip",
+        "digest": "sha256:38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7",
+    },
+    "MinGit-2.56.0.2-64-bit.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-64-bit.zip",
+        "digest": "sha256:da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be",
+    },
 }
 
 try:
@@ -33,8 +48,10 @@ try:
     with urllib.request.urlopen(req, timeout=30) as response:
         data = json.load(response)
 except Exception:
+    fallback = fallback_assets[preferred_names[0]]
     print(preferred_names[0])
-    print(fallback_urls[preferred_names[0]])
+    print(fallback["browser_download_url"])
+    print(fallback["digest"])
     raise SystemExit(0)
 
 assets = data.get("assets", [])
@@ -71,14 +88,18 @@ if best is None:
 if best is None:
     raise SystemExit("no MinGit asset found")
 
+digest = best.get("digest", "")
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    raise SystemExit("MinGit asset missing SHA-256 digest")
+
 print(best["name"])
-print(best["browser_download_url"])`,
-    ],
-    { quiet: true },
-  ).stdout.trim();
-  const [name, url] = metadata.split("\n");
-  if (!name || !url) {
-    die("failed to resolve MinGit download metadata");
+print(best["browser_download_url"])
+print(digest)`,
+  ]).stdout.trim();
+  const [name, url, digest] = metadata.split("\n");
+  const expectedSha256 = digest?.match(/^sha256:([a-f\d]{64})$/u)?.[1];
+  if (!name || !url || !expectedSha256) {
+    die("failed to resolve checksummed MinGit download metadata");
   }
   const zipPath = path.join(tgzDir, name);
   say(`Download ${name}`);
@@ -106,6 +127,10 @@ print(best["browser_download_url"])`,
       timeoutMs: 270_000,
     },
   );
+  const actualSha256 = await sha256File(zipPath);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`MinGit SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
+  }
   return zipPath;
 }
 
@@ -141,7 +166,7 @@ New-Item -ItemType Directory -Force -Path $portableGit | Out-Null
 curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(minGitUrl)} -o $archive
 tar.exe -xf $archive -C $portableGit
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
-$env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
+$env:PATH = "$portableGit\\cmd;$portableGit\\ucrt64\\bin;$portableGit\\usr\\bin;$env:PATH"
 git.exe --version`,
     { timeoutMs: 1_200_000 },
   );

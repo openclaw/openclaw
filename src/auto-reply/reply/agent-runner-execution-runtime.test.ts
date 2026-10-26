@@ -1,385 +1,160 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { TemplateContext } from "../templating.js";
+import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
 import {
-  setupAgentRunnerExecutionTestState,
-  getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
+  createRunResult,
   createFollowupRun,
-  requireRecord,
-  requireMockCall,
+  runFallbackCandidate,
   expectMockCallArgFields,
-  createMinimalRunAgentTurnParams,
+  useProductionEmbeddedRunExecutionParamsForTest,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const loadProviderScopedThinkingCatalog = vi.hoisted(() => vi.fn());
 
-describe("executeAgentTurn: runtime selection", () => {
-  it.each(["group", "channel"] as const)(
-    "forwards authoritative %s type through CLI fallback for opaque session keys",
-    async (chatType) => {
-      state.isCliProviderMock.mockReturnValue(true);
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run("codex-cli", "gpt-5.4"),
-          provider: "codex-cli",
-          model: "gpt-5.4",
-          attempts: [],
-        }),
-      );
-      state.runCliAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "final" }],
-        meta: {},
-      });
+// mock-isolation: Supply the thinking catalog fixture without live model discovery.
+vi.mock("../../agents/model-catalog.runtime.js", () => ({ loadProviderScopedThinkingCatalog }));
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const followupRun = createFollowupRun();
-      followupRun.run.provider = "codex-cli";
-      followupRun.run.model = "gpt-5.4";
-      followupRun.run.sessionKey = "agent:main:opaque:binding";
-      followupRun.run.chatType = chatType;
+const { state, runTurn } = await setupExecutionSuite();
+const cliBackend = () => ({
+  id: "claude-cli",
+  modelProvider: "anthropic",
+  config: { command: "claude" },
+});
 
-      await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({
-          followupRun,
-          sessionCtx: {
-            Provider: "discord",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
-        }),
-        sessionKey: "agent:main:opaque:binding",
-      });
-
-      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-        sessionKey: "agent:main:opaque:binding",
-        chatType,
-      });
-    },
+function selectFallback(provider: string, model: string) {
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
   );
+}
 
-  it("prefers normalized current shared context over stale queued direct metadata", async () => {
+it("forwards turn context and tool policy for the concrete Codex runtime", async () => {
+  const provider = "openai",
+    model = "gpt-5.6-luna",
+    agentRuntime = "codex";
+  await useProductionEmbeddedRunExecutionParamsForTest();
+  loadProviderScopedThinkingCatalog.mockResolvedValue([]);
+  selectFallback(provider, model);
+  state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("final"));
+  const turnContext = { start: 0, text: "Current conversation." };
+  const followupRun = createFollowupRun({
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
+    provider,
+    model,
+    skipProviderRuntimeHints: true,
+    thinkingCatalog: [{ provider, id: model, input: ["text"] }],
+  });
+
+  const result = await runTurn({
+    followupRun,
+    opts: { forceRestartSafeTools: true, forceCodeModeTools: true, toolsAllow: ["message"] },
+    getActiveSessionEntry: () => ({
+      sessionId: "session",
+      updatedAt: 1,
+      agentRuntimeOverride: agentRuntime,
+    }),
+  });
+
+  expect(result.kind).toBe("success");
+  expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
+    forceRestartSafeTools: true,
+    forceCodeModeTools: true,
+    toolsAllow: ["message"],
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
+  });
+});
+
+it.each([
+  { queued: "group", current: undefined, expected: "group" },
+  { queued: "direct", current: "Channel", expected: "channel" },
+] as const)(
+  "forwards authoritative $expected type over queued $queued metadata",
+  async ({ queued, current, expected }) => {
+    const sessionKey = "agent:main:opaque:binding";
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.sessionKey = "agent:main:opaque:binding";
-    followupRun.run.chatType = "direct";
-
-    await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          ChatType: "Channel",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
+    selectFallback("codex-cli", "gpt-5.4");
+    state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
+    await runTurn({
+      sessionKey,
+      followupRun: createFollowupRun({
+        agentId: "main",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        sessionKey,
+        chatType: queued,
       }),
-      sessionKey: "agent:main:opaque:binding",
+      sessionCtx: { Provider: "discord", MessageSid: "msg", ChatType: current },
     });
-
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      sessionKey: "agent:main:opaque:binding",
-      chatType: "channel",
+      sessionKey,
+      chatType: expected,
     });
+  },
+);
+
+it.each([false, true])("routes a CLI runtime with observed ownership %s", async (observed) => {
+  const model = observed ? "claude-sonnet-4-6" : "gpt-5.4";
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => (observed ? [{ ...cliBackend(), pluginId: "anthropic" }] : []),
+    ...(!observed &&
+      ({
+        resolvePluginSetupCliBackend: ({ backend, config }) =>
+          backend === "claude-cli" && config
+            ? { pluginId: "anthropic", backend: { ...cliBackend(), bundleMcp: false } }
+            : undefined,
+      } satisfies Parameters<typeof cliBackendsTesting.setDepsForTest>[0])),
   });
-
-  it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.messageProvider = "stale-provider";
-
-    await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
-
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      messageChannel: undefined,
-      messageProvider: "discord",
-    });
-  });
-
-  it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend, config }) =>
-        backend === "claude-cli" && config
-          ? {
-              pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
-            }
-          : undefined,
-    });
-    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
-      provider: "openai",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "fallback" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "anthropic";
-    followupRun.run.model = "claude-opus-4-7";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          agentRuntime: { id: "claude-cli" },
-        },
-      },
-    };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () =>
-        ({
-          sessionId: "session",
-          updatedAt: Date.now(),
-          agentRuntimeOverride: "claude-cli",
-        }) as SessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(
-      requireRecord(
-        requireMockCall(state.runEmbeddedAgentMock, 0, "embedded run params")[0],
-        "embedded run params",
-      ),
-    ).not.toHaveProperty("agentHarnessId", "claude-cli");
-  });
-
-  it("passes OpenAI session runtime overrides as embedded harness ids", async () => {
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
-      provider: "openai",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "openai" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.4";
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () =>
-        ({
-          sessionId: "session",
-          updatedAt: Date.now(),
-          agentRuntimeOverride: "codex",
-        }) as SessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessId: "codex",
-    });
-  });
-
-  it("keeps catalog-adopted Codex sessions on Codex during heartbeat model overrides", async () => {
-    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude-opus-4-6"),
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "heartbeat" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "anthropic";
-    followupRun.run.model = "claude-opus-4-6";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      isHeartbeat: true,
-      getActiveSessionEntry: () =>
-        ({
-          sessionId: "catalog-adopted-session",
-          updatedAt: Date.now(),
-          agentHarnessId: "codex",
+  state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
+  selectFallback(observed ? "anthropic" : "openai", model);
+  const selected = observed ? state.runCliAgentMock : state.runEmbeddedAgentMock;
+  const unused = observed ? state.runEmbeddedAgentMock : state.runCliAgentMock;
+  selected.mockResolvedValueOnce(createRunResult("final"));
+  const followupRun = createFollowupRun({
+    provider: "anthropic",
+    model: observed ? model : "claude-opus-4-7",
+    ...(observed
+      ? {
           modelSelectionLocked: true,
-          pluginExtensions: {
-            codex: {
-              supervision: {
-                sourceThreadId: "019f-codex-thread",
-                modelLocked: true,
+          // Modality preparation uses the canonical model, not the CLI backend alias.
+          thinkingCatalog: [{ provider: "anthropic", id: model, input: ["text", "image"] }],
+        }
+      : {
+          config: {
+            agents: {
+              defaults: {
+                models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
               },
             },
           },
-        }) as SessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      trigger: "heartbeat",
-      agentHarnessId: "codex",
-      agentHarnessRuntimeOverride: "codex",
-    });
+        }),
   });
 
-  it("keeps a locked Codex harness embedded when cliBackends.codex is configured", async () => {
-    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "codex");
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
-      provider: "openai",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "continued" }],
-      meta: {},
-    });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.config = {};
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () =>
-        ({
-          sessionId: "catalog-adopted-session",
-          updatedAt: Date.now(),
-          agentHarnessId: "codex",
-          modelSelectionLocked: true,
-        }) as SessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessId: "codex",
-      agentHarnessRuntimeOverride: "codex",
-    });
+  const result = await runTurn({
+    followupRun,
+    getActiveSessionEntry: () => ({
+      sessionId: "session",
+      updatedAt: 1,
+      agentRuntimeOverride: "claude-cli",
+      ...(observed && {
+        modelSelectionLocked: true,
+        pluginOwnerId: "cli-owner",
+        agentHarnessId: "claude-cli",
+      }),
+    }),
   });
 
-  it("honors agent session runtime overrides before CLI runtime aliases", async () => {
-    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
-      provider: "openai",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "agent" }],
-      meta: {},
+  expect(result.kind).toBe("success");
+  expect(unused).not.toHaveBeenCalled();
+  expect(selected).toHaveBeenCalledOnce();
+  if (observed) {
+    expectMockCallArgFields(selected, 0, "CLI run params", {
+      provider: "claude-cli",
+      model,
+      modelHasVision: true,
     });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          agentRuntime: { id: "claude-cli" },
-        },
-      },
-    };
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      getActiveSessionEntry: () =>
-        ({
-          sessionId: "session",
-          updatedAt: Date.now(),
-          agentRuntimeOverride: "codex",
-        }) as SessionEntry,
-    });
-
-    expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessId: "codex",
-    });
-  });
+  } else {
+    expect(selected.mock.calls[0]?.[0]).not.toHaveProperty("agentHarnessId", "claude-cli");
+  }
 });

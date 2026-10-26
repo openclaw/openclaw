@@ -1,64 +1,162 @@
-// Sandbox backend registry tests cover pluggable backend factory and manager
-// lifecycle hooks.
-import { describe, expect, it } from "vitest";
-import {
-  getSandboxBackendFactory,
-  getSandboxBackendManager,
-  getSandboxBackendWorkdirResolver,
-  registerSandboxBackend,
-} from "./backend.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as backend from "./backend.js";
+import type { ReservedSandboxBackendFactoryV1 } from "./backend.types.js";
+import { resolveSandboxConfigForAgent as resolveTestSandboxConfig } from "./config.js";
+const { getSandboxBackendCapabilities, getSandboxBackendFactory } = backend;
+const restorers: Array<() => void> = [];
+afterEach(() => {
+  for (const restore of restorers.splice(0).toReversed()) {
+    restore();
+  }
+});
+function registerSandboxBackend(...args: Parameters<typeof backend.registerSandboxBackend>) {
+  const restore = backend.registerSandboxBackend(...args);
+  restorers.push(restore);
+  return restore;
+}
+const hooks = (id: string, api = backend) => [
+  api.getSandboxBackendFactory(id),
+  api.getSandboxBackendManager(id),
+  api.getSandboxBackendWorkdirResolver(id),
+];
+
+function expectHooks(id: string, expected: ReturnType<typeof hooks>, api = backend) {
+  hooks(id, api).forEach((value, index) => expect(value).toBe(expected[index]));
+}
+
+const paramsFor = (cfg = resolveTestSandboxConfig(), scopeKey = "test") => ({
+  cfg,
+  sessionKey: scopeKey,
+  scopeKey,
+  workspaceDir: "/workspace",
+  agentWorkspaceDir: "/workspace",
+});
+
+function createGenerationRegistration(label: string) {
+  return {
+    factory: () => Promise.reject(new Error(`unused sandbox backend ${label}`)),
+    manager: {
+      describeRuntime: async () => ({ running: true, configLabelMatch: true }),
+      removeRuntime: async () => {},
+    },
+    resolveWorkdir: () => `/runtime/${label}`,
+  };
+}
 
 describe("sandbox backend registry", () => {
-  it("registers Podman as a built-in backend", () => {
-    expect(getSandboxBackendFactory("podman")).not.toBeNull();
-    expect(getSandboxBackendManager("podman")).not.toBeNull();
-    expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
-  });
-
-  it("registers and restores backend factories", () => {
-    // Tests and optional backends install process-local factories; restore must
-    // remove them so later suites see the default registry.
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const restore = registerSandboxBackend("test-backend", factory);
-    expect(getSandboxBackendFactory("test-backend")).toBe(factory);
-    restore();
-    expect(getSandboxBackendFactory("test-backend")).toBeNull();
-  });
-
-  it("registers backend managers alongside factories", () => {
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const manager = {
-      describeRuntime: async () => ({
-        running: true,
-        configLabelMatch: true,
+  it("checks reserved-runtime authority before invoking an opted-in factory", async () => {
+    const factory = vi.fn<ReservedSandboxBackendFactoryV1>(async () => {
+      throw new Error("provider factory reached");
+    });
+    registerSandboxBackend("reserved-authority", {
+      factory,
+      reserveRuntimeId: () => "reserved-runtime",
+    });
+    const invoke = getSandboxBackendFactory("reserved-authority")!;
+    const params = paramsFor();
+    const assertRuntimeCurrent = vi.fn(() => {});
+    for (const incomplete of [
+      params,
+      { ...params, runtimeId: "reserved-runtime" },
+      { ...params, assertRuntimeCurrent },
+    ]) {
+      await expect(invoke(incomplete)).rejects.toThrow("registry-reserved runtime");
+    }
+    await expect(
+      invoke({
+        ...params,
+        runtimeId: "reserved-runtime",
+        assertRuntimeCurrent: () => {
+          throw new Error("runtime removed");
+        },
       }),
-      removeRuntime: async () => {},
-    };
-    const restore = registerSandboxBackend("test-managed", {
-      factory,
-      manager,
-    });
-    expect(getSandboxBackendFactory("test-managed")).toBe(factory);
-    expect(getSandboxBackendManager("test-managed")).toBe(manager);
-    restore();
-    expect(getSandboxBackendManager("test-managed")).toBeNull();
+    ).rejects.toThrow("runtime removed");
+    expect(factory).not.toHaveBeenCalled();
+    await expect(
+      invoke({ ...params, runtimeId: "reserved-runtime", assertRuntimeCurrent }),
+    ).rejects.toThrow("provider factory reached");
+    expect(assertRuntimeCurrent).toHaveBeenCalledOnce();
+    expect(factory).toHaveBeenCalledOnce();
   });
 
-  it("registers backend workdir resolvers alongside factories", () => {
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const resolveWorkdir = () => "/runtime/workspace";
-    const restore = registerSandboxBackend("test-workdir", {
-      factory,
-      resolveWorkdir,
+  it("advertises read-only resource projection only for supporting backends", () => {
+    expect(getSandboxBackendCapabilities("docker")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("podman")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("ssh")?.readOnlyResourceMounts).not.toBe(true);
+
+    const restore = registerSandboxBackend("test-capabilities", {
+      factory: createGenerationRegistration("capabilities").factory,
+      capabilities: { readOnlyResourceMounts: true },
     });
-    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBe(resolveWorkdir);
+    expect(getSandboxBackendCapabilities("test-capabilities")?.readOnlyResourceMounts).toBe(true);
     restore();
-    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBeNull();
+    expect(getSandboxBackendCapabilities("test-capabilities")).toBeUndefined();
+  });
+
+  it.each(["docker", "podman", "ssh"] as const)(
+    "preserves %s overrides through repeated module reloads and restores its defaults",
+    async (backendId) => {
+      const registration = createGenerationRegistration(backendId);
+      const restore = registerSandboxBackend(backendId, registration);
+
+      const { factory, manager, resolveWorkdir } = registration;
+      for (let reload = 0; reload < 2; reload++) {
+        vi.resetModules();
+        const fresh = await import("./backend.js");
+        expectHooks(backendId, [factory, manager, resolveWorkdir], fresh);
+      }
+      restore();
+
+      const fresh = await import("./backend.js");
+      const container = await import("./docker-backend.js");
+      const ssh = await import("./ssh-backend.js");
+      const { resolveSandboxConfigForAgent } = await import("./config.js");
+      const [defaultFactory, defaultManager] = {
+        docker: [container.createDockerSandboxBackend, container.dockerSandboxBackendManager],
+        podman: [container.createPodmanSandboxBackend, container.podmanSandboxBackendManager],
+        ssh: [ssh.createSshSandboxBackend, ssh.sshSandboxBackendManager],
+      }[backendId];
+      expect(fresh.getSandboxBackendFactory(backendId)).toBe(defaultFactory);
+      expect(fresh.getSandboxBackendManager(backendId)).toBe(defaultManager);
+      const cfg = resolveSandboxConfigForAgent();
+      const scopeKey = "agent:registry-test:main";
+      const workdir = fresh.getSandboxBackendWorkdirResolver(backendId)?.(paramsFor(cfg, scopeKey));
+      expect(workdir).toBe(
+        backendId === "ssh"
+          ? ssh.resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir
+          : cfg.docker.workdir,
+      );
+    },
+  );
+
+  it("does not inherit built-in management hooks for a factory-only override", () => {
+    const registration = createGenerationRegistration("docker");
+    registerSandboxBackend("docker", registration.factory);
+    expectHooks("docker", [registration.factory, null, null]);
+  });
+
+  it.each([
+    ["skip retired predecessors", ["A", "B", "C"], [1, 0, 2], ["C", "C", null]],
+    ["restore newest predecessor", ["A", "B", "C"], [1, 2, 0], ["C", "A", null]],
+    ["repeat stale disposal", ["A", "B"], [1, 0, 1], ["A", null, null]],
+    ["same object registered twice", ["A", "B", "A"], [2, 0, 1, 2], ["B", "B", null, null]],
+  ] as const)("preserves all backend authority: %s", (_scenario, initial, dispose, active) => {
+    const backendId = "test-generation-ownership";
+    const registrations = new Map(
+      [...new Set(initial)].map((label) => [label, createGenerationRegistration(label)]),
+    );
+    const disposers = initial.map((label) =>
+      registerSandboxBackend(backendId, registrations.get(label)!),
+    );
+    for (const [index, slot] of dispose.entries()) {
+      const expectedLabel = active[index];
+      disposers[slot]!();
+      const expected = expectedLabel ? registrations.get(expectedLabel) : undefined;
+      expectHooks(backendId, [
+        expected?.factory ?? null,
+        expected?.manager ?? null,
+        expected?.resolveWorkdir ?? null,
+      ]);
+    }
   });
 });

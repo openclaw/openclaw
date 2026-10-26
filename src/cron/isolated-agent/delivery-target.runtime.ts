@@ -13,19 +13,22 @@ import {
 export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
+export { resolveProactiveDeliveryTargetWithSessionRoute } from "../../infra/outbound/targets.js";
 
 /** Resolves a cron delivery target through channel plugins with bootstrap allowed. */
 export async function resolveChannelTargetForDelivery(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  agentId: string;
   input: string;
   accountId?: string | null;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
   // Delivery may be the first channel touch after startup; allow bootstrap so
   // plugin config and account metadata are available before target resolution.
-  resolveOutboundChannelPlugin({
+  const plugin = resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
   try {
@@ -35,6 +38,7 @@ export async function resolveChannelTargetForDelivery(params: {
       input: params.input,
       accountId: params.accountId,
       unknownTargetMode: "normalized",
+      plugin,
     });
   } catch (err) {
     return {
@@ -57,23 +61,26 @@ export async function resolveOutboundSessionRouteForDelivery(params: {
 }): Promise<OutboundSessionRoute | null> {
   // Route lookup also bootstraps the plugin so canonical thread/session mapping
   // matches the send-time channel runtime.
-  resolveOutboundChannelPlugin({
+  const plugin = resolveOutboundChannelPlugin({
     channel: params.channel,
     cfg: params.cfg,
+    agentId: params.agentId,
     allowBootstrap: true,
   });
-  return await resolveOutboundSessionRoute(params);
+  return await resolveOutboundSessionRoute({ ...params, plugin });
 }
 
 /** Returns whether a channel can canonicalize outbound cron delivery sessions. */
 export function channelCanResolveOutboundSessionRoute(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  agentId: string;
 }): boolean {
   return Boolean(
     resolveOutboundChannelPlugin({
       channel: params.channel,
       cfg: params.cfg,
+      agentId: params.agentId,
       allowBootstrap: true,
     })?.messaging?.resolveOutboundSessionRoute,
   );

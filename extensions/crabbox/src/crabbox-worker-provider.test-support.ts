@@ -1,0 +1,154 @@
+import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+import timers from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, vi } from "vitest";
+import * as binaryDiscovery from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import * as processRunner from "./crabbox-process.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
+
+export const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
+export const WORKER_WALLPAPER_PATH = fileURLToPath(
+  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
+);
+type ProviderDependencies = Parameters<typeof createCrabboxWorkerProvider>[0];
+export type ProviderFixtureDependencies = Partial<ProviderDependencies> & {
+  runCommand?: CrabboxCommandRunner;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  isExecutable?: (candidate: string) => boolean;
+};
+type Provider = ReturnType<typeof createCrabboxWorkerProvider>;
+export async function destroyAndWait(
+  provider: Pick<Provider, "destroy">,
+  lease: Parameters<Provider["destroy"]>[0],
+): Promise<void> {
+  await provider.destroy(lease);
+}
+
+export function createProviderFixtures(defaults: ProviderFixtureDependencies = {}) {
+  const providers = new Set<Provider>();
+  return {
+    providers,
+    createProvider: (dependencies: ProviderFixtureDependencies) => {
+      const { runCommand, sleep, isExecutable, ...options } = { ...defaults, ...dependencies };
+      if (runCommand) {
+        vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
+      }
+      if (sleep) {
+        vi.spyOn(timers, "setTimeout").mockImplementation(
+          async (milliseconds, value, timerOptions) => {
+            await sleep(milliseconds ?? 1, timerOptions?.signal);
+            return value;
+          },
+        );
+        syncBuiltinESMExports();
+      }
+      const sibling = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+      vi.spyOn(binaryDiscovery, "resolveCrabboxBinary").mockReturnValue(
+        isExecutable?.(sibling) ? sibling : "crabbox",
+      );
+      const provider = createCrabboxWorkerProvider({
+        state: crabboxState,
+        openclawRoot: OPENCLAW_ROOT,
+        wallpaperPath: WORKER_WALLPAPER_PATH,
+        ...options,
+      });
+      providers.add(provider);
+      return provider;
+    },
+  };
+}
+
+export function createProviderTestHarness(
+  defaults: ProviderFixtureDependencies = {},
+  statePrefix?: string,
+) {
+  const fixtures = createProviderFixtures(defaults);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      try {
+        await Promise.all([...fixtures.providers].map((provider) => provider.dispose()));
+      } finally {
+        fixtures.providers.clear();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        if (statePrefix) {
+          await closeOpenClawStateDatabaseAsync();
+          resetPluginStateStoreForTests();
+        }
+        vi.unstubAllEnvs();
+        syncBuiltinESMExports();
+        cleanup();
+      }
+    }),
+  );
+  beforeEach(() => {
+    vi.mocked(ensureManagedCrabboxBinary)
+      .mockReset()
+      .mockImplementation(async (params) => ({
+        binary: params?.binary ?? "crabbox",
+        version: "999.0.0",
+      }));
+    if (statePrefix) {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make(statePrefix));
+    }
+  });
+  return { ...fixtures, tempDirs };
+}
+
+export { commandResult } from "../../test-support/command-result.test-support.js";
+
+export function nodeEnrollmentFixture(
+  setupCode: string,
+  displayName: string,
+  waitForDeviceId = async () => "device-1",
+) {
+  return {
+    mode: "connect" as const,
+    setupCode,
+    setupId: "setup-id",
+    openclawVersion: "2026.8.1",
+    nodeBootstrap: createNodeBootstrapFixture(),
+    displayName,
+    waitForDeviceId,
+  };
+}
+
+export const active = { status: "active", sharedHost: false };
+
+export function classProfile(
+  machineClass: string,
+  primary: Record<string, unknown> = {},
+  selectors: Record<string, unknown> = {},
+) {
+  return {
+    class: machineClass,
+    target: "linux",
+    architecture: "amd64",
+    primary: {
+      type: "native-8vcpu-16gb",
+      ...primary,
+    },
+    ...selectors,
+  };
+}
+
+export function mappedCatalog(profiles: unknown[]) {
+  return { disposition: "mapped", profiles };
+}
+
+export function catalogJson(
+  provider: string,
+  targets: string[],
+  profiles: unknown[],
+  extra: Record<string, unknown> = {},
+) {
+  return JSON.stringify([{ provider, targets, classCatalog: mappedCatalog(profiles), ...extra }]);
+}

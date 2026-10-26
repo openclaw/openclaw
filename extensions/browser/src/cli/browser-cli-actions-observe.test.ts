@@ -1,189 +1,97 @@
-// Browser tests cover browser cli actions observe plugin behavior.
-import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserGateway,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
-  >(async () => ({ response: { body: "ok" } })),
-}));
-
-const extractMocks = vi.hoisted(() => ({
-  completeBrowserExtract: vi.fn(async () => ({
-    content: [{ type: "text" as const, text: "[analyzed by test/model]\nThe answer." }],
-    details: {
-      url: "https://example.com",
-      chars: 12,
-      truncated: false,
-      model: "test/model",
-    },
-  })),
-  resolveBrowserExtractTimeoutMs: vi.fn(() => 60_000),
-  validateBrowserExtractSchema: vi.fn(() => undefined),
-}));
-
-vi.mock("../browser-extract.js", () => extractMocks);
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const gatewayMock = mockBrowserGateway();
+gatewayMock.mockResolvedValue({ response: { body: "ok" } });
+mockBrowserCliRuntime();
 
 const { registerBrowserActionObserveCommands } = await import("./browser-cli-actions-observe.js");
 
-function createActionObserveProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
+  browser.option("--timeout <ms>", "Timeout in ms", "30000");
   registerBrowserActionObserveCommands(browser, parentOpts);
-  return program;
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 describe("browser action observe commands", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
-    extractMocks.completeBrowserExtract.mockClear();
-    extractMocks.resolveBrowserExtractTimeoutMs.mockClear();
-    extractMocks.validateBrowserExtractSchema.mockClear();
+    gatewayMock.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
-  it("captures page content privately and prints only the extracted answer", async () => {
-    mocks.callBrowserRequest.mockResolvedValueOnce({
-      ok: true,
-      targetId: "t1",
-      url: "https://example.com",
-      html: "<main>Private page body</main>",
-    });
-    const program = createActionObserveProgram();
+  it.each([
+    { command: "console", path: "/console", timeout: "30000" },
+    { command: "console", path: "/console", timeout: "60000" },
+    { command: "pdf", path: "/pdf", timeout: "30000" },
+    { command: "pdf", path: "/pdf", timeout: "60000" },
+  ])("inherits parent $timeout ms timeout for $command", async ({ command, path, timeout }) => {
+    const parentArgs = timeout === "30000" ? ["--json"] : ["--json", "--timeout", timeout];
+    await run(...parentArgs, command);
 
-    await program.parseAsync(["browser", "extract", "What is the answer?", "--target-id", "t1"], {
-      from: "user",
-    });
-
-    expect(mocks.callBrowserRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ json: false }),
-      {
-        method: "POST",
-        path: "/extract",
-        query: undefined,
-        body: { targetId: "t1", timeoutMs: 60_000 },
-      },
-      { timeoutMs: 60_000 },
-    );
-    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        html: "<main>Private page body</main>",
-        query: "What is the answer?",
-        agentId: "main",
-      }),
-    );
-    expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).toContain("The answer.");
-    expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).not.toContain("Private page body");
-  });
-
-  it("passes extract scoping and structured-output flags through", async () => {
-    mocks.callBrowserRequest.mockResolvedValueOnce({
-      ok: true,
-      targetId: "t1",
-      url: "https://example.com",
-      html: "<main>Scoped page body</main>",
-    });
-    const program = createActionObserveProgram();
-
-    await program.parseAsync(
-      [
-        "browser",
-        "extract",
-        "What is the answer?",
-        "--selector",
-        "main",
-        "--ignore-selector",
-        "nav",
-        "--ignore-selector",
-        ".ad",
-        "--schema",
-        '{"type":"object"}',
-      ],
-      { from: "user" },
-    );
-
-    expect(mocks.callBrowserRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ json: false }),
-      expect.objectContaining({
-        body: expect.objectContaining({
-          selector: "main",
-          ignoreSelectors: ["nav", ".ad"],
-        }),
-      }),
-      { timeoutMs: 60_000 },
-    );
-    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
-      expect.objectContaining({ schema: { type: "object" } }),
-    );
-  });
-
-  it("passes a successful empty capture to extraction", async () => {
-    mocks.callBrowserRequest.mockResolvedValueOnce({
-      ok: true,
-      targetId: "t1",
-      url: "https://example.com",
-      html: "",
-    });
-    const program = createActionObserveProgram();
-
-    await program.parseAsync(["browser", "extract", "What is present?"], { from: "user" });
-
-    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
-      expect.objectContaining({ html: "" }),
+    expect(gatewayMock).toHaveBeenLastCalledWith(
+      "browser.request",
+      expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
+      expect.objectContaining({ path, timeoutMs: Number(timeout) }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 
   it("rejects non-decimal responsebody numeric flags before dispatch", async () => {
-    const program = createActionObserveProgram();
-
-    await expect(
-      program.parseAsync(["browser", "responsebody", "**/api", "--timeout-ms", "1e3"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    await expect(
-      program.parseAsync(["browser", "responsebody", "**/api", "--max-chars", "-1"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--max-chars must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
-  it("passes responsebody limits through to the request and outer timeout", async () => {
-    const program = createActionObserveProgram();
-
-    await program.parseAsync(
-      ["browser", "responsebody", "**/api", "--timeout-ms", "+030000", "--max-chars", "0100"],
-      { from: "user" },
+    await expect(run("responsebody", "**/api", "--timeout-ms", "1e3")).rejects.toThrow(
+      "--timeout-ms must be a positive integer.",
     );
-
-    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-      | { body?: { timeoutMs?: number; maxChars?: number } }
-      | undefined;
-    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-      | { timeoutMs?: number }
-      | undefined;
-    expect(request?.body?.timeoutMs).toBe(30000);
-    expect(request?.body?.maxChars).toBe(100);
-    expect(options?.timeoutMs).toBe(30000);
+    await expect(run("responsebody", "**/api", "--max-chars", "-1")).rejects.toThrow(
+      "--max-chars must be a positive integer.",
+    );
+    expect(gatewayMock).not.toHaveBeenCalled();
   });
+
+  it("rejects unknown console levels before dispatch", async () => {
+    await expect(run("console", "--level", "bogus")).rejects.toThrow(/error.*warn.*info/u);
+    expect(gatewayMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ABC", true, false],
+    ["", true, false],
+    ["ABC", undefined, false],
+    ["ABC", false, false],
+    ["", undefined, false],
+    ["ABC", true, true],
+  ] as const)("prints body=%j truncated=%s json=%s", async (body, truncated, json) => {
+    const result = { response: { body, ...(truncated === undefined ? {} : { truncated }) } };
+    gatewayMock.mockResolvedValueOnce(result);
+    await run(...(json ? ["--json"] : []), "responsebody", "**/api", "--max-chars", "3");
+    const { runtimeLogs, runtimeErrors } = getBrowserCliRuntimeCapture();
+    if (json) {
+      expect(runtimeLogs).toHaveLength(1);
+      expect(JSON.parse(runtimeLogs[0]!)).toEqual(result);
+    } else {
+      expect(runtimeLogs).toEqual([body]);
+    }
+    expect(runtimeErrors).toEqual(truncated && !json ? [expect.stringMatching(/truncat/i)] : []);
+  });
+
+  it.each([
+    ["default", undefined, undefined, 25000],
+    ["minimum explicit", "1", 1, 5001],
+    ["signed explicit", "+030000", 30000, 35000],
+  ] as const)(
+    "keeps the %s responsebody request open past its operation deadline",
+    async (_label, timeout, operationTimeoutMs, requestTimeoutMs) => {
+      const timeoutArgs = timeout === undefined ? [] : ["--timeout-ms", timeout];
+      await run("responsebody", "**/api", "--max-chars", "0100", ...timeoutArgs);
+      const request = gatewayMock.mock.calls.at(-1)?.[2];
+      expect(request).toMatchObject({
+        body: { timeoutMs: operationTimeoutMs, maxChars: 100 },
+        timeoutMs: requestTimeoutMs,
+      });
+    },
+  );
 });

@@ -1,3 +1,4 @@
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -6,6 +7,11 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
 type PromptMessage = Record<string, unknown>;
+type TranscriptMessage = {
+  entry: HistoryEntry;
+  role: "assistant" | "user";
+  transcriptId?: string;
+};
 
 function messageKeys(message: PromptMessage): string[] {
   const id = typeof message.message_id === "string" ? message.message_id.trim() : "";
@@ -32,64 +38,11 @@ function compareMessages(left: PromptMessage, right: PromptMessage): number {
   return leftTimestamp - rightTimestamp;
 }
 
-function mergeMessages(params: {
-  existing: PromptMessage[];
-  transcript: Array<{
-    entry: HistoryEntry;
-    role: "assistant" | "user";
-    transcriptId?: string;
-  }>;
-  dedupeAssistantTextKeys: Set<string>;
-  dedupeTranscriptIds: Set<string>;
-  limit: number;
-}): { added: number; messages: PromptMessage[] } {
-  const seen = new Set(params.existing.flatMap(messageKeys));
-  const seenTranscript = new Set<string>();
-  const added: PromptMessage[] = [];
-  for (const item of params.transcript) {
-    if (item.transcriptId && params.dedupeTranscriptIds.has(item.transcriptId)) {
-      continue;
-    }
-    const message = historyMessage(item.entry);
-    const keys = messageKeys(message);
-    const assistantTextKeys =
-      item.role === "assistant"
-        ? messageKeys({
-            ...message,
-            body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
-          })
-        : keys;
-    if (
-      keys.some((key) => seenTranscript.has(key)) ||
-      (item.role === "assistant" &&
-        assistantTextKeys.some((key) => params.dedupeAssistantTextKeys.has(key))) ||
-      (item.role === "user" && keys.some((key) => seen.has(key)))
-    ) {
-      continue;
-    }
-    keys.forEach((key) => seenTranscript.add(key));
-    added.push(message);
-  }
-  const sorted = [...added, ...params.existing].toSorted(compareMessages);
-  if (sorted.length <= params.limit) {
-    return { added: added.length, messages: sorted };
-  }
-  const pinned = sorted.filter((message) => message.is_reply_target === true);
-  const available = Math.max(0, params.limit - pinned.length);
-  const recent =
-    available === 0
-      ? []
-      : sorted.filter((message) => message.is_reply_target !== true).slice(-available);
-  return {
-    added: added.length,
-    messages: [...pinned.slice(-params.limit), ...recent].toSorted(compareMessages),
-  };
-}
-
-function chatWindowEntries(ctx: FinalizedMsgContext) {
+function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   return (ctx.ChannelStructuredContext ?? []).filter(
     (entry): entry is typeof entry & { payload: Record<string, unknown> } =>
       entry.type === "chat_window" &&
+      entry.sessionTranscriptMode !== "preserve" &&
       Boolean(entry.payload) &&
       typeof entry.payload === "object" &&
       !Array.isArray(entry.payload),
@@ -106,6 +59,7 @@ export async function mergeSessionTranscriptContext(params: {
   const options = params.ctx.SessionTranscriptContext;
   const limit = Math.max(0, Math.floor(options?.historyLimit ?? 0));
   if (
+    options?.historyKind === "recent" ||
     limit === 0 ||
     isSessionBoundaryCommandText(params.ctx.CommandBody ?? params.ctx.RawBody, {
       botUsername: params.ctx.BotUsername,
@@ -119,11 +73,17 @@ export async function mergeSessionTranscriptContext(params: {
   if (!agentId) {
     throw new Error("Session transcript context requires an agent owner.");
   }
+  const windows = mergeableChatWindowEntries(params.ctx);
   const turns = await readRecentUserAssistantTextForSession({
     agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
+    // A session-generated window must retain delivered close-outs alongside
+    // their questions. Native channel windows already own their delivery history.
+    ...(windows.length === 0 && options?.chatWindow === true
+      ? { includeCronDirectDeliveryContext: true, includeMessageToolSourceReplies: true }
+      : {}),
     ...((options?.beforeTimestampMs ?? params.ctx.Timestamp) !== undefined
       ? { beforeTimestampMs: options?.beforeTimestampMs ?? params.ctx.Timestamp }
       : {}),
@@ -131,11 +91,7 @@ export async function mergeSessionTranscriptContext(params: {
   });
   const labels = options?.senderLabels ?? { assistant: "Assistant", user: "User" };
   const transcript = turns.map((turn) => {
-    const item: {
-      entry: HistoryEntry;
-      role: "assistant" | "user";
-      transcriptId?: string;
-    } = {
+    const item: TranscriptMessage = {
       entry: {
         sender: `${labels[turn.role]}${turn.sourceChannel ? ` (${turn.sourceChannel})` : ""}`,
         body: turn.text,
@@ -154,7 +110,6 @@ export async function mergeSessionTranscriptContext(params: {
   if (transcript.length === 0) {
     return;
   }
-  const windows = chatWindowEntries(params.ctx);
   if (windows.length === 0 && options?.chatWindow) {
     params.ctx.ChannelStructuredContext = [
       ...(params.ctx.ChannelStructuredContext ?? []),
@@ -196,18 +151,47 @@ export async function mergeSessionTranscriptContext(params: {
       : [];
     const dedupeIds = window.sessionTranscriptDedupeMessageIds;
     const assistantTextKeys = window.sessionTranscriptAssistantTextDedupeKeys;
-    const ids = Array.isArray(dedupeIds)
-      ? new Set(dedupeIds.filter((id): id is string => typeof id === "string"))
-      : new Set<string>();
-    const merged = mergeMessages({
-      existing,
-      transcript,
-      dedupeTranscriptIds: ids,
-      dedupeAssistantTextKeys: new Set(assistantTextKeys ?? []),
-      limit,
-    });
-    window.payload = { ...window.payload, messages: merged.messages };
-    if (merged.added > 0) {
+    const ids = new Set(filterStringEntries(dedupeIds));
+    const assistantDedupeKeys = new Set(assistantTextKeys ?? []);
+    const seen = new Set(existing.flatMap(messageKeys));
+    const seenTranscript = new Set<string>();
+    const added: PromptMessage[] = [];
+    for (const item of transcript) {
+      if (item.transcriptId && ids.has(item.transcriptId)) {
+        continue;
+      }
+      const message = historyMessage(item.entry);
+      const keys = messageKeys(message);
+      const visibleAssistantKeys =
+        item.role === "assistant"
+          ? messageKeys({
+              ...message,
+              body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
+            })
+          : keys;
+      if (
+        keys.some((key) => seenTranscript.has(key)) ||
+        (item.role === "assistant" &&
+          visibleAssistantKeys.some((key) => assistantDedupeKeys.has(key))) ||
+        (item.role === "user" && keys.some((key) => seen.has(key)))
+      ) {
+        continue;
+      }
+      keys.forEach((key) => seenTranscript.add(key));
+      added.push(message);
+    }
+    let messages = [...added, ...existing].toSorted(compareMessages);
+    if (!(messages.length <= limit)) {
+      const pinned = messages.filter((message) => message.is_reply_target === true);
+      const available = Math.max(0, limit - pinned.length);
+      const recent =
+        available === 0
+          ? []
+          : messages.filter((message) => message.is_reply_target !== true).slice(-available);
+      messages = [...pinned.slice(-limit), ...recent].toSorted(compareMessages);
+    }
+    window.payload = { ...window.payload, messages };
+    if (added.length > 0) {
       window.source = "session";
     }
   }

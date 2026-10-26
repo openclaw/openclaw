@@ -1,10 +1,86 @@
 import Foundation
+import os
 import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct CLIInstallerTests {
+    @Test(arguments: [
+        (#"{"status":"ok","warnings":["Plugin repair remains pending"]}"#, 0, true),
+        (
+            #"{"status":"advisory","advisory":{"kind":"package-post-install-doctor","reason":"deferred-configured-plugin-repair","message":"Deferred","details":["Plugin repair remains pending"]}}"#,
+            86,
+            true),
+        (
+            #"{"status":"error","failureFacts":[{"check":"openclaw doctor","code":"required-migration","message":"Required migration failed"}]}"#,
+            1,
+            false),
+        (#"{"status":"ok","maintenanceRefusal":{"kind":"deferred","reason":"agent-database-in-use"}}"#, 0, false),
+        (
+            #"{"status":"ok","configWriteRefusal":{"reason":"authority-changed","message":"Required write refused","keys":["plugins"]}}"#,
+            0,
+            false),
+        (
+            #"{"status":"ok","failureFacts":[{"check":"doctor","code":"required-migration","message":"Required migration failed"}]}"#,
+            0,
+            false),
+        (#"{"status":"ok"}"#, 1, false),
+        (#"{"status":"advisory"}"#, 86, false),
+        ("invalid JSON", 0, false),
+    ])
+    func `bundled repair consumes classified Doctor outcomes after child settlement`(
+        payload: String, exitCode: Int, succeeds: Bool) throws
+    {
+        let response = ShellExecutor.ShellResult(
+            stdout: "Human inspection output\nOPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=\(payload)\nDoctor complete.\n",
+            stderr: "", exitCode: exitCode, timedOut: false, success: exitCode == 0,
+            errorMessage: exitCode == 0 ? nil : "exit \(exitCode)", preflightError: nil)
+        if succeeds {
+            #expect(try CLIInstaller.bundledDoctorDiagnostics(response).contains("Plugin repair remains pending"))
+        } else {
+            #expect(throws: (any Error).self) { try CLIInstaller.bundledDoctorDiagnostics(response) }
+        }
+        var unsettled = response
+        unsettled.exitCode = nil
+        unsettled.timedOut = true
+        #expect(throws: CLIInstaller.DoctorProcessesUnsettled.self) {
+            try CLIInstaller.bundledDoctorDiagnostics(unsettled)
+        }
+        var missing = response
+        missing.stdout = payload
+        #expect(throws: CLIInstaller.DoctorProcessesUnsettled.self) {
+            try CLIInstaller.bundledDoctorDiagnostics(missing)
+        }
+    }
+
+    @Test func `managed install locations follow the app profile`() {
+        let home = URL(fileURLWithPath: "/Users/Test User", isDirectory: true)
+        let cases = [
+            (AppProfile(environment: [:]), "/Users/Test User/.openclaw"),
+            (
+                AppProfile(environment: [
+                    "OPENCLAW_PROFILE": "onboardtest",
+                    "OPENCLAW_STATE_DIR": "/tmp/ignored-state",
+                ]),
+                "/Users/Test User/.openclaw-onboardtest"),
+        ]
+
+        for (profile, expectedPrefix) in cases {
+            let prefix = CLIInstaller.installPrefix(homeDirectory: home, profile: profile)
+            #expect(prefix == expectedPrefix)
+            #expect(CLIInstaller.managedExecutableLocation(homeDirectory: home, profile: profile) ==
+                "\(expectedPrefix)/bin/openclaw")
+
+            let command = CLIInstaller.installScriptCommand(
+                target: .exact("2026.7.3"),
+                prefix: prefix,
+                scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
+            let prefixIndex = command.firstIndex(of: "--prefix")
+            #expect(prefixIndex.map { command[$0 + 1] } == expectedPrefix)
+        }
+    }
+
     @Test func `installed location finds executable`() throws {
         let fm = FileManager()
         let root = fm.temporaryDirectory.appendingPathComponent(
@@ -90,6 +166,55 @@ struct CLIInstallerTests {
         #expect(CLIInstaller.installWatchdogTimeout(for: .exact(String())) == 900)
     }
 
+    @Test func `installer events map to concise live status`() {
+        let cases: [(String, String)] = [
+            (#"{"event":"step","name":"disk-space","status":"start"}"#, "Checking available disk space…"),
+            (#"{"event":"step","name":"node","status":"start"}"#, "Installing Node.js runtime…"),
+            (#"{"event":"step","name":"git-tools","status":"start"}"#, "Preparing Git and pnpm…"),
+            (#"{"event":"step","name":"git-clone","status":"start"}"#, "Downloading OpenClaw source…"),
+            (#"{"event":"step","name":"git-update","status":"start"}"#, "Updating OpenClaw source…"),
+            (#"{"event":"step","name":"dependencies","status":"start"}"#, "Installing dependencies…"),
+            (#"{"event":"step","name":"control-ui","status":"start"}"#, "Building interface…"),
+            (#"{"event":"step","name":"cli-build","status":"start"}"#, "Building OpenClaw CLI…"),
+            (#"{"event":"step","name":"openclaw","status":"retry"}"#, "Retrying OpenClaw CLI install…"),
+            (
+                #"{"event":"step","name":"disk-space","status":"warn"}"#,
+                "Couldn’t verify free disk space; continuing…"),
+            (
+                #"{"event":"step","name":"git-update","status":"warn"}"#,
+                "Using the existing modified OpenClaw source…"),
+            (
+                #"{"event":"step","name":"control-ui","status":"warn"}"#,
+                "Interface build did not finish; continuing…"),
+        ]
+
+        for (line, expected) in cases {
+            #expect(CLIInstaller.installStatus(forEventLine: line) == expected)
+        }
+    }
+
+    @Test func `installer status ignores malformed unknown and terminal events`() {
+        for line in [
+            "not json",
+            #"{"event":"step","name":"future-stage","status":"start"}"#,
+            #"{"event":"step","name":"dependencies","status":"ok"}"#,
+            #"{"event":"done","ok":true,"version":"2026.7.3"}"#,
+            #"{"event":"error","message":"failed"}"#,
+        ] {
+            #expect(CLIInstaller.installStatus(forEventLine: line) == nil)
+        }
+    }
+
+    @Test func `installer extracts one actionable disk preflight error`() {
+        let output = """
+        {"event":"step","name":"disk-space","status":"start"}
+        {"event":"error","message":"Fresh Git installs require at least 6 GiB of free disk space; only 2.0 GiB is available. Free disk space and retry."}
+        """
+
+        #expect(CLIInstaller.installErrorMessage(from: output) ==
+            "Fresh Git installs require at least 6 GiB of free disk space; only 2.0 GiB is available. Free disk space and retry.")
+    }
+
     @Test func `managed update uses the canonical updater without accepting downgrades`() {
         let command = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",
@@ -127,6 +252,73 @@ struct CLIInstallerTests {
             "--yes",
             "--no-restart",
         ])
+
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        #expect(CLIInstaller.managedUpdateCommand(
+            executable: "/opt/openclaw",
+            targetVersion: "2026.7.4",
+            profile: profile) == [
+            "/opt/openclaw", "--profile", "work", "update", "--tag", "2026.7.4",
+            "--json", "--timeout", "900",
+        ])
+        #expect(CLIInstaller.managedUpdateCommand(
+            executable: "/opt/openclaw",
+            targetVersion: "2026.7.4",
+            repair: true,
+            profile: profile) == [
+            "/opt/openclaw", "--profile", "work", "update", "repair", "--json",
+            "--timeout", "900", "--yes",
+        ])
+    }
+
+    @Test(arguments: [false, true])
+    func `stale managed update preserves a runtime advanced by the CLI`(advancesDuringDispatch: Bool) async throws {
+        let root = FileManager().temporaryDirectory.appendingPathComponent(
+            "openclaw-update-ahead-\(UUID().uuidString)")
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("openclaw")
+        let dispatched = root.appendingPathComponent("update-dispatched")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          if [ '\(advancesDuringDispatch)' = 'true' ] && [ ! -f '\(dispatched.path)' ]; then
+            echo 'OpenClaw 2026.9.8'
+          else
+            echo 'OpenClaw 2026.10.2'
+          fi
+          exit 0
+        fi
+        touch '\(dispatched.path)'
+        echo '{"status":"skipped","reason":"downgrade-confirmation-required","before":{"version":"2026.10.2"}}'
+        exit 1
+        """.write(to: executable, atomically: false, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let config = root.appendingPathComponent("openclaw.json")
+        try "{}".write(to: config, atomically: false, encoding: .utf8)
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_STATE_DIR": root.path, "OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact"])
+        {
+            let absent = root.appendingPathComponent("absent-service")
+            let authority = GatewayLaunchAgentManager.ServiceAuthority(
+                plist: absent, environment: absent, wrapper: absent,
+                definition: .init(plist: nil, environment: nil, wrapper: nil),
+                isLocalGateway: false, updateSelection: CLIInstallPolicy.managedUpdateSelection())
+            var dispatchedReceipt = false
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: "2026.9.8",
+                installedCLI: .init(
+                    prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
+                onDispatch: { dispatchedReceipt = true },
+                statusHandler: { _ in })
+
+            #expect(outcome == .success(fromVersion: "2026.10.2", toVersion: "2026.10.2"))
+            #expect(dispatchedReceipt == advancesDuringDispatch)
+            #expect(FileManager().fileExists(atPath: dispatched.path) == advancesDuringDispatch)
+        }
+        #expect(CLIInstaller.satisfiesUpdateTarget(installedVersion: "2026.10.2", targetVersion: "2026.9.8"))
+        #expect(!CLIInstaller.satisfiesUpdateTarget(installedVersion: "2026.9.8", targetVersion: "2026.10.2"))
     }
 
     @Test func `managed update parses structured updater diagnostics`() throws {
@@ -149,6 +341,81 @@ struct CLIInstallerTests {
         #expect(summary.before?.version == "2026.7.3")
         #expect(summary.steps?.first?.name == "package update")
         #expect(summary.steps?.first?.stderrTail == "registry unavailable")
+    }
+
+    @Test(arguments: [
+        (
+            #"{"status":"warning","coreUpdate":"completed","warnings":["Optional device-pair plugin is disabled"]}"#,
+            0,
+            true),
+        (#"{"status":"ok","coreUpdate":"completed"}"#, 0, true),
+        (#"{"status":"warning","coreUpdate":"pending"}"#, 0, false),
+        (#"{"status":"error","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"warning","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"ok"}"#, 0, false),
+        (#"{"status":"ok","coreUpdate":"unknown"}"#, 0, false),
+    ])
+    func `managed repair settles only proven core completion across relaunch`(
+        payload: String, exitCode: Int, completes: Bool) async throws
+    {
+        let root = temporaryDirectoryForTests().appendingPathComponent(
+            "openclaw-repair-completion-\(UUID().uuidString)")
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("openclaw")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo 'OpenClaw 2026.10.2'
+          exit 0
+        fi
+        echo '\(payload)'
+        exit \(exitCode)
+        """.write(to: executable, atomically: false, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let config = root.appendingPathComponent("openclaw.json")
+        try "{}".write(to: config, atomically: false, encoding: .utf8)
+        let suite = "CLIInstallerTests.repair-completion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_STATE_DIR": root.path, "OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact"])
+        {
+            let absent = root.appendingPathComponent("absent-service")
+            let authority = GatewayLaunchAgentManager.ServiceAuthority(
+                plist: absent,
+                environment: absent,
+                wrapper: absent,
+                definition: .init(plist: nil, environment: nil, wrapper: nil),
+                isLocalGateway: false,
+                updateSelection: CLIInstallPolicy.managedUpdateSelection())
+            let receipt = PostAppUpdateReceiptStore.recordSetupRecovery(
+                fromVersion: "2026.9.8", toVersion: "2026.10.2", defaults: defaults)
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: "2026.10.2",
+                restartGateway: false,
+                repair: true,
+                installedCLI: .init(
+                    prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
+                statusHandler: { _ in })
+
+            switch outcome {
+            case .success:
+                #expect(completes)
+                PostAppUpdateReceiptStore.completeCoreRepair(
+                    receipt: receipt, owner: .gateway, defaults: defaults)
+            case .failure:
+                #expect(!completes)
+            }
+            let relaunched = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
+                currentVersion: "2026.10.2", onboardingSeen: true, defaults: defaults))
+            #expect(relaunched.coreUpdatePending == !completes)
+            #expect(PostUpdateController.coreRepairAction(
+                receipt: relaunched, migrationFailed: false, explicitRetry: true) ==
+                (completes ? .none : .repair))
+        }
     }
 
     @Test func `release builds install exact while unreleased builds choose a channel`() {
@@ -196,6 +463,46 @@ struct CLIInstallerTests {
             appVersion: "2026.7.2",
             isDebug: false,
             defaults: defaults) == "2026.7.2")
+    }
+
+    @Test func `validated CLI cache changes only when the ready tuple changes`() throws {
+        let suite = "CLIInstallerTests.validated-cache.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let notificationCount = OSAllocatedUnfairLock(initialState: 0)
+        let initialLocation = "/Users/test/.local/bin/openclaw"
+        defaults.set(initialLocation, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.8.1", forKey: cliValidatedVersionKey)
+        let observer = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: nil)
+        { _ in
+            notificationCount.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        CLIInstaller.rememberValidated(
+            .ready(location: initialLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 0)
+
+        let updatedLocation = "/opt/homebrew/bin/openclaw"
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 1)
+        #expect(defaults.string(forKey: cliValidatedExecutableKey) == updatedLocation)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.1")
+
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.2"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 2)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.2")
     }
 
     @Test func `managed setup requires a parseable compatible version`() {
@@ -273,18 +580,28 @@ struct CLIInstallerTests {
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let executable = root.appendingPathComponent("openclaw")
+        let node = root.appendingPathComponent("node")
         try "#!/bin/sh\necho 'OpenClaw 2026.7.3'\n".write(
             to: executable,
             atomically: true,
             encoding: .utf8)
+        try "#!/bin/sh\necho 'v24.22.1'\n".write(
+            to: node,
+            atomically: true,
+            encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let status = await CLIInstaller.status(location: executable.path)
 
         #expect(status == .ready(location: executable.path, version: "2026.7.3"))
     }
 
-    @Test func `matching external CLI with unsupported Node is unusable`() async throws {
+    @Test(arguments: [("v20.18.0", 0), ("v24.15.0", 1)])
+    func `matching external CLI with an unusable Node runtime needs repair`(
+        version: String,
+        exitCode: Int) async throws
+    {
         let root = FileManager().temporaryDirectory.appendingPathComponent(
             "openclaw-old-node-cli-\(UUID().uuidString)")
         defer { try? FileManager().removeItem(at: root) }
@@ -295,7 +612,7 @@ struct CLIInstallerTests {
             to: executable,
             atomically: true,
             encoding: .utf8)
-        try "#!/bin/sh\necho 'v20.18.0'\n".write(
+        try "#!/bin/sh\necho '\(version)'\nexit \(exitCode)\n".write(
             to: node,
             atomically: true,
             encoding: .utf8)
@@ -335,22 +652,25 @@ struct CLIInstallerTests {
         ].joined(separator: ":"))
     }
 
-    @Test func `successful CLI setup starts the local gateway and waits for readiness`() async {
+    @Test(arguments: [false, true])
+    func `successful CLI setup starts the local gateway and waits for readiness`(pauseDuringReadiness: Bool) async {
         var didStart = false
         var didWait = false
+        var paused = false
 
         let activation = await CLIInstaller.activateLocalGateway(
             mode: .local,
-            paused: false,
+            paused: paused,
             start: { didStart = true },
             waitUntilReady: {
                 didWait = true
+                paused = pauseDuringReadiness
                 return true
             })
 
         #expect(didStart)
         #expect(didWait)
-        #expect(activation == .ready)
+        #expect(activation == (pauseDuringReadiness ? .deferred : .ready))
     }
 
     @Test func `paused CLI setup defers gateway activation`() async {
@@ -369,5 +689,16 @@ struct CLIInstallerTests {
         #expect(!didStart)
         #expect(!didWait)
         #expect(activation == .deferred)
+    }
+
+    @Test func `failed CLI setup binds the reason to this activation attempt`() async {
+        let activation = await CLIInstaller.activateLocalGateway(
+            mode: .local,
+            paused: false,
+            start: {},
+            waitUntilReady: { false },
+            failureReason: { "launchd disabled" })
+
+        #expect(activation == .failed(reason: "launchd disabled"))
     }
 }

@@ -1,21 +1,30 @@
-// Feishu plugin module implements post behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./comment-shared.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
 const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 
+type PostFileAttachment = {
+  kind: "file";
+  key: string;
+  fileName?: string;
+  // Top-level files[] are documents even without file_name; inline media is not.
+  origin?: "top-level";
+};
+
 type PostParseResult = {
   textContent: string;
-  imageKeys: string[];
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
+  attachments: Array<{ kind: "image"; key: string } | PostFileAttachment>;
   mentionedOpenIds: string[];
 };
 
 type PostPayload = {
   title: string;
   content: unknown[];
+  files?: unknown;
 };
 
 function toStringOrEmpty(value: unknown): string {
@@ -26,17 +35,6 @@ function escapeMarkdownText(text: string): string {
   return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
 }
 
-function toBoolean(value: unknown): boolean {
-  return value === true || value === 1 || value === "true";
-}
-
-function isStyleEnabled(style: Record<string, unknown> | undefined, key: string): boolean {
-  if (!style) {
-    return false;
-  }
-  return toBoolean(style[key]);
-}
-
 function wrapInlineCode(text: string): string {
   const maxRun = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(maxRun + 1);
@@ -45,40 +43,26 @@ function wrapInlineCode(text: string): string {
   return `${fence}${body}${fence}`;
 }
 
-function sanitizeFenceLanguage(language: string): string {
-  return language.trim().replace(/[^A-Za-z0-9_+#.-]/g, "");
-}
-
-function renderTextElement(element: Record<string, unknown>): string {
-  const text = toStringOrEmpty(element.text);
-  const style = isRecord(element.style) ? element.style : undefined;
-
-  if (isStyleEnabled(style, "code")) {
-    return wrapInlineCode(text);
+function applyInlineStyles(text: string, style: unknown): string {
+  // Keep boundary whitespace outside Markdown emphasis delimiters.
+  const content = text.trim();
+  if (!content || !Array.isArray(style)) {
+    return text;
   }
-
-  let rendered = escapeMarkdownText(text);
-  if (!rendered) {
-    return "";
-  }
-
-  if (isStyleEnabled(style, "bold")) {
+  let rendered = content;
+  if (style.includes("bold")) {
     rendered = `**${rendered}**`;
   }
-  if (isStyleEnabled(style, "italic")) {
+  if (style.includes("italic")) {
     rendered = `*${rendered}*`;
   }
-  if (isStyleEnabled(style, "underline")) {
+  if (style.includes("underline")) {
     rendered = `<u>${rendered}</u>`;
   }
-  if (
-    isStyleEnabled(style, "strikethrough") ||
-    isStyleEnabled(style, "line_through") ||
-    isStyleEnabled(style, "lineThrough")
-  ) {
+  if (style.includes("lineThrough")) {
     rendered = `~~${rendered}~~`;
   }
-  return rendered;
+  return text.replace(content, () => rendered);
 }
 
 function renderLinkElement(element: Record<string, unknown>): string {
@@ -105,30 +89,9 @@ function renderMentionElement(element: Record<string, unknown>): string {
   return `@${escapeMarkdownText(mention)}`;
 }
 
-function renderEmotionElement(element: Record<string, unknown>): string {
-  const text =
-    toStringOrEmpty(element.emoji) ||
-    toStringOrEmpty(element.text) ||
-    toStringOrEmpty(element.emoji_type);
-  return escapeMarkdownText(text);
-}
-
-function renderCodeBlockElement(element: Record<string, unknown>): string {
-  const language = sanitizeFenceLanguage(
-    toStringOrEmpty(element.language) || toStringOrEmpty(element.lang),
-  );
-  const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
-    /\r\n/g,
-    "\n",
-  );
-  const trailingNewline = code.endsWith("\n") ? "" : "\n";
-  return `\`\`\`${language}\n${code}${trailingNewline}\`\`\``;
-}
-
 function renderElement(
   element: unknown,
-  imageKeys: string[],
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>,
+  attachments: PostParseResult["attachments"],
   mentionedOpenIds: string[],
   renderMediaPlaceholders: boolean,
 ): string {
@@ -136,12 +99,12 @@ function renderElement(
     return escapeMarkdownText(toStringOrEmpty(element));
   }
 
-  const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
+  const tag = normalizeLowercaseStringOrEmpty(element.tag);
   switch (tag) {
     case "text":
-      return renderTextElement(element);
+      return applyInlineStyles(escapeMarkdownText(toStringOrEmpty(element.text)), element.style);
     case "a":
-      return renderLinkElement(element);
+      return applyInlineStyles(renderLinkElement(element), element.style);
     case "at":
       {
         const mentioned = toStringOrEmpty(element.open_id) || toStringOrEmpty(element.user_id);
@@ -150,24 +113,29 @@ function renderElement(
           mentionedOpenIds.push(normalizedMention);
         }
       }
-      return renderMentionElement(element);
+      return applyInlineStyles(renderMentionElement(element), element.style);
     case "img": {
-      const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
+      const imageKey = normalizeFeishuExternalKey(element.image_key);
       if (imageKey) {
-        imageKeys.push(imageKey);
+        attachments.push({ kind: "image", key: imageKey });
       }
       return renderMediaPlaceholders ? "![image]" : "";
     }
     case "media": {
-      const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
+      const fileKey = normalizeFeishuExternalKey(element.file_key);
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
-        mediaKeys.push({ fileKey, fileName });
+        attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
       }
       return renderMediaPlaceholders ? "[media]" : "";
     }
-    case "emotion":
-      return renderEmotionElement(element);
+    case "emotion": {
+      const text =
+        toStringOrEmpty(element.emoji) ||
+        toStringOrEmpty(element.text) ||
+        toStringOrEmpty(element.emoji_type);
+      return escapeMarkdownText(text);
+    }
     case "md":
     case "lark_md":
       return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
@@ -180,10 +148,56 @@ function renderElement(
       return code ? wrapInlineCode(code) : "";
     }
     case "code_block":
-    case "pre":
-      return renderCodeBlockElement(element);
+    case "pre": {
+      const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
+        .trim()
+        .replace(/[^A-Za-z0-9_+#.-]/g, "");
+      const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
+        /\r\n/g,
+        "\n",
+      );
+      const trailingNewline = code.endsWith("\n") ? "" : "\n";
+      // The enclosing fence must outlast any literal backtick run in the code.
+      let fenceLength = 3;
+      for (const run of code.matchAll(/`+/g)) {
+        fenceLength = Math.max(fenceLength, run[0].length + 1);
+      }
+      const fence = "`".repeat(fenceLength);
+      return `${fence}${language}\n${code}${trailingNewline}${fence}`;
+    }
     default:
       return escapeMarkdownText(toStringOrEmpty(element.text));
+  }
+}
+
+function appendTopLevelPostFiles(
+  attachments: PostParseResult["attachments"],
+  files: unknown,
+): void {
+  if (!Array.isArray(files)) {
+    return;
+  }
+  const seenFileKeys = new Set(
+    attachments
+      .filter((attachment) => attachment.kind === "file")
+      .map((attachment) => attachment.key),
+  );
+  for (const entry of files) {
+    if (!isRecord(entry) || entry.is_folder === true) {
+      continue;
+    }
+    const fileKey = normalizeFeishuExternalKey(entry.file_key);
+    if (!fileKey || seenFileKeys.has(fileKey)) {
+      continue;
+    }
+    seenFileKeys.add(fileKey);
+    const fileName = toStringOrEmpty(entry.file_name) || undefined;
+    attachments.push({
+      kind: "file",
+      key: fileKey,
+      origin: "top-level",
+      ...(fileName ? { fileName } : {}),
+    });
   }
 }
 
@@ -194,6 +208,7 @@ function toPostPayload(candidate: unknown): PostPayload | null {
   return {
     title: toStringOrEmpty(candidate.title),
     content: candidate.content,
+    ...(Array.isArray(candidate.files) ? { files: candidate.files } : {}),
   };
 }
 
@@ -214,42 +229,40 @@ function resolveLocalePayload(candidate: unknown): PostPayload | null {
   return null;
 }
 
-function resolvePostPayload(parsed: unknown): PostPayload | null {
-  const direct = toPostPayload(parsed);
-  if (direct) {
-    return direct;
-  }
+type PostParseOptions = {
+  renderMediaPlaceholders?: boolean;
+  emptyTextFallback?: string;
+  // Download collects top-level files[]; replay identity stays on inline media.
+  includeTopLevelFiles?: boolean;
+};
 
-  if (!isRecord(parsed)) {
-    return null;
+export function parsePostContent(content: string, options: PostParseOptions = {}): PostParseResult {
+  try {
+    return renderPostContent(JSON.parse(content), options);
+  } catch {
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
   }
-
-  const wrappedPost = resolveLocalePayload(parsed.post);
-  if (wrappedPost) {
-    return wrappedPost;
-  }
-
-  return resolveLocalePayload(parsed);
 }
 
-export function parsePostContent(
-  content: string,
-  options: { renderMediaPlaceholders?: boolean; emptyTextFallback?: string } = {},
+export function renderPostContent(
+  parsed: unknown,
+  options: PostParseOptions = {},
 ): PostParseResult {
   try {
-    const parsed = JSON.parse(content);
-    const payload = resolvePostPayload(parsed);
+    const payload =
+      toPostPayload(parsed) ??
+      (isRecord(parsed)
+        ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed))
+        : null);
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,
-        imageKeys: [],
-        mediaKeys: [],
+        attachments: [],
         mentionedOpenIds: [],
       };
     }
 
-    const imageKeys: string[] = [];
-    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
+    const attachments: PostParseResult["attachments"] = [];
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
@@ -261,8 +274,7 @@ export function parsePostContent(
       for (const element of paragraph) {
         renderedParagraph += renderElement(
           element,
-          imageKeys,
-          mediaKeys,
+          attachments,
           mentionedOpenIds,
           options.renderMediaPlaceholders !== false,
         );
@@ -270,17 +282,23 @@ export function parsePostContent(
       paragraphs.push(renderedParagraph);
     }
 
+    if (options.includeTopLevelFiles !== false) {
+      appendTopLevelPostFiles(attachments, payload.files);
+      if (isRecord(parsed)) {
+        appendTopLevelPostFiles(attachments, parsed.files);
+      }
+    }
+
     const title = escapeMarkdownText(payload.title.trim());
     const body = paragraphs.join("\n").trim();
-    const textContent = [title, body].filter(Boolean).join("\n\n").trim();
+    const textContent = [title, body].filter(Boolean).join("\n\n");
 
     return {
       textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
-      imageKeys,
-      mediaKeys,
+      attachments,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
   }
 }

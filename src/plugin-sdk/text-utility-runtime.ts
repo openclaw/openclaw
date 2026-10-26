@@ -1,6 +1,10 @@
 // Focused low-level text/runtime helpers used by bundled plugins.
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
-import { withTimeout } from "../utils/with-timeout.js";
+import { withTimeout } from "../infra/fs-safe.js";
+
+export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+export { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
 
 export {
   estimateToolResultTextChars,
@@ -11,7 +15,7 @@ export {
   resolveLiveToolResultMaxChars,
 } from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
-export { estimateStringChars } from "../utils/cjk-chars.js";
+export { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
 
@@ -54,7 +58,7 @@ export {
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
-  safeParseJson,
+  tryParseJson as safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -62,4 +66,5 @@ export {
   truncateUtf16Safe,
 } from "../utils.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 export { withTimeout };

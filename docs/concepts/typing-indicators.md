@@ -14,7 +14,8 @@ When `agents.defaults.typingMode` is **unset**:
 - **Direct chats**: typing starts immediately once the model loop begins.
 - **Group chats with a mention**: typing starts immediately.
 - **Group chats without a mention**: typing starts when the admitted run has user-visible activity, such as harness execution activity or message text.
-- **Heartbeat runs**: typing starts when the heartbeat run begins, if the resolved heartbeat target is a typing-capable chat and typing is not disabled.
+- **Message-tool-only replies**: typing starts immediately, even in a group chat without a mention, so members can see the agent working when no automatic final reply is posted. This takes precedence over the group rules above; an explicit `typingMode` still wins over it.
+- **Session events**: background events suppress typing while their ordinary session turn runs.
 
 ## Modes
 
@@ -60,8 +61,7 @@ Override the policy for one agent:
 
 - `message` mode does not start from silent reply tokens, but active execution can still show typing before any assistant text is available.
 - `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`), and can also start from active execution before reasoning deltas arrive.
-- Heartbeat typing is a liveness signal for the resolved delivery target. It starts at heartbeat run start instead of following `message` or `thinking` stream timing. Set `typingMode: "never"` to disable it.
-- Heartbeats do not show typing when the heartbeat target is `"none"`, when the target cannot be resolved, when chat delivery is disabled for the heartbeat, or when the channel does not support typing.
+- Migrated heartbeat monitors use ordinary automation delivery. They no longer have a separate heartbeat typing policy or target.
 - `agents.defaults.typingIntervalSeconds` controls the **refresh cadence** for every agent, not the start time. Default: 6 seconds.
 
 ## Related
@@ -72,5 +72,11 @@ Override the policy for one agent:
   </Card>
   <Card title="Streaming and chunking" href="/concepts/streaming" icon="bars-staggered">
     Outbound streaming behavior, chunk boundaries, and channel-specific delivery.
+  </Card>
+  <Card title="Heartbeat migration" href="/gateway/heartbeat" icon="heart-pulse">
+    Move periodic monitors to editable automation jobs with their own delivery policy.
+  </Card>
+  <Card title="Groups" href="/channels/groups" icon="users">
+    Group chat behavior and mention gating across group-capable channels.
   </Card>
 </CardGroup>

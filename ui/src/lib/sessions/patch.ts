@@ -1,36 +1,63 @@
-import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
+import type { SessionsPatchParams } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsPatchResult } from "../../api/types.ts";
 
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
+export type { SessionToolOverrides } from "../../../../packages/gateway-protocol/src/index.js";
 
-export type SessionPatch = {
-  label?: string | null;
-  category?: string | null;
-  boardFace?: "chat" | "dashboard";
-  icon?: string | null;
-  model?: string | null;
-  thinkingLevel?: string | null;
-  fastMode?: FastMode | null;
-  verboseLevel?: string | null;
-  reasoningLevel?: string | null;
-  toolOverrides?: SessionToolOverrides | null;
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-};
+export type SessionPatch = Pick<
+  SessionsPatchParams,
+  | "sandboxMode"
+  | "nativeRuntimeConsent"
+  | "expectedNativeRuntimeConsent"
+  | "expectedSandboxMode"
+  | "expectedPermissionMode"
+  | "expectedLifecycleRevision"
+  | "label"
+  | "icon"
+  | "color"
+  | "category"
+  | "boardFace"
+  | "boardPresentation"
+  | "model"
+  | "agentRuntime"
+  | "contextWindow"
+  | "thinkingLevel"
+  | "fastMode"
+  | "cyberAccessProgram"
+  | "verboseLevel"
+  | "reasoningLevel"
+  | "permissionMode"
+  | "toolOverrides"
+  | "communication"
+  | "archived"
+  | "pinned"
+  | "sidebarRoot"
+  | "snoozedUntil"
+  | "unread"
+>;
 
 export type SessionPatchOptions = {
   agentId?: string;
-  /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
-  deferModelOverride?: boolean;
+  /** Durable identity observed with the row before the action or edit began. */
+  expectedSessionId?: string;
+  /** Explicit unread marker observed by an automatic read acknowledgement. */
+  expectedMarkedUnreadAt?: number | null;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */
   waitFor?: Promise<unknown>;
+  /** Same-tail acknowledgements identify queued targets independently of dispatch readiness. */
+  predecessorReceipt?: {
+    read: () => SessionPatchResult | null;
+    subscribe: (onConfirmed: () => void) => () => void;
+  };
+  /** Publish the write receipt before list reconciliation can fail. */
+  onConfirmed?: (result: SessionPatchResult) => void;
+  /** Release a queued write's receipt after replay or discard, including failed replay. */
+  onDeferredSettled?: () => void;
+  /** Called for a rejected settings write while it still owns a pending field. */
+  onRejected?: (error: unknown) => void;
+  /** Revalidate explicit user intent after the settings tail, before dispatch. */
+  canDispatch?: () => boolean;
   /**
    * Skips the canonical list refresh this patch forces. Batch callers own one
    * refresh after their last row; otherwise an N-row batch pays N full
@@ -39,8 +66,23 @@ export type SessionPatchOptions = {
   deferListRefresh?: boolean;
 };
 
+export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+export type SessionPatchOutcome = SessionPatchResult | { queued: true };
+
+export function isSessionDeferredPatch(patch: Record<string, unknown>): boolean {
+  const fields = Object.keys(patch);
+  return (
+    (fields.length === 1 && typeof patch.archived === "boolean") ||
+    (fields.length > 0 &&
+      fields.every(
+        (field) =>
+          field === "label" || field === "icon" || field === "color" || field === "category",
+      ))
+  );
+}
+
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionsPatchResult | null>;
+) => Promise<SessionPatchOutcome | null>;

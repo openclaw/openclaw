@@ -1,147 +1,118 @@
-// Browser tests cover pw tools core.interactions.set input files plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS as downloadTimeout } from "./constants.js";
+import * as harness from "./pw-tools-core.test-harness.js";
 
-let page: Record<string, unknown> | null = null;
-let locator: Record<string, unknown> | null = null;
-
-const getPageForTargetId = vi.fn(async () => {
-  if (!page) {
-    throw new Error("test: page not set");
-  }
-  return page;
+harness.installPwToolsCoreTestHooks();
+const readFile = vi.fn(),
+  stat = vi.fn(),
+  detectMime = vi.fn();
+const resolvePaths = vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
+// mock-isolation: Upload cases supply canonical paths without reading host upload directories.
+vi.mock("./paths.js", () => ({ resolveStrictExistingUploadPaths: resolvePaths }));
+vi.mock("node:fs/promises", () => ({ default: { readFile, stat } }));
+vi.mock("openclaw/plugin-sdk/media-mime", () => ({ detectMime }));
+const { setFileChooserFilesViaPlaywright, setInputFilesViaPlaywright } =
+  await import("./pw-tools-core.interactions.content.js");
+const session = harness.getPwToolsCoreSessionMocks();
+const canonical = "/private/tmp/openclaw/uploads/a.txt";
+const paths = ["/tmp/openclaw/uploads/a.txt"];
+const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
+const remote = { cdpUrl: "https://browser.example/cdp", ssrfPolicy: {} };
+const extension = {
+  browserFilesystemLocal: false,
+  uploadPathsFallbackOnPayloadLimit: true,
+  ssrfPolicy: {},
+};
+const payload = { name: "a.txt", mimeType: "text/plain", buffer: Buffer.of(1), lastModifiedMs: 1 };
+const nativeOptions = (timeout = downloadTimeout) => ({ timeout, signal: expect.any(AbortSignal) });
+const fileStats = (size: number) => ({ size, mtimeMs: payload.lastModifiedMs });
+const setInputFiles = vi.fn(async () => {});
+const elementHandle = vi.fn(async () => {
+  throw new Error("manual upload event dispatch is forbidden");
 });
-const ensurePageState = vi.fn(() => ({}));
-const restoreRoleRefsForTarget = vi.fn(() => {});
-const isBrowserObservedDialogBlockedError = vi.fn(() => false);
-const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
-const refLocator = vi.fn(() => {
-  if (!locator) {
-    throw new Error("test: locator not set");
-  }
-  return locator;
-});
-const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const assertPageNavigationCompletedSafely = vi.fn(async () => {});
-const withPageNavigationRequestGuard = vi.fn(
-  async ({
-    action,
-    page: guardedPage,
-  }: {
-    action: (url: string) => Promise<unknown>;
-    page: { url: () => string };
-  }) => await action(guardedPage.url()),
-);
-
-const resolveStrictExistingUploadPaths =
-  vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
-
-vi.mock("./pw-session.js", () => {
-  return {
-    assertPageNavigationCompletedSafely,
-    ensurePageState,
-    forceDisconnectPlaywrightForTarget,
-    getPageForTargetId,
-    isBrowserObservedDialogBlockedError,
-    markObservedDialogsHandledRemotelyForPage,
-    refLocator,
-    restoreRoleRefsForTarget,
-    isPolicyDenyNavigationError: vi.fn(() => false),
-    quarantineBlockedNavigationTarget: vi.fn(async () => {}),
-    wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
-    withPageNavigationRequestGuard,
-  };
-});
-
-vi.mock("./paths.js", () => {
-  return {
-    resolveStrictExistingUploadPaths,
-  };
-});
-
-const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
-
-function seedSingleLocatorPage(): {
-  setInputFiles: ReturnType<typeof vi.fn>;
-  elementHandle: ReturnType<typeof vi.fn>;
-} {
-  const setInputFiles = vi.fn(async () => {});
-  const elementHandle = vi.fn(async () => {
-    throw new Error("manual upload event dispatch is forbidden");
-  });
-  locator = {
-    setInputFiles,
-    elementHandle,
-  };
-  page = {
-    locator: vi.fn(() => ({ first: () => locator })),
-    url: vi.fn(() => "https://allowed.example/form"),
-  };
-  return { setInputFiles, elementHandle };
+const page = {
+  locator: () => ({ first: () => ({ setInputFiles, elementHandle }) }),
+  url: () => "https://allowed.example/form",
+};
+function upload(options: Partial<Parameters<typeof setInputFilesViaPlaywright>[0]> = {}) {
+  return setInputFilesViaPlaywright({ ...target, inputRef: "e7", paths, ...options });
 }
+const expectUpload = (files: (string | typeof payload)[]) =>
+  expect(setInputFiles).toHaveBeenCalledExactlyOnceWith(files, nativeOptions());
 
-describe("setInputFilesViaPlaywright", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    page = null;
-    locator = null;
-    resolveStrictExistingUploadPaths.mockResolvedValue({
-      ok: true,
-      paths: ["/private/tmp/openclaw/uploads/ok.txt"],
-    });
+beforeEach(() => {
+  vi.clearAllMocks();
+  harness.setPwToolsCoreCurrentPage(page);
+  harness.setPwToolsCoreCurrentRefLocator({ setInputFiles, elementHandle });
+  readFile.mockResolvedValue(payload.buffer);
+  stat.mockResolvedValue(fileStats(payload.buffer.byteLength));
+  detectMime.mockResolvedValue(payload.mimeType);
+  resolvePaths.mockResolvedValue({ ok: true, paths: [canonical] });
+});
+
+it("converts guarded chooser uploads to payloads", async () => {
+  const fileChooser = { setFiles: vi.fn(async () => {}) };
+  await setFileChooserFilesViaPlaywright({
+    ...target,
+    ...remote,
+    page: page as never,
+    fileChooser: fileChooser as never,
+    paths,
+    timeoutMs: 250,
   });
+  expect(stat).toHaveBeenCalledWith(canonical);
+  expect(readFile).toHaveBeenCalledWith(canonical);
+  expect(fileChooser.setFiles).toHaveBeenCalledWith([payload], nativeOptions(250));
+});
 
-  it("sets resolved files once and leaves browser events to Playwright", async () => {
-    const { setInputFiles, elementHandle } = seedSingleLocatorPage();
+it("uses an octet-stream payload when mime detection has no answer", async () => {
+  detectMime.mockResolvedValueOnce(undefined);
+  await upload(remote);
+  expectUpload([{ ...payload, mimeType: "application/octet-stream" }]);
+});
 
-    await setInputFilesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      inputRef: "e7",
-      paths: ["/tmp/openclaw/uploads/ok.txt"],
-    });
-
-    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({
-      requestedPaths: ["/tmp/openclaw/uploads/ok.txt"],
-    });
-    expect(refLocator).toHaveBeenCalledWith(page, "e7");
-    expect(setInputFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"]);
-    expect(setInputFiles).toHaveBeenCalledTimes(1);
-    expect(elementHandle).not.toHaveBeenCalled();
+it("checks aggregate payload size before reading any files", async () => {
+  const largeFile = fileStats(30 * 1024 * 1024);
+  stat.mockResolvedValueOnce(largeFile).mockResolvedValueOnce(largeFile);
+  const requested = ["one.txt", "two.txt"].map((name) => `/tmp/openclaw/uploads/${name}`);
+  resolvePaths.mockResolvedValueOnce({
+    ok: true,
+    paths: requested.map((file) => `/private${file}`),
   });
+  await expect(upload({ ...remote, paths: requested })).rejects.toThrow(
+    "Cannot set buffer larger than 50Mb",
+  );
+  expect(readFile).not.toHaveBeenCalled();
+  expect(setInputFiles).not.toHaveBeenCalled();
+});
 
-  it("keeps assignment-triggered navigation inside the browser policy guard", async () => {
-    const { setInputFiles } = seedSingleLocatorPage();
+it.each([46, 47, 50])("uses safe %i MiB extension handoff", async (mib) => {
+  stat.mockResolvedValueOnce(fileStats(mib * 1024 * 1024));
+  await upload(extension);
+  expect(readFile.mock.calls).toEqual(mib === 46 ? [[canonical]] : []);
+  expectUpload([mib === 46 ? payload : canonical]);
+});
 
-    await setInputFilesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      inputRef: "e7",
-      paths: ["/tmp/openclaw/uploads/ok.txt"],
-      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-    });
-
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
-    expect(setInputFiles).toHaveBeenCalledTimes(1);
-    expect(assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(1);
+it("keeps guarded local-filesystem uploads as paths inside the policy guard", async () => {
+  await upload({
+    browserFilesystemLocal: true,
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
   });
+  for (const unused of [stat, readFile, detectMime, elementHandle]) {
+    expect(unused).not.toHaveBeenCalled();
+  }
+  expectUpload([canonical]);
+  expect(resolvePaths).toHaveBeenCalledWith({ requestedPaths: paths });
+  expect(session.refLocator).toHaveBeenCalledWith(page, "e7");
+  expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
+  expect(session.assertPageNavigationCompletedSafely).toHaveBeenCalledOnce();
+});
 
-  it("throws and skips setInputFiles when use-time validation fails", async () => {
-    resolveStrictExistingUploadPaths.mockResolvedValueOnce({
-      ok: false,
-      error: "Invalid path: must stay within inbound media directory",
-    });
-
-    const { setInputFiles } = seedSingleLocatorPage();
-
-    await expect(
-      setInputFilesViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        element: "input[type=file]",
-        paths: ["/tmp/openclaw/uploads/missing.txt"],
-      }),
-    ).rejects.toThrow("Invalid path: must stay within inbound media directory");
-
-    expect(setInputFiles).not.toHaveBeenCalled();
-  });
+it("rejects paths outside the allowed directory before native upload", async () => {
+  const error = "Invalid path: must stay within inbound media directory";
+  resolvePaths.mockResolvedValueOnce({ ok: false, error });
+  const missing = "/tmp/openclaw/uploads/missing.txt";
+  const selector = { inputRef: undefined, element: "input[type=file]", paths: [missing] };
+  await expect(upload(selector)).rejects.toThrow(error);
+  expect(setInputFiles).not.toHaveBeenCalled();
 });

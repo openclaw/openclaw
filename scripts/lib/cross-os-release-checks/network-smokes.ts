@@ -17,14 +17,14 @@ import {
 import { stopGateway } from "./process.ts";
 import { formatError, sleep } from "./shared.ts";
 
-export function buildCrossOsDiscordRoundtripNonces() {
+function buildCrossOsDiscordRoundtripNonces() {
   return {
     outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
     inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
   };
 }
 
-export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
+function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
   return {
     [guildId]: {
       channels: {
@@ -37,12 +37,50 @@ export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string
   };
 }
 
+export async function restartManualGatewayForDiscordSmoke(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  gatewayHolder: { current: GatewayHandle | null };
+  gatewayLogPath: string;
+  statusLogPath: string;
+  operations?: {
+    startGateway: typeof startManualGatewayFromInstalledCli;
+    stopGateway: typeof stopGateway;
+    waitForGateway: typeof waitForInstalledGateway;
+  };
+}) {
+  const operations = params.operations ?? {
+    startGateway: startManualGatewayFromInstalledCli,
+    stopGateway,
+    waitForGateway: waitForInstalledGateway,
+  };
+  if (params.gatewayHolder.current) {
+    await operations.stopGateway(params.gatewayHolder.current);
+    params.gatewayHolder.current = null;
+  }
+  params.gatewayHolder.current = await operations.startGateway({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    logPath: params.gatewayLogPath,
+  });
+  await operations.waitForGateway({
+    lane: params.lane,
+    cliPath: params.cliPath,
+    env: params.env,
+    gatewayHolder: params.gatewayHolder,
+    gatewayLogPath: params.gatewayLogPath,
+    logPath: params.statusLogPath,
+  });
+}
+
 async function configureDiscordSmoke(params: {
   lane: LaneState;
   cliPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  gatewayHolder?: { current: GatewayHandle | null };
+  gatewayHolder: { current: GatewayHandle | null };
   logPath: string;
   token: string;
   guildId: string;
@@ -69,50 +107,33 @@ async function configureDiscordSmoke(params: {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.enabled", "true"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.groupPolicy", "allowlist"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-  await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["config", "set", "channels.discord.guilds", guildsJson, "--strict-json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
+  for (const args of [
+    ["channels.discord.enabled", "true"],
+    ["channels.discord.groupPolicy", "allowlist"],
+    ["channels.discord.guilds", guildsJson, "--strict-json"],
+  ]) {
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["config", "set", ...args],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
+  }
   if (!shouldUseManagedGatewayService()) {
     const gatewayEnv = { ...params.env, DISCORD_BOT_TOKEN: params.token };
-    if (params.gatewayHolder?.current) {
-      await stopGateway(params.gatewayHolder.current);
-      params.gatewayHolder.current = null;
-    }
-    const gateway = await startManualGatewayFromInstalledCli({
+    const gatewayLogPath = join(
+      params.cwd,
+      `.openclaw/logs/${params.lane.name}-discord-gateway.log`,
+    );
+    await restartManualGatewayForDiscordSmoke({
       lane: params.lane,
       cliPath: params.cliPath,
       env: gatewayEnv,
-      logPath: join(params.cwd, `.openclaw/logs/${params.lane.name}-discord-gateway.log`),
-    });
-    if (params.gatewayHolder) {
-      params.gatewayHolder.current = gateway;
-    }
-    await waitForInstalledGateway({
-      lane: params.lane,
-      cliPath: params.cliPath,
-      env: gatewayEnv,
-      logPath: params.logPath,
+      gatewayHolder: params.gatewayHolder,
+      gatewayLogPath,
+      statusLogPath: params.logPath,
     });
     return;
   }

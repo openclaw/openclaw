@@ -1,35 +1,78 @@
 /* @vitest-environment jsdom */
-
-import type { RouteLocation, RouterState } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render } from "@solidjs/testing-library";
+import { spread } from "@solidjs/web";
+import { createComponent, createRoot, createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
-import type { RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
 } from "../components/command-palette-contract.ts";
 import {
-  BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
+import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
+import { showToast } from "../lib/toast.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { afterModalHidden, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
-import "./app-host.ts";
+import {
+  connectShellEvents,
+  createShellOwner,
+  mountShellView,
+  settleShell,
+} from "./app-host-solid.test-support.ts";
+import {
+  committedRouterState,
+  createRosterRefreshContext,
+  resetAppHostTestGlobals,
+} from "./app-host.test-support.ts";
+import { OpenClawShell, ShellOwner } from "./app-host.tsx";
+import { SHELL_COMPONENT_TAGS } from "./app-shell-components.ts";
+import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
+import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
+import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bootstrapApplication } from "./bootstrap.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import {
+  persistLazyShellAction,
+  readLazyShellAction,
+  SHELL_APPROVALS_OPEN_EVENT,
+} from "./lazy-shell-action.ts";
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { loadSettings } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+
+// mock-isolation: shell lifecycle tests exercise palette admission without its application data owners.
+vi.mock("../components/command-palette.tsx", () => ({
+  CommandPalette: (
+    props: Parameters<(typeof import("../components/command-palette.tsx"))["CommandPalette"]>[0],
+  ) => {
+    const element = Object.assign(document.createElement("openclaw-command-palette"), {
+      isOpen: false,
+      openPalette: vi.fn(),
+      togglePalette: vi.fn(),
+    });
+    spread(element, () => ({ ref: props.ref }), true);
+    return element;
+  },
+}));
 
 vi.mock("./stale-chunk-reload.ts", async () => {
   const actual =
@@ -40,31 +83,26 @@ vi.mock("./stale-chunk-reload.ts", async () => {
   };
 });
 
-type AppLifecycleState = {
-  loginToken: string;
-  loginPassword: string;
-  loginShowGatewayToken: boolean;
-  loginShowGatewayPassword: boolean;
-  disconnectedCallback: () => void;
-  synchronizeGateway: (gateway: ApplicationGateway) => void;
+function createRouteSessions() {
+  const { sessions } = createSessionCapabilityHarness(vi.fn());
+  onTestFinished(() => sessions.dispose());
+  return sessions;
+}
+
+type TestShell = Omit<ShellOwner, "runtime"> & {
+  runtime: { context: ApplicationContext };
+  shellGateway: ShellGatewayOwner;
+  shellNavigation: ShellNavigationOwner;
+  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
 };
 
-type ShellInitializationState = {
-  routeState: { routeId?: string };
-  ensureAgentsList: (
-    snapshot: ApplicationGatewaySnapshot,
-    agents: ApplicationContext["agents"],
-  ) => void;
-  ensureRuntimeConfig: (
-    snapshot: ApplicationGatewaySnapshot,
-    runtimeConfig: ApplicationContext["runtimeConfig"],
-  ) => void;
-};
-
-type ShellGatewaySynchronizationState = {
-  outboxStoreImport: { load: () => Promise<unknown> };
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
-};
+function testShell(context?: unknown): TestShell {
+  const shell = createShellOwner() as unknown as TestShell;
+  if (context) {
+    shell.runtime = { context: context as ApplicationContext };
+  }
+  return shell;
+}
 
 type I18nRecoveryWiring = {
   localeLoadRecovery?: {
@@ -73,121 +111,9 @@ type I18nRecoveryWiring = {
   };
 };
 
-type ShellServerPreferencesState = {
-  runtime: { context: ApplicationContext };
-  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
-};
-
-type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
-type ShellLazySurfaceState = ShellKeyboardState & {
-  browserPanelElement: TestOptionalCustomElement;
-  commandPaletteElement: TestOptionalCustomElement;
-  custodianPanelElement: TestOptionalCustomElement;
-  handleDeferredBrowserToggle: (event: Event) => void;
-  handleDeferredCustodianToggle: (event: Event) => void;
-  handleDeferredTerminalToggle: (event: Event) => void;
-  terminalPanelElement: TestOptionalCustomElement;
-};
-
-type ShellApprovalLazyState = {
-  approvalOverlay?: { show: () => void };
-  execApprovalElement: TestOptionalCustomElement;
-  openApprovals: () => void;
-};
-
-type ShellUiCommandState = ShellKeyboardState & {
-  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
-};
-
 function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
   return { defaultId, mainKey: "main", scope: "per-sender", agents };
 }
-
-function createRosterRefreshContext(params: {
-  previous: AgentsListResult;
-  next: AgentsListResult;
-  selectedId: string;
-}) {
-  const agentsState = { agentsList: params.previous };
-  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
-  const refreshList = vi.fn(async () => {
-    agentsState.agentsList = params.next;
-    return params.next;
-  });
-  const invalidateFiles = vi.fn();
-  const invalidateIdentity = vi.fn();
-  const ensureIdentity = vi.fn(async () => undefined);
-  const setSelection = vi.fn((agentId: string) => {
-    selectionState.selectedId = agentId;
-    selectionState.scopeId = agentId;
-  });
-  const refreshConfig = vi.fn(async () => null);
-  const context = {
-    agents: {
-      state: agentsState,
-      refreshList,
-      invalidateFiles,
-    },
-    agentIdentity: {
-      invalidate: invalidateIdentity,
-      ensure: ensureIdentity,
-    },
-    agentSelection: {
-      state: selectionState,
-      set: setSelection,
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false },
-      refresh: refreshConfig,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    refreshList,
-    invalidateFiles,
-    invalidateIdentity,
-    ensureIdentity,
-    setSelection,
-    refreshConfig,
-  };
-}
-
-let lazyElementSequence = 0;
-
-function createLazyElementSpec(label: string): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    },
-  };
-}
-
-type ShellChromeEventState = {
-  runtime: { context: ApplicationContext };
-  navDrawerOpen: boolean;
-  handleShellNavDrawerToggle: (event: Event) => void;
-  openPalette: () => void;
-  connectedCallback: () => void;
-  disconnectedCallback: () => void;
-};
-
-type ShellNavDrawerCloseState = HTMLElement &
-  ShellChromeEventState & {
-    desktopNavigationExpanded: boolean;
-    navDrawerTrigger: HTMLElement | null;
-    closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
-    handleWindowResize: () => void;
-    toggleNavigationSurface: () => void;
-  };
 
 function createDragEvent(type: "dragover" | "drop", types: string[]) {
   const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
@@ -196,111 +122,150 @@ function createDragEvent(type: "dragover" | "drop", types: string[]) {
   return { dataTransfer, event };
 }
 
-type ShellSettingsSearchLoadState = {
-  runtime: {
-    context: ApplicationContext;
-  };
-  handleSettingsSearchQueryChange: (query: string) => Promise<void>;
-};
-
-afterEach(() => {
-  resetAppHostTestGlobals();
-});
-
-type ShellEpochState = {
-  navDrawerOpen: boolean;
-  navDrawerTrigger: HTMLElement | null;
-  lastWorkspaceLocation: { routeId: string; search: string } | null;
-  activeSessionKey: string;
-  commandPaletteTarget: unknown;
-  agentsListClient: GatewayBrowserClient | null;
-  agentsListSource: ApplicationContext["agents"] | null;
-  sessionKeyClient: GatewayBrowserClient | null;
-  runtimeConfigClient: GatewayBrowserClient | null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null;
-  settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
-  disconnectedCallback: () => void;
-};
-
-type ShellRouteCommitState = {
-  runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  didConsiderNativeRouteRestore: boolean;
-  updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
-};
-
-type ShellCustodianRouteState = {
-  custodianMinimizeRequestId: number;
-  updateRouteState: (state: { routeId?: RouteId }) => void;
-};
-
-type ShellSessionNavigationState = {
-  runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  routeState: { routeId?: RouteId };
-  navigate: (routeId: RouteId) => void;
-  handleCommandPaletteSlashCommand: (command: string) => void;
-  replaceChatWithCurrentSession: () => void;
-};
-
-function committedRouterState(
-  routeId: RouteId,
-  pathname: string,
-  data?: unknown,
-): RouterState<RouteId> {
-  const location = { pathname, search: "", hash: "" } satisfies RouteLocation;
-  return {
-    location,
-    resolvedLocation: location,
-    status: "success",
-    matches: [{ routeId, location, data }],
-    pendingMatches: [],
-    cachedMatches: [],
-  } as unknown as RouterState<RouteId>;
+function mountPalette(shell: TestShell, openPalette: () => void) {
+  const element = Object.assign(document.createElement(SHELL_COMPONENT_TAGS.palette), {
+    custodianAvailable: false,
+    desktopAvailable: false,
+    isOpen: false,
+    openPalette,
+    togglePalette: vi.fn(),
+  });
+  shell.elements.commandPalette = element;
+  shell.element.append(element);
+}
+function configurePaletteShell(openPalette: () => void, mounted = true): TestShell {
+  const shell = testShell();
+  Object.defineProperty(shell, "updateComplete", {
+    configurable: true,
+    get: () => Promise.resolve(true),
+  });
+  document.body.append(shell.element);
+  onTestFinished(() => shell.element.remove());
+  if (mounted) {
+    mountPalette(shell, openPalette);
+  }
+  return shell;
 }
 
-describe("OpenClaw app lifecycle", () => {
-  it("hides revealed login credentials when the app connection epoch ends", () => {
-    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    app.loginShowGatewayToken = true;
-    app.loginShowGatewayPassword = true;
+async function withConnectedShell(shell: TestShell, run: () => void | Promise<void>) {
+  shell.connect();
+  try {
+    await run();
+  } finally {
+    shell.disconnect();
+  }
+}
 
-    app.disconnectedCallback();
+afterEach(resetAppHostTestGlobals);
 
-    expect(app.loginShowGatewayToken).toBe(false);
-    expect(app.loginShowGatewayPassword).toBe(false);
+describe("OpenClaw shell context lifecycle", () => {
+  setupSidebarTest();
+
+  it("restores a modal toast to a late-mounted shell after its navigation drawer closes", async () => {
+    await import("../components/modal-dialog.tsx");
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const restoreDialog = installDialogPolyfill();
+    const runtime = bootstrapApplication();
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    document.body.append(shell.element);
+    const view = mountShellView(shell);
+    let modal: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
+    try {
+      await settleShell(shell);
+      expect(shell.routeState).toEqual({});
+      expect(shell.shellElement).toBeInstanceOf(HTMLElement);
+      expect(shell.shellElement?.isConnected).toBe(false);
+      expect(shell.navDrawerElement).toBeInstanceOf(HTMLElement);
+
+      shell.connect();
+      shell.routeState = { routeId: "about" };
+      await settleShell(shell);
+      const trigger = document.createElement("button");
+      shell.shellElement!.append(trigger);
+      shell.toggleNavigationSurface(trigger);
+      await settleShell(shell);
+      const toast = shell.toastElement as HTMLElementTagNameMap["openclaw-toast-host"];
+      expect(toast.parentElement).toBe(shell.navDrawerElement);
+      expect(showToast({ message: "Drawer result", durationMs: 60_000 })).toBe(true);
+      await toast.updateComplete;
+      await vi.dynamicImportSettled();
+      flush();
+
+      modal = document.createElement("openclaw-modal-dialog");
+      document.body.append(modal);
+      await modal.updateComplete;
+      expect(showToast({ message: "Modal result", durationMs: 60_000 })).toBe(true);
+      await toast.updateComplete;
+      expect(toast.parentElement).toBe(modal.getOverlayContainer());
+
+      shell.closeNavDrawer();
+      await settleShell(shell);
+      expect(shell.navDrawerOpen).toBe(false);
+      expect(shell.navDrawerElement?.getAttribute("aria-modal")).toBeNull();
+      const hidden = afterModalHidden(modal);
+      modal.hide();
+      await modal.updateComplete;
+      await hidden;
+      await Promise.resolve();
+      flush();
+
+      expect(toast.parentElement).toBe(shell.shellElement);
+      expect(toast.textContent).toContain("Modal result");
+    } finally {
+      view.unmount();
+      shell.disconnect();
+      shell.element.remove();
+      modal?.remove();
+      runtime.stop();
+      restoreDialog();
+    }
   });
 
-  it("hides revealed login credentials when the Gateway source changes", () => {
-    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    const snapshot = {
-      client: null,
-      phase: "stopped",
-      lastError: null,
-      lastErrorCode: null,
-    } as ApplicationGatewaySnapshot;
-    const firstGateway = {
-      snapshot,
-      connection: { gatewayUrl: "ws://first.test", token: "first", password: "first-password" },
-    } as ApplicationGateway;
-    const secondGateway = {
-      snapshot,
-      connection: {
-        gatewayUrl: "ws://second.test",
-        token: "second",
-        password: "second-password",
-      },
-    } as ApplicationGateway;
-    app.synchronizeGateway(firstGateway);
-    app.loginShowGatewayToken = true;
-    app.loginShowGatewayPassword = true;
+  it("preserves reload intent on disconnect but clears it on context replacement", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    persistLazyShellAction({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+    const disconnected = createShellOwner();
+    disconnected.disconnect();
+    expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
 
-    app.synchronizeGateway(secondGateway);
-
-    expect(app.loginShowGatewayToken).toBe(false);
-    expect(app.loginShowGatewayPassword).toBe(false);
-    expect(app.loginToken).toBe("second");
-    expect(app.loginPassword).toBe("second-password");
+    const first = bootstrapApplication();
+    const second = bootstrapApplication();
+    const [runtime, setRuntime] = createSignal(first);
+    let currentShell: ShellOwner | undefined;
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = render(() =>
+        createComponent(OpenClawShell, {
+          get runtime() {
+            return runtime();
+          },
+          onShell(shell) {
+            currentShell = shell instanceof ShellOwner ? shell : undefined;
+          },
+        }),
+      );
+      flush();
+      expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      expect(currentShell?.isShellComponentRequested("palette")).toBe(true);
+      const firstShell = currentShell;
+      setRuntime(second);
+      flush();
+      expect(readLazyShellAction()).toBeNull();
+      expect(currentShell).toBeDefined();
+      expect(currentShell).not.toBe(firstShell);
+      expect(currentShell?.pendingShellAction).toBeNull();
+    } finally {
+      view?.unmount();
+      first.stop();
+      second.stop();
+    }
   });
 });
 
@@ -322,10 +287,18 @@ describe("OpenClaw shell source initialization", () => {
 
   it("retries a pending locale once when the Gateway becomes connected", () => {
     const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellGatewaySynchronizationState;
-    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    // Owner-direct: the shared jsdom lane can retain a sibling graph's
+    // openclaw-app-shell class bound to a different i18n instance; constructing
+    // the owner keeps the spy and the callee in the current module graph.
+    const host = {
+      activeSessionKey: "",
+      context: undefined,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: vi.fn(async () => undefined) },
+      shellNavigation: { recoverDeletedActiveSession: vi.fn() },
+      routeState: {},
+    } as unknown as ShellGatewayHost;
+    const owner = new ShellGatewayOwner(host);
     const reconnecting = {
       client: null,
       phase: "reconnecting",
@@ -337,55 +310,42 @@ describe("OpenClaw shell source initialization", () => {
       sessionKey: "",
     } as ApplicationGatewaySnapshot;
 
-    shell.synchronizeGateway(reconnecting);
-    shell.synchronizeGateway(connected);
-    shell.synchronizeGateway({ ...connected });
-    shell.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway(reconnecting);
+    owner.synchronizeGateway(connected);
+    owner.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway({ ...connected });
 
     expect(retryPendingLocale).toHaveBeenCalledOnce();
     retryPendingLocale.mockRestore();
   });
 
-  it("clears retained presentation and source ownership when its context epoch ends", () => {
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellEpochState;
-    const client = {} as GatewayBrowserClient;
-    const agents = {} as ApplicationContext["agents"];
-    const runtimeConfig = {} as ApplicationContext["runtimeConfig"];
+  it("clears retained presentation when its context epoch ends", () => {
+    const shell = testShell();
     const trigger = document.createElement("button");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
-    shell.lastWorkspaceLocation = { routeId: "usage", search: "?agent=old" };
+    shell.lastWorkspaceLocation = {
+      routeId: "usage",
+      pathname: "/usage",
+      search: "?agent=old",
+      hash: "",
+    };
     shell.activeSessionKey = "agent:old:main";
-    shell.commandPaletteTarget = {};
-    shell.agentsListClient = client;
-    shell.agentsListSource = agents;
-    shell.sessionKeyClient = client;
-    shell.runtimeConfigClient = client;
-    shell.runtimeConfigSource = runtimeConfig;
-    shell.settingsPreloadTimers.set(
-      trigger,
-      globalThis.setTimeout(() => undefined, 60_000),
-    );
+    shell.commandPaletteTarget = { owner: trigger, onSlashCommand: vi.fn() };
 
-    shell.disconnectedCallback();
+    shell.disconnect();
 
-    expect(shell.navDrawerOpen).toBe(false);
-    expect(shell.navDrawerTrigger).toBeNull();
-    expect(shell.lastWorkspaceLocation).toBeNull();
-    expect(shell.activeSessionKey).toBe("");
-    expect(shell.commandPaletteTarget).toBeUndefined();
-    expect(shell.agentsListClient).toBeNull();
-    expect(shell.agentsListSource).toBeNull();
-    expect(shell.sessionKeyClient).toBeNull();
-    expect(shell.runtimeConfigClient).toBeNull();
-    expect(shell.runtimeConfigSource).toBeNull();
-    expect(shell.settingsPreloadTimers.size).toBe(0);
+    expect(shell).toMatchObject({
+      navDrawerOpen: false,
+      navDrawerTrigger: null,
+      lastWorkspaceLocation: null,
+      activeSessionKey: "",
+      commandPaletteTarget: undefined,
+    });
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellInitializationState;
+    const shell = testShell();
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
@@ -397,7 +357,7 @@ describe("OpenClaw shell source initialization", () => {
     const createRuntimeConfig = () =>
       ({
         state: { client, connected: true },
-        ensureLoaded: vi.fn(() => Promise.resolve()),
+        ensureDisplayLoaded: vi.fn(() => Promise.resolve()),
       }) as unknown as ApplicationContext["runtimeConfig"];
     const firstAgents = createAgents();
     const secondAgents = createAgents();
@@ -407,61 +367,63 @@ describe("OpenClaw shell source initialization", () => {
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, secondAgents);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(firstAgents.ensureList).toHaveBeenCalledOnce();
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
-    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(firstRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
+
+    shell.disconnect();
+    shell.ensureAgentsList(snapshot, secondAgents);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+
+    expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("OpenClaw shell route session commits", () => {
-  it("builds session paths from the requested destination face", () => {
-    const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSessionNavigationState;
-    shell.runtime = {
-      context: {
-        basePath: "",
-        agents: { state: { agentsList: { mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" } },
-        gateway: { snapshot: { hello: null } },
-        sessions: { state: { result: null } },
-        navigate,
-      } as unknown as ApplicationContext,
-    };
-    shell.activeSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+  it("settles shell commits after the invalidating caller is disposed", async () => {
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    const view = mountShellView(shell);
+    flush();
 
-    shell.routeState = { routeId: "chat" };
-    shell.navigate("dashboard");
-    expect(navigate).toHaveBeenLastCalledWith("dashboard", {
-      pathname: "/dashboard/main/12345678",
+    let disposeCaller!: () => void;
+    createRoot((dispose) => {
+      disposeCaller = dispose;
+      shell.invalidate();
     });
+    const commit = shell.updateComplete;
+    shell.invalidate();
+    expect(shell.updateComplete).toBe(commit);
+    disposeCaller();
+    flush();
+    await expect(commit).resolves.toBe(true);
 
-    shell.routeState = { routeId: "dashboard" };
-    shell.navigate("chat");
-    expect(navigate).toHaveBeenLastCalledWith("chat", { pathname: "/chat/main/12345678" });
+    shell.invalidate();
+    const retiredCommit = shell.updateComplete;
+    view.unmount();
+    flush();
+    await expect(retiredCommit).resolves.toBe(false);
   });
 
   it("preserves catalog identity when routing a slash-command draft", () => {
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSessionNavigationState;
-    shell.runtime = {
-      context: {
-        basePath: "",
-        agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "research" } },
-        gateway: { snapshot: { hello: null } },
-        sessions: { state: { result: null } },
-        navigate,
-      } as unknown as ApplicationContext,
-    };
+    const shell = testShell({
+      basePath: "",
+      agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "research" } },
+      gateway: { snapshot: { hello: null } },
+      sessions: createRouteSessions(),
+      chatSubmissions: createChatSubmissions(),
+      navigate,
+    });
     shell.activeSessionKey = "catalog:claude:gateway%3Alocal:thread-1";
     shell.routeState = { routeId: "chat" };
 
@@ -476,52 +438,50 @@ describe("OpenClaw shell route session commits", () => {
   it("defers an unscoped not-found fallback until agent defaults are connected", () => {
     const replace = vi.fn();
     const snapshot = { phase: "connecting", hello: null };
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSessionNavigationState;
-    shell.runtime = {
-      context: {
-        basePath: "",
-        agents: {
-          state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
-        },
-        agentSelection: { set: vi.fn(), state: { selectedId: null } },
-        gateway: { setSessionKey: vi.fn(), snapshot },
-        sessions: { state: { result: null } },
-        replace,
-      } as unknown as ApplicationContext,
-    };
+    const shell = testShell({
+      basePath: "",
+      agents: {
+        state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
+      },
+      agentSelection: { set: vi.fn(), state: { selectedId: null } },
+      gateway: { setSessionKey: vi.fn(), snapshot },
+      sessions: createRouteSessions(),
+      chatSubmissions: createChatSubmissions(),
+      placementStartup: { get: vi.fn(() => null) },
+      replace,
+    });
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    shell.replaceChatWithCurrentSession();
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    shell.replaceChatWithCurrentSession();
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
-  it("adopts a resolved chat session after path navigation from Tasks", () => {
+  it("adopts a resolved chat session after path navigation from Cron", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const calls: string[] = [];
     const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
     const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellRouteCommitState;
-    shell.runtime = {
-      context: {
-        gateway: {
-          snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
-          setSessionKey,
-        },
-        agentSelection: { set: setAgent },
-      } as unknown as ApplicationContext,
-    };
+    const shell = testShell({
+      gateway: {
+        snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
+        setSessionKey,
+      },
+      agentSelection: { set: setAgent },
+      sessions: createRouteSessions(),
+      chatSubmissions: createChatSubmissions(),
+    });
     shell.activeSessionKey = "agent:main:session-a";
     shell.didConsiderNativeRouteRestore = true;
 
-    shell.updateRouteState(selectShellRouteState(committedRouterState("tasks", "/tasks")));
-    shell.updateRouteState(
+    shell.shellNavigation.updateRouteState(
+      selectShellRouteState(committedRouterState("cron", "/cron")),
+    );
+    shell.shellNavigation.updateRouteState(
       selectShellRouteState(
         committedRouterState("chat", "/chat/main/session-b-12345678", {
           kind: "session",
@@ -536,100 +496,88 @@ describe("OpenClaw shell route session commits", () => {
   });
 
   it("retains the custodian leave transition through an unresolved route state", () => {
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellCustodianRouteState;
+    const shell = testShell();
 
-    shell.updateRouteState({ routeId: "custodian" });
-    shell.updateRouteState({});
+    shell.shellNavigation.updateRouteState({ routeId: "custodian" });
+    shell.shellNavigation.updateRouteState({});
     expect(shell.custodianMinimizeRequestId).toBe(0);
 
-    shell.updateRouteState({ routeId: "appearance" });
+    shell.shellNavigation.updateRouteState({ routeId: "appearance" });
     expect(shell.custodianMinimizeRequestId).toBe(1);
   });
 });
 
 describe("OpenClaw shell server preferences", () => {
-  it("refreshes live navigation when a sidebar preference arrives from the gateway", () => {
+  it("refreshes live navigation from profile preferences rather than shared config", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
-    const updateNavigation = vi.fn();
-    const refreshTheme = vi.fn();
+    const request = vi.fn(async (method: string) => {
+      expect(method).toBe("users.prefs.get");
+      return {
+        status: "ok",
+        entries: { "ui.railShortcuts": sidebarEntries },
+      };
+    });
+    const client = createTestGatewayClient(request);
+    const gateway = {
+      connection: { gatewayUrl: "ws://sidebar.test" },
+      snapshot: { phase: "connected", client, selfUser: { id: "profile-a" } },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
+    const navigation = createApplicationNavigationPreferences(theme);
+    const navigationChanged = vi.fn();
+    const stopNavigation = navigation.subscribe(navigationChanged);
+    onTestFinished(() => {
+      stopNavigation();
+      theme.dispose();
+      resetServerUiPrefsSync();
+    });
     const runtimeConfig = {
       state: {
         configSnapshot: {
-          config: { ui: { prefs: { sidebarEntries } } },
+          config: { ui: { prefs: { sidebarEntries: ["route:plugins"] } } },
           hash: "sidebar-config-hash",
         },
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: { connection: { gatewayUrl: "ws://sidebar.test" } },
-      navigation: { update: updateNavigation },
-      theme: { refresh: refreshTheme },
+      gateway,
+      navigation,
+      theme,
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
-    shell.runtime = { context };
+    const shell = testShell(context);
 
-    shell.reconcileServerUiPrefs(runtimeConfig);
+    await shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
 
-    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
-    expect(refreshTheme).toHaveBeenCalledOnce();
-    resetServerUiPrefsSync();
+    expect(request).toHaveBeenCalledWith("users.prefs.get", expect.any(Object));
+    expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
+    expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));
+    expect(loadSettings(gateway.connection.gatewayUrl).sidebarEntries).toEqual(sidebarEntries);
   });
 });
 
 describe("OpenClaw shell settings search", () => {
-  it("loads config and schema for a non-empty query", async () => {
-    const runtimeConfig = {
-      ensureLoaded: vi.fn(() => Promise.resolve()),
-      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
-    } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsSearchLoadState;
-    shell.runtime = {
-      context: { runtimeConfig } as unknown as ApplicationContext,
-    };
-
-    await shell.handleSettingsSearchQueryChange("browser");
-
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
-  });
-
   it("does not load schema through a replaced runtime config capability", async () => {
-    let finishLoad: (() => void) | undefined;
+    const loadGate = createDeferred();
     const firstRuntimeConfig = {
-      ensureLoaded: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            finishLoad = resolve;
-          }),
-      ),
+      ensureLoaded: vi.fn(() => loadGate.promise),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
     const secondRuntimeConfig = {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsSearchLoadState;
-    shell.runtime = {
-      context: { runtimeConfig: firstRuntimeConfig } as unknown as ApplicationContext,
-    };
+    const shell = testShell({ runtimeConfig: firstRuntimeConfig });
 
     const load = shell.handleSettingsSearchQueryChange("browser");
     shell.runtime = {
       context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
     };
-    finishLoad?.();
+    loadGate.resolve();
     await load;
 
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
@@ -637,36 +585,18 @@ describe("OpenClaw shell settings search", () => {
     expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
   });
 
-  it.each(["config", "schema"] as const)(
-    "contains rejected %s loads within settings search",
-    async (failureStage) => {
-      const runtimeConfig = {
-        ensureLoaded: vi.fn(() =>
-          failureStage === "config"
-            ? Promise.reject(new Error("config unavailable"))
-            : Promise.resolve(),
-        ),
-        ensureSchemaLoaded: vi.fn(() =>
-          failureStage === "schema"
-            ? Promise.reject(new Error("schema unavailable"))
-            : Promise.resolve(),
-        ),
-      } as unknown as ApplicationContext["runtimeConfig"];
-      const shell = document.createElement(
-        "openclaw-app-shell",
-      ) as unknown as ShellSettingsSearchLoadState;
-      shell.runtime = {
-        context: { runtimeConfig } as unknown as ApplicationContext,
-      };
+  it("contains rejected schema loads within settings search", async () => {
+    const runtimeConfig = {
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.reject(new Error("schema unavailable"))),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const shell = testShell({ runtimeConfig });
 
-      await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
+    await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
 
-      expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-      expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(
-        failureStage === "schema" ? 1 : 0,
-      );
-    },
-  );
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
+  });
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {
@@ -678,47 +608,29 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("merges shell chrome only for plain-browser mobile chat", () => {
-    expect(
-      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
-    ).toBe(true);
-    expect(
-      shouldMergeChatChrome({ mobileNavLayout: false, routeId: "chat", onboarding: false }),
-    ).toBe(false);
-    expect(
-      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "sessions", onboarding: false }),
-    ).toBe(false);
-    expect(
-      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: true }),
-    ).toBe(false);
+    const shouldMerge = (overrides: Partial<Parameters<typeof shouldMergeChatChrome>[0]> = {}) =>
+      shouldMergeChatChrome({
+        mobileNavLayout: true,
+        routeId: "chat",
+        onboarding: false,
+        ...overrides,
+      });
+    expect(shouldMerge()).toBe(true);
+    expect(shouldMerge({ mobileNavLayout: false })).toBe(false);
+    expect(shouldMerge({ routeId: "sessions" })).toBe(false);
+    expect(shouldMerge({ onboarding: true })).toBe(false);
 
     document.documentElement.classList.add("openclaw-native-nav");
-    expect(
-      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
-    ).toBe(false);
-  });
-
-  it("wires merged header window events for the shell lifecycle", () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
-
-    shell.connectedCallback();
-
-    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
-    expect(addEventListener).toHaveBeenCalledWith(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      expect.any(Function),
-    );
-    shell.disconnectedCallback();
-    addEventListener.mockRestore();
+    expect(shouldMerge()).toBe(false);
   });
 
   it("prevents unhandled window file drops without overriding accepted targets", () => {
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const shell = testShell();
     const acceptedDropTarget = document.createElement("div");
     const nativeFileInput = document.createElement("input");
     nativeFileInput.type = "file";
     document.body.append(acceptedDropTarget, nativeFileInput);
-    shell.connectedCallback();
+    shell.connect();
 
     try {
       for (const type of ["dragover", "drop"] as const) {
@@ -746,69 +658,61 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         expect(nonFile.dataTransfer.dropEffect).toBe("copy");
       }
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       acceptedDropTarget.remove();
       nativeFileInput.remove();
     }
   });
 
-  it("suppresses modal focus restoration when the navigation drawer closes without restoring focus", () => {
-    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
-    const modal = document.createElement("openclaw-modal-dialog");
-    const setReturnFocusTarget = vi.fn();
-    modal.className = "drawer nav-drawer";
-    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
-    shell.append(modal);
-    shell.navDrawerOpen = true;
-    shell.navDrawerTrigger = document.createElement("button");
-
-    shell.closeNavDrawer();
-
-    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
-    expect(shell.navDrawerOpen).toBe(false);
-    expect(shell.navDrawerTrigger).toBeNull();
-  });
-
-  it("closes an open navigation drawer before moving its sidebar into desktop layout", () => {
-    vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
-    const updateNavigation = vi.fn();
-    shell.runtime = {
-      context: {
-        navigation: {
-          snapshot: { navCollapsed: true },
-          update: updateNavigation,
-        },
-      } as unknown as ApplicationContext,
-    };
-    const sidebar = document.createElement("openclaw-app-sidebar");
+  it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
+    await import("../components/app-sidebar.tsx");
+    vi.stubGlobal("matchMedia", () => Object.assign(new EventTarget(), { matches: false }));
+    const runtime = bootstrapApplication();
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    runtime.context.navigation.update({ navCollapsed: true });
+    const updateNavigation = vi.spyOn(runtime.context.navigation, "update");
+    const sidebar = shell.navigationSidebar;
     const dismissTransientMenus = vi.fn(() => true);
-    Object.defineProperty(sidebar, "dismissTransientMenus", { value: dismissTransientMenus });
-    const modal = document.createElement("openclaw-modal-dialog");
-    const setReturnFocusTarget = vi.fn();
-    modal.className = "drawer nav-drawer";
-    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
-    shell.append(sidebar, modal);
+    sidebar.dismissTransientMenus = dismissTransientMenus;
+    shell.element.append(sidebar);
+    document.body.append(shell.element);
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     const closeNavDrawer = vi.spyOn(shell, "closeNavDrawer");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
 
-    shell.handleWindowResize();
+    try {
+      connectShellEvents(shell);
+      window.dispatchEvent(new Event("resize"));
 
-    expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
-    expect(dismissTransientMenus).toHaveBeenCalledOnce();
-    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
-    expect(restoreTriggerFocus).not.toHaveBeenCalled();
-    expect(shell.navDrawerOpen).toBe(false);
-    expect(shell.navDrawerTrigger).toBeNull();
-    expect(updateNavigation).not.toHaveBeenCalled();
-    expect(shell.desktopNavigationExpanded).toBe(true);
-    shell.toggleNavigationSurface();
-    expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
-    expect(shell.desktopNavigationExpanded).toBe(false);
-    trigger.remove();
+      expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
+      expect(dismissTransientMenus).toHaveBeenCalledOnce();
+      expect(restoreTriggerFocus).not.toHaveBeenCalled();
+      expect(shell.navDrawerOpen).toBe(false);
+      expect(shell.navDrawerTrigger).toBeNull();
+      expect(updateNavigation).not.toHaveBeenCalled();
+      expect(shell.desktopNavigationExpanded).toBe(true);
+      shell.toggleNavigationSurface();
+      expect(updateNavigation).toHaveBeenCalledExactlyOnceWith({ navCollapsed: true });
+      expect(shell.desktopNavigationExpanded).toBe(false);
+
+      document.body.append(sidebar);
+      shell.navDrawerOpen = true;
+      shell.navDrawerTrigger = trigger;
+      shell.closeNavDrawer();
+      expect(dismissTransientMenus).toHaveBeenCalledTimes(2);
+      expect(shell.navDrawerOpen).toBe(false);
+      expect(shell.navDrawerTrigger).toBeNull();
+      expect(restoreTriggerFocus).not.toHaveBeenCalled();
+    } finally {
+      shell.disconnect();
+      shell.element.remove();
+      sidebar.remove();
+      trigger.remove();
+      runtime.stop();
+    }
   });
 
   it("handles merged header drawer and palette requests", () => {
@@ -818,132 +722,75 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     const openPalette = vi.fn();
     const trigger = document.createElement("button");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
-    shell.runtime = {
-      context: {
-        navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
-      } as unknown as ApplicationContext,
-    };
-    Object.defineProperty(shell, "commandPalette", {
+    const shell = testShell({
+      navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
+    });
+    Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
-      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+      value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
-    shell.handleShellNavDrawerToggle(
-      new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
-    );
-    shell.openPalette();
+    connectShellEvents(shell);
+    window.dispatchEvent(new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }));
+    window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
 
     expect(shell.navDrawerOpen).toBe(true);
     expect(openPalette).toHaveBeenCalledOnce();
   });
 
-  it("loads and toggles the command palette on its first shortcut", async () => {
-    const element = createLazyElementSpec("command palette");
-    const togglePalette = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.commandPaletteElement = element;
-    Object.defineProperty(shell, "updateComplete", {
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "commandPalette", {
-      configurable: true,
-      get: () =>
-        customElements.get(element.tagName)
-          ? { isOpen: false, openPalette: vi.fn(), togglePalette }
-          : undefined,
-    });
-    const event = new KeyboardEvent("keydown", {
-      key: "л",
-      code: "KeyK",
-      ctrlKey: true,
-      cancelable: true,
-    });
+  it("opens an unloaded palette only with the Mac platform shortcut", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const openPalette = vi.fn();
+    const shell = configurePaletteShell(openPalette, false);
+    connectShellEvents(shell);
+    const chord = (metaKey: boolean) =>
+      new KeyboardEvent("keydown", {
+        key: "л",
+        code: "KeyK",
+        metaKey,
+        ctrlKey: !metaKey,
+        cancelable: true,
+      });
+    const other = chord(false);
+    document.dispatchEvent(other);
+    expect(other.defaultPrevented).toBe(false);
+    expect(openPalette).not.toHaveBeenCalled();
 
-    shell.handleDocumentKeydown(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() => expect(togglePalette).toHaveBeenCalledOnce());
+    const primary = chord(true);
+    document.dispatchEvent(primary);
+    expect(primary.defaultPrevented).toBe(true);
+    expect(shell.isShellComponentRequested("palette")).toBe(true);
+    mountPalette(shell, openPalette);
+    shell.restorePendingLazyAction();
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
-  it("delivers first panel toggles after their lazy modules load", async () => {
-    const terminalElement = createLazyElementSpec("terminal panel");
-    const browserElement = createLazyElementSpec("browser panel");
-    const custodianElement = createLazyElementSpec("custodian panel");
-    const terminalToggle = vi.fn();
-    const browserToggle = vi.fn();
-    const custodianToggle = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
-    shell.terminalPanelElement = terminalElement;
-    shell.browserPanelElement = browserElement;
-    shell.custodianPanelElement = custodianElement;
-    shell.runtime = {
-      context: {
-        gateway: {
-          snapshot: {
-            phase: "connected",
-            hello: {
-              auth: { role: "operator", scopes: ["operator.admin"] },
-              features: { methods: ["terminal.open", "browser.request", "openclaw.chat"] },
-            },
-          },
-        },
-        config: { current: { terminalEnabled: true } },
-      } as unknown as ApplicationContext,
-    };
-    Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "querySelector", {
-      configurable: true,
-      value: (selector: string) => {
-        if (selector === terminalElement.tagName) {
-          return { handleToggleRequest: terminalToggle };
-        }
-        if (selector === browserElement.tagName) {
-          return { handleToggleRequest: browserToggle };
-        }
-        if (selector === custodianElement.tagName) {
-          return { handleToggleRequest: custodianToggle };
-        }
-        return null;
-      },
-    });
-    const terminalEvent = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-      detail: { dock: "right", open: true },
-    });
-    const browserEvent = new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT);
-    const custodianEvent = new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT);
-
-    shell.handleDeferredTerminalToggle(terminalEvent);
-    shell.handleDeferredBrowserToggle(browserEvent);
-    shell.handleDeferredCustodianToggle(custodianEvent);
-
-    await vi.waitFor(() => {
-      expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
-      expect(browserToggle).toHaveBeenCalledWith(browserEvent);
-      expect(custodianToggle).toHaveBeenCalledWith(custodianEvent);
+  it("clears a pending command palette action on Close", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const openPalette = vi.fn();
+    const shell = configurePaletteShell(openPalette, false);
+    await withConnectedShell(shell, () => {
+      shell.openPalette();
+      shell.closePendingPalette();
+      expect(readLazyShellAction()).toBeNull();
+      const replacement = configurePaletteShell(openPalette);
+      replacement.restorePendingLazyAction();
+      expect(openPalette).not.toHaveBeenCalled();
     });
   });
 
-  it("opens approvals after the modal module loads on demand", async () => {
-    const element = createLazyElementSpec("exec approval modal");
-    const show = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellApprovalLazyState;
-    shell.execApprovalElement = element;
-    Object.defineProperty(shell, "updateComplete", {
-      configurable: true,
-      get: () => Promise.resolve(true),
-    });
-    Object.defineProperty(shell, "approvalOverlay", {
-      configurable: true,
-      get: () => (customElements.get(element.tagName) ? { show } : undefined),
-    });
+  it("does not clear an unrelated pending action from an already-loaded palette", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    persistLazyShellAction({ eventType: SHELL_APPROVALS_OPEN_EVENT });
+    const openPalette = vi.fn();
+    const shell = configurePaletteShell(openPalette);
 
-    shell.openApprovals();
+    await withConnectedShell(shell, () => {
+      shell.openPalette();
 
-    await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
+      expect(openPalette).toHaveBeenCalledOnce();
+      expect(readLazyShellAction()).toEqual({ eventType: SHELL_APPROVALS_OPEN_EVENT });
+    });
   });
 
   it("routes UI commands to navigation, panels, and chat fallback", () => {
@@ -953,54 +800,37 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     const navigate = vi.fn();
     const panelEvent = vi.fn();
     const uiCommandEvent = vi.fn();
+    const pluginPanelEvent = vi.fn();
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
-    shell.runtime = {
-      context: {
-        basePath: "",
-        navigation: { update },
-        gateway: { setSessionKey, snapshot: { hello: null } },
-        agents: { state: { agentsList: { mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" }, set: setAgent },
-        sessions: { state: { result: null } },
-        navigate,
-      } as unknown as ApplicationContext,
-    };
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
+    const shell = testShell({
+      basePath: "",
+      navigation: { update },
+      gateway: { setSessionKey, snapshot: { hello: null } },
+      agents: { state: { agentsList: { mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "main" }, set: setAgent },
+      sessions: createRouteSessions(),
+      chatSubmissions: createChatSubmissions(),
+      navigate,
+    });
 
-    shell.handleGatewayEvent({
-      event: "ui.command",
-      payload: { command: { kind: "sidebar", visible: false } },
+    const send = (command: unknown, target: object = {}) =>
+      shell.handleGatewayEvent({ event: "ui.command", payload: { command, ...target } });
+    send({ kind: "sidebar", visible: false });
+    send({
+      kind: "panel",
+      panel: "terminal",
+      open: true,
+      dock: "right",
+      terminalSessionId: "terminal-agent-1",
     });
-    shell.handleGatewayEvent({
-      event: "ui.command",
-      payload: {
-        command: {
-          kind: "panel",
-          panel: "terminal",
-          open: true,
-          dock: "right",
-          terminalSessionId: "terminal-agent-1",
-        },
-      },
+    send({
+      kind: "split",
+      direction: "right",
+      sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
     });
-    shell.handleGatewayEvent({
-      event: "ui.command",
-      payload: {
-        command: {
-          kind: "split",
-          direction: "right",
-          sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-        },
-      },
-    });
-    shell.handleGatewayEvent({
-      event: "ui.command",
-      payload: {
-        command: { kind: "focus", sessionKey: "agent:main:other" },
-        sessionKey: "agent:main:source",
-      },
-    });
+    send({ kind: "focus", sessionKey: "agent:main:other" }, { sessionKey: "agent:main:source" });
 
     expect(update).toHaveBeenCalledWith({ navCollapsed: true });
     expect(panelEvent).toHaveBeenCalledWith(
@@ -1011,11 +841,10 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(setSessionKey).toHaveBeenCalledWith(
       "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
     );
-    // The pushed command names a session the UI has not cached, so its face is a guess
-    // and the navigation is marked for the chat loader to re-derive from the gateway.
+    // An uncached session's guessed face must be re-derived by the chat loader.
     expect(setAgent).toHaveBeenCalledWith("main");
     expect(navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(
@@ -1026,6 +855,30 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         },
       }),
     );
+    send(
+      {
+        kind: "panel",
+        panel: "plugin",
+        pluginId: "review",
+        panelId: "document",
+        open: true,
+      },
+      { sessionKey: "global", agentId: "writer" },
+    );
+    expect(setAgent).toHaveBeenLastCalledWith("writer");
+    expect(setSessionKey).toHaveBeenLastCalledWith("global");
+    expect(pluginPanelEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        detail: {
+          sessionKey: "global",
+          agentId: "writer",
+          pluginId: "review",
+          panelId: "document",
+          open: true,
+        },
+      }),
+    );
+    window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });
@@ -1045,8 +898,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       ]),
       selectedId: "main",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
+    const shell = testShell(harness.context);
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     await vi.advanceTimersByTimeAsync(100);
@@ -1066,33 +918,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: roster("main", [{ id: "fallback" }, { id: "main" }]),
       selectedId: "writer",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
+    const shell = testShell(harness.context);
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith("main");
-  });
-
-  it("keeps caches intact when a config.changed refresh returns the same roster", async () => {
-    vi.useFakeTimers();
-    const unchanged = roster("main", [{ id: "main", name: "Main" }, { id: "writer" }]);
-    const harness = createRosterRefreshContext({
-      previous: unchanged,
-      next: structuredClone(unchanged),
-      selectedId: "main",
-    });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
-
-    shell.handleGatewayEvent({ event: "config.changed", payload: {} });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(harness.refreshList).toHaveBeenCalledOnce();
-    expect(harness.invalidateFiles).not.toHaveBeenCalled();
-    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
-    expect(harness.ensureIdentity).not.toHaveBeenCalled();
+    expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith("main", { background: true });
   });
 
   it("coalesces config.changed bursts into one roster refresh", async () => {
@@ -1103,8 +934,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: unchanged,
       selectedId: "main",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
-    shell.runtime = { context: harness.context };
+    const shell = testShell(harness.context);
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
@@ -1114,5 +944,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.refreshList).toHaveBeenCalledOnce();
+    expect(harness.invalidateFiles).not.toHaveBeenCalled();
+    expect(harness.invalidateIdentity).not.toHaveBeenCalled();
+    expect(harness.ensureIdentity).not.toHaveBeenCalled();
   });
 });

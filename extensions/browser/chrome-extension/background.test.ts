@@ -1,568 +1,579 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectUnused,
+  connectRelay,
+  loadConfiguredBackground as load,
+  relayFrames,
+  relayConfig,
+  runtime,
+  waitCalled,
+} from "./background.lifecycle-test-helpers.js";
+import {
+  cleanupBackgroundHarnesses,
+  loadBackground,
+  TEST_RELAY_KEY,
+  REPLACEMENT_TEST_RELAY_KEY,
+} from "./background.test-harness.js";
 
-const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
-const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
-const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
+const nativeSuccess = (request: unknown) => ({
+  v: 1,
+  ok: true,
+  nonce: (request as { nonce?: unknown }).nonce,
+  pairingString: `ws://127.0.0.1:18797/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${TEST_RELAY_KEY}`,
+});
 
-type SocketEvent = { data?: unknown };
-type SocketListener = (event: SocketEvent) => void;
-type RuntimeMessageListener = (
-  message: { type: string; tabId?: number; note?: string; pairingString?: string },
-  sender: unknown,
-  sendResponse: (response: unknown) => void,
-) => boolean;
-type PageCaptureResult = {
-  content: string;
-  selection: string;
-  title: string;
-  url: string;
-};
-
-async function loadBackground({
-  deferSocketClose = false,
-  onConsentChanged,
-}: {
-  deferSocketClose?: boolean;
-  onConsentChanged?: () => Promise<void>;
-} = {}) {
-  const sockets: FakeWebSocket[] = [];
-  let alarmListener: ((alarm: { name: string }) => void) | undefined;
-  let messageListener: RuntimeMessageListener | undefined;
-
-  class FakeWebSocket {
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSING = 2;
-    static readonly CLOSED = 3;
-
-    readyState = FakeWebSocket.CONNECTING;
-    readonly send = vi.fn();
-    readonly close = vi.fn(() => {
-      if (deferSocketClose) {
-        this.readyState = FakeWebSocket.CLOSING;
-        return;
-      }
-      this.readyState = FakeWebSocket.CLOSED;
-      this.emit("close");
-    });
-    private readonly listeners = new Map<string, SocketListener[]>();
-
-    constructor(
-      readonly url: string,
-      readonly protocols: string[],
-    ) {
-      sockets.push(this);
-    }
-
-    addEventListener(type: string, listener: SocketListener) {
-      const listeners = this.listeners.get(type) ?? [];
-      listeners.push(listener);
-      this.listeners.set(type, listeners);
-    }
-
-    open() {
-      this.readyState = FakeWebSocket.OPEN;
-      this.emit("open");
-    }
-
-    receive(message: unknown) {
-      this.emit("message", { data: JSON.stringify(message) });
-    }
-
-    private emit(type: string, event: SocketEvent = {}) {
-      for (const listener of this.listeners.get(type) ?? []) {
-        listener(event);
-      }
-    }
-  }
-
-  const addListener = vi.fn();
-  const createAlarm = vi.fn();
-  const clearAlarm = vi.fn(async () => true);
-  const setBadgeText = vi.fn(async () => undefined);
-  const setBadgeBackgroundColor = vi.fn(async () => undefined);
-  const chromeMock = {
-    action: { setBadgeText, setBadgeBackgroundColor },
-    commands: { onCommand: { addListener } },
-    contextMenus: {
-      create: vi.fn(),
-      removeAll: vi.fn(async () => undefined),
-      onClicked: { addListener },
-    },
-    alarms: {
-      create: createAlarm,
-      clear: clearAlarm,
-      onAlarm: {
-        addListener: vi.fn((listener: (alarm: { name: string }) => void) => {
-          alarmListener = listener;
-        }),
-      },
-    },
-    debugger: {
-      onEvent: { addListener },
-      onDetach: { addListener },
-      attach: vi.fn(async () => undefined),
-      detach: vi.fn(async () => undefined),
-      getTargets: vi.fn(async () => []),
-      sendCommand: vi.fn(async () => ({})),
-    },
-    runtime: {
-      getManifest: vi.fn(() => ({ version: "1.0.0" })),
-      onConnect: { addListener },
-      onMessage: {
-        addListener: vi.fn((listener: RuntimeMessageListener) => {
-          messageListener = listener;
-        }),
-      },
-      onStartup: { addListener },
-      onInstalled: { addListener },
-    },
-    storage: {
-      local: {
-        get: vi.fn(async () => ({
-          relayUrl: "ws://127.0.0.1:18797/extension",
-          token: "test-token-placeholder",
-          groupColor: "orange",
-        })),
-        set: vi.fn(async () => undefined),
-        remove: vi.fn(async () => undefined),
-      },
-      session: {
-        get: vi.fn(async () => ({})),
-        set: vi.fn(async () => undefined),
-      },
-    },
-    scripting: {
-      executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
-    },
-    tabGroups: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
-      update: vi.fn(async () => undefined),
-      onUpdated: { addListener },
-      onRemoved: { addListener },
-    },
-    tabs: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
-      get: vi.fn(async () => ({ id: 1, windowId: 1 })),
-      group: vi.fn(async () => 1),
-      ungroup: vi.fn(async () => undefined),
-      create: vi.fn(async () => ({ id: 1 })),
-      remove: vi.fn(async () => undefined),
-      update: vi.fn(async () => undefined),
-      onRemoved: { addListener },
-      onUpdated: { addListener },
-    },
-    windows: { update: vi.fn(async () => undefined) },
-  };
-
-  vi.stubGlobal("chrome", chromeMock);
-  vi.stubGlobal("navigator", { userAgent: "Chromium/125.0.0.0" });
-  vi.stubGlobal("WebSocket", FakeWebSocket);
-
-  if (onConsentChanged) {
-    const copilotModule = await import("./modules/copilot-background.js");
-    const createCopilotController = copilotModule.createCopilotController;
-    vi.spyOn(copilotModule, "createCopilotController").mockImplementation((options) => ({
-      ...createCopilotController(options),
-      onConsentChanged,
-    }));
-  }
-
-  // The shipped MV3 worker is plain JS, so keep this a runtime-resolved import.
-  const backgroundModulePath = "./background.js";
-  await import(backgroundModulePath);
-  await Promise.resolve();
-  await Promise.resolve();
-
-  if (!alarmListener) {
-    throw new Error("expected background worker to register an alarm listener");
-  }
-  if (!messageListener) {
-    throw new Error("expected background worker to register a message listener");
-  }
+type Harness = Awaited<ReturnType<typeof loadBackground>>;
+async function deferredNative() {
+  const response = createDeferred<unknown>();
+  const h = await loadBackground({ storedConfig: {}, nativeMessage: () => response.promise });
   return {
-    alarmListener,
-    clearAlarm,
-    createAlarm,
-    executeScript: chromeMock.scripting.executeScript,
-    messageListener,
-    setBadgeText,
-    sockets,
-    storageRemove: chromeMock.storage.local.remove,
-    storageSet: chromeMock.storage.local.set,
-    tabGroupsQuery: chromeMock.tabGroups.query,
-    tabsGet: chromeMock.tabs.get,
-    tabsGroup: chromeMock.tabs.group,
-    tabsQuery: chromeMock.tabs.query,
-    tabsUngroup: chromeMock.tabs.ungroup,
+    h,
+    respond: () => response.resolve(nativeSuccess(h.sendNativeMessage.mock.calls[0]?.[1])),
   };
 }
-
-async function startPendingPageShare(
-  harness: Awaited<ReturnType<typeof loadBackground>>,
-  socket = harness.sockets.at(-1),
-) {
-  if (!socket) {
-    throw new Error("expected the page-share relay socket");
-  }
-  if (socket.readyState !== 1) {
-    socket.open();
-  }
-  harness.executeScript.mockResolvedValueOnce([
-    {
-      result: {
-        url: "https://example.com/article",
-        title: "Example article",
-        selection: "",
-        content: "Article body",
-      },
-    },
-  ]);
-  const response = vi.fn();
-  expect(harness.messageListener({ type: "sendPageToOpenClaw", tabId: 1 }, {}, response)).toBe(
-    true,
-  );
-  await vi.waitFor(() => {
-    expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "pageShare")).toBe(true);
+const pair = (h: Harness, accessMode?: string) =>
+  runtime(h, "pair", {
+    pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
+    ...(accessMode ? { accessMode } : {}),
   });
-  const raw = socket.send.mock.calls.find(([frame]) => JSON.parse(frame).type === "pageShare")?.[0];
-  if (typeof raw !== "string") {
-    throw new Error("expected a sent page-share request");
+const retiredConfig = () => ({
+  ...relayConfig("all"),
+  copilotSessionRegistryV1: {
+    sessions: { 17: { creationPending: true } },
+    pendingArchives: [],
+  },
+});
+
+beforeEach(() => vi.resetModules());
+afterEach(async () => {
+  await cleanupBackgroundHarnesses();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("native extension bootstrap", () => {
+  it("recovers after a repaired manifest only when automatic setup is explicitly enabled again", async () => {
+    let repaired = false;
+    const h = await loadBackground({
+      storedConfig: {},
+      nativeMessage: async (request) =>
+        repaired ? nativeSuccess(request) : { v: 1, ok: false, code: "manifest_invalid" },
+    });
+    await vi.waitFor(() =>
+      expect(h.storageValues).toMatchObject({
+        nativeBootstrapState: "manual_required",
+        nativeBootstrapFailureCode: "manifest_invalid",
+      }),
+    );
+    repaired = true;
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    await runtime(h, "getStatus");
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    expect(h.relaySockets).toHaveLength(0);
+    expect(await runtime(h, "setNativeBootstrapEnabled", { enabled: true })).toMatchObject({
+      ok: true,
+    });
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    expect(h.storageValues.nativeBootstrapState).toBe("ready");
+    expect(h.storageValues).not.toHaveProperty("nativeBootstrapFailureCode");
+    expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
+    expect(h.relaySockets[0]?.protocols).toEqual(["openclaw-extension-relay.v2"]);
+    expect(JSON.stringify(h.relaySockets[0]?.protocols)).not.toContain(TEST_RELAY_KEY);
+  });
+  it("coalesces startup, watchdog, and popup attempts", async () => {
+    const { h, respond } = await deferredNative();
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    const status = runtime(h, "getStatus");
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    respond();
+    await status;
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+  });
+  it("does not overwrite a manual pairing that wins a native response race", async () => {
+    const { h, respond } = await deferredNative();
+    expect(await pair(h, "selected")).toEqual({ ok: true });
+    respond();
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    expect(h.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18798/extension",
+      token: REPLACEMENT_TEST_RELAY_KEY,
+      accessMode: "selected",
+    });
+  });
+  it("preserves opt-out across restart and manual pairing clears it", async () => {
+    const h = await loadBackground({
+      storedConfig: { nativeBootstrapDisabled: true, nativeBootstrapState: "disabled" },
+    });
+    expectUnused(h.sendNativeMessage);
+    expect(await pair(h)).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("nativeBootstrapDisabled");
+  });
+  it.each([
+    ["disable", "preflight"],
+    ["unpair", "save"],
+  ])("does not apply a native pairing overtaken by %s during %s", async (revocation, stage) => {
+    const { h, respond } = await deferredNative();
+    const readStorage = h.storageGet.getMockImplementation()!;
+    const blocked = createDeferred<void>();
+    let pairingReads = 0;
+    let saving = false;
+    h.storageGet.mockImplementation(async (keys) => {
+      const result = await readStorage(keys);
+      if (keys.includes("relayUrl") && ++pairingReads === 2 && stage === "preflight") {
+        await blocked.promise;
+      }
+      return result;
+    });
+    const writeStorage = h.storageSet.getMockImplementation()!;
+    h.storageSet.mockImplementation(async (values) => {
+      if (stage === "save" && values.relayUrl) {
+        saving = true;
+        await blocked.promise;
+      }
+      await writeStorage(values);
+    });
+    respond();
+    await vi.waitFor(() => expect(stage === "preflight" ? pairingReads === 2 : saving).toBe(true));
+    const revoking = runtime(
+      h,
+      revocation === "unpair" ? "unpair" : "setNativeBootstrapEnabled",
+      revocation === "unpair" ? {} : { enabled: false },
+    );
+    await vi.waitFor(() => expect(h.storageValues.nativeBootstrapDisabled).toBe(true));
+    blocked.resolve();
+    expect(await revoking).toMatchObject({ ok: true });
+    await runtime(h, "getStatus");
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+    expect(h.relaySockets).toHaveLength(0);
+  });
+  it("fails closed on a malformed or nonce-mismatched response", async () => {
+    const h = await loadBackground({
+      storedConfig: {},
+      nativeMessage: async () => ({
+        v: 1,
+        ok: true,
+        nonce: "wrong",
+        pairingString: `ws://127.0.0.1:18797/extension#${TEST_RELAY_KEY}`,
+      }),
+    });
+    await vi.waitFor(() =>
+      expect(h.storageValues).toMatchObject({
+        nativeBootstrapState: "manual_required",
+        nativeBootstrapFailureCode: "malformed_response",
+      }),
+    );
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+  it("blocks every startup path while retired copilot custody is unresolved", async () => {
+    const h = await loadBackground({
+      deferRetiredStatePreparation: true,
+      inheritedDebuggerTabIds: [17],
+      storedConfig: retiredConfig(),
+    });
+    h.alarmListener({ name: "openclaw-relay-watchdog" });
+    h.startupListener();
+    h.installedListener();
+    await Promise.resolve();
+    expectUnused(h.sendNativeMessage, h.debuggerAttach);
+    expect(h.relaySockets).toHaveLength(0);
+    h.releaseRetiredStatePreparation();
+    await waitCalled(h.debuggerDetach, { targetId: "tab-17" });
+    expectUnused(h.sendNativeMessage);
+    expect(h.relaySockets).toHaveLength(0);
+    const status = await runtime(h, "getStatus");
+    expect(status).toMatchObject({
+      paired: true,
+      retiredCopilotCustodyBlocked: true,
+    });
+    expect(JSON.stringify(status)).not.toMatch(/creationPending|pendingArchives|sessionKey/u);
+    expect(await pair(h)).toMatchObject({ ok: false });
+    expect(await runtime(h, "setNativeBootstrapEnabled", { enabled: true })).toMatchObject({
+      ok: false,
+    });
+    expect(await runtime(h, "setAccessMode", { accessMode: "selected" })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      await runtime(h, "toggleTabAccess", { tabId: 17, accessMode: "all", grant: true }),
+    ).toMatchObject({ ok: false });
+    expect(h.storageValues).toMatchObject({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      accessMode: "all",
+      copilotSessionRegistryV1: expect.any(Object),
+    });
+    expect(await runtime(h, "unpair")).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("copilotSessionRegistryV1");
+    expect(h.storageValues).not.toHaveProperty("retiredCopilotCustodyBlockedV1");
+    expect(h.storageValues.nativeBootstrapDisabled).toBe(true);
+  });
+  it("keeps a persisted custody marker inert across worker startup without a registry", async () => {
+    const h = await loadBackground({
+      inheritedDebuggerTabIds: [18],
+      nativeMessage: async (request) => nativeSuccess(request),
+      storedConfig: { ...relayConfig("all"), retiredCopilotCustodyBlockedV1: true },
+    });
+    await waitCalled(h.debuggerDetach, { targetId: "tab-18" });
+    expect(h.relaySockets).toHaveLength(0);
+    expectUnused(h.sendNativeMessage, h.debuggerAttach);
+    expect(await runtime(h, "getStatus")).toMatchObject({
+      retiredCopilotCustodyBlocked: true,
+    });
+  });
+});
+
+describe("relay pairing and authentication", () => {
+  it("clears malformed persisted pairing before opening a relay", async () => {
+    const h = await loadBackground({
+      storedConfig: { relayUrl: "ws://gateway.example/extension", token: TEST_RELAY_KEY },
+    });
+    expect(h.relaySockets).toHaveLength(0);
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+  it("cancels the opening deadline when the socket-close fallback ends the relay", async () => {
+    const h = await loadBackground({ relayNegotiatedProtocol: "unsupported" });
+    const socket = h.relaySockets[0]!;
+    expect(socket).toBeDefined();
+    h.clearAlarm.mockClear();
+    socket.close.mockImplementationOnce(() => {
+      throw new Error("socket close failed");
+    });
+    socket.open();
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalledTimes(2));
+    expect(h.clearAlarm).toHaveBeenCalledOnce();
+  });
+  it("revokes synchronously while an older manual pair is stalled", async () => {
+    const h = await loadBackground({
+      initialTabs: [{ id: 131, url: "https://example.com/paired", groupId: 7 }],
+    });
+    const socket = h.relaySockets[0]!;
+    expect(socket).toBeDefined();
+    await h.authenticate(socket);
+    h.storageSet.mockClear();
+    const releaseSave = h.deferNextStorageSet();
+    const pairing = pair(h, "all");
+    await waitCalled(
+      h.storageSet,
+      expect.objectContaining({ relayUrl: "ws://127.0.0.1:18798/extension" }),
+    );
+    const unpairing = runtime(h, "unpair");
+    expect(socket.close).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(h.storageValues.nativeBootstrapDisabled).toBe(true));
+    releaseSave();
+    expect(await pairing).toMatchObject({ ok: false });
+    expect(await unpairing).toEqual({ ok: true });
+    expect(h.storageValues).not.toHaveProperty("relayUrl");
+  });
+});
+
+describe("standalone relay wake-up", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+  });
+  it("wakes the paired port on reconnect, at most once per minute", async () => {
+    const relayPort = 20123;
+    const h = await loadBackground({
+      storedConfig: { relayUrl: `ws://127.0.0.1:${relayPort}/extension`, token: TEST_RELAY_KEY },
+      nativeMessage: async (request) => ({
+        v: 1,
+        ok: true,
+        nonce: (request as { nonce: string }).nonce,
+        relay: "spawned",
+      }),
+    });
+    expectUnused(h.sendNativeMessage);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.sendNativeMessage).toHaveBeenCalledExactlyOnceWith("ai.openclaw.browser_bootstrap", {
+      v: 1,
+      op: "ensure_relay",
+      nonce: expect.any(String),
+      relayPort,
+    });
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.relaySockets).toHaveLength(3);
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() + 60_000);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    ["remote Gateway", "wss://gateway.example.com/browser/extension", false],
+    ["automatic setup opt-out", "ws://127.0.0.1:18798/extension", true],
+  ])("does not wake a daemon for %s", async (_label, relayUrl, nativeBootstrapDisabled) => {
+    const h = await loadBackground({
+      storedConfig: { relayUrl, token: TEST_RELAY_KEY, nativeBootstrapDisabled },
+    });
+    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(1));
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.relaySockets).toHaveLength(2);
+    expectUnused(h.sendNativeMessage);
+  });
+});
+
+const setMode = (h: Harness, accessMode: string) => runtime(h, "setAccessMode", { accessMode });
+const toggle = (h: Harness, tabId: number, accessMode: string, grant = false) =>
+  runtime(h, "toggleTabAccess", { tabId, accessMode, grant });
+const expectMode = async (result: ReturnType<typeof setMode>, accessMode: string) =>
+  expect(await result).toEqual({ ok: true, accessMode });
+const expectAccess = async (h: Harness, tabId: number, accessible: boolean) =>
+  expect(await runtime(h, "getTabAccess", { tabId })).toMatchObject({ accessible });
+
+async function ready(...args: Parameters<typeof load>) {
+  const harness = await load(...args);
+  const connection = await connectRelay(harness);
+  if (
+    !harness.debuggerEventListener ||
+    !harness.debuggerDetachListener ||
+    !harness.tabsRemovedListener ||
+    !harness.tabGroupRemovedListener
+  ) {
+    throw new Error("expected relay and Chrome lifecycle listeners");
   }
-  return { socket, response, requestId: (JSON.parse(raw) as { requestId: number }).requestId };
+  return Object.assign(harness, {
+    ...connection,
+    events: () => connection.frames().filter((frame) => frame.type === "cdpEvent"),
+    debuggerEventListener: harness.debuggerEventListener,
+    debuggerDetachListener: harness.debuggerDetachListener,
+    tabsRemovedListener: harness.tabsRemovedListener,
+    tabGroupRemovedListener: harness.tabGroupRemovedListener,
+  });
 }
 
-describe("relay opening deadline", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    vi.setSystemTime(START_TIME_MS);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("closes a stuck connecting socket and retries", async () => {
-    const harness = await loadBackground();
-    expect(harness.sockets).toHaveLength(1);
-    expect(harness.createAlarm).toHaveBeenCalledWith(RELAY_WATCHDOG_ALARM, {
-      periodInMinutes: 0.5,
-    });
-    expect(harness.createAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM, {
-      when: START_TIME_MS + 30_000,
-    });
-
-    vi.setSystemTime(START_TIME_MS + 30_000);
-    harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
-
-    expect(harness.sockets[0]?.close).toHaveBeenCalledOnce();
-    expect(harness.clearAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "!" });
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(harness.sockets).toHaveLength(2);
-    expect(harness.createAlarm).toHaveBeenLastCalledWith(RELAY_OPENING_DEADLINE_ALARM, {
-      when: START_TIME_MS + 61_000,
-    });
-  });
-
-  it("clears the deadline after the socket opens", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    expect(socket).toBeDefined();
-
-    socket?.open();
-    expect(harness.clearAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM);
-    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "ON" });
-
-    vi.setSystemTime(START_TIME_MS + 60_000);
-    harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
-    expect(socket?.close).not.toHaveBeenCalled();
-  });
-});
-
-describe("copilot panel messaging", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("responds exactly once when the tab cannot be retrieved", async () => {
-    const harness = await loadBackground();
-    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
-    const sendResponse = vi.fn();
-
-    expect(
-      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledOnce();
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-    expect(sendResponse).toHaveBeenCalledWith({
-      ok: false,
-      error: "No tab with id: 44.",
-    });
-  });
-
-  it("responds exactly once with the prepared panel path", async () => {
-    const harness = await loadBackground();
-    const sendResponse = vi.fn();
-
-    expect(
-      harness.messageListener({ type: "prepareCopilotPanel", tabId: 44 }, {}, sendResponse),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledOnce();
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-    expect(sendResponse).toHaveBeenCalledWith({
-      ok: true,
-      path: expect.stringMatching(/^sidepanel\.html\?binding=/),
-    });
-  });
-});
-
-describe("popup message failure responses", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("responds exactly once when a shared tab closes before it can be grouped", async () => {
-    const harness = await loadBackground();
-    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
-    const sendResponse = vi.fn();
-
-    expect(harness.messageListener({ type: "toggleShareTab", tabId: 44 }, {}, sendResponse)).toBe(
-      true,
-    );
-
-    await vi.waitFor(() => {
-      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({
-        ok: false,
-        error: "No tab with id: 44.",
+async function attach(h: Awaited<ReturnType<typeof ready>>, ...tabIds: number[]) {
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      expect(await h.request({ type: "attach", tabId })).toMatchObject({
+        type: "result",
+        result: { targetId: `tab-${tabId}` },
       });
-    });
-    expect(harness.tabsGet).toHaveBeenCalledWith(44);
-  });
-
-  it.each([
-    { action: "share", initiallyShared: false },
-    { action: "unshare", initiallyShared: true },
-  ])(
-    "responds exactly once when $action consent reconciliation rejects",
-    async ({ initiallyShared }) => {
-      const error = "Could not reconcile browser tab consent.";
-      const onConsentChanged = vi.fn(async () => {
-        throw new Error(error);
-      });
-      const harness = await loadBackground({ onConsentChanged });
-      if (initiallyShared) {
-        harness.tabGroupsQuery.mockResolvedValueOnce([{ id: 7, windowId: 1 }]);
-        harness.tabsQuery.mockResolvedValueOnce([{ id: 44, windowId: 1 }]);
-      }
-      const sendResponse = vi.fn();
-
-      expect(harness.messageListener({ type: "toggleShareTab", tabId: 44 }, {}, sendResponse)).toBe(
-        true,
-      );
-
-      await vi.waitFor(() => {
-        expect(onConsentChanged).toHaveBeenCalledOnce();
-      });
-      if (initiallyShared) {
-        expect(harness.tabsUngroup).toHaveBeenCalledWith([44]);
-      } else {
-        expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [44] });
-      }
-      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
-      expect(sendResponse).not.toHaveBeenCalledWith({ ok: true, shared: !initiallyShared });
-    },
+    }),
   );
+}
 
-  it.each([
-    {
-      message: {
-        type: "pair" as const,
-        pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
-      },
-      operation: "set" as const,
-      error: "Could not save browser pairing.",
-    },
-    {
-      message: { type: "unpair" as const },
-      operation: "remove" as const,
-      error: "Could not remove browser pairing.",
-    },
-  ])(
-    "responds exactly once when $message.type storage rejects",
-    async ({ message, operation, error }) => {
-      const harness = await loadBackground();
-      const storageOperation = operation === "set" ? harness.storageSet : harness.storageRemove;
-      storageOperation.mockRejectedValueOnce(new Error(error));
-      const sendResponse = vi.fn();
-
-      expect(harness.messageListener(message, {}, sendResponse)).toBe(true);
-
-      await vi.waitFor(() => {
-        expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
-      });
-    },
-  );
-});
-
-describe("page-share relay request lifecycle", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
-
-  it("immediately rejects a page share when its owning relay disconnects", async () => {
-    const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.close();
-
-    await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-    });
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("immediately rejects a page share when the user unpairs the relay", async () => {
-    const harness = await loadBackground({ deferSocketClose: true });
-    const pending = await startPendingPageShare(harness);
-    const unpairResponse = vi.fn();
-
-    expect(harness.messageListener({ type: "unpair" }, {}, unpairResponse)).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(unpairResponse).toHaveBeenCalledWith({ ok: true });
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-    });
-    expect(pending.socket.close).toHaveBeenCalledOnce();
-    expect(pending.socket.readyState).toBe(2);
-    expect(pending.response).toHaveBeenCalledOnce();
-  });
-
-  it("rejects old page shares before a replacement relay finishes closing", async () => {
-    const harness = await loadBackground({ deferSocketClose: true });
-    const pending = await startPendingPageShare(harness);
-    const pairResponse = vi.fn();
-
+describe("relay command authorization", () => {
+  it("closes the old selected relay before a replacement pairing widens access", async () => {
+    const harness = await ready("selected", [45]);
+    const oldSocket = harness.socket;
     expect(
-      harness.messageListener(
-        {
-          type: "pair",
-          pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
-        },
-        {},
-        pairResponse,
+      await runtime(harness, "pair", {
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
+        accessMode: "all",
+      }),
+    ).toEqual({ ok: true });
+    expect(oldSocket.close).toHaveBeenCalledOnce();
+    const oldFrames = relayFrames(oldSocket);
+    expect(
+      oldFrames.some(
+        (frame) =>
+          frame.type === "tabs" && frame.tabs?.some((tab: { tabId?: number }) => tab.tabId === 45),
       ),
-    ).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(pairResponse).toHaveBeenCalledWith({ ok: true });
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-    });
-    expect(pending.socket.close).toHaveBeenCalledOnce();
-    expect(pending.socket.readyState).toBe(2);
-    expect(harness.sockets).toHaveLength(2);
-    expect(pending.response).toHaveBeenCalledOnce();
+    ).toBe(false);
+    const replacement = harness.relaySockets.find(
+      (socket) => socket.url === "ws://127.0.0.1:18798/extension",
+    );
+    if (!replacement) {
+      throw new Error("expected replacement relay socket");
+    }
+    await harness.authenticate(replacement);
+    const replacementHello = relayFrames(replacement).find((frame) => frame.type === "hello");
+    expect(replacementHello.tabs).toContainEqual(expect.objectContaining({ tabId: 45 }));
   });
-
-  it("preserves the acknowledgement from the page share's own relay", async () => {
-    const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.receive({ type: "pageShareResult", requestId: pending.requestId, ok: true });
-
-    await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({ ok: true });
-    });
-    pending.socket.close();
-    expect(pending.response).toHaveBeenCalledOnce();
+  it("waits for access initialization before toggling an all-mode tab", async () => {
+    const harness = await load("all", [46], { deferTabAccessInitialization: true });
+    harness.tabsGet.mockClear();
+    const response = vi.fn();
+    harness.messageListener(
+      { type: "toggleTabAccess", tabId: 46, accessMode: "all", grant: false },
+      {},
+      response,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expectUnused(response, harness.tabsGet, harness.tabsGroup);
+    harness.releaseTabAccessInitialization();
+    await waitCalled(response, { ok: true, accessible: false, denied: true });
+    expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([46]);
+    expectUnused(harness.tabsGroup);
   });
-
-  it("preserves the delivery error returned by the page share's own relay", async () => {
+  it("rejects a negative getTabAccess tab id without querying Chrome", async () => {
     const harness = await loadBackground();
-    const pending = await startPendingPageShare(harness);
-
-    pending.socket.receive({
-      type: "pageShareResult",
-      requestId: pending.requestId,
+    harness.tabsGet.mockClear();
+    expect(await runtime(harness, "getTabAccess", { tabId: -1 })).toEqual({
+      accessMode: "selected",
+      accessible: false,
+      eligible: false,
+      denied: false,
+    });
+    expectUnused(harness.tabsGet);
+  });
+  it("revokes all-mode authority before a queued downgrade reaches the mutation queue", async () => {
+    const harness = await ready("all", [204]);
+    const socket = harness.socket;
+    socket.receive({ type: "attach", seq: 40, tabId: 204 });
+    await waitCalled(harness.debuggerAttach, { tabId: 204 }, "1.3");
+    harness.storageSet.mockClear();
+    socket.send.mockClear();
+    const releaseOlderMutation = harness.deferNextStorageSet();
+    const olderMutation = setMode(harness, "all");
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const downgrading = setMode(harness, "selected");
+    await expectAccess(harness, 204, false);
+    harness.debuggerEventListener({ tabId: 204 }, "Runtime.consoleAPICalled", {});
+    expect(harness.events()).toEqual([]);
+    releaseOlderMutation();
+    await expectMode(olderMutation, "all");
+    await expectMode(downgrading, "selected");
+    expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-204" });
+  });
+  it("rejects a stale tab action when a queued mode change executes first", async () => {
+    const harness = await load("all", [205]);
+    harness.storageSet.mockClear();
+    const releaseModeStorage = harness.deferNextStorageSet();
+    const changingMode = setMode(harness, "selected");
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    const staleToggle = toggle(harness, 205, "all");
+    releaseModeStorage();
+    await expectMode(changingMode, "selected");
+    expect(await staleToggle).toEqual({
       ok: false,
-      error: "Gateway page-share queue unavailable.",
+      error: "Browser access mode changed. Refresh and retry.",
     });
-
-    await vi.waitFor(() => {
-      expect(pending.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Gateway page-share queue unavailable.",
-      });
-    });
-    pending.socket.close();
-    expect(pending.response).toHaveBeenCalledOnce();
+    expectUnused(harness.tabsGroup);
+    expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
   });
-
-  it("does not let a stale socket reject a share on the reconnected relay", async () => {
-    const harness = await loadBackground();
-    const original = await startPendingPageShare(harness);
-
-    original.socket.close();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(harness.sockets).toHaveLength(2);
-    const replacement = await startPendingPageShare(harness);
-
-    original.socket.receive({
-      type: "pageShareResult",
-      requestId: replacement.requestId,
-      ok: false,
-      error: "Stale relay response.",
+  it("keeps a Selected barrier ahead of a queued All-mode widening", async () => {
+    const harness = await load("selected", [206]);
+    harness.storageSet.mockClear();
+    const releaseWideningStorage = harness.deferNextStorageSet();
+    const widening = setMode(harness, "all");
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const restricting = setMode(harness, "selected");
+    const releaseRestrictingStorage = harness.deferNextStorageSet();
+    releaseWideningStorage();
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    await expectAccess(harness, 206, false);
+    releaseRestrictingStorage();
+    await expectMode(widening, "all");
+    await expectMode(restricting, "selected");
+  });
+  it("revalidates a selected survivor that leaves its group during downgrade cleanup", async () => {
+    const harness = await ready("all", [{ id: 211, groupId: 7 }, 212]);
+    await attach(harness, 211, 212);
+    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledTimes(2));
+    const unselectedDetach = createDeferred<void>();
+    harness.debuggerDetach.mockImplementation(async ({ targetId }) => {
+      if (targetId === "tab-212") {
+        await unselectedDetach.promise;
+      }
     });
-    original.socket.close();
-    expect(replacement.response).not.toHaveBeenCalled();
-
-    replacement.socket.receive({
-      type: "pageShareResult",
-      requestId: replacement.requestId,
+    harness.socket.send.mockClear();
+    const changingMode = setMode(harness, "selected");
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-212" });
+    harness.unshareTab(211);
+    harness.tabsUpdatedListener(211, { groupId: -1 });
+    unselectedDetach.resolve();
+    await expectMode(changingMode, "selected");
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-211" });
+    harness.debuggerEventListener({ tabId: 211 }, "Runtime.consoleAPICalled", {});
+    expect(harness.events()).toEqual([]);
+  });
+  it.each(["all", "selected"] as const)(
+    "keeps an unrelated attachment live while toggling one tab in %s mode",
+    async (accessMode) => {
+      const groupId = accessMode === "selected" ? 7 : -1;
+      const harness = await ready(
+        accessMode,
+        [201, 202].map((id) => ({ id, groupId })),
+      );
+      await attach(harness, 201, 202);
+      harness.socket.send.mockClear();
+      let releaseMutation = () => {};
+      if (accessMode === "all") {
+        releaseMutation = harness.deferNextSessionStorageSet();
+        harness.sessionStorageSet.mockClear();
+      } else {
+        const pendingDetach = new Promise<void>((resolve) => {
+          releaseMutation = resolve;
+        });
+        harness.debuggerDetach.mockImplementation(async ({ targetId }) => {
+          if (targetId === "tab-202") {
+            await pendingDetach;
+          }
+        });
+      }
+      const toggling = toggle(harness, 202, accessMode);
+      if (accessMode === "all") {
+        await waitCalled(harness.sessionStorageSet);
+      } else {
+        await waitCalled(harness.debuggerDetach, { targetId: "tab-202" });
+      }
+      await expectAccess(harness, 201, true);
+      await expectAccess(harness, 202, false);
+      const emitPhase = (phase: string) => {
+        for (const tabId of [201, 202]) {
+          harness.debuggerEventListener({ tabId }, "Runtime.consoleAPICalled", { phase });
+        }
+        return harness.events().map((frame) => frame.params?.phase);
+      };
+      expect(emitPhase("during")).toEqual(["during"]);
+      releaseMutation();
+      expect(await toggling).toEqual({
+        ok: true,
+        accessible: false,
+        denied: accessMode === "all",
+      });
+      expect(emitPhase("after")).toEqual(["during", "after"]);
+      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-202" });
+      expect(harness.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "tab-201" });
+      expect(harness.debuggerAttach).toHaveBeenCalledTimes(2);
+    },
+  );
+  it("refreshes targets on selected-to-all while keeping session-denied tabs hidden", async () => {
+    const harness = await ready("selected", [71, 72], { sessionConfig: { deniedTabIdsV1: [72] } });
+    await expectMode(setMode(harness, "all"), "all");
+    await vi.waitFor(() => {
+      const refreshes = harness.frames().filter((frame) => frame.type === "tabs");
+      expect(refreshes.at(-1)?.tabs).toEqual([expect.objectContaining({ tabId: 71 })]);
+    });
+  });
+  it("persists Cancel as an all-mode session deny, restores with Allow, and prunes on close", async () => {
+    const harness = await ready("all", [81]);
+    const socket = harness.socket;
+    socket.receive({ type: "attach", seq: 30, tabId: 81 });
+    await waitCalled(harness.debuggerAttach);
+    harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
+    expect(await harness.request({ type: "attach", tabId: 81 })).toEqual({
+      type: "error",
+      seq: expect.any(Number),
+      message: "tab 81 is paused for OpenClaw",
+    });
+    expect(await toggle(harness, 81, "all", true)).toMatchObject({
       ok: true,
+      accessible: true,
+      denied: false,
     });
-
-    await vi.waitFor(() => {
-      expect(original.response).toHaveBeenCalledWith({
-        ok: false,
-        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
-      });
-      expect(replacement.response).toHaveBeenCalledWith({ ok: true });
-    });
-    expect(original.response).toHaveBeenCalledOnce();
-    expect(replacement.response).toHaveBeenCalledOnce();
+    expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
+    harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
+    harness.tabsRemovedListener(81);
+    await vi.waitFor(() =>
+      expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1"),
+    );
+  });
+  it("revokes selected access on group removal", async () => {
+    const harness = await ready("selected", [{ id: 111, groupId: 7 }]);
+    harness.shareTab(111);
+    harness.socket.receive({ type: "attach", seq: 34, tabId: 111 });
+    await waitCalled(harness.debuggerAttach);
+    harness.debuggerDetach.mockClear();
+    harness.unshareTab(111);
+    harness.tabGroupRemovedListener();
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-111" });
   });
 });

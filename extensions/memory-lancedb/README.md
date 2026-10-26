@@ -18,15 +18,19 @@ Restart the Gateway after installing or updating the plugin.
 - `memory_recall`
 - `memory_forget`
 - LanceDB vector storage and hybrid memory retrieval.
+- `openclaw ltm optimize` for offline local-table compaction, preserving rows and version history.
 
 ## Configure
 
 Use the memory plugin docs for embedding provider setup, storage paths, indexing, and recall behavior:
 
-- https://docs.openclaw.ai/plugins/memory-lancedb
+- <https://docs.openclaw.ai/plugins/memory-lancedb>
 
 ## Package
 
 - Plugin id: `memory-lancedb`
 - Package: `@openclaw/memory-lancedb`
-- Minimum OpenClaw host: `2026.4.10`
+- Enforced minimum OpenClaw host (`openclaw.install.minHostVersion`): `>=2026.5.31`
+- Enforced plugin API compatibility (`openclaw.compat.pluginApi`): `>=2026.9.3`
+
+The installer checks these ranges independently. Both must be satisfied.

@@ -1,4 +1,3 @@
-// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -9,33 +8,22 @@ import type {
 } from "../../../config/types.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  collectRelevantDoctorPluginIds,
-  collectRelevantDoctorPluginIdsForTouchedPaths,
+  collectDoctorConfigRepairPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
+import { preparePluginMetadataMachineStateAsync } from "../../../plugins/installed-plugin-index-record-state.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-
-function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
-  if (!raw || typeof raw !== "object") {
-    return new Set();
-  }
-  const channels = (raw as { channels?: unknown }).channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return new Set();
-  }
-  return new Set(Object.keys(channels).filter((channelId) => channelId !== "defaults"));
-}
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
 
 function collectPluginLegacyConfigRules(
   raw: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
-  const channelIds = collectConfiguredChannelIds(raw);
-  const pluginIds = (
-    touchedPaths
-      ? collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths })
-      : collectRelevantDoctorPluginIds(raw)
-  ).filter((pluginId) => !channelIds.has(pluginId));
+  const channelIds = new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
+  const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
+    (pluginId) => !channelIds.has(pluginId),
+  );
   if (pluginIds.length === 0) {
     return [];
   }
@@ -48,28 +36,34 @@ export function findDoctorLegacyConfigIssues(
   sourceRaw?: unknown,
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
-  return findLegacyConfigIssues(
-    raw,
-    sourceRaw,
-    [
-      ...collectChannelLegacyConfigRules(raw, touchedPaths),
-      ...collectPluginLegacyConfigRules(raw, touchedPaths),
-    ],
-    touchedPaths,
-  );
+  return findLegacyConfigIssues(raw, sourceRaw, [
+    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectPluginLegacyConfigRules(raw, touchedPaths),
+  ]);
 }
 
-export function addDoctorLegacyIssues(
+export async function addDoctorLegacyIssues(
   snapshot: ConfigFileSnapshot,
   pluginMetadataSnapshot?: PluginMetadataSnapshot,
-): ConfigFileSnapshot {
+): Promise<ConfigFileSnapshot> {
   if (!snapshot.exists) {
     return snapshot;
+  }
+  if (!pluginMetadataSnapshot) {
+    // Core-invalid snapshots may skip metadata; diagnostics still need worker-owned policy facts.
+    const activatePluginState = await preparePluginMetadataMachineStateAsync({});
+    activatePluginState();
   }
   const resolvedRaw = snapshot.sourceConfig ?? snapshot.config ?? {};
   const collect = () => {
     const sourceRaw = snapshot.parsed ?? resolvedRaw;
     const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    const ownerIssue = findLegacySystemAgentOwnerIssue(
+      snapshot.sourceConfigBeforeMigrations ?? resolvedRaw,
+    );
+    if (ownerIssue) {
+      legacyIssues.push(ownerIssue);
+    }
     return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
   };
   return pluginMetadataSnapshot

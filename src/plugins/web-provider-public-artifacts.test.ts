@@ -1,12 +1,12 @@
 // Covers web provider public artifact extraction from plugin metadata.
 import { describe, expect, it } from "vitest";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
-  loadBundledWebFetchProviderEntriesFromDir,
-  loadBundledWebSearchProviderEntriesFromDir,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
 
-const registry = loadPluginManifestRegistry();
+const registry = loadPluginManifestRegistryCore();
 const webSearchPluginIds = bundledPluginIdsWithContract("webSearchProviders");
 const webFetchPluginIds = bundledPluginIdsWithContract("webFetchProviders");
 
@@ -29,13 +29,19 @@ describe("web provider public artifacts", () => {
 
   it.each(webSearchPluginIds)("loads public web-search artifacts for %s", (pluginId) => {
     expect(
-      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+      resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+        onlyPluginIds: [pluginId],
+        manifestRecords: registry.plugins,
+      }),
     ).not.toBeNull();
   });
 
   it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
     expect(
-      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
+        onlyPluginIds: [pluginId],
+        manifestRecords: registry.plugins,
+      }),
     ).not.toBeNull();
   });
 });

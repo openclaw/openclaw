@@ -1,73 +1,64 @@
-// Opencode tests cover opencode plugin behavior.
-import {
-  completeSimple,
-  type AssistantMessage,
-  type Model,
-  type Tool,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { buildStaticOpencodeZenProviderConfig } from "./provider-catalog.js";
+import {
+  createLiveValueTool,
+  createLiveToolReplayContext,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
+import plugin from "./index.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  listOpencodeZenModelCatalogEntries,
+} from "./provider-catalog.js";
 
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash-free";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "deepseek-v4-flash";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-const describeCatalogLive = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) ? describe : describe.skip;
 
 type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
 };
 
-function resolveOpencodeDeepSeekLiveModel(): Model<"openai-completions"> {
-  return {
-    id: LIVE_MODEL_ID,
-    name: LIVE_MODEL_ID,
-    api: "openai-completions",
-    provider: "opencode",
-    baseUrl: "https://opencode.ai/zen/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 65_536,
-    maxTokens: 8192,
-  };
-}
-
-function liveEchoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object(
-      {
-        value: Type.String(),
-      },
-      { additionalProperties: false },
-    ),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`OpenCode DeepSeek live model did not call a tool: ${message.stopReason}`);
+async function resolveOpencodeToolLiveModel() {
+  const provider = await buildOpencodeZenLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
+  const row = provider.models.find((model) => model.id === LIVE_MODEL_ID);
+  if (
+    !row ||
+    row.api !== "openai-completions" ||
+    !row.contextWindow ||
+    !row.reasoning ||
+    !row.compat?.supportsTools
+  ) {
+    throw new Error(`OpenCode catalog lacks a reasoning/tool-capable chat model: ${LIVE_MODEL_ID}`);
   }
-  return toolCall;
-}
-
-function hasReasoningContentReplay(message: AssistantMessage): boolean {
-  return message.content.some(
-    (block) => block.type === "thinking" && block.thinkingSignature === "reasoning_content",
+  const input = row.input.filter((kind) => kind === "text" || kind === "image");
+  expect(input).toEqual(row.input);
+  const reasoning = (["low", "medium", "high", "max"] as const).find((effort) =>
+    row.compat?.supportedReasoningEfforts?.includes(effort),
   );
+  const model: Model<"openai-completions"> = {
+    ...row,
+    api: row.api,
+    contextWindow: row.contextWindow,
+    provider: "opencode",
+    baseUrl: row.baseUrl ?? provider.baseUrl,
+    input,
+  };
+  return { model, reasoningOptions: reasoning ? { reasoning } : {} };
 }
 
 async function fetchOpencodeZenModelIds(): Promise<string[]> {
   const response = await fetch(OPENCODE_ZEN_MODELS_URL, {
-    headers: { "accept-encoding": "identity" },
+    headers: {
+      authorization: `Bearer ${OPENCODE_API_KEY}`,
+      "accept-encoding": "identity",
+    },
   });
   expect(response.ok).toBe(true);
   const json = (await response.json()) as OpencodeModelsResponse;
@@ -82,103 +73,128 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
   return modelIds;
 }
 
-function listStaticOpencodeZenModelIds(): string[] {
-  return buildStaticOpencodeZenProviderConfig()
-    .models.map((model) => model.id)
-    .toSorted();
-}
-
-describeCatalogLive("opencode Zen live catalog drift", () => {
-  it("keeps the provider-owned static seed aligned with the live model ids", async () => {
+describeLive("opencode Zen live catalog drift", () => {
+  it("discovers every listed live id except inactive metadata rows", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
-    const staticIds = listStaticOpencodeZenModelIds();
-    expect(new Set(staticIds).size).toBe(staticIds.length);
+    const discovered = await buildOpencodeZenLiveProviderConfig({
+      apiKey: OPENCODE_API_KEY,
+      discoveryApiKey: OPENCODE_API_KEY,
+    });
+    const discoveredIds = discovered.models.map((model) => model.id).toSorted();
+    expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
-    const staticIdSet = new Set(staticIds);
-    const liveIdSet = new Set(liveIds);
-    const missingStaticMetadata = liveIds.filter((id) => !staticIdSet.has(id));
-    const staleStaticRows = staticIds.filter((id) => !liveIdSet.has(id));
+    // Listed ids without public metadata stay visible; only inactive metadata rows hide them.
+    const inactiveIds = new Set(
+      listOpencodeZenModelCatalogEntries()
+        .filter((row) => row.status)
+        .map((row) => row.id.toLowerCase()),
+    );
 
-    expect(
-      { missingStaticMetadata, staleStaticRows },
-      [
-        "OpenCode Zen live catalog drifted from the provider-owned static seed.",
-        "Add routing/baseUrl/cost/context/capability metadata for missing live ids,",
-        "or remove stale static rows if OpenCode retired them.",
-      ].join(" "),
-    ).toEqual({ missingStaticMetadata: [], staleStaticRows: [] });
+    expect(discoveredIds.length).toBeGreaterThan(0);
+    expect(discoveredIds).toEqual(liveIds.filter((id) => !inactiveIds.has(id)));
   }, 30_000);
 });
 
 describeLive("opencode plugin live", () => {
-  it("accepts DeepSeek V4 tier-suffixed thinking replay after a tool call", async () => {
-    const model = resolveOpencodeDeepSeekLiveModel();
-    const tool = liveEchoTool();
-    const firstOptions = {
+  it("completes a discovered live tool-call round trip", async () => {
+    const { model, reasoningOptions } = await resolveOpencodeToolLiveModel();
+    const tool = createLiveValueTool("live_echo");
+    const options = {
       apiKey: OPENCODE_API_KEY,
-      reasoning: "low",
-      maxTokens: 128,
+      ...reasoningOptions,
+      maxTokens: 4096,
     } as const;
 
     const first = await completeSimple(
       model,
       {
         messages: [
-          {
-            role: "user",
-            content: "You must call the live_echo tool with value ok. Do not answer directly.",
-            timestamp: Date.now(),
-          },
+          makeUserMessage(
+            "You must call the live_echo tool with value ok. Do not answer directly.",
+            Date.now(),
+          ),
         ],
         tools: [tool],
       },
-      firstOptions,
+      options,
     );
 
     if (first.stopReason === "error") {
-      throw new Error(first.errorMessage || "OpenCode DeepSeek first turn returned an error");
+      throw new Error(first.errorMessage || "OpenCode Zen first turn returned an error");
     }
 
-    const toolCall = requireToolCall(first);
-    expect(hasReasoningContentReplay(first)).toBe(true);
+    const toolCall = requireLiveToolCall(first, "OpenCode Zen live model did not call a tool: ");
 
     const second = await completeSimple(
       model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: "You must call the live_echo tool with value ok. Do not answer directly.",
-            timestamp: Date.now() - 3,
-          },
-          first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [tool],
-      },
-      {
-        apiKey: OPENCODE_API_KEY,
-        reasoning: "low",
-        maxTokens: 64,
-      },
+      createLiveToolReplayContext(
+        makeUserMessage(
+          "You must call the live_echo tool with value ok. Do not answer directly.",
+          Date.now() - 3,
+        ),
+        first,
+        toolCall,
+        tool,
+      ),
+      options,
     );
 
     if (second.stopReason === "error") {
-      throw new Error(second.errorMessage || "OpenCode DeepSeek replay returned an error");
+      throw new Error(second.errorMessage || "OpenCode Zen replay returned an error");
     }
 
     expect(extractNonEmptyAssistantText(second.content)).toMatch(/^ok[.!]?$/i);
   }, 120_000);
+});
+
+(LIVE && LIVE_MODEL_ID === "kimi-k3" ? describe : describe.skip)("Kimi K3 live thinking", () => {
+  it.each(["off", "low", "high", "max"] as const)(
+    "honors %s through the registered Zen provider",
+    async (reasoning) => {
+      const { model } = await resolveOpencodeToolLiveModel();
+      const provider = await registerSingleProviderPlugin(plugin);
+      const streamFn = provider.wrapStreamFn?.({
+        provider: provider.id,
+        modelId: model.id,
+        model,
+        thinkingLevel: reasoning,
+        streamFn: streamSimple,
+      });
+      if (!streamFn) {
+        throw new Error("Registered Zen stream wrapper missing");
+      }
+      let sentEffort: unknown;
+      const stream = await streamFn(
+        model,
+        {
+          messages: [
+            makeUserMessage("What is 17 times 23? Reply with the number only.", Date.now()),
+          ],
+        },
+        {
+          apiKey: OPENCODE_API_KEY,
+          sessionId: `openclaw-kimi-live-${reasoning}`,
+          reasoning,
+          maxTokens: 1024,
+          onPayload: (payload) => {
+            sentEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          },
+        },
+      );
+      const result = await stream.result();
+      expect(result.stopReason, result.errorMessage).toBe("stop");
+      expect(sentEffort).toBe(reasoning === "off" ? "none" : reasoning);
+      expect(extractNonEmptyAssistantText(result.content)).toMatch(/^391[.!]?$/);
+      const thinking = result.content
+        .filter((block) => block.type === "thinking")
+        .map((block) => block.thinking)
+        .join("");
+      if (reasoning === "off") {
+        expect(thinking).toBe("");
+      } else {
+        expect(thinking.length).toBeGreaterThan(0);
+      }
+    },
+    120_000,
+  );
 });

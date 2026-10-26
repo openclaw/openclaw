@@ -1,12 +1,17 @@
 /** Shared fixtures for secrets runtime unit tests. */
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import { clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
 
-type PrepareSecretsRuntimeSnapshot = typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
@@ -28,49 +33,44 @@ export function asConfig(value: unknown): OpenClawConfig {
 export function loadAuthStoreWithProfiles(
   profiles: AuthProfileStore["profiles"],
 ): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
+  return { version: 1, profiles };
 }
 
-function createTestProvider(params: {
-  id: WebProviderUnderTest;
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
+function createTestProvider(
+  id: WebProviderUnderTest,
+  pluginId: string,
+  autoDetectOrder: number,
+): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${pluginId}.config.webSearch.apiKey`;
   return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
+    pluginId,
+    id,
+    label: id,
+    hint: `${id} test provider`,
+    envVars: [`${id.toUpperCase()}_API_KEY`],
+    placeholder: `${id}-...`,
+    signupUrl: `https://example.com/${id}`,
+    autoDetectOrder,
     credentialPath,
     inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
+    getCredentialValue: (searchConfig) => {
+      const provider = searchConfig?.[id];
+      const providerConfig =
+        provider && typeof provider === "object" ? (provider as { apiKey?: unknown }) : undefined;
+      return providerConfig?.apiKey ?? searchConfig?.apiKey;
+    },
     setCredentialValue: (searchConfigTarget, value) => {
       const providerConfig =
-        params.id === "brave"
+        id === "brave"
           ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
+          : ((searchConfigTarget[id] ??= {}) as { apiKey?: unknown });
       providerConfig.apiKey = value;
     },
     getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
+      (config?.plugins?.entries?.[pluginId]?.config as { webSearch?: { apiKey?: unknown } })
         ?.webSearch?.apiKey,
     getConfiguredCredentialFallback:
-      params.id === "gemini"
+      id === "gemini"
         ? (config) => {
             const provider = (config?.models?.providers?.google ?? {}) as { apiKey?: unknown };
             return provider.apiKey !== undefined
@@ -81,28 +81,24 @@ function createTestProvider(params: {
     setConfiguredCredentialValue: (configTarget, value) => {
       const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
       const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
+      const entry = (entries[pluginId] ??= {}) as { config?: Record<string, unknown> };
       const config = (entry.config ??= {});
       const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
       webSearch.apiKey = value;
     },
     resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
+      id === "perplexity" ? () => ({ perplexityTransport: "search_api" as const }) : undefined,
     createTool: () => null,
   };
 }
 
 export function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider("brave", "brave", 10),
+    createTestProvider("gemini", "google", 20),
+    createTestProvider("grok", "xai", 30),
+    createTestProvider("kimi", "moonshot", 40),
+    createTestProvider("perplexity", "perplexity", 50),
   ];
 }
 
@@ -112,24 +108,9 @@ export function resetPluginWebSearchProvidersMock() {
 }
 
 export function setupSecretsRuntimeSnapshotTestHooks(): {
-  prepareSecretsRuntimeSnapshot: PrepareSecretsRuntimeSnapshot;
+  prepareSecretsRuntimeSnapshot: typeof prepareSecretsRuntimeSnapshot;
 } {
-  let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-  let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-  let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-  let prepareSecretsRuntimeSnapshotImpl: PrepareSecretsRuntimeSnapshot;
-
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({
-      clearSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotImpl,
-    } = await import("./runtime.js"));
-  });
-
-  beforeEach(() => {
-    resetPluginWebSearchProvidersMock();
-  });
+  beforeEach(resetPluginWebSearchProvidersMock);
 
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -138,8 +119,5 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
     clearConfigCache();
   });
 
-  return {
-    prepareSecretsRuntimeSnapshot: ((...args) =>
-      prepareSecretsRuntimeSnapshotImpl(...args)) as PrepareSecretsRuntimeSnapshot,
-  };
+  return { prepareSecretsRuntimeSnapshot };
 }

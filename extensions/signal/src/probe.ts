@@ -1,6 +1,9 @@
-// Signal plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type SignalTransportKind, signalCheck, signalRpcRequest } from "./client-adapter.js";
 import { detectSignalTransport } from "./transport-detection.js";
@@ -12,23 +15,17 @@ export type SignalProbe = BaseProbeResult & {
 };
 
 function parseSignalVersion(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  const directVersion = normalizeOptionalString(value);
+  if (directVersion) {
+    return directVersion;
   }
   if (typeof value === "object" && value !== null) {
     const { version, versions } = value as { version?: unknown; versions?: unknown };
-    if (typeof version === "string" && version.trim()) {
-      return version.trim();
+    const normalizedVersion = normalizeOptionalString(version);
+    if (normalizedVersion) {
+      return normalizedVersion;
     }
-    if (Array.isArray(versions)) {
-      const normalizedVersions = versions
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-      if (normalizedVersions.length > 0) {
-        return normalizedVersions.join(", ");
-      }
-    }
+    return normalizeTrimmedStringList(versions).join(", ") || null;
   }
   return null;
 }
@@ -79,7 +76,7 @@ async function probeSignalTransport(
     } catch (error) {
       result.error = formatErrorMessage(error);
     }
-    return { ...result, ok: true, status: check.status ?? null };
+    return { ...result, ok: result.error === null, status: check.status ?? null };
   });
 }
 

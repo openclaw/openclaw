@@ -1,7 +1,6 @@
-/** Reminder-context projection for cron tool job creation. */
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import { REMINDER_CONTEXT_MESSAGES_MAX } from "./cron-tool-schema.js";
 import type { ChatMessage, GatewayToolCaller } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
@@ -20,15 +19,11 @@ export function stripExistingContext(text: string) {
 }
 
 function truncateText(input: string, maxLen: number) {
-  if (input.length <= maxLen) {
-    return input;
-  }
-  const truncated = truncateUtf16Safe(input, Math.max(0, maxLen - 3)).trimEnd();
-  return `${truncated}...`;
+  return truncateWithMarker(input, maxLen, { marker: "...", reserve: 3, trimEnd: true });
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
-  const role = typeof message.role === "string" ? message.role : "";
+  const role = message.role;
   if (role !== "user" && role !== "assistant") {
     return null;
   }
@@ -38,6 +33,7 @@ function extractMessageText(message: ChatMessage): { role: string; text: string 
 
 export async function buildReminderContextLines(params: {
   agentSessionKey?: string;
+  agentId?: string;
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
   callGatewayTool: GatewayToolCaller;
@@ -54,14 +50,15 @@ export async function buildReminderContextLines(params: {
     return [];
   }
   const cfg = getRuntimeConfig();
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(cfg);
+  const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias });
   try {
     const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",
       params.gatewayOpts,
       {
         sessionKey: resolvedKey,
+        agentId: params.agentId,
         limit: maxMessages,
       },
     );
@@ -70,9 +67,6 @@ export async function buildReminderContextLines(params: {
       .map((msg) => extractMessageText(msg as ChatMessage))
       .filter((msg): msg is { role: string; text: string } => Boolean(msg));
     const recent = parsed.slice(-maxMessages);
-    if (recent.length === 0) {
-      return [];
-    }
     const lines: string[] = [];
     let total = 0;
     for (const entry of recent) {

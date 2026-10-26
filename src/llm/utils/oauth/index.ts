@@ -1,24 +1,7 @@
-/**
- * OAuth credential management for AI providers.
- *
- * This module handles login, token refresh, and credential storage
- * for OAuth-based providers:
- * - Anthropic (Claude Pro/Max)
- * - provider plugins through their runtime auth hooks
- */
-
-// Anthropic
-// OpenAI Codex (ChatGPT OAuth)
-
-export * from "./types.js";
-
-// ============================================================================
-// Built-in providers and instance-owned registries
-// ============================================================================
-
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
+export * from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,
@@ -86,23 +69,9 @@ export class OAuthProviderRegistry {
   }
 }
 
-/**
- * Get a built-in OAuth provider by ID.
- */
-function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
-  return BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
-}
-
-/**
- * Get all built-in OAuth providers.
- */
 export function getOAuthProviders(): OAuthProviderInterface[] {
   return [...BUILT_IN_OAUTH_PROVIDERS];
 }
-
-// ============================================================================
-// High-level built-in provider API
-// ============================================================================
 
 /**
  * Get API key for a provider from OAuth credentials.
@@ -115,7 +84,7 @@ export async function getOAuthApiKey(
   providerId: OAuthProviderId,
   credentials: Record<string, OAuthCredentials>,
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
-  const provider = getOAuthProvider(providerId);
+  const provider = BUILT_IN_OAUTH_PROVIDERS.find((entry) => entry.id === providerId);
   if (!provider) {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
   }

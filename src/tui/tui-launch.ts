@@ -1,17 +1,12 @@
-// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
-import path from "node:path";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { formatErrorMessage } from "../infra/errors.js";
+import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
-import { filterTuiExecArgv } from "./tui-exec-argv.js";
-import type { TuiOptions } from "./tui.js";
-
-// Relaunch helper used when setup wants to hand control to an inherited-stdio TUI process.
-type TuiLaunchOptions = {
-  authSource?: "config";
-  gatewayUrl?: string;
-};
+import type { TuiOptions } from "./tui-types.js";
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
@@ -20,16 +15,12 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
-function buildCurrentCliEntryArgs(): string[] {
+export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const entry = process.argv[1]?.trim();
-  if (!entry) {
+  if (!entry && !isStandaloneRuntimeExecutable()) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
-  return path.isAbsolute(entry) ? [entry] : [];
-}
-
-function buildTuiCliArgs(opts: TuiOptions): string[] {
-  const args = [...filterTuiExecArgv(process.execArgv), ...buildCurrentCliEntryArgs(), "tui"];
+  const args = ["tui"];
   if (opts.local) {
     args.push("--local");
   }
@@ -45,37 +36,25 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   if (opts.deliver) {
     args.push("--deliver");
   }
-  return args;
-}
-
-/** Launches a child TUI process with inherited stdio and setup-specific environment hints. */
-export async function launchTuiCli(
-  opts: TuiOptions,
-  launchOptions: TuiLaunchOptions = {},
-): Promise<void> {
-  const args = buildTuiCliArgs(opts);
-  const env =
-    launchOptions.gatewayUrl || launchOptions.authSource
-      ? {
-          ...process.env,
-          ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
-          ...(launchOptions.authSource === "config"
-            ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
-            : {}),
-        }
-      : process.env;
+  const invocation = resolveOpenClawCliInvocation({
+    args,
+    execArgv: filterOpenClawChildExecArgv(process.execArgv),
+  });
   // Pause parent stdin while the inherited-stdio child owns the terminal.
   // Keep it paused afterward so setup/container parents with stdin_open can exit.
   process.stdin.pause();
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(invocation.command, invocation.args, {
       stdio: "inherit",
-      env,
+      env: process.env,
     });
     const { detach } = attachChildProcessBridge(child);
 
-    child.once("error", (error) => {
+    child.on("error", (error) => {
+      if (child.pid !== undefined) {
+        return;
+      }
       detach();
       reject(new Error(`failed to launch TUI: ${formatErrorMessage(error)}`));
     });

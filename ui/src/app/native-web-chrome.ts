@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
 
 export type NativeHistoryState = {
@@ -6,12 +8,41 @@ export type NativeHistoryState = {
 };
 
 type NativeWebChromeWindow = Window & {
+  __OPENCLAW_NATIVE_EMBED__?: unknown;
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
 };
 
+// Hosts listen from document start so they can enable the shared chrome before
+// application state reads their flag or the first shell renders.
+if (typeof window !== "undefined") {
+  window.dispatchEvent(new Event("openclaw:native-window-chrome-available"));
+}
+
 export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
+}
+
+export function nativeEmbedHost(): {
+  platform: "ios" | "macos" | "android";
+  formFactor: "phone" | "pad" | "desktop";
+  surface?: "conversation";
+} | null {
+  // SAFETY: the host adds this optional document-start value; its shape is validated below.
+  const host = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_EMBED__"];
+  if (!isRecord(host)) {
+    return null;
+  }
+  const { platform, formFactor, surface } = host;
+  return (platform === "ios" || platform === "macos" || platform === "android") &&
+    (formFactor === "phone" || formFactor === "pad" || formFactor === "desktop") &&
+    (surface === undefined || surface === "conversation")
+    ? { platform, formFactor, ...(surface ? { surface } : {}) }
+    : null;
+}
+
+export function isNativeEmbedHost(): boolean {
+  return nativeEmbedHost() !== null;
 }
 
 export function readNativeHistoryState(): NativeHistoryState {

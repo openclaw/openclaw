@@ -1,93 +1,210 @@
-import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
-import type { TerminalSessionInfo } from "./terminal-connection.ts";
+import { createMemo, createSignal, isPending, onSettled } from "solid-js";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
+import type { TerminalSessionListOptions } from "./terminal-panel-session-types.ts";
 
-type TerminalSessionPickerProps = {
-  open: boolean;
-  loading: boolean;
-  sessions: TerminalSessionInfo[];
-  currentSessionIds: ReadonlySet<string>;
-  onToggle: () => void;
-  onDismiss: (restoreFocus: boolean) => void;
-  onFocusOut: (event: FocusEvent) => void;
-  onRefresh: () => void;
-  onAttach: (sessionId: string, owner: TerminalSessionInfo["owner"]) => void;
-};
+export function createTerminalSessionPicker(deps: {
+  client: () => TerminalGatewayClient | null;
+  available: () => boolean;
+  hosted: () => boolean;
+  connected: () => boolean;
+  initialOpen: () => boolean;
+  standalone: () => boolean;
+  presented: () => boolean;
+  tabCount: () => number;
+  currentSessionIds: () => ReadonlySet<string>;
+  list: (options?: TerminalSessionListOptions) => Promise<TerminalSessionInfo[] | null>;
+  showError: (error: unknown) => void;
+  attach: (sessionId: string, agentOwned: boolean) => Promise<void>;
+}) {
+  const [open, setOpen] = createSignal(false);
+  let acceptedSessions: TerminalSessionInfo[] = [];
+  const [request, setRequest] = createSignal<{
+    key: number;
+    value: TerminalSessionInfo[] | Promise<TerminalSessionInfo[]>;
+  }>({ key: 0, value: acceptedSessions });
+  const sessions = createMemo<TerminalSessionInfo[]>(() => request().value);
+  const loading = () => isPending(sessions);
+  let generation = 0;
+  let discoveredTabCount: number | undefined;
+  let inlineTrigger: HTMLButtonElement | undefined;
+  let hostedTrigger: HTMLButtonElement | undefined;
+  const trigger = () => (deps.hosted() ? hostedTrigger : inlineTrigger);
+  let menu: HTMLDivElement | undefined;
+  let refresh: HTMLButtonElement | undefined;
 
-const TERMINAL_SESSION_PICKER_ID = "terminal-session-picker-dialog";
+  async function load(options?: TerminalSessionListOptions) {
+    const key = ++generation;
+    const client = deps.client();
+    if (!client || !deps.available()) {
+      setRequest({ key, value: acceptedSessions });
+      return;
+    }
+    const isCurrent = () => key === generation && client === deps.client() && deps.available();
+    let restoreFocus = false;
+    const value = (async () => {
+      try {
+        const result = await deps.list(options);
+        if (isCurrent() && result !== null) {
+          acceptedSessions = result;
+          reconcileVisibility(result);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          // Background discovery must leave focus in the terminal or composer.
+          if (open()) {
+            dismiss(false);
+            restoreFocus = true;
+          }
+          deps.showError(error);
+        }
+      }
+      // The panel owner routes failures; null and retired reads preserve the accepted list.
+      return acceptedSessions;
+    })();
+    setRequest({ key, value });
+    await value;
+    if (restoreFocus && isCurrent()) {
+      // Focus-triggered discovery must see the completed read, not its pending frame.
+      onSettled(() => trigger()?.focus());
+    }
+  }
 
-export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
-  return html`
-    <div class="tp-session-picker" @focusout=${props.onFocusOut}>
-      <button
-        class="tp-icon"
-        type="button"
-        title=${t("terminal.sessions")}
-        aria-label=${t("terminal.sessions")}
-        aria-expanded=${props.open ? "true" : "false"}
-        aria-haspopup="dialog"
-        aria-controls=${TERMINAL_SESSION_PICKER_ID}
-        @click=${props.onToggle}
-      >
-        <svg
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.3"
-          aria-hidden="true"
-        >
-          <path d="M3 3.25h10v3.5H3zM3 9.25h10v3.5H3z" />
-          <path d="m5 4.5 1 1-1 1m0 4 1 1-1 1" />
-        </svg>
-      </button>
-      ${props.open
-        ? html`<div
-            id=${TERMINAL_SESSION_PICKER_ID}
-            class="tp-session-menu"
-            role="dialog"
-            aria-label=${t("terminal.sessions")}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key !== "Escape") {
-                return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              props.onDismiss(true);
-            }}
-          >
-            <div class="tp-session-menu__header">
-              <span>${t("terminal.sessions")}</span>
-              <button class="tp-session-refresh" type="button" @click=${props.onRefresh}>
-                ${t("terminal.refreshSessions")}
-              </button>
-            </div>
-            ${props.loading
-              ? html`<div class="tp-session-empty">${t("terminal.loadingSessions")}</div>`
-              : props.sessions.length === 0
-                ? html`<div class="tp-session-empty">${t("terminal.noSessions")}</div>`
-                : props.sessions.map((session) => {
-                    const current = props.currentSessionIds.has(session.sessionId);
-                    const state = current
-                      ? t("terminal.currentSession")
-                      : session.attached
-                        ? t("terminal.sessionAttached")
-                        : t("terminal.detached");
-                    return html`<button
-                      class="tp-session"
-                      type="button"
-                      ?disabled=${current}
-                      title=${current ? state : t("terminal.attachSession")}
-                      @click=${() => props.onAttach(session.sessionId, session.owner)}
-                    >
-                      <span class="tp-session__agent">${session.agentId}</span>
-                      <span class="tp-session__cwd">${session.cwd}</span>
-                      <span class="tp-session__state">${state}</span>
-                    </button>`;
-                  })}
-          </div>`
-        : nothing}
-    </div>
-  `;
+  function dismiss(restoreFocus: boolean) {
+    setOpen(false);
+    if (restoreFocus) {
+      onSettled(() => trigger()?.focus());
+    }
+  }
+
+  function hiddenFor(current: readonly TerminalSessionInfo[]) {
+    const session = current[0];
+    return (
+      deps.standalone() &&
+      deps.tabCount() <= 1 &&
+      current.length === 1 &&
+      session !== undefined &&
+      deps.currentSessionIds().has(session.sessionId)
+    );
+  }
+
+  function reconcileVisibility(current = acceptedSessions) {
+    if (hiddenFor(current)) {
+      // The trigger is being removed; focus must remain in the terminal.
+      dismiss(false);
+    }
+  }
+
+  function inside(target: EventTarget | null) {
+    return target instanceof Node && (target === trigger() || menu?.contains(target));
+  }
+
+  onSettled(() => {
+    // Lazy bridge inputs bind after the component body has created this picker.
+    setOpen(deps.initialOpen());
+    const stop = listen(
+      document,
+      "pointerdown",
+      (event) => {
+        if (
+          !deps.hosted() &&
+          open() &&
+          !event.composedPath().some((node) => node === trigger() || node === menu)
+        ) {
+          dismiss(false);
+        }
+      },
+      true,
+    );
+    return () => {
+      generation += 1;
+      stop();
+    };
+  });
+
+  return {
+    get connected() {
+      return deps.connected();
+    },
+    get hosted() {
+      return deps.hosted();
+    },
+    get currentSessionIds() {
+      return deps.currentSessionIds();
+    },
+    open,
+    sessions,
+    requestKey: () => request().key,
+    hidden: () => {
+      // Track read settlement without holding the surrounding chrome on its async value.
+      loading();
+      return hiddenFor(acceptedSessions);
+    },
+    syncPresentation() {
+      const count = deps.presented() && deps.standalone() ? deps.tabCount() : 0;
+      const changed = count !== discoveredTabCount;
+      discoveredTabCount = count;
+      if (changed && count > 0) {
+        void load({ preserveError: true });
+      }
+      reconcileVisibility();
+    },
+    triggerRef: (element: HTMLButtonElement) => {
+      inlineTrigger = element;
+    },
+    hostedTriggerRef: (element: HTMLButtonElement) => {
+      hostedTrigger = element;
+    },
+    menuRef: (element: HTMLDivElement) => {
+      menu = element;
+    },
+    refreshRef: (element: HTMLButtonElement) => {
+      refresh = element;
+    },
+    onToggle() {
+      if (open()) {
+        return dismiss(true);
+      }
+      setOpen(true);
+      void load();
+      onSettled(() => {
+        if (open()) {
+          refresh?.focus();
+        }
+      });
+    },
+    onDismiss: dismiss,
+    onFocusOut(event: FocusEvent) {
+      if (deps.hosted()) {
+        return;
+      }
+      if (inside(event.relatedTarget)) {
+        return;
+      }
+      queueMicrotask(() => {
+        if (open() && !inside(document.activeElement)) {
+          dismiss(false);
+        }
+      });
+    },
+    onRefresh: (options?: TerminalSessionListOptions) => void load(options),
+    onDiscover() {
+      // Activation can arrive through both pointer and focus. An open menu
+      // already exposes Refresh; background discovery must not interrupt it.
+      if (!loading() && !open()) {
+        void load({ preserveError: true });
+      }
+    },
+    onAttach(sessionId: string, owner: TerminalSessionInfo["owner"]) {
+      setOpen(false);
+      void deps.attach(sessionId, owner?.startsWith("agent:") === true);
+    },
+    reset() {
+      generation += 1;
+      discoveredTabCount = undefined;
+      setOpen(false);
+      acceptedSessions = [];
+      setRequest({ key: generation, value: acceptedSessions });
+    },
+  };
 }

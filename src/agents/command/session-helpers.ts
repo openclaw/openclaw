@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -15,24 +17,67 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
-import type { AgentRunSessionTarget } from "../run-session-target.js";
-import { persistSessionEntry as persistSessionEntryBase } from "./attempt-execution.shared.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import type { InternalSessionEffectsTarget } from "../internal-session-effects.js";
+import type { AgentRunSessionTarget } from "../run-session-target.types.js";
+import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import type { AgentCommandOpts } from "./types.js";
 
-type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath: string;
-  initialEntry: SessionEntry;
-  entry: SessionEntry;
-};
-
-export async function persistSessionEntry(
-  params: PersistSessionEntryParams & {
-    shouldPersist?: (entry: SessionEntry | undefined) => boolean;
-  },
-): Promise<SessionEntry | undefined> {
-  return await persistSessionEntryBase(params);
+export function prepareCommandUserTurnTranscript(
+  params: Pick<
+    RunEmbeddedAgentAttemptParams,
+    "prepared" | "opts" | "suppressVisibleSessionEffects"
+  >,
+  internalSessionTarget: InternalSessionEffectsTarget | undefined,
+  sessionEntry: SessionEntry | undefined,
+) {
+  const {
+    cfg,
+    transcriptBody,
+    sessionId,
+    sessionKey,
+    sessionAgentId,
+    sessionStore,
+    storePath,
+    cwd,
+    workspaceDir,
+  } = params.prepared;
+  const transcriptMedia = params.opts.transcriptMedia ?? [];
+  const hasTranscriptMedia = transcriptMedia.length > 0;
+  const suppressUserTurnPersistence =
+    params.opts.suppressPromptPersistence === true ||
+    (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
+  const recorderTranscriptText = transcriptBody || undefined;
+  const userTurnTranscriptRecorder =
+    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
+    createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+        ? {
+            input: {
+              text: recorderTranscriptText,
+              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+              senderIsOwner: params.opts.senderIsOwner,
+              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
+            },
+          }
+        : {}),
+      target: {
+        sessionId: internalSessionTarget?.sessionId ?? sessionId,
+        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: internalSessionTarget?.storePath ?? storePath,
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
+  if (suppressUserTurnPersistence) {
+    userTurnTranscriptRecorder.markBlocked();
+  }
+  return { suppressUserTurnPersistence, userTurnTranscriptRecorder };
 }
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
@@ -63,7 +108,7 @@ export async function prepareCurrentRunDelivery(params: {
   if (opts.deliver !== true) {
     return undefined;
   }
-  const buildPlan = async (requestedChannel: string | undefined) =>
+  const buildPlan = async (requestedChannel: string | undefined, preparedPlugin?: ChannelPlugin) =>
     await resolveAgentDeliveryPlanWithSessionRoute({
       cfg,
       agentId: params.agentId,
@@ -78,6 +123,7 @@ export async function prepareCurrentRunDelivery(params: {
       turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
       turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
       turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+      preparedPlugin,
     });
   let deliveryPlan = await buildPlan(opts.replyChannel ?? opts.channel);
   const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
@@ -85,7 +131,7 @@ export async function prepareCurrentRunDelivery(params: {
     opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
   if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
     const selection = await resolveMessageChannelSelection({ cfg });
-    deliveryPlan = await buildPlan(selection.channel);
+    deliveryPlan = await buildPlan(selection.channel, selection.plugin);
   }
   if (deliveryPlan.targetResolutionError) {
     throw deliveryPlan.targetResolutionError;
@@ -99,7 +145,7 @@ export async function prepareCurrentRunDelivery(params: {
     opts.deliveryTargetMode ??
     deliveryPlan.deliveryTargetMode ??
     ((opts.replyTo ?? opts.to) ? "explicit" : "implicit");
-  const resolved = resolveAgentOutboundTarget({
+  const resolved = await resolveAgentOutboundTarget({
     cfg,
     plan: deliveryPlan,
     targetMode,
@@ -126,30 +172,6 @@ export async function prepareCurrentRunDelivery(params: {
     threadId,
   });
   return context ? { context, targetMode } : undefined;
-}
-
-export function createAgentCommandSessionWorkingCopy(params: {
-  sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-}): {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-} {
-  const result: {
-    sessionEntry?: SessionEntry;
-    sessionStore?: Record<string, SessionEntry>;
-  } = {};
-  if (params.sessionEntry) {
-    result.sessionEntry = { ...params.sessionEntry };
-  }
-  if (params.sessionStore || params.sessionKey) {
-    result.sessionStore = {};
-  }
-  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
-    result.sessionStore[params.sessionKey] = result.sessionEntry;
-  }
-  return result;
 }
 
 export function resolveInternalSessionEffectsSource(params: {

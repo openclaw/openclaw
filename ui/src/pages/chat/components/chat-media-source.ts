@@ -1,3 +1,10 @@
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
+import {
+  appendChatMediaPlaybackParam,
+  waitForChatMediaPlayback,
+  type ChatMediaPlaybackMode,
+} from "./chat-media-playback.ts";
+
 type PlaybackRestore = {
   currentTime: number;
   paused: boolean;
@@ -7,32 +14,138 @@ function finiteMediaTime(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-/** Keeps a refreshed ticket ready without interrupting active media playback. */
-export class ChatMediaSourceController {
+/** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
+export class ChatMediaSourceOwner {
+  private syncQueued = false;
   private appliedSource = "";
   private appliedIdentity = "";
   private pendingSource = "";
   private pendingIdentity = "";
   private restore: PlaybackRestore | null = null;
+  private sourceFailed = false;
+  private authorizationKey = "";
+  private readinessRequest: {
+    key: string;
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null = null;
+  private playbackSource = "";
+  private playbackReadiness: "idle" | "preparing" | "ready" | "unavailable" = "idle";
 
-  get currentSource(): string {
-    return this.appliedSource;
+  private readonly listeners = createChangeListeners();
+
+  readonly subscribe = this.listeners.subscribe;
+
+  private setPlayback(
+    readiness: typeof this.playbackReadiness,
+    source = this.playbackSource,
+  ): void {
+    if (readiness === this.playbackReadiness && source === this.playbackSource) {
+      return;
+    }
+    this.playbackReadiness = readiness;
+    this.playbackSource = source;
+    this.listeners.publish();
   }
 
-  get currentIdentity(): string {
-    return this.appliedIdentity;
+  get readySource(): string {
+    return this.playbackSource;
   }
 
-  get queuedSource(): string {
-    return this.pendingSource;
+  get readiness() {
+    return this.playbackReadiness;
   }
 
-  updateSource(media: HTMLMediaElement, source: string, sourceIdentity = source): void {
+  queueSync(sync: () => void): void {
+    if (this.syncQueued) {
+      return;
+    }
+    this.syncQueued = true;
+    // Native callers assign related properties together; consume their complete source once.
+    queueMicrotask(() => {
+      this.syncQueued = false;
+      sync();
+    });
+  }
+
+  sync(
+    media: HTMLMediaElement,
+    source: string,
+    sourceIdentity: string,
+    playback: ChatMediaPlaybackMode,
+    authToken?: string | null,
+  ): Promise<void> | null {
+    const nextSource = source.trim();
+    const nextIdentity = sourceIdentity.trim();
+    const nextAuthToken = authToken?.trim() ?? "";
+    if (!nextSource || !nextIdentity) {
+      return null;
+    }
+
+    const authorizationKey = `${nextIdentity}\0${nextAuthToken}`;
+    if (this.authorizationKey && authorizationKey !== this.authorizationKey) {
+      this.reset(media);
+    }
+    this.authorizationKey = authorizationKey;
+
+    const nextPlaybackSource =
+      playback === "transcode" ? appendChatMediaPlaybackParam(nextSource) : nextSource;
+    if (playback !== "transcode") {
+      this.abortReadiness();
+      this.sourceFailed = false;
+      this.setPlayback("ready", nextPlaybackSource);
+      this.updateSource(media, nextPlaybackSource, nextIdentity);
+      return null;
+    }
+
+    const readinessKey = [nextPlaybackSource, nextIdentity, nextAuthToken].join("\0");
+    if (readinessKey === this.readinessRequest?.key) {
+      if (this.playbackSource === nextPlaybackSource) {
+        this.updateSource(media, nextPlaybackSource, nextIdentity);
+      }
+      return this.readinessRequest.promise;
+    }
+
+    this.abortReadiness();
+    const controller = new AbortController();
+    const hasUsableSource = () => this.appliedIdentity === nextIdentity && !this.sourceFailed;
+    this.setPlayback(hasUsableSource() ? "ready" : "preparing", "");
+    const pending = waitForChatMediaPlayback({
+      source: nextPlaybackSource,
+      authToken: nextAuthToken || null,
+      signal: controller.signal,
+    }).then((result) => {
+      if (this.readinessRequest?.controller !== controller || result === "aborted") {
+        return;
+      }
+      if (result !== "ready") {
+        if (hasUsableSource()) {
+          this.setPlayback("ready", this.appliedSource);
+        } else {
+          this.setPlayback("unavailable");
+        }
+        return;
+      }
+      this.setPlayback("ready", nextPlaybackSource);
+      this.updateSource(media, nextPlaybackSource, nextIdentity);
+    });
+    this.readinessRequest = { key: readinessKey, controller, promise: pending };
+    return pending;
+  }
+
+  cancel(): void {
+    this.abortReadiness();
+    this.cancelPendingResume();
+    this.setPlayback("idle", "");
+  }
+
+  updateSource(media: HTMLMediaElement, source: string, sourceIdentity: string): void {
     const nextSource = source.trim();
     const nextIdentity = sourceIdentity.trim();
     if (!nextSource || !nextIdentity) {
       return;
     }
+    this.setPlayback("ready");
     if (this.appliedIdentity && nextIdentity !== this.appliedIdentity) {
       if (!media.paused) {
         media.pause();
@@ -68,32 +181,30 @@ export class ChatMediaSourceController {
   }
 
   handleEnded(media: HTMLMediaElement): boolean {
-    if (!this.pendingSource) {
-      return false;
-    }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, null);
-    return true;
+    return this.applyPendingSource(media, false);
   }
 
   handleError(media: HTMLMediaElement): boolean {
-    if (!this.pendingSource) {
-      return false;
+    if (this.applyPendingSource(media)) {
+      return true;
     }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, {
-      currentTime: finiteMediaTime(media.currentTime),
-      paused: media.paused,
-    });
-    return true;
+    this.sourceFailed = true;
+    this.setPlayback("unavailable", "");
+    return false;
   }
 
-  applyPendingSource(media: HTMLMediaElement): boolean {
+  applyPendingSource(media: HTMLMediaElement, restorePlayback = true): boolean {
     if (!this.pendingSource) {
       return false;
     }
-    this.applySource(media, this.pendingSource, this.pendingIdentity, {
-      currentTime: finiteMediaTime(media.currentTime),
-      paused: media.paused,
-    });
+    this.applySource(
+      media,
+      this.pendingSource,
+      this.pendingIdentity,
+      restorePlayback
+        ? { currentTime: finiteMediaTime(media.currentTime), paused: media.paused }
+        : null,
+    );
     return true;
   }
 
@@ -121,16 +232,22 @@ export class ChatMediaSourceController {
   }
 
   reset(media: HTMLMediaElement): void {
+    if (!media.paused) {
+      media.pause();
+    }
     this.appliedSource = "";
     this.appliedIdentity = "";
     this.pendingSource = "";
     this.pendingIdentity = "";
     this.restore = null;
+    this.sourceFailed = false;
+    this.setPlayback(this.playbackReadiness, "");
     media.removeAttribute("src");
     media.load();
   }
 
   handleLoadedMetadata(media: HTMLMediaElement, canResume = () => true): void {
+    this.sourceFailed = false;
     const restore = this.restore;
     if (!restore) {
       return;
@@ -154,6 +271,12 @@ export class ChatMediaSourceController {
     this.pendingSource = "";
     this.pendingIdentity = "";
     this.restore = restore;
+    this.sourceFailed = false;
     media.src = source;
+  }
+
+  private abortReadiness(): void {
+    this.readinessRequest?.controller.abort();
+    this.readinessRequest = null;
   }
 }

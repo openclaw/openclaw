@@ -1,7 +1,10 @@
 /** Redaction-safe projection from live agent events into durable audit metadata. */
 import { createHash } from "node:crypto";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readNonEmptyStringPreservingWhitespace as nonEmptyString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -10,35 +13,25 @@ import {
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { isAllowedToolCallName } from "../agents/tool-call-shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import type { TrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isAuditLedgerEnabled } from "./audit-config.js";
 import type {
-  AuditEventInput,
+  AgentRunFinishedAuditEventInput,
   AgentRunFinishedAuditTerminal,
+  AgentRunStartedAuditEventInput,
   ToolActionAuditEventInput,
 } from "./audit-event-types.js";
-import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
+import type { AuditEventWriter } from "./audit-event-writer.js";
 
-const runProvenance = new Map<
-  string,
-  { actorType: "agent" | "system"; agentId: string; sessionKey?: string; sessionId?: string }
->();
-const MAX_TRACKED_RUN_PROVENANCE = 1_024;
-const log = createSubsystemLogger("audit/events");
-let persistenceFailureWarned = false;
+const MAX_TRACKED_RUN_INSTANCES = 1_024;
 
 export type AgentEventAuditRecorder = {
   record: (event: AgentEventPayload) => void;
   recordTool: (event: TrustedToolExecutionEvent) => void;
   stop: () => Promise<void>;
 };
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 function auditToolName(value: unknown): string | undefined {
   const toolName = nonEmptyString(value)?.trim();
@@ -71,49 +64,19 @@ function legacyAuditSourceId(params: {
   return `${params.runId}:${params.sourceSequence}:${params.occurredAt}:${params.action}`;
 }
 
-function rememberRunProvenance(
-  runId: string,
-  provenance: {
-    actorType: "agent" | "system";
-    agentId: string;
-    sessionKey?: string;
-    sessionId?: string;
-  },
-): void {
-  runProvenance.delete(runId);
-  runProvenance.set(runId, provenance);
-  pruneMapToMaxSize(runProvenance, MAX_TRACKED_RUN_PROVENANCE);
-}
-
-function resolveProvenance(
-  runId: string,
-  event: { agentId?: unknown; sessionKey?: unknown; sessionId?: unknown },
-) {
-  const remembered = runProvenance.get(runId);
-  const sessionKey = nonEmptyString(event.sessionKey) ?? remembered?.sessionKey;
-  const sessionId = nonEmptyString(event.sessionId) ?? remembered?.sessionId;
+// Audit is projection-only: session/run correlation cannot establish identity.
+// Producers must carry authoritative attribution on every event that needs it.
+function projectExplicitAttribution(event: {
+  agentId?: unknown;
+  sessionKey?: unknown;
+  sessionId?: unknown;
+}) {
   const eventAgentId = nonEmptyString(event.agentId);
-  const sessionAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
-  const agentId = eventAgentId ?? sessionAgentId ?? remembered?.agentId ?? "unknown";
-  const actorType = eventAgentId || sessionAgentId ? "agent" : (remembered?.actorType ?? "system");
-  return { actorType, agentId, sessionKey, sessionId };
-}
-
-function resolveToolProvenance(
-  runId: string,
-  event: { agentId?: unknown; sessionKey?: unknown; sessionId?: unknown },
-) {
-  const observed = resolveProvenance(runId, event);
-  const remembered = runProvenance.get(runId);
-  if (!remembered) {
-    return observed;
-  }
-  // Tool diagnostics may use an execution sandbox key. Lifecycle start owns
-  // the canonical run identity; tool metadata only fills missing session fields.
   return {
-    ...remembered,
-    sessionKey: remembered.sessionKey ?? observed.sessionKey,
-    sessionId: remembered.sessionId ?? observed.sessionId,
+    actorType: eventAgentId ? ("agent" as const) : ("system" as const),
+    agentId: eventAgentId ?? "unknown",
+    sessionKey: nonEmptyString(event.sessionKey),
+    sessionId: nonEmptyString(event.sessionId),
   };
 }
 
@@ -138,10 +101,12 @@ function classifyRunTerminal(
   return { outcome, ...terminal };
 }
 
-type AgentAuditProjection = {
-  input: AuditEventInput;
-  terminal?: { outcome: AgentRunTerminalOutcome; phase: "end" | "error" };
-};
+type AgentAuditProjection =
+  | { input: AgentRunStartedAuditEventInput; terminal?: never }
+  | {
+      input: AgentRunFinishedAuditEventInput;
+      terminal: { outcome: AgentRunTerminalOutcome; phase: "end" | "error" };
+    };
 
 function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | undefined {
   const runId = nonEmptyString(event.runId);
@@ -149,9 +114,8 @@ function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | und
   if (!runId || !phase) {
     return undefined;
   }
-  const provenance = resolveProvenance(runId, event);
+  const provenance = projectExplicitAttribution(event);
   if (event.stream === "lifecycle" && phase === "start") {
-    rememberRunProvenance(runId, provenance);
     const occurredAt = asDateTimestampMs(event.data.startedAt) ?? event.ts;
     const action = "agent.run.started" as const;
     return {
@@ -177,7 +141,6 @@ function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | und
     };
   }
   if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
-    rememberRunProvenance(runId, provenance);
     const { outcome, ...terminal } = classifyRunTerminal(event.data, phase);
     const occurredAt = asDateTimestampMs(event.data.endedAt) ?? event.ts;
     const action = "agent.run.finished" as const;
@@ -226,7 +189,7 @@ function projectToolExecutionEventToAudit(
     return undefined;
   }
   const toolCallId = auditToolCallId(event.toolCallId);
-  const provenance = resolveToolProvenance(runId, event);
+  const provenance = projectExplicitAttribution(event);
   const occurredAt = asDateTimestampMs(event.sourceTimestampMs) ?? event.ts;
   const attribution = {
     sourceSequence: event.seq,
@@ -303,38 +266,29 @@ function projectToolExecutionEventToAudit(
 }
 
 /** Create the Gateway-owned non-blocking audit projection and persistence handle. */
-export function createAgentEventAuditRecorder(options?: {
-  writer?: AuditEventWriter;
-  stateDir?: string;
+export function createAgentEventAuditRecorder(options: {
+  writer: AuditEventWriter;
+  getConfig: () => OpenClawConfig;
   terminalSettleMs?: number;
 }): AgentEventAuditRecorder {
-  const writer =
-    options?.writer ??
-    createAuditEventWriter({
-      ...(options?.stateDir ? { stateDir: options.stateDir } : {}),
-      onError: (error) => {
-        if (!persistenceFailureWarned) {
-          persistenceFailureWarned = true;
-          log.warn(`audit event persistence failed: ${error}`);
-        }
-      },
-    });
+  const { writer } = options;
   type PendingTerminal = NonNullable<AgentAuditProjection["terminal"]> & {
-    input: AuditEventInput;
+    input: AgentRunFinishedAuditEventInput;
     timer: ReturnType<typeof setTimeout>;
   };
   const terminalSettleMs = Math.max(
     0,
-    Math.floor(options?.terminalSettleMs ?? AGENT_RUN_TERMINAL_RETRY_GRACE_MS),
+    Math.floor(options.terminalSettleMs ?? AGENT_RUN_TERMINAL_RETRY_GRACE_MS),
   );
   const pendingTerminals = new Map<string, PendingTerminal>();
+  const bufferedStarts = new Map<string, AgentRunStartedAuditEventInput>();
   const openRunInstances = new Set<string>();
   const settledRunInstances = new Set<string>();
 
   const rememberSettled = (runInstance: string) => {
     settledRunInstances.delete(runInstance);
     settledRunInstances.add(runInstance);
-    if (settledRunInstances.size > MAX_TRACKED_RUN_PROVENANCE) {
+    if (settledRunInstances.size > MAX_TRACKED_RUN_INSTANCES) {
       const oldest = settledRunInstances.values().next().value;
       if (oldest !== undefined) {
         settledRunInstances.delete(oldest);
@@ -349,15 +303,28 @@ export function createAgentEventAuditRecorder(options?: {
     clearTimeout(pending.timer);
     pendingTerminals.delete(runInstance);
   };
-  const flushPending = (runInstance: string) => {
-    const pending = pendingTerminals.get(runInstance);
-    if (!pending) {
-      return;
+  const flushBufferedStarts = (maxRemaining = 0) => {
+    for (const [runInstance, start] of bufferedStarts) {
+      if (bufferedStarts.size <= maxRemaining) {
+        break;
+      }
+      bufferedStarts.delete(runInstance);
+      writer.record(start);
     }
+  };
+  const settleTerminal = (runInstance: string, finish: AgentRunFinishedAuditEventInput) => {
+    const start = bufferedStarts.get(runInstance);
     clearPending(runInstance);
     openRunInstances.delete(runInstance);
-    if (writer.record(pending.input)) {
+    if (start ? writer.recordRun(start, finish) : writer.record(finish)) {
+      bufferedStarts.delete(runInstance);
       rememberSettled(runInstance);
+    }
+  };
+  const flushPending = (runInstance: string) => {
+    const pending = pendingTerminals.get(runInstance);
+    if (pending) {
+      settleTerminal(runInstance, pending.input);
     }
   };
   const scheduleTerminal = (runInstance: string, incoming: Omit<PendingTerminal, "timer">) => {
@@ -382,7 +349,7 @@ export function createAgentEventAuditRecorder(options?: {
     timer.unref?.();
     pendingTerminals.delete(runInstance);
     pendingTerminals.set(runInstance, { ...selected, timer });
-    if (pendingTerminals.size > MAX_TRACKED_RUN_PROVENANCE) {
+    if (pendingTerminals.size > MAX_TRACKED_RUN_INSTANCES) {
       const oldest = pendingTerminals.keys().next().value;
       if (oldest !== undefined) {
         flushPending(oldest);
@@ -392,11 +359,16 @@ export function createAgentEventAuditRecorder(options?: {
 
   return {
     record: (event) => {
+      const runInstance = `${event.lifecycleGeneration ?? "unknown"}\0${event.runId}`;
+      if (!isAuditLedgerEnabled(options.getConfig())) {
+        flushBufferedStarts();
+        openRunInstances.delete(runInstance);
+        return;
+      }
       const projection = projectAgentEvent(event);
       if (!projection) {
         return;
       }
-      const runInstance = `${event.lifecycleGeneration ?? "unknown"}\0${event.runId}`;
       if (!projection.terminal) {
         const alreadyOpen = openRunInstances.has(runInstance);
         clearPending(runInstance);
@@ -407,7 +379,9 @@ export function createAgentEventAuditRecorder(options?: {
         // Retry starts cancel a provisional terminal for the same logical run.
         // Keep the original start so one run cannot acquire unmatched starts.
         openRunInstances.add(runInstance);
-        writer.record(projection.input);
+        // An open run's start stays in memory until settlement or a bounded flush.
+        bufferedStarts.set(runInstance, projection.input);
+        flushBufferedStarts(MAX_TRACKED_RUN_INSTANCES);
         return;
       }
       if (settledRunInstances.has(runInstance)) {
@@ -417,15 +391,16 @@ export function createAgentEventAuditRecorder(options?: {
         projection.terminal.outcome.reason === "completed" &&
         !pendingTerminals.has(runInstance)
       ) {
-        openRunInstances.delete(runInstance);
-        if (writer.record(projection.input)) {
-          rememberSettled(runInstance);
-        }
+        settleTerminal(runInstance, projection.input);
         return;
       }
       scheduleTerminal(runInstance, { input: projection.input, ...projection.terminal });
     },
     recordTool: (event) => {
+      if (!isAuditLedgerEnabled(options.getConfig())) {
+        flushBufferedStarts();
+        return;
+      }
       const input = projectToolExecutionEventToAudit(event);
       if (input) {
         writer.record(input);
@@ -435,6 +410,7 @@ export function createAgentEventAuditRecorder(options?: {
       for (const runInstance of pendingTerminals.keys()) {
         flushPending(runInstance);
       }
+      flushBufferedStarts();
       await writer.stop();
     },
   };

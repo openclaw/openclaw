@@ -5,18 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
+import { stop } from "../../../src/cron/service/ops-lifecycle.js";
 import {
-  createDeferred,
-  createRunningCronServiceState,
-} from "../../../src/cron/service.test-harness.js";
-import type { CronServiceDeps } from "../../../src/cron/service/state.js";
+  createCronServiceState,
+  type CronServiceDeps,
+  type CronServiceState,
+} from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
-import { waitForActiveTasks } from "../../../src/process/command-queue.js";
+import { getTotalQueueSize } from "../../../src/process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
+import { createDeferred } from "../promise.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+const fixtureStates = new Map<string, Set<CronServiceState>>();
+
+async function waitForCommandQueueIdle(timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (getTotalQueueSize() > 0 && Date.now() < deadlineAt) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+}
 
 export const noopLogger = {
   info: () => {},
@@ -26,12 +39,41 @@ export const noopLogger = {
   trace: () => {},
 };
 
+type CronRegressionDefaults = "scheduler" | "cronEnabled" | "log" | "enqueueSystemEvent";
+
+export function createCronRegressionState(
+  deps: Omit<CronServiceDeps, CronRegressionDefaults> &
+    Partial<Pick<CronServiceDeps, CronRegressionDefaults>>,
+) {
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
+    ...deps,
+  });
+  fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
+  return state;
+}
+
 export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {
   let fixtureRoot = "";
   let fixtureCount = 0;
+  const states = new Set<CronServiceState>();
+  const drainStates = async () => {
+    for (const state of states) {
+      stop(state);
+    }
+    await Promise.all([...states].map((state) => state.schedulerDrain));
+    states.clear();
+  };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "cron-issues-"));
+    fixtureStates.set(path.resolve(fixtureRoot), states);
   });
 
   beforeEach(() => {
@@ -40,18 +82,21 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   });
 
   afterEach(async () => {
+    await drainStates();
     vi.clearAllTimers();
     vi.restoreAllMocks();
     useRealTime();
-    await waitForActiveTasks(250);
+    await waitForCommandQueueIdle(250);
     resetCommandQueueStateForTest();
     clearSessionStoreCacheForTest();
     resetAgentEventsForTest();
   });
 
   afterAll(async () => {
+    await drainStates();
+    fixtureStates.delete(path.resolve(fixtureRoot));
     useRealTime();
-    await waitForActiveTasks(250);
+    await waitForCommandQueueIdle(250);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -63,8 +108,6 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     },
   };
 }
-
-export { createDeferred, createRunningCronServiceState };
 
 export function topOfHourOffsetMs(jobId: string) {
   const digest = crypto.createHash("sha256").update(jobId).digest();
@@ -102,7 +145,7 @@ export function createDefaultIsolatedRunner(): CronServiceDeps["runIsolatedAgent
 
 export function createAbortAwareIsolatedRunner(summary = "late") {
   let observedAbortSignal: AbortSignal | undefined;
-  const started = createDeferred<void>();
+  const started = createDeferred();
   const runIsolatedAgentJob = vi.fn(async ({ abortSignal, onExecutionStarted }) => {
     observedAbortSignal = abortSignal;
     started.resolve();

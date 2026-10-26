@@ -1,68 +1,92 @@
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
+import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
-  buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
+import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
+import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
+import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceBootstrapPending,
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
-import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
-import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
+import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
+import type { EmbeddedRunAttemptBase, EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
-  attempt: EmbeddedRunAttemptParams;
-  effectiveWorkspace: string;
+  attempt: Omit<EmbeddedRunAttemptBase, "workspaceDir" | "prompt" | "timeoutMs" | "runId"> &
+    Pick<EmbeddedRunAttemptParams, "operation">;
+  setup: Pick<
+    EmbeddedAttemptSetup,
+    "effectiveWorkspace" | "resolvedWorkspace" | "sessionAgentId"
+  > & {
+    prepStages?: Pick<EmbeddedAttemptSetup["prepStages"], "mark">;
+  };
   hasReadTool: boolean;
   isRawModelRun: boolean;
-  markStage: (name: string) => void;
-  resolvedWorkspace: string;
-  sessionAgentId: string;
-  sessionLabel: string;
 }) {
   const { attempt } = params;
+  const bootstrapWorkspaceDir = attempt.bootstrapWorkspaceDir ?? params.setup.resolvedWorkspace;
+  // The selected session workspace owns execution. Agent bootstrap identity stays
+  // in the configured workspace; execution project instructions layer after it.
+  const bootstrapPromptWorkspaceDir =
+    bootstrapWorkspaceDir === params.setup.resolvedWorkspace
+      ? params.setup.effectiveWorkspace
+      : bootstrapWorkspaceDir;
   const suppressAmbientContext =
     params.isRawModelRun || attempt.operation === "settled-tool-finalization";
-  const contextInjectionMode = resolveContextInjectionMode(attempt.config, params.sessionAgentId);
+  const contextInjectionMode = resolveContextInjectionMode(
+    attempt.config,
+    params.setup.sessionAgentId,
+  );
   const bootstrapWarn = makeBootstrapWarn({
-    sessionLabel: params.sessionLabel,
-    workspaceDir: params.resolvedWorkspace,
+    sessionLabel: attempt.sessionKey ?? attempt.sessionId,
+    workspaceDir: bootstrapWorkspaceDir,
     warn: (message) => log.warn(message),
   });
+  const resolveWorkspaceBootstrapFiles = () =>
+    resolveBootstrapFilesForRun({
+      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
+      config: attempt.config,
+      sessionKey: attempt.sessionKey,
+      sessionId: attempt.sessionId,
+      chatType: attempt.chatType,
+      workspaceDir: bootstrapWorkspaceDir,
+      executionWorkspaceDir: params.setup.resolvedWorkspace,
+      agentId: params.setup.sessionAgentId,
+      warn: bootstrapWarn,
+      contextMode: attempt.bootstrapContextMode,
+      runKind: attempt.bootstrapContextRunKind,
+    });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
-    return completedBootstrapTurn;
-  };
+  const hasCompletedBootstrapTurnForAttempt = async () =>
+    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapFiles,
       bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       trigger: attempt.trigger,
       sessionKey: attempt.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
       isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-      effectiveWorkspace: params.effectiveWorkspace,
-      resolvedWorkspace: params.resolvedWorkspace,
+      isWorkspaceBootstrapPending,
+      bootstrapFiles,
+      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
+      effectiveWorkspace: params.setup.effectiveWorkspace,
+      resolvedWorkspace: bootstrapWorkspaceDir,
       hasBootstrapFileAccess: params.hasReadTool,
     });
   const shouldProbeContinuationSkip =
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
     (await hasCompletedBootstrapTurnForAttempt());
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
@@ -74,74 +98,67 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
-    preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
-      workspaceDir: params.resolvedWorkspace,
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      sessionId: attempt.sessionId,
-      chatType: attempt.chatType,
-      agentId: params.sessionAgentId,
-      warn: bootstrapWarn,
-      contextMode: attempt.bootstrapContextMode,
-      runKind: attempt.bootstrapContextRunKind,
-    });
+    preloadedBootstrapFiles = await resolveWorkspaceBootstrapFiles();
     bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
   }
   bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
   const bootstrapMode = bootstrapRouting.bootstrapMode;
-  const {
+  // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
+  // context even though finalization preserves the settled transcript.
+  const effectiveContextInjectionMode = suppressAmbientContext ? "never" : contextInjectionMode;
+  const bootstrapContextMode = attempt.bootstrapContextMode;
+  const bootstrapContextRunKind = attempt.bootstrapContextRunKind ?? "default";
+  const deliversCompleteWorkspaceContext = bootstrapRouting.deliversCompleteWorkspaceContext;
+  const isContinuationTurn =
+    bootstrapMode !== "full" &&
+    effectiveContextInjectionMode === "continuation-skip" &&
+    (await hasCompletedBootstrapTurnForAttempt());
+  const shouldSkipBootstrapInjection =
+    effectiveContextInjectionMode === "never" || isContinuationTurn;
+  let hookAdjustedBootstrapFiles: WorkspaceBootstrapFile[] = [];
+  let resolvedContextFiles: EmbeddedContextFile[] = [];
+  if (!shouldSkipBootstrapInjection) {
+    hookAdjustedBootstrapFiles =
+      preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles());
+    resolvedContextFiles = buildBootstrapContextForFiles(hookAdjustedBootstrapFiles, {
+      config: attempt.config,
+      agentId: params.setup.sessionAgentId,
+      warn: bootstrapWarn,
+    });
+  }
+  // Check both workspace layers after loading: an unreadable file must be retried next turn.
+  const shouldRecordCompletedBootstrapTurn =
+    !shouldSkipBootstrapInjection &&
+    bootstrapContextMode !== "lightweight" &&
+    bootstrapContextRunKind !== "cron" &&
+    deliversCompleteWorkspaceContext &&
+    !hookAdjustedBootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
+    (bootstrapMode === "full" || effectiveContextInjectionMode === "continuation-skip");
+  params.setup.prepStages?.mark("bootstrap-context");
+  const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
+    ? resolvedContextFiles
+    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+  // Injection accounting keys on the source path the bootstrap file was loaded
+  // from, so it runs before the remap rewrites paths onto the prompt workspace.
+  const bootstrapInjectionStats = buildBootstrapInjectionStats({
     bootstrapFiles: hookAdjustedBootstrapFiles,
-    contextFiles: resolvedContextFiles,
-    shouldRecordCompletedBootstrapTurn,
-  } = await resolveAttemptBootstrapContext({
-    // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
-    // context even though finalization preserves the settled transcript.
-    contextInjectionMode: suppressAmbientContext ? "never" : contextInjectionMode,
-    bootstrapContextMode: attempt.bootstrapContextMode,
-    bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
-    bootstrapMode,
-    hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
-    resolveBootstrapContextForRun: async () => {
-      const bootstrapFiles =
-        preloadedBootstrapFiles ??
-        (await resolveBootstrapFilesForRun({
-          workspaceDir: params.resolvedWorkspace,
-          config: attempt.config,
-          sessionKey: attempt.sessionKey,
-          sessionId: attempt.sessionId,
-          chatType: attempt.chatType,
-          agentId: params.sessionAgentId,
-          warn: bootstrapWarn,
-          contextMode: attempt.bootstrapContextMode,
-          runKind: attempt.bootstrapContextRunKind,
-        }));
-      return {
-        bootstrapFiles,
-        contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
-          config: attempt.config,
-          agentId: params.sessionAgentId,
-          warn: bootstrapWarn,
-        }),
-      };
-    },
+    injectedFiles: injectedContextFiles,
   });
-  params.markStage("bootstrap-context");
-  const remappedContextFiles = remapInjectedContextFilesToWorkspace({
-    files: resolvedContextFiles,
-    sourceWorkspaceDir: params.resolvedWorkspace,
-    targetWorkspaceDir: params.effectiveWorkspace,
+  const contextFiles = remapInjectedContextFilesToWorkspace({
+    files: injectedContextFiles,
+    sourceWorkspaceDir: bootstrapWorkspaceDir,
+    targetWorkspaceDir: bootstrapPromptWorkspaceDir,
   });
-  const contextFiles = bootstrapRouting.includeBootstrapInSystemContext
-    ? remappedContextFiles
-    : remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
-  const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
-    ? hookAdjustedBootstrapFiles
-    : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+  // Stats retain input order. Reports include suppressed BOOTSTRAP rows; budgets do not.
+  const bootstrapBudgetFiles = bootstrapRouting.includeBootstrapInSystemContext
+    ? bootstrapInjectionStats
+    : bootstrapInjectionStats.filter(
+        (_, index) => hookAdjustedBootstrapFiles[index]!.name !== DEFAULT_BOOTSTRAP_FILENAME,
+      );
   const bootstrapBudget = buildBootstrapBudgetState({
     config: attempt.config,
-    agentId: params.sessionAgentId,
-    bootstrapFiles: bootstrapFilesForInjectionStats,
-    injectedFiles: contextFiles,
+    agentId: params.setup.sessionAgentId,
+    files: bootstrapBudgetFiles,
     seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
     previousSignature: attempt.bootstrapPromptWarningSignature,
   });
@@ -163,7 +180,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     ...bootstrapBudget,
     bootstrapMode,
     contextFiles,
-    hookAdjustedBootstrapFiles,
+    bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,
     workspaceNotes,
   };

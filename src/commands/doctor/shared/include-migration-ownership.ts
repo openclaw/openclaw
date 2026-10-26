@@ -1,28 +1,30 @@
+import fs from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { INCLUDE_KEY } from "../../../config/includes.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isPathInside } from "../../../infra/path-safety.js";
+import { resolveIncludeWriteBoundary } from "../../../config/include-write-boundary.js";
+import { INCLUDE_KEY, isInternalIncludeWriteTarget } from "../../../config/includes.js";
+import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import { isRootFileMissingFailure, openRootFileSync } from "../../../infra/boundary-file-read.js";
 import { isRecord } from "../../../utils.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
   if (Array.isArray(value)) {
     return value.some(containsAuthoredInclude);
   }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, INCLUDE_KEY) || Object.values(record).some(containsAuthoredInclude);
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.hasOwn(value, INCLUDE_KEY) || Object.values(value).some(containsAuthoredInclude);
 }
 
 type ConfigPathMigrationOwnership =
   | { kind: "direct" }
-  | { kind: "single-top-level-include"; targetPath: string }
+  | { kind: "single-include"; targetPath: string }
   | { kind: "manual"; targetPaths: string[] };
 
+type OtelGrpcMigrationOwnership = ConfigPathMigrationOwnership | { kind: "resolved-only" };
+
 /** Classify whether Doctor can safely persist a migration at one resolved config path. */
-export function classifyConfigPathMigrationOwnership(params: {
+function classifyConfigPathMigrationOwnership(params: {
   snapshot: Pick<ConfigFileSnapshot, "path" | "includeProvenance">;
   configPath: readonly string[];
 }): ConfigPathMigrationOwnership {
@@ -40,43 +42,67 @@ export function classifyConfigPathMigrationOwnership(params: {
       owners.flatMap((owner) => owner.targetPaths ?? (owner.targetPath ? [owner.targetPath] : [])),
     ),
   ].toSorted();
-  const owner = owners[0];
-  const configDir = path.dirname(path.resolve(params.snapshot.path));
+  const boundary = resolveIncludeWriteBoundary({
+    provenance: params.snapshot.includeProvenance,
+    changed: { paths: [params.configPath], rootChanged: false },
+  });
+  // Canonical containment, not lexical: a symlink beneath the config directory
+  // can target an external file the guarded writer rejects; that is manual.
   if (
-    owners.length === 1 &&
-    owner?.path.length === 1 &&
-    owner.path[0] === params.configPath[0] &&
-    owner.kind === "single" &&
-    !owner.hasSiblingOverrides &&
-    owner.targetPath &&
-    isPathInside(configDir, path.resolve(owner.targetPath))
+    boundary &&
+    isInternalIncludeWriteTarget({
+      configPath: params.snapshot.path,
+      includePath: boundary.includePath,
+    })
   ) {
-    return { kind: "single-top-level-include", targetPath: owner.targetPath };
+    return { kind: "single-include", targetPath: boundary.includePath };
   }
 
   return { kind: "manual", targetPaths };
 }
 
-export function isSingleTopLevelIncludeMigration(params: {
-  parsed: unknown;
-  sourceConfig: OpenClawConfig;
-  candidate: OpenClawConfig;
-}): boolean {
-  if (!isRecord(params.parsed)) {
-    return false;
+function readOtelProtocol(config: unknown): unknown {
+  const root = isRecord(config) ? config : null;
+  const diagnostics = isRecord(root?.diagnostics) ? root.diagnostics : null;
+  const otel = isRecord(diagnostics?.otel) ? diagnostics.otel : null;
+  return otel?.protocol;
+}
+
+/** Classify ownership for the sole legacy migration that consults resolved config values. */
+export function classifyOtelGrpcMigrationOwnership(params: {
+  snapshot: Pick<ConfigFileSnapshot, "path" | "includeProvenance">;
+  authoredConfig: unknown;
+  resolvedConfig: unknown;
+}): OtelGrpcMigrationOwnership | null {
+  if (readOtelProtocol(params.resolvedConfig) !== "grpc") {
+    return null;
   }
-  const keys = new Set([...Object.keys(params.sourceConfig), ...Object.keys(params.candidate)]);
-  const sourceConfig = params.sourceConfig as Record<string, unknown>;
-  const candidate = params.candidate as Record<string, unknown>;
-  const changed = [...keys].filter((key) => !isDeepStrictEqual(sourceConfig[key], candidate[key]));
-  const changedKey = changed.length === 1 ? changed[0] : undefined;
-  if (changedKey === undefined) {
-    return false;
+  const ownership = classifyConfigPathMigrationOwnership({
+    snapshot: params.snapshot,
+    configPath: ["diagnostics", "otel", "protocol"],
+  });
+  if (ownership.kind !== "direct") {
+    return ownership;
   }
-  const authoredSection = params.parsed[changedKey];
-  return (
-    isRecord(authoredSection) &&
-    Object.keys(authoredSection).length === 1 &&
-    typeof authoredSection[INCLUDE_KEY] === "string"
-  );
+  return readOtelProtocol(params.authoredConfig) === "grpc" ? ownership : { kind: "resolved-only" };
+}
+
+/** Read historical config evidence without following a backup outside its directory. */
+export function readDoctorConfigBackup(backupPath: string): string | undefined {
+  const opened = openRootFileSync({
+    absolutePath: backupPath,
+    rootPath: path.dirname(backupPath),
+    boundaryLabel: "config backup directory",
+  });
+  if (!opened.ok) {
+    if (isRootFileMissingFailure(opened)) {
+      return undefined;
+    }
+    throw new Error("Config backup could not be read safely");
+  }
+  try {
+    return fs.readFileSync(opened.fd, "utf8");
+  } finally {
+    fs.closeSync(opened.fd);
+  }
 }

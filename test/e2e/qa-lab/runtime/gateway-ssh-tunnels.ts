@@ -1,18 +1,21 @@
 // Real OpenSSH and Gateway status proof for the SSH tunnel fallback path.
-import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { gatewayStatusCommand } from "../../../../src/commands/gateway-status.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import type { OutputRuntimeEnv } from "../../../../src/runtime.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
@@ -24,6 +27,7 @@ const STATUS_TIMEOUT_MS = 8_000;
 const PROCESS_TIMEOUT_MS = 10_000;
 const TEST_TOKEN = "qa-gateway-ssh-token";
 const SSH_NAMESPACE_MARKER = "OPENCLAW_QA_SSH_NAMESPACE";
+export const sshTrustPreparedMarker = "OPENCLAW_QA_SSH_TRUST_PREPARED";
 
 type ProducerOptions = {
   artifactBase: string;
@@ -171,19 +175,6 @@ async function waitForPortState(port: number, open: boolean, timeoutMs = PROCESS
   throw new Error(`localhost:${port} did not become ${open ? "reachable" : "unreachable"}`);
 }
 
-async function waitForExit(child: ChildProcess, timeoutMs: number) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
 async function generateKey(sshKeygen: string, filePath: string) {
   await runChecked(sshKeygen, ["-q", "-t", "ed25519", "-N", "", "-f", filePath]);
 }
@@ -279,6 +270,8 @@ async function startIsolatedSshd(
   const child = spawn(invocation.command, invocation.args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let stderr = "";
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {
@@ -290,7 +283,17 @@ async function startIsolatedSshd(
     stopPromise ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-        await waitForExit(child, 2_000);
+        // Escalation never settles cleanup: retain the controller's one exit completion.
+        const escalation = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
+        }, 2_000);
+        try {
+          await exited;
+        } finally {
+          clearTimeout(escalation);
+        }
       }
       if (await canConnect(port)) {
         const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
@@ -298,10 +301,6 @@ async function startIsolatedSshd(
           await runPrivileged("/bin/kill", ["-TERM", pid]).catch(() => {});
           await waitForPortState(port, false, 2_000).catch(() => {});
         }
-      }
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-        await waitForExit(child, 2_000);
       }
       if (await canConnect(port)) {
         const pid = (await fs.readFile(pidPath, "utf8").catch(() => "")).trim();
@@ -413,8 +412,13 @@ exec "$@"
     cwd: options.repoRoot,
     detached: true,
     env: process.env,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: [
+      options.fixtureReadyPath ? "pipe" : "ignore",
+      options.fixtureReadyPath ? "pipe" : "ignore",
+      "pipe",
+    ],
   });
+  child.stdout?.pipe(process.stdout, { end: false });
   if (options.fixtureProcessPath && child.pid) {
     await fs.writeFile(options.fixtureProcessPath, `${child.pid}\n`, "utf8");
   }
@@ -430,7 +434,9 @@ exec "$@"
       signal: NodeJS.Signals | null;
     }>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
+      child.once("close", (exitCode, exitSignal) =>
+        resolve({ code: exitCode, signal: exitSignal }),
+      );
     });
     const evidencePath = path.join(options.artifactBase, QA_EVIDENCE_FILENAME);
     const evidence = await fs
@@ -511,12 +517,6 @@ function sanitizeDiagnostic(text: string, roots: readonly string[]) {
 export async function runGatewaySshTunnels(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
-  if (process.env.OPENCLAW_TESTBOX !== "1") {
-    throw new Error("Gateway SSH tunnel QA requires OPENCLAW_TESTBOX=1 before privileged setup");
-  }
-  if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
-    return await runInSshNamespace(options);
-  }
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -529,13 +529,19 @@ export async function runGatewaySshTunnels(
       title: "Gateway SSH tunnel fallback",
       sourcePath: "qa/scenarios/runtime/gateway-ssh-tunnels.yaml",
       docsRefs: ["docs/gateway/remote.md", "docs/cli/gateway.md"],
-      codeRefs: [
-        SOURCE_PATH,
-        "src/infra/ssh-tunnel.ts",
-        "src/commands/gateway-status/probe-run.ts",
-      ],
+      codeRefs: [SOURCE_PATH, "src/infra/ssh-tunnel.ts", "src/commands/gateway-status.ts"],
     },
   });
+  if (process.env.OPENCLAW_TESTBOX !== "1") {
+    return await writer.write({
+      details: "Gateway SSH tunnel QA requires OPENCLAW_TESTBOX=1 before privileged setup",
+      durationMs: 1,
+      status: "blocked",
+    });
+  }
+  if (process.env[SSH_NAMESPACE_MARKER] !== "1") {
+    return await runInSshNamespace(options);
+  }
   const startedAt = Date.now();
   // openclaw-temp-dir: normal runs remove the fixture root; the SIGKILL test tracks its injected root
   const root =
@@ -555,7 +561,11 @@ export async function runGatewaySshTunnels(
       fixtureReadyPath
         ? async () => {
             await fs.writeFile(fixtureReadyPath, "ready\n", "utf8");
-            await new Promise<void>(() => {});
+            process.stdout.write(`${sshTrustPreparedMarker}\n`);
+            // The parent's open pipe keeps this fixture alive until its deliberate SIGKILL.
+            process.stdin.resume();
+            await finished(process.stdin);
+            throw new Error("Gateway SSH tunnel fixture lost its parent before termination");
           }
         : undefined,
     );
@@ -581,6 +591,7 @@ export async function runGatewaySshTunnels(
 
     const result = await withEnvAsync(
       {
+        ...snapshotGatewayStartupEnv(),
         HOME: homeDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -710,7 +721,7 @@ async function main(argv: readonly string[]) {
   const status = evidence.entries[0]?.result.status;
   process.stdout.write(`Gateway SSH tunnel evidence: ${QA_EVIDENCE_FILENAME}\n`);
   process.stdout.write(`Gateway SSH tunnel status: ${status}\n`);
-  return status === "pass" ? 0 : 1;
+  return status === "pass" || status === "blocked" ? 0 : 1;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

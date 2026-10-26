@@ -1,381 +1,352 @@
 // @vitest-environment node
-import { describe, expect, it, test } from "vitest";
-import type { SessionsListResult } from "../../api/types.ts";
+import { expect, it, test } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { resolveChatThinkingSelectState } from "../chat/thinking.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
 
-function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "store",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
+const key = "agent:main:main";
+const identity = {
+  modelProvider: "test-provider",
+  model: "reasoning-model",
+  agentRuntime: { id: "openclaw", source: "model" as const },
+};
+const thinkingLevels = ["max", "ultra"].map((id) => ({ id, label: id }));
+function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, kind: "direct", updatedAt: 1, ...overrides };
 }
 
-test("sessions.changed removes a label when the event carries null", () => {
-  const result: SessionsListResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [
-      {
-        key: "agent:main:main",
-        kind: "global",
-        updatedAt: 1,
-        label: "Named session",
-        displayName: "Named session",
-      },
-    ],
-  };
+const buildResult = (...sessions: SessionsListResult["sessions"]) => sessionsResult(sessions);
 
-  const reconciled = reconcileSessionChanged(result, {
-    sessionKey: "agent:main:main",
-    reason: "patch",
-    updatedAt: 2,
-    label: null,
-    displayName: null,
+it("replaces an unknown owner without donating another owner's presentation", () => {
+  const row = sessionRow({ key: "unknown", kind: "unknown", sessionId: "shared-session" });
+  const current = buildResult({
+    ...row,
+    agentId: "main",
+    derivedTitle: "Main title",
+    lastMessagePreview: "Main preview",
   });
-
-  expect(reconciled.applied).toBe(true);
-  expect(reconciled.result?.sessions[0]?.label).toBeUndefined();
-  expect(reconciled.result?.sessions[0]?.displayName).toBeUndefined();
+  const incoming = { ...row, agentId: "work", updatedAt: 2 };
+  expect(reconcileSessionHistory(current, incoming, undefined, { resultAgentId: "main" })).toBe(
+    current,
+  );
+  const next = reconcileSessionHistory(current, incoming, undefined, {
+    resultAgentId: "work",
+  });
+  expect(next?.sessions).toEqual([incoming]);
 });
 
-test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
-  const key = "agent:main:main";
-  const result = buildResult([
+it.each([
+  { name: "keeps an empty roster's own inherited thinking", agentId: "main" },
+  { name: "accepts the same agent's updated defaults", agentId: "work" },
+])("$name", ({ agentId }) => {
+  const defaults: SessionsListResult["defaults"] = {
+    ...identity,
+    contextTokens: 128_000,
+    thinkingDefault: "low",
+    thinkingLevels: ["Low", "High"].map((label) => ({ id: label.toLowerCase(), label })),
+  };
+  const current = { ...buildResult(), defaults };
+  const workDefaults = { ...defaults, thinkingDefault: "high" };
+  const next = reconcileSessionHistory(
+    current,
     {
-      key,
+      ...identity,
+      key: "global",
+      agentId: "work",
       kind: "global",
-      updatedAt: 1,
-      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+      sessionId: "work-session",
+      updatedAt: 10,
     },
-  ]);
-  result.creators = [{ id: "profile-ada", label: "Ada" }];
+    workDefaults,
+    { resultAgentId: agentId, selectedGlobalAgentId: "work" },
+  );
+
+  const ownAgent = agentId === "work";
+  expect(
+    resolveChatThinkingSelectState({ catalog: [], sessionKey: "global", sessionsResult: next })
+      .inherited,
+  ).toEqual({
+    value: ownAgent ? "high" : "low",
+    displayLabel: ownAgent ? "Inherited: High" : "Inherited: Low",
+  });
+  expect(next?.defaults).toEqual(ownAgent ? workDefaults : defaults);
+  expect(next?.sessions.map((row) => row.sessionId)).toEqual(ownAgent ? ["work-session"] : []);
+});
+
+test("enrichment survives omitted fields but not explicit transcript clearing receipts", () => {
+  const initial = buildResult(
+    sessionRow({
+      sessionId: "same-session",
+      derivedTitle: "Task",
+      lastMessagePreview: "Last message",
+      lastAssistantMessage: { text: "Assistant reply", timestamp: 1 },
+    }),
+  );
+  const event = {
+    sessionKey: key,
+    agentId: "main",
+    reason: "transcript",
+    session: sessionRow({ sessionId: "same-session", updatedAt: 2 }),
+  };
+  const omitted = reconcileSessionChanged(initial, event).result;
+  expect(omitted?.sessions[0]?.lastAssistantMessage).toEqual({
+    text: "Assistant reply",
+    timestamp: 1,
+  });
+  const cleared = reconcileSessionChanged(omitted, {
+    ...event,
+    session: {
+      ...event.session,
+      updatedAt: 3,
+      derivedTitle: null,
+      lastMessagePreview: null,
+      lastAssistantMessage: null,
+    },
+  }).result;
+  expect(cleared?.sessions[0]?.derivedTitle).toBeUndefined();
+  expect(cleared?.sessions[0]?.lastMessagePreview).toBeUndefined();
+  expect(cleared?.sessions[0]?.lastAssistantMessage).toBeUndefined();
+});
+
+test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
+  const result = buildResult(sessionRow());
+  const payload = {
+    sessionKey: key,
+    reason: "patch",
+    catalogChanged: true,
+    ts: 2,
+    updatedAt: 2,
+    label: "Renamed",
+  };
+
+  const first = reconcileSessionChanged(result, payload);
+  expect(first).toMatchObject({
+    applied: true,
+    result: { ts: 2, sessions: [{ label: "Renamed" }] },
+  });
+  expect(first.result).not.toBe(result);
+  expect(first.result?.sessions[0]).not.toHaveProperty("catalogChanged");
+
+  const second = reconcileSessionChanged(first.result ?? null, payload);
+  expect(second.result).toBe(first.result);
+});
+
+test("sessions.changed deletes every nested null tombstone, not a hand-kept list", () => {
+  const fields = {
+    toolOverrides: { profile: "coding" },
+    contextBudgetStatus: contextBudgetStatusFixture(),
+    agentStatus: { state: "needs_attention" },
+    observerDigest: { headline: "Waiting" },
+    controlOwnerSessionKey: "agent:main:owner",
+    restartRecoveryStatus: "pending",
+    goal: "ship it",
+  };
+  const tombstones = Object.fromEntries(Object.keys(fields).map((field) => [field, null]));
+  const result = buildResult(sessionRow({ ...fields, modelOverrideSource: "user" } as never));
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
-    reason: "reset",
-    updatedAt: 2,
-    createdActor: { type: "human", id: "profile-bob", label: "Bob" },
-  });
+    reason: "patch",
+    session: sessionRow({ updatedAt: 2, ...tombstones, modelOverrideSource: null }),
+  } as never);
 
-  expect(reconciled.result?.sessions[0]?.createdActor?.id).toBe("profile-bob");
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.applied).toBe(true);
+  const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
+  for (const field of Object.keys(fields)) {
+    expect(row?.[field], field).toBeUndefined();
+  }
+  // Unlike optional fields, null pin provenance confirms inheritance.
+  expect(row).toMatchObject({ updatedAt: 2, modelOverrideSource: null });
 });
 
-test("sessions.changed preserves the creator facet when ownership is unchanged", () => {
-  const key = "agent:main:main";
+test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
   const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
-  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdActor }]);
-  result.creators = [{ id: createdActor.id, label: createdActor.label }];
+  const result = buildResult(
+    sessionRow({ kind: "global", createdActor, owner: { actor: createdActor } }),
+  );
+  result.owners = [createdActor];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
     reason: "send",
     updatedAt: 2,
     createdActor,
+    owner: { actor: createdActor },
   });
 
-  expect(reconciled.result?.creators).toEqual([{ id: createdActor.id, label: createdActor.label }]);
+  expect(reconciled.result?.owners).toEqual([createdActor]);
 });
 
-describe("reconcileSessionChanged", () => {
-  it("drops a cleared icon from the merged row", () => {
-    const key = "agent:main:main";
-    const result = buildResult([
-      { key, kind: "global", updatedAt: 1, sessionId: "s1", icon: "name:spark" },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
+it.each(["raw global", "main delete", "main update", "explicit global"])(
+  "keeps event ownership scoped for %s",
+  (mode) => {
+    const global = mode.includes("global");
+    const agentId = global ? "research" : "main";
+    const activity = {
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: [global ? "ops-run" : "main-run"],
+    };
+    const result = buildResult(
+      sessionRow({
+        key: global ? "global" : "main",
+        kind: global ? "global" : "direct",
+        status: "done",
+        ...(global
+          ? {
+              owner: { actor: { type: "agent", id: "research", label: "Research" } },
+              model: "research-model",
+            }
+          : {}),
+      }),
+    );
+    const payload =
+      mode === "main delete"
+        ? { sessionKey: "main", reason: "delete", ts: 2 }
+        : {
+            sessionKey: global ? "global" : "main",
+            updatedAt: 2,
+            ...activity,
+            ...(global
+              ? {
+                  reason: "updated",
+                  owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+                  model: "ops-model",
+                }
+              : {}),
+            ...(mode === "explicit global" ? { agentId } : {}),
+          };
+    const changed = reconcileSessionChanged(result, payload, {
+      resultAgentId: agentId,
+      selectedGlobalAgentId: agentId,
+    });
+    const applied = mode !== "raw global" && mode !== "main delete";
+    expect(changed.applied).toBe(applied);
+    if (!applied) {
+      expect(changed.result).toBe(result);
+      if (global) {
+        expect(changed.row).toBeUndefined();
+      }
+    } else {
+      expect(changed.row).toMatchObject(
+        global
+          ? {
+              owner: { actor: { id: "ops" } },
+              model: "ops-model",
+              status: "running",
+              activeRunIds: ["ops-run"],
+            }
+          : { key: "main", status: "running", hasActiveRun: true, activeRunIds: ["main-run"] },
+      );
+      if (!global) {
+        expect(changed.row).not.toHaveProperty("agentId");
+      }
+    }
+  },
+);
+
+it.each([
+  ["configured Off", "off", undefined, ["off", "medium"]],
+  ["explicit Off", "medium", "off", ["off", "medium"]],
+  ["an empty profile", undefined, undefined, []],
+] as const)(
+  "preserves %s when history omits thinking metadata",
+  (_name, thinkingDefault, thinkingLevel, levels) => {
+    const row = sessionRow({
+      ...identity,
+      sessionId: "s1",
+      thinkingLevel,
+    });
+    const metadata = {
+      ...(thinkingDefault === undefined ? {} : { thinkingDefault }),
+      thinkingLevels: levels.map((id) => ({ id, label: id })),
+      thinkingOptions: [...levels],
+    };
+    const current = {
+      ...buildResult({ ...row, ...metadata }),
+      defaults: { ...identity, ...metadata, contextTokens: null },
+    };
+    const next = reconcileSessionHistory(
+      current,
+      { ...row, updatedAt: 2 },
+      { ...identity, contextTokens: null },
+    );
+
+    const thinking = resolveChatThinkingSelectState({
+      catalog: [],
+      sessionKey: row.key,
+      sessionsResult: next,
+    });
+    expect(thinking.options.map((option) => option.value)).toEqual(levels);
+    expect(next?.sessions[0]).toMatchObject(metadata);
+    expect(next?.defaults).toMatchObject(metadata);
+    expect(next?.sessions[0]?.thinkingDefault).toBe(thinkingDefault);
+    expect(next?.defaults.thinkingDefault).toBe(thinkingDefault);
+    expect(next?.sessions[0]?.thinkingLevel).toBe(thinkingLevel);
+    expect(thinking.selection).toMatchObject({
+      source: thinkingLevel === undefined ? "default" : "override",
+      value: thinkingLevel ?? thinkingDefault ?? "",
+    });
+  },
+);
+
+it("does not let stale chat history overwrite a newer runtime switch", () => {
+  const current = buildResult(
+    sessionRow({
       kind: "global",
-      updatedAt: 2,
-      sessionId: "s1",
-      icon: null,
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.icon).toBeUndefined();
-  });
-
-  it("drops a cleared category from the merged row", () => {
-    const key = "agent:main:discord:channel:1";
-    const result = buildResult([
-      { key, kind: "group", updatedAt: 1, sessionId: "s1", category: "Research" },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "group",
-      updatedAt: 2,
-      sessionId: "s1",
-      category: null,
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.category).toBeUndefined();
-  });
-
-  it("applies an updated category to the merged row", () => {
-    const key = "agent:main:discord:channel:1";
-    const result = buildResult([{ key, kind: "group", updatedAt: 1, sessionId: "s1" }]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "group",
-      updatedAt: 2,
-      sessionId: "s1",
-      category: "Research",
-    });
-    expect(next.applied).toBe(true);
-    expect(next.row?.category).toBe("Research");
-  });
-
-  it("replaces thinking metadata when the same model changes runtime", () => {
-    const key = "agent:main:main";
-    const result = buildResult([
-      {
-        key,
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "openclaw", source: "model" },
-        thinkingLevels: [
-          { id: "max", label: "max" },
-          { id: "ultra", label: "ultra" },
-        ],
-        thinkingOptions: ["max", "ultra"],
-      },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "global",
-      updatedAt: 2,
+      updatedAt: 3,
       sessionId: "s1",
       modelProvider: "openai",
       model: "gpt-5.6-luna",
       agentRuntime: { id: "codex", source: "session-key" },
       thinkingLevels: [{ id: "max", label: "max" }],
-      thinkingOptions: ["max"],
-    });
+    }),
+  );
 
-    expect(next.row?.agentRuntime?.id).toBe("codex");
-    expect(next.row?.thinkingLevels).toEqual([{ id: "max", label: "max" }]);
-    expect(next.row?.thinkingOptions).toEqual(["max"]);
-  });
-
-  it("drops stale picker metadata when a runtime-change event omits catalog fields", () => {
-    const key = "agent:main:main";
-    const result = buildResult([
-      {
-        key,
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "openclaw", source: "model" },
-        thinkingLevels: [
-          { id: "max", label: "max" },
-          { id: "ultra", label: "ultra" },
-        ],
-        thinkingOptions: ["max", "ultra"],
-        thinkingDefault: "medium",
-      },
-    ]);
-
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "global",
+  const next = reconcileSessionHistory(
+    current,
+    {
+      ...current.sessions[0]!,
       updatedAt: 2,
-      sessionId: "s1",
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: { id: "codex", source: "session-key" },
-    });
+      agentRuntime: { id: "openclaw", source: "session-key" },
+      thinkingLevels,
+    },
+    undefined,
+  );
 
-    expect(next.row?.agentRuntime?.id).toBe("codex");
-    expect(next.row?.thinkingLevels).toBeUndefined();
-    expect(next.row?.thinkingOptions).toBeUndefined();
-    expect(next.row?.thinkingDefault).toBeUndefined();
-  });
+  expect(next).toBe(current);
+});
 
-  it("does not let stale chat history overwrite a newer runtime switch", () => {
-    const key = "agent:main:main";
-    const current = buildResult([
-      {
-        key,
-        kind: "global",
-        updatedAt: 3,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "codex", source: "session-key" },
-        thinkingLevels: [{ id: "max", label: "max" }],
-      },
-    ]);
-
-    const next = reconcileSessionHistory(
-      current,
-      {
-        key,
-        kind: "global",
-        updatedAt: 2,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "openclaw", source: "session-key" },
-        thinkingLevels: [
-          { id: "max", label: "max" },
-          { id: "ultra", label: "ultra" },
-        ],
-      },
-      undefined,
-    );
-
-    expect(next).toBe(current);
-  });
-
-  it("replaces same-model defaults when their runtime changes", () => {
-    const key = "agent:main:main";
-    const result: SessionsListResult = {
-      ...buildResult([{ key, kind: "global", updatedAt: 1, sessionId: "s1" }]),
-      defaults: {
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        contextTokens: null,
-        agentRuntime: { id: "openclaw", source: "model" },
-        thinkingLevels: [
-          { id: "max", label: "max" },
-          { id: "ultra", label: "ultra" },
-        ],
-      },
-    };
-
-    const next = reconcileSessionHistory(
-      result,
-      { key, kind: "global", updatedAt: 1, sessionId: "s1" },
-      {
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        contextTokens: null,
-        agentRuntime: { id: "codex", source: "model" },
-        thinkingLevels: [{ id: "max", label: "max" }],
-      },
-    );
-
-    expect(next?.defaults.agentRuntime?.id).toBe("codex");
-    expect(next?.defaults.thinkingLevels).toEqual([{ id: "max", label: "max" }]);
-  });
-
-  it("preserves catalog-backed options when an event omits picker metadata", () => {
-    const key = "agent:main:main";
-    const thinkingLevels = [
-      { id: "max", label: "max" },
-      { id: "ultra", label: "ultra" },
-    ];
-    const result = buildResult([
-      {
-        key,
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntime: { id: "codex", source: "model" },
-        thinkingLevels,
-        thinkingOptions: ["max", "ultra"],
-      },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
+it.each([false, true])("reconciles thinking metadata (clear override: %s)", (clear) => {
+  const result = buildResult(
+    sessionRow({
       kind: "global",
-      updatedAt: 2,
       sessionId: "s1",
-      thinkingLevel: "ultra",
-      agentRuntime: { id: "codex", source: "model" },
-    });
-
-    expect(next.row?.thinkingLevel).toBe("ultra");
+      ...(clear
+        ? { thinkingLevel: "ultra" }
+        : {
+            modelProvider: "openai",
+            model: "gpt-5.6-sol",
+            agentRuntime: { id: "codex", source: "model" as const },
+            thinkingLevels,
+            thinkingOptions: ["max", "ultra"],
+          }),
+    }),
+  );
+  const next = reconcileSessionChanged(result, {
+    sessionKey: key,
+    key,
+    kind: "global",
+    updatedAt: 2,
+    sessionId: "s1",
+    thinkingLevel: clear ? null : "ultra",
+    ...(clear ? {} : { agentRuntime: { id: "codex", source: "model" } }),
+  });
+  expect(next.row?.thinkingLevel).toBe(clear ? undefined : "ultra");
+  if (!clear) {
     expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
     expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
-  });
-
-  it("clears a thinking override when the event carries null", () => {
-    const key = "agent:main:main";
-    const result = buildResult([
-      {
-        key,
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        thinkingLevel: "ultra",
-      },
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "global",
-      updatedAt: 2,
-      sessionId: "s1",
-      thinkingLevel: null,
-    });
-
-    expect(next.row?.thinkingLevel).toBeUndefined();
-  });
-
-  it("keeps archive-state changes in an all-status result", () => {
-    const key = "agent:main:thread";
-    const result = buildResult([{ key, kind: "direct", updatedAt: 1, sessionId: "s1" }]);
-
-    const next = reconcileSessionHistory(
-      result,
-      { key, kind: "direct", updatedAt: 2, sessionId: "s1", archived: true },
-      undefined,
-      { archivedFilter: "all" },
-    );
-
-    expect(next?.sessions).toEqual([
-      expect.objectContaining({ key, archived: true, updatedAt: 2 }),
-    ]);
-  });
-
-  it("clears archive attribution when an unarchive event arrives", () => {
-    const key = "agent:main:thread";
-    const result = buildResult([
-      {
-        key,
-        kind: "direct",
-        updatedAt: 1,
-        sessionId: "s1",
-        archived: true,
-        archivedAt: 1,
-        archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
-      },
-    ]);
-
-    const next = reconcileSessionChanged(
-      result,
-      {
-        sessionKey: key,
-        key,
-        kind: "direct",
-        updatedAt: 2,
-        sessionId: "s1",
-        archived: false,
-        archivedAt: null,
-        archivedBy: null,
-      },
-      { archivedFilter: "all" },
-    );
-
-    expect(next.row?.archivedBy).toBeUndefined();
-    expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
-  });
+  }
 });

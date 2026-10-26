@@ -1,64 +1,141 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
+  mergeSessionEntry,
   resolveSessionResetPolicy,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
+import * as transcriptReader from "../../config/sessions/session-transcript-anchor-read.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 
-function buildPatch(touchInteraction: boolean, opts?: { requestLabel?: string; label?: string }) {
-  const now = 1_000;
-  const entry: SessionEntry = {
-    sessionId: "session",
-    updatedAt: now,
-    lifecycleRunId: "completed-run",
-    status: "failed",
-    agentStatus: { note: "Need a password", attention: "key", expiresAt: now + 60_000 },
-    ...(opts?.label ? { label: opts.label } : {}),
-  };
+beforeEach(() => {
+  const read = transcriptReader.readSessionTranscriptAnchorsAsync;
+  vi.spyOn(transcriptReader, "readSessionTranscriptAnchorsAsync").mockImplementation((...args) =>
+    args[1].includeMetadata
+      ? Promise.resolve({
+          anchors: [],
+          metadata: { present: true, observedAt: null, updatedAt: null },
+        })
+      : read(...args),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
+
+type PatchInput = Partial<Parameters<typeof buildAgentSessionPatch>[0]>;
+function buildCreationPatch(opts: PatchInput) {
   return buildAgentSessionPatch({
-    freshEntry: entry,
-    initialEntry: entry,
-    ...(opts?.requestLabel ? { requestLabel: opts.requestLabel } : {}),
+    freshEntry: opts.freshEntry,
+    initialEntry: opts.freshEntry,
     cfg: {},
     sessionAgentId: "main",
-    canonicalSessionKey: "agent:main:main",
-    storePath: "/tmp/openclaw-agent-status-test.json",
+    canonicalSessionKey: "agent:main:incident-42",
+    storePath: "/tmp/openclaw-explicit-session-name-test.json",
     normalizedSpawned: {},
     requestDeliveryHint: undefined,
-    expectedExistingSessionId: entry.sessionId,
+    expectedExistingSessionId: opts.freshEntry?.sessionId,
     hasRestoredCronContinuation: false,
     resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
-    now,
-    isSystemGatewayRun: true,
+    now: 1_000,
+    isSystemGatewayRun: false,
     visibleRequest: true,
     fallbackSessionId: "fallback",
-    touchInteraction,
-    failedSessionTranscriptMissing: () => false,
-  }).patch;
+    touchInteraction: false,
+    ...opts,
+  });
 }
 
-describe("agent session patch", () => {
-  it("clears agent status at the next human interaction boundary", () => {
-    const patch = buildPatch(true);
-    expect(Object.hasOwn(patch, "agentStatus")).toBe(true);
-    expect(patch.agentStatus).toBeUndefined();
-    expect(Object.hasOwn(patch, "lifecycleRunId")).toBe(true);
-    expect(patch.lifecycleRunId).toBeUndefined();
-  });
+const failedEntry: SessionEntry = {
+  sessionId: "session",
+  updatedAt: 1_000,
+  status: "failed",
+  lifecycleRunId: "completed-run",
+  lastRunId: "completed-run",
+  agentStatus: { note: "Need a password", attention: "key", expiresAt: 61_000 },
+};
 
-  it("does not clear agent status for lifecycle-only patches", () => {
-    expect(Object.hasOwn(buildPatch(false), "agentStatus")).toBe(false);
+it("clears agent status at the next human interaction boundary", async () => {
+  const { patch } = await buildCreationPatch({
+    freshEntry: failedEntry,
+    touchInteraction: true,
+    isSystemGatewayRun: true,
+    canonicalSessionKey: "agent:main:main",
   });
+  expect(patch).toMatchObject({ agentStatus: undefined, lifecycleRunId: undefined });
+  expect(patch.lastRunId).toBeUndefined();
+});
 
-  // Subagent spawn labels rely on run-start persistence; there is no post-run
-  // label patch anymore (see subagent-announce.ts).
-  it("persists the request label at run start", () => {
-    expect(buildPatch(false, { requestLabel: "Fix flaky auth test" }).label).toBe(
-      "Fix flaky auth test",
-    );
-  });
+it("preserves a recovery reservation while reusing a session with a failed outcome", async () => {
+  const entry: SessionEntry = {
+    sessionId: "recovering-session",
+    updatedAt: 1_000,
+    status: "failed",
+    abortedLastRun: true,
+    restartRecoveryDeliveryRunId: "recovery-run",
+    mainRestartRecovery: {
+      cycleId: "recovery-cycle",
+      revision: 2,
+      chargedAttempts: 1,
+      reservation: { runId: "recovery-run", lifecycleGeneration: "generation-1", attempt: 1 },
+    },
+  };
+  const { patch } = await buildCreationPatch({ freshEntry: entry, isSystemGatewayRun: true });
+  const merged = mergeSessionEntry(entry, patch);
 
-  it("keeps the existing label when the request has none", () => {
-    expect(buildPatch(false, { label: "Existing" }).label).toBe("Existing");
+  expect(
+    transitionMainSessionRecovery(merged, {
+      kind: "validate_recovery",
+      lifecycleGeneration: "generation-1",
+      runId: "recovery-run",
+      sessionId: entry.sessionId,
+    }),
+  ).toEqual({ kind: "recovery_validated" });
+  expect(merged).toMatchObject({
+    status: "failed",
+    abortedLastRun: true,
+    mainRestartRecovery: entry.mainRestartRecovery,
   });
 });
+
+it.each([
+  { label: undefined, requestLabel: "Fix flaky auth test", expected: "Fix flaky auth test" },
+  { label: "Existing", requestLabel: undefined, expected: "Existing" },
+])("preserves the run-start label $expected", async ({ label, requestLabel, expected }) => {
+  const { patch } = await buildCreationPatch({
+    freshEntry: { ...failedEntry, label },
+    requestLabel,
+    isSystemGatewayRun: true,
+    canonicalSessionKey: "agent:main:main",
+  });
+  expect(patch.label).toBe(expected);
+  if (label) {
+    expect(Object.hasOwn(patch, "agentStatus")).toBe(false);
+  }
+});
+
+it.each([
+  {
+    name: "existing session",
+    key: "agent:main:incident-42",
+    displayName: "Existing",
+    entry: { sessionId: "existing", updatedAt: 1_000, displayName: "Existing" },
+  },
+  { name: "explicit key", key: "agent:main:incident-42", displayName: "incident-42" },
+  { name: "defaulted main", key: "agent:main:main", defaulted: true },
+  { name: "invisible run", key: "agent:main:internal:probe", invisible: true },
+  { name: "subagent", key: "agent:main:subagent:worker-1" },
+  { name: "ACP", key: "agent:main:acp:thread-1" },
+])(
+  "derives the display name for $name",
+  async ({ key, displayName, defaulted, invisible, entry }) => {
+    const { patch } = await buildCreationPatch({
+      canonicalSessionKey: displayName && !entry ? `${key} ` : key,
+      explicitSessionKey: defaulted ? undefined : key,
+      visibleRequest: !invisible,
+      freshEntry: entry,
+    });
+    expect(mergeSessionEntry(entry, patch).displayName).toBe(displayName);
+    if (!displayName) {
+      expect(patch).not.toHaveProperty("displayName");
+    }
+  },
+);

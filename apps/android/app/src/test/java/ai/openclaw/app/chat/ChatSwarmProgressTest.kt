@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -97,7 +98,7 @@ class ChatSwarmProgressTest {
       buildChatSwarmGroups(
         sessions =
           listOf(
-            session("queued", null, active, subagentRunState = "active"),
+            session("queued", "queued", active, hasActiveRun = true),
             session("running", "running", active),
             session("done", "done", active),
             session("failed", "timeout", active),
@@ -120,6 +121,25 @@ class ChatSwarmProgressTest {
         .dots
         .map(ChatSwarmDot::status),
     )
+  }
+
+  @Test
+  fun phasesUseTheLowestObservedRankAndPreserveWorkerOrderWithinEachPhase() {
+    val groupId = "swarm:agent:main:parent:phases"
+    val rows =
+      listOf(
+        session("first-build", "running", groupId).copy(swarmPhase = "Build", swarmPhaseRank = 4),
+        session("research", "done", groupId).copy(swarmPhase = "Research", swarmPhaseRank = 2),
+        session("second-build", "queued", groupId).copy(swarmPhase = "Build", swarmPhaseRank = 1),
+        session("review", "queued", groupId).copy(swarmPhase = "Review", swarmPhaseRank = 2),
+        session("unassigned", "queued", groupId),
+      )
+
+    val phases = buildChatSwarmGroups(rows) { it == "agent:main:parent" }.single().phases
+
+    assertEquals(listOf("Build", "Research", "Review", null), phases.map(ChatSwarmPhase::title))
+    assertEquals(listOf("Build", "Research", "Review", ""), phases.map(ChatSwarmPhase::key))
+    assertEquals(listOf("first-build", "second-build"), phases.first().dots.map(ChatSwarmDot::key))
   }
 
   @Test
@@ -226,11 +246,32 @@ class ChatSwarmProgressTest {
     assertTrue(phase.dots.any { it.status == ChatSwarmDotStatus.Running })
   }
 
+  @Test
+  fun swarmSnapshotRequiresEnabledMatchingSessionOwner() {
+    val group =
+      ChatSwarmGroup(
+        groupId = "private-group",
+        label = "private-label",
+        running = 1,
+        done = 0,
+        failed = 0,
+        narrator = null,
+        phases = emptyList(),
+      )
+    val snapshot = ChatSwarmSnapshot(sessionKey = "agent:main:a", enabled = true, groups = listOf(group))
+
+    assertTrue(snapshot.isAvailableFor("agent:main:a"))
+    assertFalse(snapshot.isAvailableFor("agent:main:b"))
+    assertFalse(snapshot.copy(enabled = false).isAvailableFor("agent:main:a"))
+    assertFalse(snapshot.copy(sessionKey = null).isAvailableFor("agent:main:a"))
+  }
+
   private fun session(
     key: String,
     status: String?,
     groupId: String,
     subagentRunState: String? = null,
+    hasActiveRun: Boolean? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -240,5 +281,6 @@ class ChatSwarmProgressTest {
       subagentRunState = subagentRunState,
       swarmGroupId = groupId,
       status = status,
+      hasActiveRun = hasActiveRun,
     )
 }

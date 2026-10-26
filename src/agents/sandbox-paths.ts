@@ -7,34 +7,36 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
-import { promisify } from "node:util";
-import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
+  assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolveAbsolutePathForRead,
+  resolvePathPrefixSync,
   safeFileURLToPath,
-} from "../infra/local-file-access.js";
-import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+  type PathAliasPolicy,
+} from "@openclaw/fs-safe/advanced";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
+import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
-const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
 const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
 
-function normalizeUnicodeSpaces(str: string): string {
-  return str.replace(UNICODE_SPACES, " ");
+/** Consume one file-reference prefix while preserving remaining literal @ bytes. */
+export function normalizeFileReferencePrefix(filePath: string): string {
+  const referenced = filePath.startsWith("@") ? filePath.slice(1) : filePath;
+  // Paths cross multiple tool/guard/bridge resolvers. Escape the remaining
+  // prefix so later resolution cannot reinterpret the selected filename.
+  return referenced.startsWith("@") ? `./${referenced}` : referenced;
 }
 
-function normalizeAtPrefix(filePath: string): string {
-  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
-}
-
-function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+export function normalizeSandboxInputPath(filePath: string): string {
+  const normalized = normalizeFileReferencePrefix(filePath);
   if (normalized === "~") {
     return os.homedir();
   }
@@ -49,8 +51,8 @@ function hostPathLooksAbsolute(expanded: string): boolean {
   return path.isAbsolute(expanded) || isWindowsDrivePath(expanded);
 }
 
-function resolveToCwd(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath);
+export function resolveSandboxInputPath(filePath: string, cwd: string): string {
+  const expanded = normalizeSandboxInputPath(filePath);
   // Drive-letter paths first: on Unix path.isAbsolute is false for C:/...; on Windows we still normalize.
   if (isWindowsDrivePath(expanded)) {
     return path.win32.normalize(expanded);
@@ -61,10 +63,6 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
-export function resolveSandboxInputPath(filePath: string, cwd: string): string {
-  return resolveToCwd(filePath, cwd);
-}
-
 export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
   resolved: string;
   relative: string;
@@ -72,9 +70,6 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "") {
-    return { resolved, relative: "" };
-  }
   if (
     relative === ".." ||
     relative.startsWith("../") ||
@@ -82,107 +77,149 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     path.isAbsolute(relative) ||
     isWindowsDrivePath(relative)
   ) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`,
+    throw markHostRootEscape(
+      new Error(`Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`),
     );
   }
   return { resolved, relative };
 }
 
-const realpathNative = promisify(fs.realpath.native);
+const HOST_ROOT_ESCAPE = Symbol.for("openclaw.hostRootEscape");
 
-async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
-  let cursor = rawPath;
-  const missingSuffix: string[] = [];
-  while (true) {
-    try {
-      return path.resolve(await realpathNative(cursor), ...missingSuffix);
-    } catch (error) {
-      if (!isNotFoundPathError(error)) {
-        throw error;
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        throw error;
-      }
-      missingSuffix.unshift(path.basename(cursor));
-      cursor = parent;
+/**
+ * Tag a rejection as coming from the host workspace root. Sandbox filesystem bridges
+ * enforce their own mount boundary and leave their rejections untagged, so callers can
+ * tell the two apart without reading the message text.
+ */
+export function markHostRootEscape<E>(error: E): E {
+  try {
+    if (error instanceof Error && Object.isExtensible(error)) {
+      Object.defineProperty(error, HOST_ROOT_ESCAPE, { value: true });
     }
+  } catch {
+    // Diagnostic annotation must never replace the original rejection.
+  }
+  return error;
+}
+
+/** True when a rejection came from the host workspace root rather than a container mount. */
+export function isHostRootEscapeError(error: unknown): error is Error {
+  try {
+    return error instanceof Error && Reflect.get(error, HOST_ROOT_ESCAPE) === true;
+  } catch {
+    return false;
   }
 }
 
-async function assertRawParentWithinRoot(params: {
-  filePath: string;
-  cwd: string;
-  root: string;
-}): Promise<{ rootCanonical: string; targetCanonical: string }> {
-  // Win32 resolves reparse-point/.. paths lexically, so it has no equivalent escape.
-  // Avoid adding another realpath to this hot path on Windows, where it is expensive.
-  if (process.platform === "win32") {
-    return {
-      rootCanonical: path.resolve(params.root),
-      targetCanonical: resolveSandboxInputPath(params.filePath, params.cwd),
-    };
+function rethrowHostPathAliasError(error: unknown): never {
+  // Only the direct host validator calls this. fs-safe reports escape kinds as
+  // messages; bridge errors never enter this classifier. Other alias and I/O
+  // failures must keep their own explanation.
+  if (isPathBoundaryEscapeError(error, "sandbox root")) {
+    throw markHostRootEscape(error);
   }
-  const expanded = expandPath(params.filePath);
-  if (isWindowsDrivePath(expanded)) {
-    return {
-      rootCanonical: path.resolve(params.root),
-      targetCanonical: path.win32.normalize(expanded),
-    };
+  throw error;
+}
+
+/** Classify fs-safe's untyped escape errors only at a known validator boundary. */
+export function isPathBoundaryEscapeError(
+  error: unknown,
+  boundary: "sandbox root" | "workspace root",
+): error is Error {
+  return (
+    error instanceof Error &&
+    /^(?:Path escapes|Path resolves outside|Symlink escapes) (sandbox root|workspace root) \(/.exec(
+      error.message,
+    )?.[1] === boundary
+  );
+}
+
+async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
+  try {
+    // Kernel traversal checks search permissions even inside symlink targets;
+    // native realpath alone can erase a denied directory followed by '..'.
+    if (fs.existsSync(rawPath)) {
+      return (await resolveAbsolutePathForRead(rawPath, { symlinks: "follow" })).canonicalPath;
+    }
+  } catch {
+    // The prefix resolver owns missing paths and the original error contract.
   }
-  // Do not use path.resolve here: it would erase the symlink-sensitive `..` before
-  // native realpath can traverse the raw parent chain. The final component stays
-  // unresolved so assertNoPathAliasEscape retains final-link policy ownership.
-  const rawAbsolute = path.isAbsolute(expanded) ? expanded : `${params.cwd}${path.sep}${expanded}`;
-  const hasTrailingSeparator = rawAbsolute.endsWith(path.sep);
-  const rawParent = hasTrailingSeparator ? rawAbsolute : path.dirname(rawAbsolute);
-  const finalSegment = hasTrailingSeparator ? "." : path.basename(rawAbsolute);
-  const rootResolved = path.resolve(params.root);
-  const [rootCanonical, parentCanonical] = await Promise.all([
-    resolveRawPathViaExistingAncestor(rootResolved),
-    resolveRawPathViaExistingAncestor(rawParent),
-  ]);
-  const targetCanonical =
-    path.resolve(rawAbsolute) === rootResolved
-      ? await resolveRawPathViaExistingAncestor(rawAbsolute)
-      : path.resolve(parentCanonical, finalSegment);
-  if (targetCanonical !== rootCanonical && !isPathInside(rootCanonical, targetCanonical)) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
-    );
-  }
-  return { rootCanonical, targetCanonical };
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
+  return path.resolve(existingPath, ...unresolvedSegments);
 }
 
 export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
+  allowLinkedWorktrees?: boolean;
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
-  const resolved = resolveSandboxPath(params);
+  const root = params.allowLinkedWorktrees
+    ? resolveHostWorkspaceRoot(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
+    : path.resolve(params.root);
+  const cwd = path.resolve(params.cwd);
+  let resolutionCwd = cwd;
+  let filePath = params.filePath;
+  const expanded = normalizeSandboxInputPath(filePath);
+  if (process.platform !== "win32" && !isWindowsDrivePath(expanded)) {
+    const rootPromise = resolveRawPathViaExistingAncestor(root);
+    const [rootCanonical, canonicalCwd] = await Promise.all([
+      rootPromise,
+      cwd === root ? rootPromise : resolveRawPathViaExistingAncestor(cwd),
+    ]);
+    resolutionCwd = path.resolve(root, path.relative(rootCanonical, canonicalCwd));
+    // Only caller-owned prefixes may change spelling. Canonicalizing the input
+    // itself would admit unrelated external links pointing into the workspace.
+    const prefixes: [string, string][] = [
+      [cwd, resolutionCwd],
+      [root, root],
+      [rootCanonical, root],
+    ];
+    if (path.isAbsolute(expanded) && isPathInside(rootCanonical, canonicalCwd)) {
+      const rootAlias = path.resolve(cwd, path.relative(canonicalCwd, rootCanonical));
+      // Cwd may itself link deeper into the root; its ancestors are trusted only
+      // after proving the candidate has the recorded root's canonical identity.
+      if (
+        !prefixes.some(([prefix]) => prefix === rootAlias) &&
+        (await resolveRawPathViaExistingAncestor(rootAlias)) === rootCanonical
+      ) {
+        prefixes.push([rootAlias, root]);
+      }
+    }
+    for (const [prefix, replacement] of prefixes.toSorted((a, b) => b[0].length - a[0].length)) {
+      if (expanded === prefix) {
+        filePath = replacement;
+        break;
+      }
+      const prefixWithSeparator = prefix.endsWith(path.sep) ? prefix : `${prefix}${path.sep}`;
+      if (expanded.startsWith(prefixWithSeparator)) {
+        // Preserve raw '..' and trailing separators for the path guards below.
+        const separator = replacement.endsWith(path.sep) ? "" : path.sep;
+        filePath = `${replacement}${separator}${expanded.slice(prefixWithSeparator.length)}`;
+        break;
+      }
+    }
+  }
+  const resolved = resolveSandboxPath({ filePath, cwd: resolutionCwd, root });
+  const rawPath = normalizeSandboxInputPath(filePath);
   const policy: PathAliasPolicy = {
     allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
     allowFinalHardlinkForUnlink: params.allowFinalHardlinkForUnlink,
   };
-  await assertNoPathAliasEscape({
-    absolutePath: resolved.resolved,
-    rootPath: params.root,
-    boundaryLabel: "sandbox root",
-    policy,
-  });
-  // The alias guard owns its specific symlink/hardlink errors; this closes the raw
-  // symlink-then-`..` gap that lexical normalization hides from that guard.
-  const rawTarget = await assertRawParentWithinRoot(params);
-  if (path.resolve(rawTarget.targetCanonical) !== path.resolve(resolved.resolved)) {
+  // Callers retain the lexical result; both it and POSIX symlink/.. traversal must be safe.
+  const paths = new Set([resolved.resolved]);
+  if (process.platform !== "win32") {
+    paths.add(path.isAbsolute(rawPath) ? rawPath : `${resolutionCwd}${path.sep}${rawPath}`);
+  }
+  for (const absolutePath of paths) {
     await assertNoPathAliasEscape({
-      absolutePath: rawTarget.targetCanonical,
-      rootPath: rawTarget.rootCanonical,
+      absolutePath,
+      rootPath: root,
       boundaryLabel: "sandbox root",
       policy,
-    });
+    }).catch(rethrowHostPathAliasError);
   }
   return resolved;
 }
@@ -194,10 +231,10 @@ export function assertMediaNotDataUrl(media: string): void {
   }
 }
 
-function isManagedMediaPathUnderRoot(candidate: string): boolean {
-  const expanded = expandPath(candidate);
+export function resolveManagedMediaRoot(candidate: string): string | undefined {
+  const expanded = normalizeSandboxInputPath(candidate);
   if (!hostPathLooksAbsolute(expanded)) {
-    return false;
+    return undefined;
   }
   const mediaRoot = path.join(resolveConfigDir(), "media");
   const resolvedMediaRoot = path.resolve(mediaRoot);
@@ -206,25 +243,28 @@ function isManagedMediaPathUnderRoot(candidate: string): boolean {
     resolvedExpanded === resolvedMediaRoot ||
     !isPathInside(resolvedMediaRoot, resolvedExpanded)
   ) {
-    return false;
+    return undefined;
   }
   const relative = path.relative(resolvedMediaRoot, resolvedExpanded);
   const firstSegment = relative.split(path.sep)[0] ?? "";
-  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
+  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-")
+    ? path.join(resolvedMediaRoot, firstSegment)
+    : undefined;
 }
 
 export async function resolveAllowedManagedMediaPath(
   candidate: string,
 ): Promise<string | undefined> {
-  const expanded = expandPath(candidate);
-  if (!isManagedMediaPathUnderRoot(expanded)) {
+  const expanded = normalizeSandboxInputPath(candidate);
+  if (!resolveManagedMediaRoot(expanded)) {
     return undefined;
   }
   const resolved = path.resolve(expanded);
   const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
-  await assertNoManagedMediaAliasEscape({
-    filePath: resolved,
-    managedMediaRoot,
+  await assertNoPathAliasEscape({
+    absolutePath: resolved,
+    rootPath: managedMediaRoot,
+    boundaryLabel: "managed media root",
   });
   return resolved;
 }
@@ -232,6 +272,7 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): Promise<string> {
   const raw = params.media.trim();
   if (!raw) {
@@ -240,11 +281,16 @@ export async function resolveSandboxedMediaSource(params: {
   if (isPassThroughRemoteMediaSource(raw)) {
     return raw;
   }
+  const normalizedContainerWorkdir = path.posix.normalize(
+    (params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\\/g, "/"),
+  );
+  const containerWorkdir = normalizedContainerWorkdir.replace(/\/+$/, "") || "/";
   let candidate = raw;
-  if (/^file:\/\//i.test(candidate)) {
+  if (/^file:/i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -261,6 +307,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -285,28 +332,13 @@ export async function resolveSandboxedMediaSource(params: {
   return sandboxResult.resolved;
 }
 
-async function assertNoManagedMediaAliasEscape(params: {
-  filePath: string;
-  managedMediaRoot: string;
-}): Promise<void> {
-  await assertNoPathAliasEscape({
-    absolutePath: params.filePath,
-    rootPath: params.managedMediaRoot,
-    boundaryLabel: "managed media root",
-  });
-}
-
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.fileUrl);
-  } catch {
-    return undefined;
-  }
-  if (parsed.protocol !== "file:") {
+  const parsed = URL.parse(params.fileUrl);
+  if (parsed?.protocol !== "file:") {
     return undefined;
   }
   const host = parsed.hostname.trim().toLowerCase();
@@ -316,42 +348,35 @@ function mapContainerWorkspaceFileUrl(params: {
   if (hasEncodedFileUrlSeparator(parsed.pathname)) {
     return undefined;
   }
-  // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
-  // Windows hosts can still accept file:///workspace/... media references.
+  // Backend workdirs are container paths; parse the URL directly so Windows hosts
+  // can still map Linux-style file URLs to their actual sandbox workspace.
   let normalizedPathname: string;
   try {
     normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
   } catch {
     return undefined;
   }
-  if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
-  ) {
-    return undefined;
-  }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  if (normalized === params.containerWorkdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = params.containerWorkdir === "/" ? "/" : `${params.containerWorkdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }
   const rel = normalized.slice(prefix.length);
-  if (!rel) {
-    return path.resolve(params.sandboxRoot);
-  }
   return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
 }
 
@@ -359,7 +384,7 @@ async function resolveAllowedTmpMediaPath(params: {
   candidate: string;
   sandboxRoot: string;
 }): Promise<string | undefined> {
-  const candidateIsAbsolute = hostPathLooksAbsolute(expandPath(params.candidate));
+  const candidateIsAbsolute = hostPathLooksAbsolute(normalizeSandboxInputPath(params.candidate));
   if (!candidateIsAbsolute) {
     return undefined;
   }
@@ -368,17 +393,10 @@ async function resolveAllowedTmpMediaPath(params: {
   if (!isPathInside(openClawTmpDir, resolved)) {
     return undefined;
   }
-  await assertNoTmpAliasEscape({ filePath: resolved, tmpRoot: openClawTmpDir });
-  return resolved;
-}
-
-async function assertNoTmpAliasEscape(params: {
-  filePath: string;
-  tmpRoot: string;
-}): Promise<void> {
   await assertNoPathAliasEscape({
-    absolutePath: params.filePath,
-    rootPath: params.tmpRoot,
+    absolutePath: resolved,
+    rootPath: openClawTmpDir,
     boundaryLabel: "tmp root",
   });
+  return resolved;
 }

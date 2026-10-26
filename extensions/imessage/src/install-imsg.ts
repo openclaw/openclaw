@@ -1,23 +1,66 @@
-// iMessage plugin module implements imsg CLI install behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 
-type IMessageInstallResult = {
-  ok: boolean;
-  cliPath?: string;
-  version?: string;
-  error?: string;
-};
+const IMESSAGE_BREW_FORMULA = "steipete/tap/imsg";
+
+async function resolveBrewManagedIMessageCliPath(
+  brewExe: string,
+  cliPath: string,
+): Promise<string | null> {
+  try {
+    const formulae = await runPluginCommandWithTimeout({
+      argv: [brewExe, "list", "--formula", "--full-name"],
+      timeoutMs: 10_000,
+    });
+    const installed = formulae.stdout
+      .split(/\r?\n/u)
+      .some((formula) => formula.trim() === IMESSAGE_BREW_FORMULA);
+    if (formulae.code !== 0 || !installed) {
+      return null;
+    }
+
+    let resolvedCliPath = cliPath;
+    if (!path.isAbsolute(resolvedCliPath)) {
+      const resolved = await runPluginCommandWithTimeout({
+        argv: ["/usr/bin/env", "which", resolvedCliPath],
+        timeoutMs: 10_000,
+      });
+      resolvedCliPath =
+        resolved.code === 0 ? (resolved.stdout.split(/\r?\n/u)[0]?.trim() ?? "") : "";
+    }
+    if (!resolvedCliPath) {
+      return null;
+    }
+
+    const cellar = await runPluginCommandWithTimeout({
+      argv: [brewExe, "--cellar"],
+      timeoutMs: 10_000,
+    });
+    if (cellar.code !== 0 || !cellar.stdout.trim()) {
+      return null;
+    }
+    const [realCliPath, realFormulaPath] = await Promise.all([
+      fs.realpath(resolvedCliPath),
+      fs.realpath(path.join(cellar.stdout.trim(), "imsg")),
+    ]);
+    // An installed receipt alone does not own a shadowing PATH wrapper. Only
+    // upgrade when the executable itself resolves into this formula's Cellar rack.
+    return isPathStrictlyInside(realFormulaPath, realCliPath) ? resolvedCliPath : null;
+  } catch {
+    return null;
+  }
+}
 
 async function resolveBrewIMessageCliPath(brewExe: string): Promise<string | null> {
   try {
     const result = await runPluginCommandWithTimeout({
-      argv: [brewExe, "--prefix", "imsg"],
+      argv: [brewExe, "--prefix"],
       timeoutMs: 10_000,
     });
     if (result.code !== 0 || !result.stdout.trim()) {
@@ -33,8 +76,12 @@ async function resolveBrewIMessageCliPath(brewExe: string): Promise<string | nul
 
 export async function installIMessageCli(
   runtime: RuntimeEnv,
-  opts?: { upgrade?: boolean },
-): Promise<IMessageInstallResult> {
+  opts?: { upgrade?: boolean; cliPath?: string },
+): Promise<{
+  ok: boolean;
+  cliPath?: string;
+  error?: string;
+}> {
   if (process.platform !== "darwin") {
     return {
       ok: false,
@@ -52,27 +99,26 @@ export async function installIMessageCli(
 
   runtime.log(`${opts?.upgrade ? "Updating" : "Installing"} imsg via Homebrew (${brewExe})...`);
   if (opts?.upgrade) {
-    const update = await runPluginCommandWithTimeout({
-      argv: [brewExe, "update"],
-      timeoutMs: 5 * 60_000,
-    });
-    if (update.code !== 0) {
-      return {
-        ok: false,
-        error: `brew update failed (exit ${update.code}): ${truncateUtf16Safe(update.stderr.trim(), 200)}`,
-      };
+    const managedCliPath = await resolveBrewManagedIMessageCliPath(brewExe, opts.cliPath ?? "imsg");
+    if (!managedCliPath) {
+      runtime.log("Keeping the detected imsg binary because Homebrew does not manage it.");
+      return { ok: true };
     }
   }
-  const command = opts?.upgrade ? ["upgrade", "imsg"] : ["install", "steipete/tap/imsg"];
-  const result = await runPluginCommandWithTimeout({
-    argv: [brewExe, ...command],
-    timeoutMs: 15 * 60_000,
-  });
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error: `brew ${command.join(" ")} failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
-    };
+  const commands = opts?.upgrade
+    ? [["update"], ["upgrade", "imsg"]]
+    : [["install", "steipete/tap/imsg"]];
+  for (const command of commands) {
+    const result = await runPluginCommandWithTimeout({
+      argv: [brewExe, ...command],
+      timeoutMs: (command[0] === "update" ? 5 : 15) * 60_000,
+    });
+    if (result.code !== 0) {
+      return {
+        ok: false,
+        error: `brew ${command.join(" ")} failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
+      };
+    }
   }
 
   const cliPath = await resolveBrewIMessageCliPath(brewExe);
@@ -83,16 +129,5 @@ export async function installIMessageCli(
     };
   }
 
-  let version: string | undefined;
-  try {
-    const versionResult = await runPluginCommandWithTimeout({
-      argv: [cliPath, "--version"],
-      timeoutMs: 10_000,
-    });
-    version = versionResult.stdout.trim() || undefined;
-  } catch {
-    // Version output is helpful but not required for setup.
-  }
-
-  return { ok: true, cliPath, version };
+  return { ok: true, cliPath };
 }

@@ -15,7 +15,8 @@ scenario:
     - The runtime continues from settled tool results without replaying the write.
     - Telegram receives the exact recovery marker.
   codeRefs:
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
     - src/agents/embedded-agent-runner/run/terminal-resolution.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
@@ -25,7 +26,7 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       promptSnippet: Empty response after write recovery QA check
-      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
       expectedMarker: TELEGRAM-EMPTY-WRITE-RECOVERED-OK
 
 flow:
@@ -46,7 +47,7 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then answer exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK."
+            text: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`."
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

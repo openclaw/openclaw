@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-window-chrome-drag"
+description = "Enables the window_chrome_drag command without any pre-configured scope."
+commands.allow = ["window_chrome_drag"]
+
+[[permission]]
+identifier = "deny-window-chrome-drag"
+description = "Denies the window_chrome_drag command without any pre-configured scope."
+commands.deny = ["window_chrome_drag"]

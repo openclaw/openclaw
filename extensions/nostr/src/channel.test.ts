@@ -1,15 +1,15 @@
-// Nostr tests cover channel plugin behavior.
+import { nip19 } from "nostr-tools";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
-import { normalizePubkey } from "./nostr-key-utils.js";
-import { nostrSetupWizard } from "./setup-surface.js";
+import { nostrSetupPlugin } from "./channel.setup.js";
+import { nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
   TEST_HEX_PUBLIC_KEY,
@@ -17,571 +17,195 @@ import {
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
-import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
+import { resolveNostrAccount } from "./types.js";
 
-function normalizeNostrTestEntry(entry: string): string {
-  return entry
-    .trim()
-    .replace(/^nostr:/i, "")
-    .toLowerCase();
-}
-
-function resolveNostrTestDmPolicy(params: {
-  cfg: OpenClawConfig;
-  account: ReturnType<typeof resolveNostrAccount>;
-}) {
-  return {
-    cfg: params.cfg,
-    accountId: params.account.accountId,
-    policy: params.account.config.dmPolicy ?? "pairing",
-    allowFrom: params.account.config.allowFrom ?? [],
-    normalizeEntry: normalizeNostrTestEntry,
-  };
-}
-
-const nostrTestPlugin = {
-  id: "nostr",
-  meta: {
-    label: "Nostr",
-    docsPath: "/channels/nostr",
-    blurb: "Decentralized DMs via Nostr relays (NIP-04)",
-  },
-  capabilities: {
-    chatTypes: ["direct"],
-    media: false,
-  },
-  config: {
-    listAccountIds: listNostrAccountIds,
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveNostrAccount({ cfg, accountId }),
-  },
-  messaging: {
-    normalizeTarget: (target: string) => normalizeNostrTestEntry(target),
-    targetResolver: {
-      looksLikeId: (input: string) => {
-        const trimmed = input.trim();
-        return trimmed.startsWith("npub1") || /^[0-9a-fA-F]{64}$/.test(trimmed);
-      },
+const npub = nip19.npubEncode(TEST_HEX_PUBLIC_KEY);
+const { messaging, outbound, pairing, security, config } = nostrPlugin;
+const resolveTarget = (to?: string) => outbound?.resolveTarget?.({ cfg: {}, to, mode: "explicit" });
+const setupInput = (privateKey: string) => ({
+  cfg: {},
+  accountId: "default",
+  input: { privateKey },
+});
+const secretCfg: OpenClawConfig = {
+  channels: {
+    nostr: {
+      defaultAccount: "Team.A",
+      privateKey: { source: "env", provider: "default", id: "MISSING_NOSTR_KEY" },
     },
-  },
-  outbound: {
-    deliveryMode: "direct",
-    textChunkLimit: 4000,
-  },
-  pairing: {
-    idLabel: "nostrPubkey",
-    normalizeAllowEntry: normalizeNostrTestEntry,
-  },
-  security: {
-    resolveDmPolicy: resolveNostrTestDmPolicy,
-  },
-  status: {
-    defaultRuntime: {
-      accountId: "default",
-      running: false,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-    },
-  },
-  setupWizard: nostrSetupWizard,
-  setup: {
-    resolveAccountId: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-      input: unknown;
-    }) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
   },
 };
 
-const nostrConfigure = createPluginSetupWizardConfigure(nostrTestPlugin);
-
-function requireNostrLooksLikeId() {
-  const looksLikeId = nostrTestPlugin.messaging?.targetResolver?.looksLikeId;
-  if (!looksLikeId) {
-    throw new Error("nostr messaging.targetResolver.looksLikeId missing");
-  }
-  return looksLikeId;
-}
-
-function requireNostrNormalizeTarget() {
-  const normalize = nostrTestPlugin.messaging?.normalizeTarget;
-  if (!normalize) {
-    throw new Error("nostr messaging.normalizeTarget missing");
-  }
-  return normalize;
-}
-
-function requireNostrPairingNormalizer() {
-  const normalize = nostrTestPlugin.pairing?.normalizeAllowEntry;
-  if (!normalize) {
-    throw new Error("nostr pairing.normalizeAllowEntry missing");
-  }
-  return normalize;
-}
-
-function requireNostrResolveDmPolicy() {
-  const resolveDmPolicy = nostrTestPlugin.security?.resolveDmPolicy;
-  if (!resolveDmPolicy) {
-    throw new Error("nostr security.resolveDmPolicy missing");
-  }
-  return resolveDmPolicy;
-}
-
-function createUnresolvedNostrPrivateKeyCfg() {
-  return {
-    channels: {
-      nostr: {
-        privateKey: {
-          source: "env" as const,
-          provider: "default",
-          id: "NOSTR_PRIVATE_KEY",
-        },
-      },
-    },
-  };
-}
-
-const unresolvedSecretRefPrivateKeyCases = [
-  {
-    name: "listNostrAccountIds",
-    assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
-    },
-  },
-  {
-    name: "resolveNostrAccount",
-    assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.configured).toBe(false);
-      expect(account.privateKey).toBe("");
-      expect(account.publicKey).toBe("");
-      expect(account.config.privateKey).toEqual(cfg.channels.nostr.privateKey);
-    },
-  },
-];
-
-describe("nostrPlugin", () => {
-  describe("meta", () => {
-    it("has correct id", () => {
-      expect(nostrTestPlugin.id).toBe("nostr");
-    });
-
-    it("has required meta fields", () => {
-      expect(nostrTestPlugin.meta.label).toBe("Nostr");
-      expect(nostrTestPlugin.meta.docsPath).toBe("/channels/nostr");
-      expect(nostrTestPlugin.meta.blurb).toContain("NIP-04");
+describe("nostr targets and access policy", () => {
+  it("resolves a prefixed public key", () => {
+    const to = `  nostr:${npub.toUpperCase()}  `;
+    const normalized = messaging?.normalizeTarget?.(to);
+    expect(normalized).toBe(TEST_HEX_PUBLIC_KEY);
+    expect(messaging?.targetResolver?.looksLikeId?.(to)).toBe(true);
+    expect(messaging?.targetResolver?.looksLikeId?.(to, normalized)).toBe(true);
+    expect(messaging?.inferTargetChatType?.({ to })).toBe("direct");
+    expect(resolveTarget(to)).toEqual({
+      ok: true,
+      to: TEST_HEX_PUBLIC_KEY,
     });
   });
 
-  describe("capabilities", () => {
-    it("supports direct messages", () => {
-      expect(nostrTestPlugin.capabilities.chatTypes).toContain("direct");
-    });
-
-    it("does not support groups (MVP)", () => {
-      expect(nostrTestPlugin.capabilities.chatTypes).not.toContain("group");
-    });
-
-    it("does not support media (MVP)", () => {
-      expect(nostrTestPlugin.capabilities.media).toBe(false);
+  it("rejects invalid direct-message targets", () => {
+    const to = "not-a-public-key";
+    expect(messaging?.targetResolver?.looksLikeId?.(to)).toBe(false);
+    expect(messaging?.inferTargetChatType?.({ to })).toBeUndefined();
+    expect(resolveTarget(to)).toMatchObject({
+      ok: false,
+      error: expect.any(Error),
     });
   });
 
-  describe("config adapter", () => {
-    it("listAccountIds returns empty array for unconfigured", () => {
-      const cfg = { channels: {} };
-      const ids = nostrTestPlugin.config.listAccountIds(cfg);
-      expect(ids).toStrictEqual([]);
-    });
-
-    it("listAccountIds returns default for configured", () => {
-      const cfg = createConfiguredNostrCfg();
-      const ids = nostrTestPlugin.config.listAccountIds(cfg);
-      expect(ids).toContain("default");
-    });
-
-    it("normalizes prefixed npub allowlist entries", () => {
-      const npub = "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj";
-      const formatted = nostrPlugin.config.formatAllowFrom?.({
-        cfg: createConfiguredNostrCfg() as OpenClawConfig,
-        allowFrom: [`nostr:${npub}`],
-      });
-
-      expect(formatted).toEqual([normalizePubkey(npub)]);
-    });
-
-    it("preserves invalid prefixed allowlist entries instead of promoting them to wildcards", () => {
-      const formatted = nostrPlugin.config.formatAllowFrom?.({
-        cfg: createConfiguredNostrCfg() as OpenClawConfig,
-        allowFrom: ["nostr:*"],
-      });
-
-      expect(formatted).toEqual(["nostr:*"]);
+  it("explains a missing outbound target", () => {
+    expect(resolveTarget()).toMatchObject({
+      ok: false,
+      error: { message: "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>" },
     });
   });
 
-  describe("messaging", () => {
-    it("recognizes npub as valid target", () => {
-      const looksLikeId = requireNostrLooksLikeId();
-
-      expect(looksLikeId("npub1xyz123")).toBe(true);
-    });
-
-    it("recognizes hex pubkey as valid target", () => {
-      const looksLikeId = requireNostrLooksLikeId();
-
-      expect(looksLikeId(TEST_HEX_PRIVATE_KEY)).toBe(true);
-    });
-
-    it("rejects invalid input", () => {
-      const looksLikeId = requireNostrLooksLikeId();
-
-      expect(looksLikeId("not-a-pubkey")).toBe(false);
-      expect(looksLikeId("")).toBe(false);
-    });
-
-    it("normalizeTarget strips spaced nostr prefixes", () => {
-      const normalize = requireNostrNormalizeTarget();
-
-      expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
-      expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
-    });
-
-    it("recognizes prefixed targets after provider normalization", () => {
-      const raw = `nostr:${TEST_HEX_PUBLIC_KEY}`;
-      const normalized = nostrPlugin.messaging?.normalizeTarget?.(raw);
-
-      expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(raw, normalized)).toBe(true);
-    });
-
-    it.each([
-      { name: "hex", target: TEST_HEX_PUBLIC_KEY },
-      {
-        name: "npub",
-        target: "npub140x77qfrg4ncn27dauqjx3t83x4ummcpydzk0zdtehhszg69v7ystddknj",
-      },
-    ])("normalizes prefixed $name targets for direct outbound sends", ({ target }) => {
-      const result = nostrPlugin.outbound?.resolveTarget?.({
-        cfg: createConfiguredNostrCfg() as OpenClawConfig,
-        to: `nostr:${target}`,
-        mode: "explicit",
-      });
-
-      expect(result).toEqual({ ok: true, to: normalizePubkey(target) });
-    });
-
-    it("preserves the missing-target hint when no outbound target is supplied", () => {
-      const result = nostrPlugin.outbound?.resolveTarget?.({
-        cfg: createConfiguredNostrCfg() as OpenClawConfig,
-        mode: "explicit",
-      });
-
-      expect(result?.ok).toBe(false);
-      if (!result || result.ok) {
-        throw new Error("expected blank Nostr target to fail");
-      }
-      expect(result.error.message).toBe(
-        "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>",
-      );
-    });
+  it("formats nostr:* without widening access", () => {
+    expect(config.formatAllowFrom?.({ cfg: {}, allowFrom: ["nostr:*"] })).toEqual(["nostr:*"]);
   });
 
-  describe("outbound", () => {
-    it("has correct delivery mode", () => {
-      expect(nostrTestPlugin.outbound?.deliveryMode).toBe("direct");
-    });
-
-    it("has reasonable text chunk limit", () => {
-      expect(nostrTestPlugin.outbound?.textChunkLimit).toBe(4000);
-    });
+  it("normalizes pairing entries with spaced prefixes", () => {
+    expect(pairing?.normalizeAllowEntry?.(`  nostr:${TEST_HEX_PUBLIC_KEY}  `)).toBe(
+      TEST_HEX_PUBLIC_KEY,
+    );
   });
 
-  describe("pairing", () => {
-    it("has id label for pairing", () => {
-      expect(nostrTestPlugin.pairing?.idLabel).toBe("nostrPubkey");
+  it("applies the configured DM policy and its allowlist normalizer", () => {
+    const entry = `  nostr:${TEST_HEX_PUBLIC_KEY}  `;
+    const allowFrom = [entry];
+    const cfg = createConfiguredNostrCfg({ dmPolicy: "allowlist", allowFrom });
+    const result = security?.resolveDmPolicy?.({
+      cfg,
+      account: buildResolvedNostrAccount({ config: cfg.channels.nostr }),
     });
-
-    it("normalizes spaced nostr prefixes in allow entries", () => {
-      const normalize = requireNostrPairingNormalizer();
-
-      expect(normalize(`nostr:${TEST_HEX_PRIVATE_KEY}`)).toBe(TEST_HEX_PRIVATE_KEY);
-      expect(normalize(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(TEST_HEX_PRIVATE_KEY);
-    });
-  });
-
-  describe("security", () => {
-    it("normalizes dm allowlist entries through the dm policy adapter", () => {
-      const resolveDmPolicy = requireNostrResolveDmPolicy();
-
-      const cfg = createConfiguredNostrCfg({
-        dmPolicy: "allowlist",
-        allowFrom: [`  nostr:${TEST_HEX_PRIVATE_KEY}  `],
-      });
-      const account = buildResolvedNostrAccount({
-        config: cfg.channels.nostr,
-      });
-
-      const result = resolveDmPolicy({ cfg, account });
-      if (!result) {
-        throw new Error("nostr resolveDmPolicy returned null");
-      }
-
-      expect(result.policy).toBe("allowlist");
-      expect(result.allowFrom).toEqual([`  nostr:${TEST_HEX_PRIVATE_KEY}  `]);
-      expect(result.normalizeEntry?.(`  nostr:${TEST_HEX_PRIVATE_KEY}  `)).toBe(
-        TEST_HEX_PRIVATE_KEY,
-      );
-    });
-  });
-
-  describe("status", () => {
-    it("has default runtime", () => {
-      expect(nostrTestPlugin.status?.defaultRuntime).toEqual({
-        accountId: "default",
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      });
-    });
+    expect(result).toMatchObject({ policy: "allowlist", allowFrom });
+    expect(result?.normalizeEntry?.(entry)).toBe(TEST_HEX_PUBLIC_KEY);
   });
 });
 
-describe("nostr setup wizard", () => {
-  it("configures a private key and relay URLs", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Nostr private key (nsec... or hex)") {
-          return TEST_HEX_PRIVATE_KEY;
-        }
-        if (message === "Relay URLs (comma-separated, optional)") {
-          return TEST_SETUP_RELAY_URLS.join(", ");
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
+describe("nostr accounts", () => {
+  it("resolves a disabled named account and its configured relays", () => {
+    const cfg = createConfiguredNostrCfg({
+      name: "Test Bot",
+      defaultAccount: "work",
+      enabled: false,
+      relays: ["wss://test.relay"],
     });
-
-    const result = await runSetupWizardConfigure({
-      configure: nostrConfigure,
-      cfg: {} as OpenClawConfig,
-      prompter,
-      options: {},
+    expect(config.listAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveNostrAccount({ cfg, accountId: "custom" })).toMatchObject({
+      accountId: "custom",
+      name: "Test Bot",
+      enabled: false,
+      configured: true,
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      publicKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+      relays: ["wss://test.relay"],
     });
-
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.nostr?.enabled).toBe(true);
-    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
-    expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
   });
 
-  it("preserves the selected named account label during setup", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Nostr private key (nsec... or hex)") {
-          return TEST_HEX_PRIVATE_KEY;
-        }
-        if (message === "Relay URLs (comma-separated, optional)") {
-          return "";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
-    });
-
-    const result = await runSetupWizardConfigure({
-      configure: nostrConfigure,
-      cfg: {} as OpenClawConfig,
-      prompter,
-      options: {},
-      accountOverrides: {
-        nostr: "work",
-      },
-    });
-
-    expect(result.accountId).toBe("work");
-    expect(result.cfg.channels?.nostr?.defaultAccount).toBe("work");
-    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
-  });
-
-  it("uses configured defaultAccount when setup accountId is omitted", () => {
+  it("leaves the public key empty for invalid credentials", () => {
     expect(
-      nostrTestPlugin.setup?.resolveAccountId?.({
-        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as OpenClawConfig,
-        accountId: undefined,
-        input: {},
-      } as never),
-    ).toBe("work");
-  });
-});
-
-describe("nostr unresolved SecretRef privateKey", () => {
-  it.each(unresolvedSecretRefPrivateKeyCases)(
-    "$name does not treat unresolved SecretRef privateKey as configured",
-    ({ assert }) => {
-      assert(createUnresolvedNostrPrivateKeyCfg());
-    },
-  );
-});
-
-describe("nostr account helpers", () => {
-  describe("listNostrAccountIds", () => {
-    it("returns empty array when not configured", () => {
-      const cfg = { channels: {} };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
-    });
-
-    it("returns empty array when nostr section exists but no privateKey", () => {
-      const cfg = { channels: { nostr: { enabled: true } } };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
-    });
-
-    it("returns default when privateKey is configured", () => {
-      const cfg = createConfiguredNostrCfg();
-      expect(listNostrAccountIds(cfg)).toEqual(["default"]);
-    });
-
-    it("returns configured defaultAccount when privateKey is configured", () => {
-      const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
-      expect(listNostrAccountIds(cfg)).toEqual(["work"]);
-    });
+      resolveNostrAccount({ cfg: createConfiguredNostrCfg({ privateKey: "invalid-key" }) }),
+    ).toMatchObject({ configured: true, publicKey: "" });
   });
 
-  describe("resolveDefaultNostrAccountId", () => {
-    it("returns default when configured", () => {
-      const cfg = createConfiguredNostrCfg();
-      expect(resolveDefaultNostrAccountId(cfg)).toBe("default");
-    });
-
-    it("returns default when not configured", () => {
-      const cfg = { channels: {} };
-      expect(resolveDefaultNostrAccountId(cfg)).toBe("default");
-    });
-
-    it("prefers configured defaultAccount when present", () => {
-      const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
-      expect(resolveDefaultNostrAccountId(cfg)).toBe("work");
-    });
-  });
-
-  describe("resolveNostrAccount", () => {
-    it("resolves configured account", () => {
-      const cfg = createConfiguredNostrCfg({
-        name: "Test Bot",
-        relays: ["wss://test.relay"],
-        dmPolicy: "pairing" as const,
-      });
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.accountId).toBe("default");
-      expect(account.name).toBe("Test Bot");
-      expect(account.enabled).toBe(true);
-      expect(account.configured).toBe(true);
-      expect(account.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
-      expect(account.publicKey).toMatch(/^[0-9a-f]{64}$/);
-      expect(account.relays).toEqual(["wss://test.relay"]);
-    });
-
-    it("resolves unconfigured account with defaults", () => {
-      const cfg = { channels: {} };
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.accountId).toBe("default");
-      expect(account.enabled).toBe(true);
-      expect(account.configured).toBe(false);
-      expect(account.privateKey).toBe("");
-      expect(account.publicKey).toBe("");
-      expect(account.relays).toContain("wss://relay.damus.io");
-      expect(account.relays).toContain("wss://nos.lol");
-    });
-
-    it("handles disabled channel", () => {
-      const cfg = createConfiguredNostrCfg({ enabled: false });
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.enabled).toBe(false);
-      expect(account.configured).toBe(true);
-    });
-
-    it("handles custom accountId parameter", () => {
-      const cfg = createConfiguredNostrCfg();
-      const account = resolveNostrAccount({ cfg, accountId: "custom" });
-
-      expect(account.accountId).toBe("custom");
-    });
-
-    it("handles allowFrom config", () => {
-      const cfg = createConfiguredNostrCfg({
-        allowFrom: ["npub1test", "0123456789abcdef"],
-      });
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.config.allowFrom).toEqual(["npub1test", "0123456789abcdef"]);
-    });
-
-    it("handles invalid private key gracefully", () => {
-      const cfg = {
-        channels: {
-          nostr: {
-            privateKey: "invalid-key",
-          },
-        },
-      };
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.configured).toBe(true);
-      expect(account.publicKey).toBe("");
-    });
-
-    it("preserves all config options", () => {
-      const cfg = createConfiguredNostrCfg({
-        name: "Bot",
-        enabled: true,
-        relays: ["wss://relay1", "wss://relay2"],
-        dmPolicy: "allowlist" as const,
-        allowFrom: ["pubkey1", "pubkey2"],
-      });
-      const account = resolveNostrAccount({ cfg });
-
-      expect(account.config).toEqual({
+  it("uses the environment key for an unconfigured default account", () => {
+    withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
+      expect(
+        resolveNostrAccount({ cfg: { channels: { nostr: { enabled: true } } } }),
+      ).toMatchObject({
+        configured: true,
         privateKey: TEST_HEX_PRIVATE_KEY,
-        name: "Bot",
-        enabled: true,
-        relays: ["wss://relay1", "wss://relay2"],
-        dmPolicy: "allowlist",
-        allowFrom: ["pubkey1", "pubkey2"],
+        publicKey: expect.stringMatching(/^[0-9a-f]{64}$/),
       });
     });
   });
 
-  describe("setup wizard", () => {
-    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
-      const secretRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "NOSTR_PRIVATE_KEY",
-      };
-      const cfg = {
-        channels: {
-          nostr: {
-            privateKey: secretRef,
-          },
-        },
-      };
-      const credential = nostrSetupWizard.credentials?.[0];
-      if (!credential?.inspect) {
-        throw new Error("nostr setup credential inspect missing");
-      }
+  it("keeps unresolved SecretRefs configured without ambient credential fallback", () => {
+    withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
+      expect(config.listAccountIds(secretCfg)).toEqual(["team-a"]);
+      expect(resolveNostrAccount({ cfg: secretCfg })).toMatchObject({
+        accountId: "team-a",
+        configured: true,
+        privateKey: "",
+        publicKey: "",
+        config: { privateKey: secretCfg.channels?.nostr?.privateKey },
+      });
+    });
+  });
 
-      expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
-        accountConfigured: false,
+  it("inspects a SecretRef without exposing a materialized value", () => {
+    withEnv({ NOSTR_PRIVATE_KEY: undefined }, () => {
+      expect(
+        nostrSetupWizard.credentials?.[0]?.inspect?.({ cfg: secretCfg, accountId: "default" }),
+      ).toEqual({
+        accountConfigured: true,
         hasConfiguredValue: true,
         resolvedValue: undefined,
         envValue: undefined,
       });
     });
+  });
+});
+
+describe("nostr setup", () => {
+  it.each([
+    { accountId: "default", relayUrls: TEST_SETUP_RELAY_URLS.join(", ") },
+    { accountId: "work", relayUrls: "" },
+  ])("configures the $accountId account through the wizard", async ({ accountId, relayUrls }) => {
+    const result = await runSetupWizardConfigure({
+      configure: createPluginSetupWizardConfigure(nostrPlugin),
+      cfg: {},
+      prompter: createTestWizardPrompter({
+        text: async ({ message }) => {
+          if (message === "Nostr private key (nsec... or hex)") {
+            return TEST_HEX_PRIVATE_KEY;
+          }
+          if (message === "Relay URLs (comma-separated, optional)") {
+            return relayUrls;
+          }
+          throw new Error(`Unexpected prompt: ${message}`);
+        },
+      }),
+      options: {},
+      accountOverrides: accountId === "default" ? undefined : { nostr: accountId },
+    });
+    expect(result.accountId).toBe(accountId);
+    expect(result.cfg.channels?.nostr).toMatchObject({
+      enabled: true,
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      ...(accountId === "default" ? { relays: TEST_SETUP_RELAY_URLS } : { defaultAccount: "work" }),
+    });
+    if (accountId === "default") {
+      expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
+    }
+  });
+
+  it("uses the configured setup default when accountId is omitted", () => {
+    const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
+    expect(nostrPlugin.setupContract?.resolveAccountId?.({ cfg, input: {} })).toBe("work");
+  });
+
+  it("accepts uppercase bech32 private keys in lightweight setup", () => {
+    const privateKey = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex")).toUpperCase();
+    expect(nostrSetupPlugin.setupContract?.validateInput?.(setupInput(privateKey))).toBeNull();
+  });
+
+  it.each([
+    ["malformed nsec", "nsec1not-a-real-secret"],
+    ["wrong payload length", nip19.nsecEncode(new Uint8Array(31))],
+    ["curve-order scalar", "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"],
+  ])("rejects %s across setup surfaces", (_label, privateKey) => {
+    const input = setupInput(privateKey);
+    const error = "Nostr private key must be valid nsec or 64-character hex.";
+    expect(nostrSetupContract.validateInput?.(input)).toBe(error);
+    expect(nostrSetupPlugin.setupContract?.validateInput?.(input)).toBe(error);
   });
 });

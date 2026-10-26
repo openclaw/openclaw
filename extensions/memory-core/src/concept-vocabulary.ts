@@ -1,239 +1,220 @@
-// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MAX_CONCEPT_TAGS = 8;
 
 type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
-export type ConceptTagScriptCoverage = {
-  latinEntryCount: number;
-  cjkEntryCount: number;
-  mixedEntryCount: number;
-  otherEntryCount: number;
-};
+export type ConceptTagScriptCoverage = ReturnType<typeof summarizeConceptTagScriptCoverage>;
 
-const LANGUAGE_STOP_WORDS = {
-  shared: [
-    "about",
-    "after",
-    "agent",
-    "again",
-    "also",
-    "assistant",
-    "because",
-    "before",
-    "being",
-    "between",
-    "build",
-    "called",
-    "could",
-    "daily",
-    "default",
-    "deploy",
-    "during",
-    "every",
-    "file",
-    "files",
-    "from",
-    "have",
-    "into",
-    "just",
-    "line",
-    "lines",
-    "long",
-    "main",
-    "make",
-    "memory",
-    "month",
-    "more",
-    "most",
-    "move",
-    "much",
-    "next",
-    "note",
-    "notes",
-    "over",
-    "part",
-    "past",
-    "port",
-    "same",
-    "score",
-    "search",
-    "session",
-    "sessions",
-    "short",
-    "should",
-    "since",
-    "some",
-    "subagent",
-    "system",
-    "than",
-    "that",
-    "their",
-    "there",
-    "these",
-    "they",
-    "this",
-    "through",
-    "today",
-    "user",
-    "using",
-    "with",
-    "work",
-    "workspace",
-    "year",
-  ],
-  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
-  spanish: [
-    "al",
-    "con",
-    "como",
-    "de",
-    "del",
-    "el",
-    "en",
-    "es",
-    "la",
-    "las",
-    "los",
-    "para",
-    "por",
-    "que",
-    "se",
-    "sin",
-    "su",
-    "sus",
-    "una",
-    "uno",
-    "unos",
-    "unas",
-    "y",
-  ],
-  french: [
-    "au",
-    "aux",
-    "avec",
-    "dans",
-    "de",
-    "des",
-    "du",
-    "en",
-    "est",
-    "et",
-    "la",
-    "le",
-    "les",
-    "ou",
-    "pour",
-    "que",
-    "qui",
-    "sans",
-    "ses",
-    "son",
-    "sur",
-    "une",
-    "un",
-  ],
-  german: [
-    "auf",
-    "aus",
-    "bei",
-    "das",
-    "dem",
-    "den",
-    "der",
-    "des",
-    "die",
-    "ein",
-    "eine",
-    "einem",
-    "einen",
-    "einer",
-    "für",
-    "im",
-    "in",
-    "mit",
-    "nach",
-    "oder",
-    "ohne",
-    "über",
-    "und",
-    "von",
-    "zu",
-    "zum",
-    "zur",
-  ],
-  cjk: [
-    "が",
-    "から",
-    "する",
-    "して",
-    "した",
-    "で",
-    "と",
-    "に",
-    "の",
-    "は",
-    "へ",
-    "まで",
-    "も",
-    "や",
-    "を",
-    "与",
-    "为",
-    "了",
-    "及",
-    "和",
-    "在",
-    "将",
-    "或",
-    "把",
-    "是",
-    "用",
-    "的",
-    "과",
-    "는",
-    "도",
-    "로",
-    "를",
-    "에",
-    "에서",
-    "와",
-    "은",
-    "으로",
-    "을",
-    "이",
-    "하다",
-    "한",
-    "할",
-    "해",
-    "했다",
-  ],
-  pathNoise: [
-    "cjs",
-    "cpp",
-    "cts",
-    "jsx",
-    "json",
-    "md",
-    "mjs",
-    "mts",
-    "text",
-    "toml",
-    "ts",
-    "tsx",
-    "txt",
-    "yaml",
-    "yml",
-  ],
-} as const;
-
-const CONCEPT_STOP_WORDS = new Set(
-  Object.values(LANGUAGE_STOP_WORDS)
-    .flat()
-    .map((word) => normalizeLowercaseStringOrEmpty(word)),
-);
+const CONCEPT_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "agent",
+  "again",
+  "also",
+  "assistant",
+  "because",
+  "before",
+  "being",
+  "between",
+  "build",
+  "called",
+  "could",
+  "daily",
+  "default",
+  "deploy",
+  "during",
+  "every",
+  "file",
+  "files",
+  "from",
+  "have",
+  "into",
+  "just",
+  "line",
+  "lines",
+  "long",
+  "main",
+  "make",
+  "memory",
+  "month",
+  "more",
+  "most",
+  "move",
+  "much",
+  "next",
+  "note",
+  "notes",
+  "over",
+  "part",
+  "past",
+  "port",
+  "same",
+  "score",
+  "search",
+  "session",
+  "sessions",
+  "short",
+  "should",
+  "since",
+  "some",
+  "subagent",
+  "system",
+  "than",
+  "that",
+  "their",
+  "there",
+  "these",
+  "they",
+  "this",
+  "through",
+  "today",
+  "user",
+  "using",
+  "with",
+  "work",
+  "workspace",
+  "year",
+  "and",
+  "are",
+  "for",
+  "its",
+  "our",
+  "the",
+  "then",
+  "were",
+  "you",
+  "your",
+  "al",
+  "con",
+  "como",
+  "de",
+  "del",
+  "el",
+  "en",
+  "es",
+  "la",
+  "las",
+  "los",
+  "para",
+  "por",
+  "que",
+  "se",
+  "sin",
+  "su",
+  "sus",
+  "una",
+  "uno",
+  "unos",
+  "unas",
+  "y",
+  "au",
+  "aux",
+  "avec",
+  "dans",
+  "des",
+  "du",
+  "est",
+  "et",
+  "le",
+  "les",
+  "ou",
+  "pour",
+  "qui",
+  "sans",
+  "ses",
+  "son",
+  "sur",
+  "une",
+  "un",
+  "auf",
+  "aus",
+  "bei",
+  "das",
+  "dem",
+  "den",
+  "der",
+  "die",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "für",
+  "im",
+  "in",
+  "mit",
+  "nach",
+  "oder",
+  "ohne",
+  "über",
+  "und",
+  "von",
+  "zu",
+  "zum",
+  "zur",
+  "が",
+  "から",
+  "する",
+  "して",
+  "した",
+  "で",
+  "と",
+  "に",
+  "の",
+  "は",
+  "へ",
+  "まで",
+  "も",
+  "や",
+  "を",
+  "与",
+  "为",
+  "了",
+  "及",
+  "和",
+  "在",
+  "将",
+  "或",
+  "把",
+  "是",
+  "用",
+  "的",
+  "과",
+  "는",
+  "도",
+  "로",
+  "를",
+  "에",
+  "에서",
+  "와",
+  "은",
+  "으로",
+  "을",
+  "이",
+  "하다",
+  "한",
+  "할",
+  "해",
+  "했다",
+  "cjs",
+  "cpp",
+  "cts",
+  "jsx",
+  "json",
+  "md",
+  "mjs",
+  "mts",
+  "text",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "yaml",
+  "yml",
+]);
 
 const PROTECTED_GLOSSARY = [
   "backup",
@@ -247,7 +228,6 @@ const PROTECTED_GLOSSARY = [
   "kv",
   "network",
   "openai",
-  "qmd",
   "router",
   "s3",
   "vlan",
@@ -288,12 +268,7 @@ const HIRAGANA_RE = /\p{Script=Hiragana}/u;
 const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
-const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
-
-function containsLetterOrNumber(value: string): boolean {
-  return LETTER_OR_NUMBER_RE.test(value);
-}
+const DEFAULT_WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
 
 function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
@@ -330,27 +305,28 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
-function normalizeConceptToken(rawToken: string, fromGlossary = false): string | null {
+export function normalizeConceptToken(rawToken: string): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(
     rawToken
       .normalize("NFKC")
       .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
       .replaceAll("_", "-"),
   );
-  if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
+  if (!normalized || !LETTER_OR_NUMBER_RE.test(normalized) || normalized.length > 32) {
     return null;
   }
   if (
-    /^\d+$/.test(normalized) ||
-    /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
+    /^\p{N}+(?:[./-]\p{N}+)*$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
     return null;
   }
   const script = classifyConceptTagScript(normalized);
-  // Glossary entries are an explicit allowlist of short technical terms (e.g. "kv", "s3"); they
-  // bypass the per-script minimum length that would otherwise discard them.
-  if (!fromGlossary && normalized.length < minimumTokenLengthForScript(script)) {
+  // Recognize the glossary here so extraction and stored REM tags share the same short-token policy.
+  if (
+    normalized.length < minimumTokenLengthForScript(script) &&
+    !PROTECTED_GLOSSARY.includes(normalized)
+  ) {
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -368,96 +344,46 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
 // Precomputed so derive() does not reclassify on every call.
 const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
   entry,
-  wholeWord: entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
+  // Unicode boundaries must inspect code points, not half of an astral letter or number.
+  wholeWord:
+    entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry))
+      ? new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(entry)}(?![\\p{L}\\p{N}])`, "u")
+      : undefined,
 }));
-
-function isAlphanumericAt(source: string, index: number): boolean {
-  const ch = source[index];
-  return ch !== undefined && LETTER_OR_NUMBER_RE.test(ch);
-}
-
-// True when `entry` occurs as a delimiter-bounded token, not inside a longer word. Keeps short
-// glossary entries like "kv"/"s3" from firing inside "mkv"/"css3" once they bypass the length gate.
-function includesStandaloneTerm(source: string, entry: string): boolean {
-  let from = source.indexOf(entry);
-  while (from !== -1) {
-    if (!isAlphanumericAt(source, from - 1) && !isAlphanumericAt(source, from + entry.length)) {
-      return true;
-    }
-    from = source.indexOf(entry, from + 1);
-  }
-  return false;
-}
 
 function collectGlossaryMatches(source: string): string[] {
   const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
-  const matches: string[] = [];
-  for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
-    const present = wholeWord
-      ? includesStandaloneTerm(normalizedSource, entry)
-      : normalizedSource.includes(entry);
-    if (present) {
-      matches.push(entry);
-    }
-  }
-  return matches;
-}
-
-function collectCompoundTokens(source: string): string[] {
-  return source.match(COMPOUND_TOKEN_RE) ?? [];
+  return GLOSSARY_ENTRIES.filter(({ entry, wholeWord }) =>
+    wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry),
+  ).map(({ entry }) => entry);
 }
 
 function collectSegmentTokens(source: string): string[] {
-  if (DEFAULT_WORD_SEGMENTER) {
-    return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
-      part.isWordLike ? part.segment : "",
-    ).filter(Boolean);
-  }
-  return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
+    part.isWordLike ? part.segment : "",
+  ).filter(Boolean);
 }
 
-function pushNormalizedTag(
-  tags: string[],
-  rawToken: string,
-  limit: number,
-  fromGlossary = false,
-): void {
-  const normalized = normalizeConceptToken(rawToken, fromGlossary);
-  if (!normalized || tags.includes(normalized)) {
-    return;
-  }
-  tags.push(normalized);
-  if (tags.length > limit) {
-    tags.splice(limit);
-  }
-}
-
-export function deriveConceptTags(params: {
-  path: string;
-  snippet: string;
-  limit?: number;
-}): string[] {
+export function deriveConceptTags(params: { path: string; snippet: string }): string[] {
   // Recall annotations are control metadata; deriving tags from them can turn
   // project identities into promoted triggers instead of user-visible concepts.
   const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
   const source = `${path.basename(params.path)} ${visibleSnippet}`;
-  const limit = Number.isFinite(params.limit)
-    ? Math.max(0, Math.floor(params.limit as number))
-    : MAX_CONCEPT_TAGS;
-  if (limit === 0) {
-    return [];
-  }
 
   const tags: string[] = [];
-  const tokenSources: Array<{ tokens: string[]; fromGlossary: boolean }> = [
-    { tokens: collectGlossaryMatches(source), fromGlossary: true },
-    { tokens: collectCompoundTokens(source), fromGlossary: false },
-    { tokens: collectSegmentTokens(source), fromGlossary: false },
+  const tokenSources = [
+    collectGlossaryMatches(source),
+    source.match(COMPOUND_TOKEN_RE) ?? [],
+    collectSegmentTokens(source),
   ];
-  for (const { tokens, fromGlossary } of tokenSources) {
+  for (const tokens of tokenSources) {
     for (const rawToken of tokens) {
-      pushNormalizedTag(tags, rawToken, limit, fromGlossary);
-      if (tags.length >= limit) {
+      const normalized = normalizeConceptToken(rawToken);
+      if (!normalized || tags.includes(normalized)) {
+        continue;
+      }
+      tags.push(normalized);
+      if (tags.length >= MAX_CONCEPT_TAGS) {
         return tags;
       }
     }
@@ -465,10 +391,8 @@ export function deriveConceptTags(params: {
   return tags;
 }
 
-export function summarizeConceptTagScriptCoverage(
-  conceptTagsByEntry: string[][],
-): ConceptTagScriptCoverage {
-  const coverage: ConceptTagScriptCoverage = {
+export function summarizeConceptTagScriptCoverage(conceptTagsByEntry: string[][]) {
+  const coverage = {
     latinEntryCount: 0,
     cjkEntryCount: 0,
     mixedEntryCount: 0,
@@ -476,35 +400,8 @@ export function summarizeConceptTagScriptCoverage(
   };
 
   for (const conceptTags of conceptTagsByEntry) {
-    let hasLatin = false;
-    let hasCjk = false;
-    let hasOther = false;
-    for (const tag of conceptTags) {
-      const family = classifyConceptTagScript(tag);
-      if (family === "mixed") {
-        hasLatin = true;
-        hasCjk = true;
-        continue;
-      }
-      if (family === "latin") {
-        hasLatin = true;
-        continue;
-      }
-      if (family === "cjk") {
-        hasCjk = true;
-        continue;
-      }
-      hasOther = true;
-    }
-
-    if (hasLatin && hasCjk) {
-      coverage.mixedEntryCount += 1;
-    } else if (hasCjk) {
-      coverage.cjkEntryCount += 1;
-    } else if (hasLatin) {
-      coverage.latinEntryCount += 1;
-    } else if (hasOther) {
-      coverage.otherEntryCount += 1;
+    if (conceptTags.length > 0) {
+      coverage[`${classifyConceptTagScript(conceptTags.join(" "))}EntryCount`] += 1;
     }
   }
 

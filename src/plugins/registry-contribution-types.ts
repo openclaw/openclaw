@@ -1,17 +1,36 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
+import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import type {
+  LegacyMemoryReadResult,
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+  MemoryOriginClass,
+  MemoryReadResult,
+  MemorySearchManager,
+  MemorySearchResult,
+} from "../memory-host-sdk/host/types.js";
+import type {
+  EmbeddingBatchChunk,
+  EmbeddingBatchOptions,
+} from "./embedding-provider-runtime-types.js";
 import type {
   EmbeddingProvider,
   EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type {
+  MemoryProviderOpenParams,
+  MemoryProviderOpenResult,
+} from "./memory-provider-types.js";
 
 export type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
@@ -51,90 +70,43 @@ export type RegisteredCompactionProvider = {
   ownerPluginId?: string;
 };
 
-export type MemoryEmbeddingBatchChunk = {
-  text: string;
+export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MemoryEmbeddingBatchOptions = {
-  agentId: string;
+export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
   chunks: MemoryEmbeddingBatchChunk[];
-  wait: boolean;
-  concurrency: number;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
 export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
 
-export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
-  sourceWideBatchEmbed?: boolean;
+export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
 export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
 
-export type MemoryEmbeddingProvider = Pick<
-  EmbeddingProvider,
-  "id" | "model" | "maxInputTokens" | "close"
-> & {
-  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    texts: string[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  embedBatchInputs?: (
-    inputs: EmbeddingInput[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-};
+export type MemoryEmbeddingProvider = EmbeddingProvider;
 
-export type MemoryEmbeddingProviderCreateOptions = Omit<
-  EmbeddingProviderCreateOptions,
-  "dimensions" | "local" | "taskType"
-> & {
+export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
+  local?: NonNullable<EmbeddingProviderCreateOptions["local"]> & {
     contextSize?: number | "auto";
   };
-  outputDimensionality?: number;
-  taskType?:
-    | "RETRIEVAL_QUERY"
-    | "RETRIEVAL_DOCUMENT"
-    | "SEMANTIC_SIMILARITY"
-    | "CLASSIFICATION"
-    | "CLUSTERING"
-    | "QUESTION_ANSWERING"
-    | "FACT_VERIFICATION";
 };
 
-export type MemoryEmbeddingProviderCreateResult = {
-  provider: MemoryEmbeddingProvider | null;
+export type MemoryEmbeddingProviderCreateResult = Omit<EmbeddingProviderCreateResult, "runtime"> & {
   runtime?: MemoryEmbeddingProviderRuntime;
 };
 
-export type MemoryEmbeddingProviderAdapter = Omit<
-  EmbeddingProviderAdapter,
-  "create" | "resolveIndexIdentity"
-> & {
+export type MemoryEmbeddingProviderAdapter = Omit<EmbeddingProviderAdapter, "create"> & {
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
-  resolveIndexIdentity?: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => MemoryEmbeddingProviderIndexIdentity;
   create: (
     options: MemoryEmbeddingProviderCreateOptions,
   ) => Promise<MemoryEmbeddingProviderCreateResult>;
   shouldContinueAutoSelection?: (err: unknown) => boolean;
-};
-
-export type RegisteredMemoryEmbeddingProvider = {
-  adapter: MemoryEmbeddingProviderAdapter;
-  ownerPluginId?: string;
 };
 
 export type MemoryPromptSectionParams = {
@@ -143,9 +115,14 @@ export type MemoryPromptSectionParams = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** Host-resolved repository identity for this run; the plugin owns any memory-format guidance. */
+  projectKey?: string;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
+
+/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
+export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
 
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
@@ -158,6 +135,7 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentId?: string;
     agentSessionKey?: string;
     sandboxed: boolean;
+    projectKey?: string;
   }>;
   lines: readonly string[];
 }>;
@@ -228,61 +206,85 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
+/** A file-persistence flush plan with its resolved timing. */
 export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;
-  recordWriteProvenance?: (params: {
-    workspaceDir: string;
-    relativePath: string;
-    contentBefore: string;
-    contentAfter: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }) => Promise<(() => Promise<void>) | void>;
-  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
 };
 
-export type MemoryFlushPlanResolver = (params: {
+/** Flush timing the host resolves from memory-flush config and the model context window. */
+type MemoryFlushPlanTiming = Pick<
+  MemoryFlushPlan,
+  "softThresholdTokens" | "forceFlushTranscriptBytes" | "reserveTokensFloor"
+>;
+
+/**
+ * A file plan as a resolver may return it: omitted timing fields are filled by the host, and
+ * defined ones deliberately override it.
+ */
+export type MemoryFlushFilePlanDraft = Omit<MemoryFlushPlan, keyof MemoryFlushPlanTiming> &
+  Partial<MemoryFlushPlanTiming> & { persistenceToolNames?: never; lookupToolNames?: never };
+
+/**
+ * Tool persistence for the selected memory slot owner. The host fills omitted timing;
+ * defined values deliberately override it.
+ */
+export type MemoryFlushToolsPlan = Partial<MemoryFlushPlanTiming> & {
+  prompt: string;
+  systemPrompt: string;
+  /** Absent on every tools plan; a tools plan never names a workspace file. */
+  relativePath?: never;
+  persistenceToolNames: readonly string[];
+  /** Read-only helper tools the flush may use to inspect existing provider memory. */
+  lookupToolNames?: readonly string[];
+};
+
+type MemoryFlushPlanResolverParams = {
   cfg?: OpenClawConfig;
   nowMs?: number;
-}) => MemoryFlushPlan | null;
-
-export type RegisteredMemorySearchManager = MemorySearchManager;
-
-type MemoryRuntimeQmdConfig = {
-  command?: string;
+  contextWindowTokens?: number;
 };
 
-type MemoryRuntimeBackendConfig =
-  | { backend: "builtin" }
-  | { backend: "qmd"; qmd?: MemoryRuntimeQmdConfig };
+/** Resolves a complete file flush plan. */
+export type MemoryFlushPlanResolver = (
+  params: MemoryFlushPlanResolverParams,
+) => MemoryFlushPlan | null;
+
+/**
+ * Resolves a flush plan the host completes: a file plan whose omitted timing the host fills,
+ * or a tools plan that persists through the selected slot owner's own tools.
+ */
+export type MemoryProviderFlushPlanResolver = (
+  params: MemoryFlushPlanResolverParams,
+) => MemoryFlushFilePlanDraft | MemoryFlushToolsPlan | null;
+
+export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"> & {
+  readFile(
+    params: Parameters<MemorySearchManager["readFile"]>[0],
+  ): Promise<LegacyMemoryReadResult | MemoryReadResult>;
+};
+
+type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  /** CLI search and recall recording run under the same plugin instance. */
+  searchForCli?(params: MemoryCliSearchParams): Promise<MemoryCliSearchResult>;
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: "default" | "status" | "cli";
+    /** Request a read-only source freshness scan; runtimes may ignore unsupported diagnostics. */
+    inspectSources?: boolean;
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
-      backend?: "builtin" | "qmd";
+      backend?: "builtin";
       purpose?: "default" | "status" | "cli";
       managerMs?: number;
-      managerCacheState?:
-        | "cached-full-hit"
-        | "cached-full-miss"
-        | "transient-cli"
-        | "transient-status"
-        | "pending-create-wait"
-        | "fallback-builtin"
-        | "recent-failure-cooldown";
-      qmdIdentityHash?: string;
-      failureCode?: "qmd-unavailable";
     };
     error?: string;
   }>;
@@ -297,9 +299,39 @@ export type MemoryPluginRuntime = {
     requesterSessionKey: string | undefined;
     sandboxed: boolean;
     hits: MemorySearchResult[];
+    /** A sessionless host or operator caller acting for `agentId` may keep only that agent's hits. */
+    trustedAgentScope?: boolean;
+    /** The session caller's host-granted recall pass, exactly as its tool context received it. */
+    conversationRecall?: ConversationRecallContext;
   }): Promise<MemorySearchResult[]>;
+  /** The classifier consumes pinned read sources without probing Gateway-local paths. */
+  supportsWorkspaceMemoryReadSources?: true;
+  classifyWorkspaceMemoryPaths?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    workspaceDir: string;
+    relativePaths: string[];
+    /** Already-read remote files; an absent canonical path must remain untrusted. */
+    readSources?: readonly { relativePath: string; canonicalRelativePath?: string }[];
+  }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
+  /** Fence and drain managers consuming these exact retiring capability objects. */
+  prepareReload?(change: {
+    retireRuntime: boolean;
+    retiringEmbeddingProviders: readonly MemoryEmbeddingProviderAdapter[];
+  }): {
+    drain(): Promise<void | { errors: readonly unknown[] }>;
+    resume(): void;
+  };
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
+};
+
+/** Additive runtime; lifecycle hooks share the existing memory runtime cleanup owner. */
+export type MemoryProviderRuntime = Pick<
+  MemoryPluginRuntime,
+  "prepareReload" | "closeMemorySearchManager" | "closeAllMemorySearchManagers"
+> & {
+  open(params: MemoryProviderOpenParams): Promise<MemoryProviderOpenResult>;
 };
 
 type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
@@ -320,26 +352,44 @@ export type MemoryPluginPublicArtifactsProvider = {
 export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
+  /** Host-completed flush plans, including tool persistence; preferred over flushPlanResolver. */
+  providerFlushPlanResolver?: MemoryProviderFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
+  /** Provider-neutral host integration; preferred over runtime when present. */
+  providerRuntime?: MemoryProviderRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /** Agent-facing tools Active Memory may use for provider-owned deep recall. */
+  recallToolNames?: readonly string[];
+  /** Local deterministic recall tool required by provider-owned direct lookup. */
+  deterministicRecallToolName?: string;
+  /** Whether recall may read protected same-agent private session transcripts. */
+  supportsPrivateTranscriptRecall?: boolean;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  learnToolNames?: readonly string[];
+  /** Guidance appended to /learn when some learnToolNames are available. */
+  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
 };
 
 export type MemoryPluginCapabilityRegistration = {
   pluginId: string;
   capability: MemoryPluginCapability;
+  /**
+   * Registrar-provided memory slot ownership. Only the slot owner may displace
+   * earlier fields during resolution; undeclared registrations contribute what
+   * the owner lacks but never take over its runtime or consolidation surface.
+   */
+  memorySlotSelected?: boolean;
 };
 
-export type SessionDiscussionState = "none" | "available" | "open";
-export type SessionDiscussionInfo = {
-  state: SessionDiscussionState;
-  embedUrl?: string;
-  openUrl?: string;
-};
+export type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+} from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 
 export type SessionDiscussionProvider = {
   id: string;
-  info(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
-  open(params: { sessionKey: string }): Promise<SessionDiscussionInfo>;
+  info(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
+  open(params: { sessionKey: string; agentId: string }): Promise<SessionDiscussionInfo>;
 };
 
 export type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };

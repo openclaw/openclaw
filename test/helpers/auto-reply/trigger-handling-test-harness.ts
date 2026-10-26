@@ -5,9 +5,10 @@ import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../src/state/openclaw-agent-db-lifecycle.js";
+import { captureEnv } from "../../../src/test-utils/env.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -26,22 +27,10 @@ const embeddedAgentMocks = getSharedMocks("openclaw.trigger-handling.embedded-ag
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: vi.fn(),
   runEmbeddedAgent: vi.fn(),
-  queueEmbeddedAgentMessageWithOutcome: vi.fn(
-    (sessionId: string, _text?: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }),
-  ),
-  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  resolveActiveSessionRunId: vi.fn().mockReturnValue(undefined),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
 }));
-
-export function getAbortEmbeddedAgentRunMock(): AnyMock {
-  return embeddedAgentMocks.abortEmbeddedAgentRun;
-}
 
 export function getCompactEmbeddedAgentSessionMock(): AnyMock {
   return embeddedAgentMocks.compactEmbeddedAgentSession;
@@ -52,35 +41,31 @@ export function getRunEmbeddedAgentMock(): AnyMock {
 }
 
 const installEmbeddedAgentMock = () =>
-  vi.doMock("../../../src/agents/embedded-agent.js", () => ({
+  vi.doMock("../../../src/agents/embedded-agent.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../../src/agents/embedded-agent.js")>()),
     abortEmbeddedAgentRun: (...args: unknown[]) =>
       embeddedAgentMocks.abortEmbeddedAgentRun(...args),
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedAgentMocks.compactEmbeddedAgentSession(...args),
     runEmbeddedAgent: (...args: unknown[]) => embeddedAgentMocks.runEmbeddedAgent(...args),
-    queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-      embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-      embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
-    isEmbeddedAgentRunActive: (...args: unknown[]) =>
-      embeddedAgentMocks.isEmbeddedAgentRunActive(...args),
-    isEmbeddedAgentRunStreaming: (...args: unknown[]) =>
-      embeddedAgentMocks.isEmbeddedAgentRunStreaming(...args),
+    resolveActiveSessionRunId: (...args: unknown[]) =>
+      embeddedAgentMocks.resolveActiveSessionRunId(...args),
+    isSessionRunActive: (...args: unknown[]) => embeddedAgentMocks.isSessionRunActive(...args),
+    isSessionNativeAttemptStreaming: (...args: unknown[]) =>
+      embeddedAgentMocks.isSessionNativeAttemptStreaming(...args),
   }));
 
 installEmbeddedAgentMock();
 
+// mock-isolation: Trigger cases use the shared abort stub and must not cancel process-wide native runs.
 vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
   abortEmbeddedAgentRun: (...args: unknown[]) => embeddedAgentMocks.abortEmbeddedAgentRun(...args),
-  formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
-    outcome.reason && outcome.sessionId
-      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
-      : undefined,
-  queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-    embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
-  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
-    embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
+}));
+
+vi.doMock("../../../src/sessions/session-controller.queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/sessions/session-controller.queries.js")>()),
+  resolveActiveSessionRunId: (...args: unknown[]) =>
+    embeddedAgentMocks.resolveActiveSessionRunId(...args),
 }));
 
 const providerUsageMocks = vi.hoisted(() => ({
@@ -88,7 +73,6 @@ const providerUsageMocks = vi.hoisted(() => ({
     updatedAt: 0,
     providers: [],
   }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
@@ -120,7 +104,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
+  readPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -129,22 +113,26 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  getPreparedModelCatalogOwnerSnapshot: () => undefined,
+  materializePreparedModelCatalogOwner: (owner: object) => owner,
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
 }));
 
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadPreparedModelCatalog: (...args: unknown[]) =>
-    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  readPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.readPreparedModelCatalog(...args),
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    const entries = await modelCatalogMocks.readPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.readPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
@@ -164,7 +152,13 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
       model: string;
       run: (provider: string, model: string, runOptions?: unknown) => Promise<unknown>;
     }) => ({
-      result: await params.run(params.provider, params.model),
+      result: await params.run(params.provider, params.model, {
+        modelRoutingProvenance: {
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          stage: "initial",
+        },
+      }),
       provider: params.provider,
       model: params.model,
       attempts: [],
@@ -198,45 +192,8 @@ installWebSessionMock();
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 
-type TempHomeEnvSnapshot = {
-  home: string | undefined;
-  userProfile: string | undefined;
-  homeDrive: string | undefined;
-  homePath: string | undefined;
-  openclawHome: string | undefined;
-  stateDir: string | undefined;
-};
-
 let suiteTempHomeRoot = "";
 let suiteTempHomeId = 0;
-
-function snapshotTempHomeEnv(): TempHomeEnvSnapshot {
-  return {
-    home: process.env.HOME,
-    userProfile: process.env.USERPROFILE,
-    homeDrive: process.env.HOMEDRIVE,
-    homePath: process.env.HOMEPATH,
-    openclawHome: process.env.OPENCLAW_HOME,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
-}
-
-function restoreTempHomeEnv(snapshot: TempHomeEnvSnapshot): void {
-  const restoreKey = (key: string, value: string | undefined) => {
-    if (value === undefined) {
-      delete process.env[key];
-      return;
-    }
-    process.env[key] = value;
-  };
-
-  restoreKey("HOME", snapshot.home);
-  restoreKey("USERPROFILE", snapshot.userProfile);
-  restoreKey("HOMEDRIVE", snapshot.homeDrive);
-  restoreKey("HOMEPATH", snapshot.homePath);
-  restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
-  restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
-}
 
 function setTempHomeEnv(home: string): void {
   process.env.HOME = home;
@@ -263,6 +220,7 @@ afterAll(async () => {
   if (!suiteTempHomeRoot) {
     return;
   }
+  await closeOpenClawAgentDatabasesAsync(suiteTempHomeRoot);
   try {
     rmSync(suiteTempHomeRoot, { recursive: true, force: true });
   } catch {
@@ -274,7 +232,14 @@ afterAll(async () => {
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const home = join(suiteTempHomeRoot, `case-${++suiteTempHomeId}`);
-  const snapshot = snapshotTempHomeEnv();
+  const snapshot = captureEnv([
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+  ]);
   await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
   setTempHomeEnv(home);
 
@@ -283,20 +248,12 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
     embeddedAgentMocks.runEmbeddedAgent.mockReset();
     embeddedAgentMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(false);
     embeddedAgentMocks.compactEmbeddedAgentSession.mockReset();
-    embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome
-      .mockReset()
-      .mockImplementation((sessionId: string) => ({
-        queued: false,
-        sessionId,
-        reason: "not_streaming",
-        gatewayHealth: "live",
-      }));
-    embeddedAgentMocks.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
-    embeddedAgentMocks.isEmbeddedAgentRunStreaming.mockReset().mockReturnValue(false);
+    embeddedAgentMocks.isSessionRunActive.mockReset().mockReturnValue(false);
+    embeddedAgentMocks.isSessionNativeAttemptStreaming.mockReset().mockReturnValue(false);
     modelFallbackMocks.runWithModelFallback.mockClear();
     return await fn(home);
   } finally {
-    restoreTempHomeEnv(snapshot);
+    snapshot.restore();
   }
 }
 
@@ -308,8 +265,9 @@ export function makeCfg(home: string): OpenClawConfig {
         models: {
           "anthropic/claude-haiku-4-5-20251001": {},
           "anthropic/claude-opus-4-7": {},
-          "openai/gpt-4.1-mini": {},
-          "openai/gpt-5.4": {},
+          // Model selections execute through this harness's embedded runner.
+          "openai/gpt-4.1-mini": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
         },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
@@ -317,7 +275,7 @@ export function makeCfg(home: string): OpenClawConfig {
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
     channels: {
       whatsapp: {
@@ -334,12 +292,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -358,7 +316,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -387,36 +345,6 @@ export async function expectInlineCommandHandledAndStripped(params: {
   const prompt = lastCall?.[0]?.prompt ?? "";
   expect(prompt).not.toContain(params.stripToken);
   expect(text).toBe("ok");
-}
-
-export async function expectBareNewOrResetAcknowledged(params: {
-  home: string;
-  body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
-}) {
-  const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-  runEmbeddedAgentMock.mockClear();
-  runEmbeddedAgentMock.mockResolvedValue({
-    payloads: [{ text: "hello" }],
-    meta: {
-      durationMs: 1,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-
-  const res = await params.getReplyFromConfig(
-    {
-      Body: params.body,
-      From: "+1003",
-      To: "+2000",
-      CommandAuthorized: true,
-    },
-    {},
-    makeCfg(params.home),
-  );
-  const text = Array.isArray(res) ? res[0]?.text : res?.text;
-  expect(text).toBe(params.body === "/reset" ? "✅ Session reset." : "✅ New session started.");
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
 }
 
 function installTriggerHandlingE2eTestHooks() {

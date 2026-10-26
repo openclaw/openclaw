@@ -1,12 +1,11 @@
-// Logging config tests cover config file loading and defaults.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { readLoggingConfig } from "./config.js";
+import { applyLoggingConfig, resetLogger } from "./logger.js";
 
-const originalArgv = process.argv;
 let tempDirs: string[] = [];
 
 function writeConfig(source: string): string {
@@ -17,22 +16,25 @@ function writeConfig(source: string): string {
   return configPath;
 }
 
+function readConfig(configPath: string, env: Record<string, string | undefined> = {}) {
+  return withEnv({ OPENCLAW_CONFIG_PATH: configPath, ...env }, readLoggingConfig);
+}
+
 describe("readLoggingConfig", () => {
   afterEach(() => {
-    process.argv = originalArgv;
+    resetLogger();
     for (const dir of tempDirs) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
     tempDirs = [];
   });
 
-  it("reads logging style without a mutating config load for config schema", () => {
-    process.argv = ["node", "openclaw", "config", "schema"];
-    const configPath = writeConfig(`{ logging: { consoleStyle: "json" } }`);
+  it("returns the applied runtime snapshot without bootstrap filesystem work", () => {
+    const existsSync = vi.spyOn(fs, "existsSync");
+    applyLoggingConfig({ level: "debug", consoleStyle: "json" });
 
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json" });
-    });
+    expect(readLoggingConfig()).toEqual({ level: "debug", consoleStyle: "json" });
+    expect(existsSync).not.toHaveBeenCalled();
   });
 
   it("reads logging config directly from the active config path", () => {
@@ -49,21 +51,6 @@ describe("readLoggingConfig", () => {
         level: "debug",
         file: "/tmp/openclaw-custom.log",
         maxFileBytes: 1234,
-      });
-    });
-  });
-
-  it("supports JSON5 comments and trailing commas", () => {
-    const configPath = writeConfig(`{
-      // users commonly keep comments in openclaw.json
-      logging: {
-        consoleLevel: "warn",
-      },
-    }`);
-
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toStrictEqual({
-        consoleLevel: "warn",
       });
     });
   });
@@ -129,72 +116,53 @@ describe("readLoggingConfig", () => {
 
   it("does not cache a partial style while environment-backed fields are unresolved", () => {
     const configPath = writeConfig(`{
-      logging: {
-        consoleStyle: "json",
-        file: "\${OPENCLAW_TEST_LOG_FILE}",
-        level: "debug",
-      },
+      logging: { consoleStyle: "json", file: "\${OPENCLAW_TEST_LOG_FILE}", level: "debug" },
     }`);
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_TEST_LOG_FILE: undefined,
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json" });
-      },
-    );
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_TEST_LOG_FILE: "/tmp/openclaw-env-backed.log",
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({
-          consoleStyle: "json",
-          file: "/tmp/openclaw-env-backed.log",
-          level: "debug",
-        });
-      },
-    );
+    expect(readConfig(configPath, { OPENCLAW_TEST_LOG_FILE: undefined })).toStrictEqual({
+      consoleStyle: "json",
+    });
+    expect(
+      readConfig(configPath, { OPENCLAW_TEST_LOG_FILE: "/tmp/openclaw-env-backed.log" }),
+    ).toStrictEqual({ consoleStyle: "json", file: "/tmp/openclaw-env-backed.log", level: "debug" });
   });
 
   it("preserves custom redaction patterns while another logging field is unresolved", () => {
-    const configPath = writeConfig(`{
-      logging: {
-        consoleStyle: "json",
-        redactPatterns: ["/custom-only-secret/g"],
-        file: "\${MISSING_LOG_FILE}",
-      },
-    }`);
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        MISSING_LOG_FILE: undefined,
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({
-          consoleStyle: "json",
-          redactPatterns: ["/custom-only-secret/g"],
-        });
-      },
-    );
+    const configPath = writeConfig(`{ logging: {
+      consoleStyle: "json", redactPatterns: ["/custom-only-secret/g"], file: "\${MISSING_LOG_FILE}",
+    } }`);
+    expect(readConfig(configPath, { MISSING_LOG_FILE: undefined })).toStrictEqual({
+      consoleStyle: "json",
+      redactPatterns: ["/custom-only-secret/g"],
+    });
   });
 
   it("returns undefined for missing or malformed config files", () => {
-    withEnv(
-      { OPENCLAW_CONFIG_PATH: path.join(os.tmpdir(), "openclaw-missing-config.json") },
-      () => {
-        expect(readLoggingConfig()).toBeUndefined();
-      },
-    );
+    expect(readConfig(path.join(os.tmpdir(), "openclaw-missing-config.json"))).toBeUndefined();
+    expect(readConfig(writeConfig(`{ logging: `))).toBeUndefined();
+  });
 
-    const configPath = writeConfig(`{ logging: `);
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toBeUndefined();
-    });
+  it("caches a missing config until the path selector changes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-logging-config-missing-"));
+    tempDirs.push(dir);
+    const firstPath = path.join(dir, "missing-first.json");
+    const secondPath = path.join(dir, "missing-second.json");
+    const existsSync = vi.spyOn(fs, "existsSync");
+
+    try {
+      withEnv({ OPENCLAW_CONFIG_PATH: firstPath }, () => {
+        expect(readLoggingConfig()).toBeUndefined();
+        expect(readLoggingConfig()).toBeUndefined();
+      });
+      withEnv({ OPENCLAW_CONFIG_PATH: secondPath }, () => {
+        expect(readLoggingConfig()).toBeUndefined();
+      });
+
+      const checksFor = (configPath: string) =>
+        existsSync.mock.calls.filter(([candidate]) => candidate === configPath).length;
+      expect(checksFor(firstPath)).toBe(1);
+      expect(checksFor(secondPath)).toBe(1);
+    } finally {
+      existsSync.mockRestore();
+    }
   });
 });

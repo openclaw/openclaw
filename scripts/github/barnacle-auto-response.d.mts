@@ -1,21 +1,24 @@
 export const managedLabelSpecs: Record<string, { color: string; description: string }>;
-export const candidateLabels: {
-  blankTemplate: string;
-  lowSignalDocs: string;
-  docsDiscoverability: string;
-  testOnlyNoBug: string;
-  refactorOnly: string;
-  needsPrContext: string;
-  dirtyCandidate: string;
-  riskyInfra: string;
-  externalPluginCandidate: string;
-};
+export const candidateLabels: Record<
+  | "blankTemplate"
+  | "lowSignalDocs"
+  | "docsDiscoverability"
+  | "testOnlyNoBug"
+  | "refactorOnly"
+  | "needsPrContext"
+  | "dirtyCandidate"
+  | "riskyInfra"
+  | "externalPluginCandidate",
+  string
+>;
+export function hasVerifiedResponseClosure(snapshot: unknown, event: unknown): boolean;
 export function classifyPullRequestCandidateLabels(
-  pullRequest: Record<string, unknown>,
-  files: Array<{ filename: string; status: string }>,
+  pullRequest: unknown,
+  files: unknown[],
 ): string[];
-export function runBarnacleAutoResponse(params: {
-  github: Record<string, unknown>;
-  context: Record<string, unknown>;
+export function runBarnacleAutoResponse(options: {
+  github: unknown;
+  context: unknown;
   core?: Pick<Console, "info">;
+  expectedAppId: number;
 }): Promise<void>;

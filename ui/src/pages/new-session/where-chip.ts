@@ -1,0 +1,128 @@
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+  type DevicePlacementOption,
+  type DevicePlacementRequirement,
+} from "./device-placement.ts";
+import {
+  cloudMachinesForOs,
+  defaultCloudMachine,
+  defaultCloudOs,
+  type DraftCloudProfile,
+  type DraftEnvironment,
+} from "./discovery.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import {
+  environmentDeviceDisabledReason,
+  environmentPlacementRuntime,
+} from "./hosted-environments.ts";
+
+registerNewSessionSetupEnglish();
+
+export function draftWhereChipParams(
+  place: DraftPlaceState,
+  gateway: DraftGatewayState,
+  cloudProfiles = place.isAdmin() ? gateway.cloudProfiles : [],
+) {
+  return {
+    hostedEnvironment: place.hostedEnvironment
+      ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
+      : undefined,
+    environments: place.canWrite() ? gateway.environments : [],
+    cloudProfiles,
+    cloudProfileId: place.cloudProfileId,
+    ...place.cloudSelection,
+    deviceId: place.deviceId,
+    autoDevice: place.autoDevice,
+    devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
+    deviceDisabledReason:
+      environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
+  };
+}
+
+export function resolveWhereChip(params: {
+  hostedEnvironment?: { id: string; label: string };
+  environments: readonly DraftEnvironment[] | null;
+  cloudProfiles: readonly DraftCloudProfile[];
+  cloudProfileId: string;
+  machineClass?: string;
+  os?: string;
+  deviceId: string;
+  autoDevice?: boolean;
+  devicePlacement?: DevicePlacementRequirement;
+  deviceDisabledReason?: string;
+}): Readonly<{
+  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
+  label: string;
+  devices: readonly DevicePlacementOption[];
+  cloudProfiles: readonly DraftCloudProfile[];
+  cloudMachines: readonly WorkerMachineOption[];
+  selectedMachineId: string;
+  operatingSystems: readonly WorkerOperatingSystem[];
+  selectedOsId: string;
+  autoDeviceDisabledReason?: string;
+  hostedRuntimeId?: string;
+}> {
+  const devices = projectDevicePlacements(
+    params.environments,
+    params.devicePlacement,
+    params.deviceDisabledReason,
+  );
+  const autoDeviceDisabledReason = resolveAutomaticDevicePlacementDisabledReason(
+    params.environments,
+    devices,
+    params.deviceDisabledReason,
+  );
+  const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
+  const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
+  const common = {
+    devices,
+    cloudProfiles: params.cloudProfiles,
+    cloudMachines: [],
+    selectedMachineId: "",
+    operatingSystems: [],
+    selectedOsId: "",
+    autoDeviceDisabledReason,
+  };
+  if (params.hostedEnvironment) {
+    return {
+      ...common,
+      kind: "hosted",
+      label: params.hostedEnvironment.label,
+      hostedRuntimeId: params.hostedEnvironment.id,
+    };
+  }
+  if (params.cloudProfileId) {
+    const defaultOs = profile ? defaultCloudOs(profile) : "";
+    const selectedOsId = params.os || defaultOs;
+    const operatingSystems = profile?.operatingSystems ?? [];
+    const cloudMachines = profile ? cloudMachinesForOs(profile, selectedOsId) : [];
+    const defaultMachine = profile ? defaultCloudMachine(profile, selectedOsId) : undefined;
+    const selectedMachine = params.machineClass
+      ? cloudMachines.find((machine) => machine.id === params.machineClass)
+      : defaultMachine;
+    return {
+      ...common,
+      kind: "cloud",
+      label: profile?.id ?? params.cloudProfileId,
+      operatingSystems,
+      selectedOsId,
+      cloudMachines,
+      selectedMachineId: selectedMachine?.id ?? "",
+    };
+  }
+  return {
+    ...common,
+    kind: params.deviceId ? "device" : params.autoDevice ? "auto-device" : "local",
+    label: params.deviceId
+      ? (device?.label ?? params.deviceId)
+      : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
+  };
+}

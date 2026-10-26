@@ -1,8 +1,8 @@
-// Cron Mcp Cleanup Seed script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { upsertAuthProfileAsync } from "../../dist/plugin-sdk/provider-auth.js";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 const require = createRequire(import.meta.url);
@@ -13,8 +13,8 @@ async function writeProbeServer(params: {
   pidsPath: string;
   exitPath: string;
 }) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   await fs.writeFile(
     params.serverPath,
     `#!/usr/bin/env node
@@ -41,7 +41,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 setInterval(() => {}, 1000);
 
 const server = new McpServer({ name: "cron-mcp-cleanup-probe", version: "1.0.0" });
-server.tool("cleanup_probe", "Cron MCP cleanup probe", async () => ({
+server.registerTool("cleanup_probe", { description: "Cron MCP cleanup probe" }, async () => ({
   content: [{ type: "text", text: "cron-mcp-cleanup-ok" }],
 }));
 
@@ -68,6 +68,7 @@ async function main() {
   await fs.rm(exitPath, { force: true });
   await writeProbeServer({ serverPath, pidPath, pidsPath, exitPath });
 
+  const profileId = "openai:docker-cron-cleanup";
   const seededConfig = applyDockerOpenAiProviderConfig(
     {
       gateway: {
@@ -80,9 +81,6 @@ async function main() {
       },
       agents: {
         defaults: {
-          heartbeat: {
-            every: "0m",
-          },
           skipBootstrap: true,
           contextInjection: "never",
           skills: [],
@@ -115,6 +113,23 @@ async function main() {
     } satisfies OpenClawConfig,
     "sk-docker-cron-mcp-cleanup-test",
   );
+
+  // Scheduled inference retains a stored account, not the provider-config key.
+  await upsertAuthProfileAsync({
+    profileId,
+    credential: {
+      type: "api_key",
+      provider: "openai",
+      key: "sk-docker-cron-mcp-cleanup-test",
+    },
+  });
+  seededConfig.agents = {
+    ...seededConfig.agents,
+    defaults: {
+      ...seededConfig.agents?.defaults,
+      model: `openai/gpt-5.6-luna@${profileId}`,
+    },
+  };
 
   await fs.writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf-8");
 

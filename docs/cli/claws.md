@@ -1,34 +1,90 @@
 ---
-summary: "Create, add, update, and remove experimental Claw agent packages"
+summary: "Author, inspect, and add Claw bundles as ordinary agents"
 read_when:
   - You are authoring or validating a CLAW.md manifest
-  - You want to preview or add one agent from a Claw
-  - You need to inspect Claw ownership, drift, or cleanup behavior
+  - You want to add a new agent from a Claw
+  - You need to understand what remains after deleting that agent
 title: "Claws"
 ---
 
 # `openclaw claws`
 
-A Claw is a versioned setup for one new OpenClaw agent. It can describe the
-agent's portable identity, workspace files, skills, plugins, MCP servers, and
-cron jobs. Harness-specific agent settings may be carried in a referenced
-package profile. A Claw does not replace or modify an existing agent.
+A Claw is a portable setup for a new OpenClaw agent. It can include agent
+instructions, workspace files, skills, plugins, MCP servers, and automations.
+**Add is a one-way action:** it creates an ordinary agent and installs its
+requirements. It does not create an installed Claw to manage. Adding the same
+Claw again creates another agent.
 
-Claws are experimental. Their schema, command output, and lifecycle may change.
-Enable the command surface explicitly:
+After Add, manage the agent with [agent commands](/cli/agents), its automations
+with [cron commands](/automation/cron-jobs), and shared dependencies with their
+ordinary plugin or MCP controls. There are no Claw status, update, remove, or
+export commands. To use a newer release, Add it as another agent.
+
+Enable **Claws** in **Settings → Labs** before adding one. On a headless installation, set
+`gateway.controlUi.experimental.claws` to `true` in OpenClaw config.
+Authoring and inspecting local Claw packages do not require the Labs toggle.
+
+The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
+JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
+Add refuses it before creating an agent or workspace.
+Publishing and searching Claws through ClawHub use the separate registry
+surface. The Control UI can browse official and community Claws from **Pages → Claws** at `/claws`
+when **Claws** is enabled in **Settings → Labs**.
+
+## Create with an agent
+
+With Claws enabled in Labs, choose **Create Claw** from the agent's left-sidebar
+row menu. Pinned agents keep this action in a focused row menu. The action sends
+the bundled `$create-claw` skill invocation into that agent's existing main
+chat. The agent proposes portable behavior with an input, job, output, and
+authority boundary, then writes its private draft in that conversation. When
+the draft is ready, the Control UI opens a review modal; the agent does not
+return a review link or create or fork a session. This flow currently requires
+a workspace on the Gateway host.
+
+The review modal shows the exact archive files and
+declared skill, plugin, MCP, and automation requirements. The Name field is
+the new agent's display name, defaulted to readable title case; it does not
+change the package slug used as the Claw's registry identity. Change the name
+or description and uncheck any optional workspace file or requirement before
+publishing. **Ask for changes** returns to the same chat; review the rebuilt
+package after the agent revises the draft. The package includes only newly
+authored proposal contents; it does not copy the source workspace, memories,
+or raw conversations. Known private paths and credential-like text are
+rejected. Review the remaining text for personal facts and private context.
+
+Sign in with `clawhub login` on the Gateway host. **Publish to ClawHub** uploads
+the exact reviewed artifact using that account; changing the selection
+requires another review. The editable Name is the agent display name; the
+ClawHub package slug and authenticated publisher are separate identities. An
+agent turn cannot authorize publication. After submission, a dismissing
+notification confirms that publication is pending security review and links
+to the Claw's ClawHub page.
+After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
+
+## Author locally
+
+Create a minimal project, validate its inputs, preview it without mutation,
+and build an immutable package artifact:
 
 ```bash
-export OPENCLAW_EXPERIMENTAL_CLAWS=1
+openclaw claws create ./incident-triage
+openclaw claws validate ./incident-triage
+openclaw claws dev ./incident-triage
+openclaw claws build ./incident-triage --out ./incident-triage-1.0.0.tgz
 ```
 
-The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
-Publishing, searching, and installing whole Claws through ClawHub are a
-separate registry track and are not part of this command surface yet.
+A package contains `package.json`, `CLAW.md`, and any files selected by its
+manifest. `create` writes only `package.json` and `CLAW.md` and refuses to merge
+into a nonempty directory. Project validation rejects package scripts and
+lifecycle hooks. `dev` builds the same package artifact and checks its Add
+requirements locally without installing packages, contacting ClawHub,
+starting an agent turn, enabling automations, or changing OpenClaw state.
+Requirements needing online preflight appear as blockers. `build` creates a
+deterministic `.tgz` and refuses to overwrite an existing file.
 
-## Create a Claw package
-
-A package contains `package.json`, a `CLAW.md` manifest, and any profiles or
-workspace sidecars referenced by that manifest:
+A minimal `package.json` identifies the package and its manifest:
 
 ```json
 {
@@ -39,9 +95,8 @@ workspace sidecars referenced by that manifest:
 }
 ```
 
-`CLAW.md` starts with YAML frontmatter. A non-empty Markdown body is the
-portable agent prompt. OpenClaw applies it as the Claw-managed `SOUL.md` for
-the new agent:
+`CLAW.md` starts with YAML frontmatter. Its Markdown body becomes the new
+agent's `SOUL.md`:
 
 ```md
 ---
@@ -49,8 +104,7 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
-metadata:
-  openclaw.config: profiles/openclaw.yml
+categories: [operations, research]
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -60,312 +114,167 @@ cronJobs: []
 
 # Incident triage
 
-You review incoming incidents, identify severity and ownership, and leave a
-concise handoff with evidence.
+Review incoming incidents, identify severity and ownership, and leave
+a concise handoff with evidence.
 ```
 
-`metadata` is a string-to-string map for portable consumer hints. OpenClaw's
-`openclaw.config` key points to an optional, package-relative YAML profile. The
-exported default is `profiles/openclaw.yml`; the pointer is normative, so a
-package may choose another safe relative `.yml` or `.yaml` path.
+`categories` is optional. Declare one to three distinct lowercase slugs for
+catalog discovery; the receiving registry decides which category names it
+accepts. Categories do not change the agent's runtime behavior.
+
+OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
+No manifest pointer is required. Other harnesses may discover their own
+conventional profile, such as `profiles/codex.yml`, without changing the
+portable manifest.
+
+The older `metadata.openclaw.config` pointer is deprecated but still read, so
+packages published against it keep working. Reading one reports a
+`deprecated_openclaw_profile_pointer` warning; move that file to
+`profiles/openclaw.yml` and remove the metadata entry. A pointer that is not a
+package-relative `.yml`/`.yaml` path is rejected, and a pointer that references
+a different file while `profiles/openclaw.yml` also exists is rejected as a
+conflict.
+
+A package may add named bootstrap files and other workspace files from
+package-relative sources. These go into the new agent's dedicated workspace:
 
 ```yaml
-schemaVersion: 1
-agent:
-  tools:
-    profile: coding
-    alsoAllow: [cron]
-    deny: [exec]
-    fs:
-      workspaceOnly: true
-  memory:
-    search:
-      enabled: true
-      rememberAcrossConversations: true
-      sources: [memory, sessions]
+workspace:
+  bootstrapFiles:
+    AGENTS.md:
+      source: workspace/AGENTS.md
+  files:
+    - source: workspace/reference/policy.md
+      path: reference/policy.md
 ```
 
-This profile exists only inside the Claw package. OpenClaw validates and uses it
-while inspecting, adding, updating, and exporting that Claw; it is not copied
-to the user's normal OpenClaw configuration path. Other harnesses can ignore
-the namespaced metadata key and consume the portable manifest fields.
+An optional package-root `BOOTSTRAP.md` supplies first-run instructions.
+The package may also declare exact ClawHub skill and plugin requirements,
+MCP servers, and scheduled automations:
 
-The same strict version 1 schema continues to accept grouped JSON manifests.
-Grouped JSON uses the same `metadata.openclaw.config` pointer rather than
-embedding a second copy of the OpenClaw profile. The remaining schema fragments
-on this page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
-
-The OpenClaw package profile may select any built-in tool profile registered by
-the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
-`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
-weaken host filesystem confinement. `tools.allow` remains available as an
-explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
-`memory.search.enabled`, choose the portable `memory` and `sessions` sources,
-and opt into cross-conversation memory with `rememberAcrossConversations`.
-Declaring the `sessions` source requires that opt-in.
-Host policy still constrains these settings, and Claws do not carry custom
-profile definitions, providers, credentials, bindings, or local memory paths.
-The referenced profile is limited to 256 KiB, must be JSON-compatible YAML, may
-not use aliases, anchors, tags, or merge keys, and must be a regular,
-non-symlinked, non-hardlinked file inside the package.
-
-Package and workspace paths must remain inside the package root. Manifests are
-limited to 1 MiB, package metadata to 256 KiB, and workspace sources enforce
-separate per-file and aggregate limits. Workspace sources also reject symlinked
-parents.
-
-The `CLAW.md` body is the preferred portable source for `SOUL.md`; do not also
-declare a `SOUL.md` sidecar when the body is non-empty. Other bootstrap files
-use named entries, while additional files use package-relative sources and
-workspace-relative targets:
-
-```json
-{
-  "workspace": {
-    "bootstrapFiles": {
-      "AGENTS.md": { "source": "workspace/AGENTS.md" }
-    },
-    "files": [
-      {
-        "source": "workspace/reference/policy.md",
-        "path": "reference/policy.md"
-      }
-    ]
-  }
-}
+```yaml
+packages:
+  - kind: skill
+    source: clawhub
+    ref: incident-triage
+    version: 1.0.0
+  - kind: plugin
+    source: clawhub
+    ref: "@acme/audit-plugin"
+    version: 2.0.0
+mcpServers:
+  statuspage:
+    command: npx
+    args: ["--yes", "@acme/statuspage-mcp@1.0.0"]
+    env:
+      STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}"
+cronJobs:
+  - id: daily-summary
+    name: Daily incident summary
+    schedule: { cron: "0 9 * * *", timezone: UTC }
+    session: isolated
+    message: Summarize active incidents.
 ```
 
-Skills and plugins use exact ClawHub versions:
+Environment values remain unresolved references; never package credentials.
+Shared plugins and MCP servers must match existing declarations exactly or Add
+reports the conflict without replacing them. Plugin and skill trust warnings
+require explicit consent. Automations are assigned to the new agent.
 
-```json
-{
-  "packages": [
-    {
-      "kind": "skill",
-      "source": "clawhub",
-      "ref": "incident-triage",
-      "version": "1.0.0"
-    },
-    {
-      "kind": "plugin",
-      "source": "clawhub",
-      "ref": "@acme/audit-plugin",
-      "version": "2.0.0"
-    }
-  ]
-}
-```
+Older packages may declare `agent.heartbeat` in the OpenClaw profile or include
+`HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
+and private job scratch instead of installing heartbeat configuration. Legacy
+`tasks:` entries become separate automations, and the remaining checklist stays
+in the monitor's scratch. An `every: 0m` declaration stays disabled.
+The Add review shows each converted job with its interval and owner delivery;
+existing cron schedules and `none` or last-channel delivery keep their meaning.
+Gateway review responses represent interval schedules as `{ everyMs }`, where
+`everyMs` is a positive integer, and
+owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
+and `none` or `last-channel` delivery variants.
 
-The dry run uses the existing skill and plugin preflight paths to resolve the
-exact artifact, integrity, and any ClawHub trust warning before consent. The
-warning remains visible in the integrity-bound plan. Apply installs missing artifacts
-or reuses matching ones and records whether the Claw introduced or referenced
-each resource. Plugins remain process-wide OpenClaw capabilities rather than
-per-agent installations.
+Add creates a job disabled until its imported scratch is saved and verified.
+If scratch import conflicts with another edit, or its write cannot be confirmed,
+Add reports a partial result and keeps the new agent and jobs for inspection.
+Check their scratch and enabled state before retrying; Add does not overwrite
+concurrent edits to make the import succeed.
 
-Cron jobs declare scheduled work for the new agent:
+OpenClaw discovers optional harness settings from `profiles/openclaw.yml`.
+Those settings can refine the agent's tools, sandbox, memory search, and
+extension requirements, but cannot set a model, provider, credentials, or
+named delegate agents. Host policy still constrains every grant. Foreign
+harness profiles are ignored by OpenClaw. A released older
+`metadata.openclaw.config` profile pointer is still read with a deprecation
+warning; new packages should use the conventional profile path.
 
-```json
-{
-  "cronJobs": [
-    {
-      "id": "daily-summary",
-      "name": "Daily incident summary",
-      "schedule": { "cron": "0 9 * * *", "timezone": "UTC" },
-      "session": "isolated",
-      "message": "Summarize active incidents."
-    }
-  ]
-}
-```
+Package and workspace paths must stay inside the package root. Manifests are
+limited to 1 MiB, package metadata to 256 KiB, and workspace files have
+per-file and aggregate limits. Selected files become package content, so
+review them for secrets before building or publishing.
 
-Claws use the existing Gateway scheduler and bind created jobs to the new
-agent. Preview, provenance, status, and removal cover those jobs without
-changing the behavior of ordinary cron commands. Removal rereads the live job
-through the Gateway and preserves it when its owned definition changed after
-planning.
+<a id="inspect-and-preview"></a>
 
-MCP declarations use the existing `mcp.servers` configuration model:
+## Inspect and Add
 
-```json
-{
-  "mcpServers": {
-    "statuspage": {
-      "command": "npx",
-      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
-      "env": { "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}" }
-    }
-  }
-}
-```
-
-Environment references remain references; Claws do not embed resolved secret
-values. A collision-free declaration becomes managed, while an exact existing
-or shared declaration is referenced. Preview, provenance, status, export, and
-removal follow the same ownership policy as other Claw resources.
-
-## Inspect and preview
-
-Validate the source without planning local changes:
+Inspect a source before using it:
 
 ```bash
-openclaw claws inspect ./incident-triage.claw.json
+openclaw claws inspect ./incident-triage
 ```
 
-Preview all proposed lifecycle actions:
+Add it to create a new ordinary agent:
 
 ```bash
-openclaw claws add ./incident-triage.claw.json --dry-run --json
+openclaw claws add ./incident-triage
 ```
 
-The plan reports the derived agent and workspace, every proposed action,
-prerequisites, blockers, distinct capability escalations, and a `planIntegrity`
-digest. Capability records show the exact package, MCP, scheduled-work, sandbox,
-tool, or heartbeat effect. Review the plan before creating the agent:
+Each Add chooses an unused agent ID. The CLI reports that ID so you can open
+or configure the agent afterward. The Control UI opens the new agent's chat
+and starts with "What can you do?" after a successful Add.
+
+`--dry-run --json` remains available for automation or offline inspection.
+`--agent-id` and `--workspace` override the default destination with an
+unused ID or new path. Ordinary Add does not require a separate plan or
+review token. Exceptional trust warnings can still require explicit consent.
+
+Gateway Add review responses describe schedules as either `{ cron, timezone }`
+or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
+values are `none`, `last-channel`, or `owner`.
+
+Add reuses matching shared dependencies, installs missing requirements,
+creates the agent and its workspace, and assigns its automations. An existing
+agent or workspace is never overwritten. If Add fails, inspect the specific
+error and retry after resolving it; newly created resources are cleaned up
+where safe, while resources that existed before Add are left alone.
+
+## Remove the agent
+
+Deleting an agent added from a Claw is the same as deleting any other agent:
 
 ```bash
-openclaw claws add ./incident-triage.claw.json \
-  --yes \
-  --plan-integrity <SHA256_FROM_DRY_RUN>
+openclaw agents delete incident-triage
 ```
 
-`--yes` alone is insufficient. OpenClaw rebuilds the plan and rejects consent
-when the source, destination, or live configuration changed after preview. Use
-`--agent-id` or `--workspace` during both preview and apply when package
-defaults collide with local state. For disposable profiles and parallel validation,
-pass an explicit `--workspace`; `OPENCLAW_STATE_DIR` relocates runtime state but
-does not change the default workspace location.
-
-Adding a Claw creates the new agent and workspace configuration, writes declared
-workspace files, installs or reuses declared skill and plugin artifacts, and
-records package, MCP, and cron provenance. Existing files are not overwritten,
-and retries fail closed when owned content drifted.
-
-## Inspect installed state
-
-```bash
-openclaw claws status
-openclaw claws status incident-triage --json
-openclaw doctor
-```
-
-`status` compares the installed agent and its recorded workspace, package, MCP,
-and cron provenance with current state. It reports incomplete installs, missing
-resources, and drift without changing local state. `openclaw doctor` adds
-Claw-specific diagnostics for incomplete ownership records, unsafe managed
-files, and cron jobs that cannot be corroborated with live Gateway inventory.
-
-Claw provenance distinguishes two relationships:
-
-- **Managed:** the Claw introduced and currently manages the resource. It is a
-  cleanup candidate when unchanged and no conflicting owner remains.
-- **Referenced:** the resource existed independently or is shared. Removal
-  releases this Claw's reference and retains the resource by default.
-
-This is not a reference count. Ordinary plugin, skill, and agent commands keep
-their existing behavior; Claws add provenance and guarded lifecycle operations
-on top.
-
-## Update an installed Claw
-
-By default, update uses the source recorded when the Claw was added. Use
-`--from` when that source moved or when testing another package directory:
-
-```bash
-openclaw claws update incident-triage --dry-run --json
-openclaw claws update incident-triage \
-  --from ./incident-triage-next \
-  --dry-run --json
-```
-
-The plan compares current provenance and live state with the target manifest.
-It reports agent, workspace, package, MCP, cron, and ownership changes,
-including capability escalations and blockers. Capability escalations have
-separate machine-readable records and `!` lines with exact redacted effects in
-human output. Resolved package integrity, install identity, and any trust
-warning are included. Removing a package declaration releases this Claw's edge
-without uninstalling the artifact during update. The eventual
-exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
-content changes. Hosts may use the same records for a separate dialog or an
-aggregate multi-agent review. Apply the exact reviewed plan with explicit
-consent:
-
-```bash
-openclaw claws update incident-triage \
-  --yes \
-  --plan-integrity <SHA256_FROM_DRY_RUN>
-```
-
-OpenClaw rebuilds the plan and compare-and-swaps owned state before each
-mutation. Removed package declarations release dependency edges without
-uninstalling artifacts. Cron changes reread the live scheduler definition and
-stop on operator drift. Package installers, source-config writers, and the Gateway scheduler
-are not one transaction. If compensation cannot be proven after an external
-mutation, OpenClaw reports error code `update_partial` with structured
-`status: partial`, preserves uncertain provenance,
-and stops. Inspect `claws status`, the affected resource, and `openclaw doctor`;
-then preview again before retrying or removing anything.
-
-## Remove an installed Claw
-
-Preview removal before selecting cleanup:
-
-```bash
-openclaw claws remove incident-triage --dry-run --json
-openclaw claws remove incident-triage \
-  --yes \
-  --plan-integrity <SHA256_FROM_DRY_RUN>
-```
-
-The default removes eligible managed state and releases referenced state.
-Modified files and resources with another current owner are retained or
-blocked. Cleanup choices are part of the plan digest; `--yes` never broadens
-them. Globally installed plugins are retained while this Claw's reference is
-released; use the ordinary plugin lifecycle separately when you intend to
-uninstall a process-wide plugin.
-
-To remove unchanged Claw-introduced references that have no other current
-owner, include `--remove-unused` in both preview and apply. To select exact
-referenced resources instead, repeat `--remove-referenced`:
-
-```bash
-openclaw claws remove incident-triage \
-  --dry-run \
-  --remove-referenced 'plugin:@acme/audit-plugin@2.0.0'
-```
-
-Use `--force-referenced` only after reviewing the displayed dependents,
-independent owners, and pre-existing origin. It allows selected cleanup despite
-those conflicts; it does not skip plan-integrity consent.
-
-## Export an installed agent
-
-Export creates a new package directory and fails if the destination exists or
-managed state has drifted:
-
-```bash
-openclaw claws export incident-triage --out ./incident-triage-export --json
-```
-
-The result contains `package.json`, canonical `CLAW.md`, and managed workspace
-sidecars. Managed `SOUL.md` content is emitted as the `CLAW.md` body when it is
-non-empty UTF-8 and the combined document fits the manifest limit. Otherwise,
-export retains it as an explicit sidecar so the package remains importable. It
-is a portable Claw package, not a whole-instance backup: unrelated agents,
-credentials, sessions, and unowned local state are excluded.
+The ordinary agent deletion flow removes the agent's dedicated workspace,
+including its local instructions and skills, and automations assigned to that
+agent. It also removes files or automations the user added later to that agent.
+Shared plugins, MCP servers, and other host-level integrations remain installed;
+remove them separately through their ordinary controls when no longer needed.
+There is no Claw ownership record or reverse-install operation.
 
 ## Command reference
 
-| Command                             | Purpose                                             |
-| ----------------------------------- | --------------------------------------------------- |
-| `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one new agent and workspace.      |
-| `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
-| `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
-| `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
-| `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
+| Command                          | Purpose                                          |
+| -------------------------------- | ------------------------------------------------ |
+| `claws create [path]`            | Create a minimal local Claw project.             |
+| `claws validate [path]`          | Validate project inputs and package contents.    |
+| `claws dev [path]`               | Build and preview locally without mutation.      |
+| `claws build [path] --out <tgz>` | Build a deterministic package artifact.          |
+| `claws inspect <source>`         | Inspect a package or grouped manifest.           |
+| `claws add <source>`             | Create a new agent and install its requirements. |
 
-Use `--json` for experimental machine-readable output.
+Use `--json` for experimental machine-readable output. Validation errors,
+blocked requirements, and failed additions exit `1`.
 
 ## See also
 
@@ -373,4 +282,4 @@ Use `--json` for experimental machine-readable output.
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
 - [Cron jobs](/automation/cron-jobs)
-- [MCP configuration](/gateway/configuration-reference#mcp)
+- [MCP configuration](/gateway/config-extensions#mcp)

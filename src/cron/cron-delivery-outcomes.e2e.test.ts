@@ -1,36 +1,37 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
-  sendGatewayCronWebhook,
 } from "../gateway/server-cron-notifications.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import {
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runOutsideGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runCronCommandJob } from "./command-runner.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { resolveCronDeliveryPreviews } from "./delivery-preview.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
+import type { CronJob, CronJobCreate } from "./types.js";
 
 type WebhookRequest = {
   body: Record<string, unknown>;
   path: string;
 };
 
-async function createWebhookReceiver(): Promise<{
-  close: () => Promise<void>;
-  request: Promise<WebhookRequest>;
-  url: string;
-}> {
-  let resolveRequest!: (request: WebhookRequest) => void;
-  const request = new Promise<WebhookRequest>((resolve) => {
-    resolveRequest = resolve;
-  });
+async function createWebhookReceiver() {
+  const requests: WebhookRequest[] = [];
+  const request = createDeferred<WebhookRequest>();
   const server = createServer((incoming, response) => {
     let body = "";
     incoming.setEncoding("utf8");
@@ -38,338 +39,409 @@ async function createWebhookReceiver(): Promise<{
       body += chunk;
     });
     incoming.on("end", () => {
-      resolveRequest({
+      const received = {
         body: JSON.parse(body) as Record<string, unknown>,
         path: incoming.url ?? "",
-      });
+      };
+      requests.push(received);
+      request.resolve(received);
       response.writeHead(204, { Connection: "close" });
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+  const { claim, releaseListener } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => server,
   });
-  const address = server.address() as AddressInfo;
   return {
-    request,
-    url: `http://127.0.0.1:${address.port}/cron`,
+    request: request.promise,
+    requests,
+    url: `http://127.0.0.1:${claim.port}/cron`,
     close: async () => {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      try {
+        await releaseListener();
+      } finally {
+        await claim.release();
+      }
     },
   };
 }
 
-function commandRunner(): NonNullable<CronServiceDeps["runCommandJob"]> {
-  return async ({ job, abortSignal }) =>
-    await runCronCommandJob({ job, abortSignal, nowMs: Date.now });
+async function withReceiver(
+  prefix: string,
+  run: (
+    storePath: string,
+    receiver: Awaited<ReturnType<typeof createWebhookReceiver>>,
+    startCron: (deps?: Partial<CronServiceDeps>) => Promise<CronService>,
+  ) => Promise<void>,
+) {
+  const receiver = await createWebhookReceiver();
+  const crons: CronService[] = [];
+  try {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: `openclaw-cron-${prefix}-` },
+      async (state) => {
+        const storePath = state.path("cron", "jobs.json");
+        try {
+          await run(storePath, receiver, async (deps) => {
+            const cron = createCron(storePath, deps);
+            crons.push(cron);
+            await cron.start();
+            return cron;
+          });
+        } finally {
+          for (const cron of crons) {
+            cron.stop();
+          }
+        }
+      },
+    );
+  } finally {
+    await receiver.close();
+  }
+}
+
+function createCron(storePath: string, deps: Partial<CronServiceDeps> = {}) {
+  return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
+    storePath,
+    cronEnabled: true,
+    log: createNoopLogger(),
+    enqueueSystemEvent: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...deps,
+  });
+}
+
+function addJob(cron: CronService, name: string, overrides: Partial<CronJobCreate> = {}) {
+  return cron.add({
+    name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: name },
+    ...overrides,
+  });
+}
+
+const sendFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = (params) =>
+  sendGatewayCronFailureAlert({
+    ...params,
+    deps: {} as never,
+    logger: createNoopLogger(),
+    resolveCronAgent: () => ({ agentId: "main", cfg: {} as never }),
+    ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+  });
+
+function failureDelivery(to: string): NonNullable<CronJobCreate["delivery"]> {
+  return { mode: "none", failureDestination: { mode: "webhook", to } };
+}
+
+function agentResult(result: Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>) {
+  return vi.fn(async () => ({ ...result }));
+}
+
+async function runJob(cron: CronService, id: string) {
+  await expect(cron.run(id, "force")).resolves.toEqual({ ok: true, ran: true });
+}
+
+function runHistory(storePath: string, jobId: string, limit = 1) {
+  return readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId, limit });
 }
 
 function historyEntry(storePath: string, jobId: string) {
-  const history = readCronTaskRunHistoryPage({
-    storeKey: cronStoreKey(storePath),
-    jobId,
-    limit: 1,
-  });
+  const history = runHistory(storePath, jobId);
   expect(history.total).toBe(1);
-  return history.entries[0];
+  const entry = history.entries[0];
+  if (!entry) {
+    throw new Error(`Expected cron run history for job ${jobId}`);
+  }
+  return entry;
 }
 
 async function persistedJob(storePath: string, jobId: string) {
   return (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
 }
 
-describe.sequential("cron delivery outcomes", () => {
-  it("delivers a command result through the guarded webhook boundary and persists it", async () => {
-    const receiver = await createWebhookReceiver();
-    try {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-cron-webhook-delivery-" },
-        async (state) => {
-          resetTaskRegistryForTests({ persist: false });
-          const storePath = state.path("cron", "jobs.json");
-          const cron = new CronService({
-            storePath,
-            cronEnabled: true,
-            log: createNoopLogger(),
-            enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
-            runCommandJob: commandRunner(),
-            runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-            sendCronWebhook: async (params) =>
-              await sendGatewayCronWebhook({
-                ...params,
-                ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-              }),
-          });
-          try {
-            await cron.start();
-            const job = await cron.add({
-              name: "primary webhook delivery",
-              enabled: true,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "next-heartbeat",
-              payload: {
-                kind: "command",
-                argv: [process.execPath, "-e", "process.stdout.write('DELIVERY_OUTCOME')"],
-              },
-              delivery: { mode: "webhook", to: receiver.url },
-            });
+async function expectState(storePath: string, jobId: string, expected: Partial<CronJob["state"]>) {
+  expect((await persistedJob(storePath, jobId))?.state).toMatchObject(expected);
+}
 
-            await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-            const delivered = await receiver.request;
-            expect(delivered).toMatchObject({
-              path: "/cron",
-              body: {
-                action: "finished",
-                jobId: job.id,
-                status: "ok",
-                summary: "DELIVERY_OUTCOME",
-              },
-            });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "ok",
-                lastDelivered: true,
-                lastDeliveryStatus: "delivered",
-              },
-            });
-            expect(historyEntry(storePath, job.id)).toMatchObject({
-              status: "ok",
-              deliveryStatus: "delivered",
-              delivered: true,
-            });
-          } finally {
-            cron.stop();
-            resetTaskRegistryForTests({ persist: false });
+describe("cron delivery outcomes", { concurrent: false }, () => {
+  it("omits providerless channel causes while preserving watchdog timeout diagnostics", async () => {
+    await withReceiver("providerless", async (storePath, receiver, startCron) => {
+      let execution: "channel-failure" | "watchdog-timeout" = "channel-failure";
+      const watchdogExecutionStarted = createDeferred();
+      const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(
+        async ({ abortSignal, onExecutionStarted }) => {
+          if (execution === "channel-failure") {
+            return {
+              status: "error",
+              error:
+                "heartbeat failed: MatrixError: [500] M_UNKNOWN: Internal server error occurred",
+            };
           }
+          if (!abortSignal) {
+            throw new Error("expected cron watchdog abort signal");
+          }
+          onExecutionStarted?.();
+          watchdogExecutionStarted.resolve();
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { status: "error", error: "cron watchdog aborted the runner" };
         },
       );
-    } finally {
-      await receiver.close();
-    }
+      const cron = await startCron({
+        runIsolatedAgentJob,
+        sendCronFailureAlert: sendFailureAlert,
+      });
+      const createJob = async (name: string, timeoutSeconds?: number) =>
+        await addJob(cron, name, {
+          payload: {
+            kind: "agentTurn",
+            message: name,
+            ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+          },
+          delivery: failureDelivery(receiver.url),
+          failureAlert: { after: 1 },
+        });
+
+      const channelJob = await createJob("providerless channel failure");
+      await runJob(cron, channelJob.id);
+      await vi.waitFor(() => expect(receiver.requests).toHaveLength(1));
+      expect(cron.getJob(channelJob.id)?.state.lastErrorReason).toBeUndefined();
+      expect(historyEntry(storePath, channelJob.id).errorReason).toBeUndefined();
+      expect(receiver.requests[0]?.body.message).not.toContain("Cause: timeout");
+      expect(receiver.requests[0]?.body.message).toContain("Last error: heartbeat failed:");
+
+      execution = "watchdog-timeout";
+      const watchdogJob = await createJob("providerless cron watchdog timeout", 0.05);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const watchdogRun = cron.run(watchdogJob.id, "force");
+        await watchdogExecutionStarted.promise;
+        await vi.advanceTimersByTimeAsync(50);
+        await expect(watchdogRun).resolves.toEqual({ ok: true, ran: true });
+        await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(cron.getJob(watchdogJob.id)?.state.lastErrorReason).toBe("timeout");
+      expect(historyEntry(storePath, watchdogJob.id).errorReason).toBe("timeout");
+      expect(receiver.requests[1]?.body.message).toContain("Cause: timeout");
+    });
   });
 
-  it("dispatches a failed run to its real failure webhook and keeps durable error state", async () => {
-    const receiver = await createWebhookReceiver();
-    try {
+  it("applies threshold and cooldown once before transporting execution failure alerts", async () => {
+    await withReceiver("failure", async (storePath, receiver, startCron) => {
+      const cron = await startCron({
+        runIsolatedAgentJob: agentResult({ status: "error", error: "monitor failed" }),
+        sendCronFailureAlert: sendFailureAlert,
+        onEvent: (event) => {
+          if (event.action !== "finished") {
+            return;
+          }
+          dispatchGatewayCronFinishedNotifications({
+            evt: event,
+            job: event.job ?? cron.getJob(event.jobId),
+            logger: createNoopLogger(),
+            ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+          });
+        },
+      });
+      const job = await addJob(cron, "60-second monitor", {
+        delivery: failureDelivery(receiver.url),
+      });
+
+      for (let index = 0; index < 21; index += 1) {
+        await runJob(cron, job.id);
+      }
+      const disabled = await addJob(cron, "disabled failure alert", {
+        delivery: failureDelivery(receiver.url),
+        failureAlert: false,
+      });
+      for (let index = 0; index < 2; index += 1) {
+        await runJob(cron, disabled.id);
+      }
+
+      await receiver.request;
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(receiver.requests).toHaveLength(1);
+      expect(receiver.requests[0]).toMatchObject({
+        path: "/cron",
+        body: {
+          jobId: job.id,
+          jobName: "60-second monitor",
+          message: 'Automation "60-second monitor" failed 2 times\nLast error: monitor failed',
+        },
+      });
+      await expectState(storePath, job.id, {
+        lastRunStatus: "error",
+        lastError: "monitor failed",
+        consecutiveErrors: 21,
+        lastFailureAlertAtMs: expect.any(Number),
+        lastFailureNotificationDeliveryStatus: "not-requested",
+      });
+      const history = runHistory(storePath, job.id, 25);
+      expect(history.total).toBe(21);
+      expect(history.entries).toHaveLength(21);
+      expect(history.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ status: "error", error: "monitor failed" }),
+        ]),
+      );
+      expect(
+        history.entries.filter((entry) => entry.failureNotificationDelivery?.status === "unknown"),
+      ).toHaveLength(1);
+    });
+  });
+
+  it.each(["transport", "admission"] as const)(
+    "falls back to the exact job owner when Gateway alert %s rejects",
+    async (failure) => {
       await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-cron-failure-destination-" },
+        { layout: "state-only", prefix: "openclaw-cron-alert-fallback-" },
         async (state) => {
-          resetTaskRegistryForTests({ persist: false });
+          const enqueueSystemEvent = vi.fn();
+          const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
           const storePath = state.path("cron", "jobs.json");
-          const cron = new CronService({
-            storePath,
-            cronEnabled: true,
-            log: createNoopLogger(),
-            enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
-            runCommandJob: commandRunner(),
-            runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-            onEvent: (event) => {
-              if (event.action !== "finished") {
-                return;
+          let delivery: Promise<void> | undefined;
+          const expectedError =
+            failure === "admission"
+              ? "Gateway is restarting"
+              : "Blocked hostname or private/internal/special-use IP address";
+          const cron = createCron(storePath, {
+            enqueueSystemEvent,
+            enqueueSessionEvent,
+            runIsolatedAgentJob: agentResult({ status: "error", error: "provider unavailable" }),
+            sendCronFailureAlert: (params) => {
+              const send = () =>
+                sendGatewayCronFailureAlert({
+                  ...params,
+                  deps: {} as never,
+                  logger: createNoopLogger(),
+                  resolveCronAgent: () => ({ agentId: "work", cfg: {} as never }),
+                });
+              if (failure === "admission") {
+                // Without a live parent, a detached alert must respect the restart fence.
+                markGatewayRestartDraining();
+                delivery = runOutsideGatewayRootWorkAdmission(send);
+              } else {
+                delivery = send();
               }
-              dispatchGatewayCronFinishedNotifications({
-                evt: event,
-                job: event.job ?? cron.getJob(event.jobId),
-                deps: {} as never,
-                logger: createNoopLogger(),
-                resolveCronAgent: () => ({ agentId: "main", cfg: {} as never }),
-                ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-              });
+              return delivery;
             },
           });
           try {
             await cron.start();
-            const job = await cron.add({
-              name: "failure destination delivery",
-              enabled: true,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "next-heartbeat",
-              payload: {
-                kind: "command",
-                argv: [
-                  process.execPath,
-                  "-e",
-                  "process.stderr.write('DELIVERY_FAILURE'); process.exit(2)",
-                ],
-              },
-              delivery: {
-                mode: "none",
-                failureDestination: { mode: "webhook", to: receiver.url },
+            const sessionKey = "agent:work:cron:failure-fallback";
+            const job = await addJob(cron, "fallback owner", {
+              agentId: "work",
+              sessionKey,
+              wakeMode: "now",
+              delivery: { mode: "none" },
+              failureAlert: {
+                after: 1,
+                mode: "webhook",
+                to: "http://127.0.0.1:9/failure",
               },
             });
 
-            await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-            expect(await receiver.request).toMatchObject({
-              path: "/cron",
-              body: {
-                jobId: job.id,
-                jobName: "failure destination delivery",
-                status: "error",
-                message:
-                  'Automation "failure destination delivery" failed: command exited with code 2',
-              },
-            });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "error",
-                lastError: "command exited with code 2",
-              },
-            });
-            expect(historyEntry(storePath, job.id)).toMatchObject({
-              status: "error",
-              error: "command exited with code 2",
+            await cron.run(job.id, "force");
+
+            if (!delivery) {
+              throw new Error("Expected a failure alert transport");
+            }
+            await expect(delivery).rejects.toThrow(expectedError);
+            expect(enqueueSystemEvent).not.toHaveBeenCalled();
+            expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining('Automation "fallback owner" failed 1 times'),
+              { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+            );
+            await expectState(storePath, job.id, {
+              lastFailureNotificationDelivered: false,
+              lastFailureNotificationDeliveryStatus: "not-delivered",
+              lastFailureNotificationDeliveryError: expect.stringContaining(expectedError),
             });
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
+            resetGatewayWorkAdmission();
           }
         },
       );
-    } finally {
-      await receiver.close();
-    }
-  });
+    },
+  );
 
   it("sends skipped-run alerts through the real webhook path and persists alert state", async () => {
-    const receiver = await createWebhookReceiver();
-    try {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-cron-skipped-alert-" },
-        async (state) => {
-          resetTaskRegistryForTests({ persist: false });
-          const storePath = state.path("cron", "jobs.json");
-          const cron = new CronService({
-            storePath,
-            cronEnabled: true,
-            cronConfig: {
-              failureAlert: {
-                enabled: true,
-                after: 1,
-                cooldownMs: 0,
-                includeSkipped: true,
-                mode: "webhook",
-                to: receiver.url,
-              },
-            },
-            log: createNoopLogger(),
-            enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: vi.fn(async () => ({
-              status: "skipped" as const,
-              error: "requests-in-flight",
-            })),
-            sendCronFailureAlert: async (params) =>
-              await sendGatewayCronFailureAlert({
-                ...params,
-                deps: {} as never,
-                logger: createNoopLogger(),
-                resolveCronAgent: () => ({ agentId: "main", cfg: {} as never }),
-                ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-              }),
-          });
-          try {
-            await cron.start();
-            const job = await cron.add({
-              name: "skipped run alert",
-              enabled: true,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "agentTurn", message: "check availability" },
-              delivery: { mode: "none" },
-            });
-
-            await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
-            expect(await receiver.request).toMatchObject({
-              path: "/cron",
-              body: {
-                jobId: job.id,
-                jobName: "skipped run alert",
-                message:
-                  'Automation "skipped run alert" skipped 1 times\nSkip reason: requests-in-flight',
-              },
-            });
-            expect(await persistedJob(storePath, job.id)).toMatchObject({
-              state: {
-                lastRunStatus: "skipped",
-                consecutiveSkipped: 1,
-                lastFailureAlertAtMs: expect.any(Number),
-              },
-            });
-            expect(historyEntry(storePath, job.id)).toMatchObject({
-              status: "skipped",
-              error: "requests-in-flight",
-            });
-          } finally {
-            cron.stop();
-            resetTaskRegistryForTests({ persist: false });
-          }
+    await withReceiver("skipped", async (storePath, receiver, startCron) => {
+      const cron = await startCron({
+        cronConfig: {
+          failureAlert: {
+            enabled: true,
+            after: 1,
+            cooldownMs: 0,
+            includeSkipped: true,
+            mode: "webhook",
+            to: receiver.url,
+          },
         },
+        runIsolatedAgentJob: agentResult({ status: "skipped", error: "requests-in-flight" }),
+        sendCronFailureAlert: sendFailureAlert,
+      });
+      const job = await addJob(cron, "skipped run alert", {
+        delivery: { mode: "none" },
+      });
+
+      await runJob(cron, job.id);
+      expect(await receiver.request).toMatchObject({
+        path: "/cron",
+        body: {
+          jobId: job.id,
+          jobName: "skipped run alert",
+          message:
+            'Automation "skipped run alert" skipped 1 times\nSkip reason: requests-in-flight',
+        },
+      });
+      await vi.waitFor(() =>
+        expectState(storePath, job.id, {
+          lastRunStatus: "skipped",
+          consecutiveSkipped: 1,
+          lastFailureAlertAtMs: expect.any(Number),
+          lastFailureNotificationDelivered: true,
+          lastFailureNotificationDeliveryStatus: "delivered",
+        }),
       );
-    } finally {
-      await receiver.close();
-    }
+      expect(historyEntry(storePath, job.id)).toMatchObject({
+        status: "skipped",
+        error: "requests-in-flight",
+      });
+    });
   });
 
-  it("builds delivery previews from persisted webhook and opt-out jobs", async () => {
+  it("builds delivery previews for webhook and opt-out jobs", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-delivery-preview-" },
-      async (state) => {
-        resetTaskRegistryForTests({ persist: false });
-        const cron = new CronService({
-          storePath: state.path("cron", "jobs.json"),
-          cronEnabled: true,
-          log: createNoopLogger(),
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runCommandJob: commandRunner(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-        try {
-          await cron.start();
-          const webhookJob = await cron.add({
-            name: "webhook preview",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
+      async () => {
+        const payload: CronJob["payload"] = {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.exit(0)"],
+        };
+        const jobs = [
+          makeCronJob({
+            id: "webhook",
+            payload,
             delivery: { mode: "webhook", to: "https://hooks.example.test/cron" },
-          });
-          const noDeliveryJob = await cron.add({
-            name: "no delivery preview",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
-            delivery: { mode: "none" },
-          });
-
-          const jobs = await cron.list({ includeDisabled: true });
-          const previews = await resolveCronDeliveryPreviews({ cfg: {} as never, jobs });
-          expect(previews).toMatchObject({
-            [webhookJob.id]: {
-              label: "webhook:https://hooks.example.test/cron",
-              detail: "webhook",
-            },
-            [noDeliveryJob.id]: {
-              label: "not requested",
-              detail: "not requested",
-            },
-          });
-        } finally {
-          cron.stop();
-          resetTaskRegistryForTests({ persist: false });
-        }
+          }),
+          makeCronJob({ id: "none", payload, delivery: { mode: "none" } }),
+        ];
+        expect(await resolveCronDeliveryPreviews({ cfg: {}, jobs })).toMatchObject({
+          webhook: { label: "webhook:https://hooks.example.test/cron", detail: "webhook" },
+          none: { label: "not requested", detail: "not requested" },
+        });
       },
     );
   });

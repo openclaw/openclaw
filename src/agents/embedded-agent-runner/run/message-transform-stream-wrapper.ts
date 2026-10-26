@@ -1,39 +1,49 @@
-/**
- * Wraps stream functions with pre-call message transforms.
- */
+import {
+  PROVIDER_CONTEXT_HANDOFF,
+  type ProviderContext,
+  type ProviderStreamOptions,
+} from "@openclaw/ai/provider-types";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "../../runtime/index.js";
 
-/**
- * Stream wrapper for applying message transforms immediately before provider dispatch.
- */
-type MessageTransform = (messages: AgentMessage[], model: unknown) => AgentMessage[];
+type MessageTransform = (
+  messages: AgentMessage[],
+  model: Parameters<StreamFn>[0],
+) => AgentMessage[];
+type ProviderContextMaterializer = (input: {
+  context: Parameters<StreamFn>[1];
+  signal?: AbortSignal;
+}) => Promise<ProviderContext>;
 
-/** Wraps a stream function with a conditional message-list transform. */
 export function wrapStreamFnWithMessageTransform(
   streamFn: StreamFn,
   transform: MessageTransform,
+  materializeProviderContext?: ProviderContextMaterializer,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = (context as unknown as { messages?: unknown })?.messages;
-    if (!Array.isArray(messages)) {
-      return streamFn(model, context, options);
+    const messages = context.messages;
+    const nextMessages = transform(messages, model);
+    const nextContext =
+      nextMessages !== messages
+        ? {
+            ...context,
+            messages: nextMessages as typeof context.messages,
+          }
+        : context;
+    if (!materializeProviderContext) {
+      return streamFn(model, nextContext, options);
     }
-
-    const nextMessages = transform(messages as AgentMessage[], model);
-    if (nextMessages === messages) {
-      return streamFn(model, context, options);
-    }
-
-    return streamFn(
-      // Clone the context instead of mutating it so callers can reuse the original assembled
-      // context for logging, replay, or retry comparisons.
-      model,
-      {
-        ...(context as unknown as Record<string, unknown>),
-        messages: nextMessages,
-      } as typeof context,
-      options,
-    );
+    let providerContext: Promise<ProviderContext> | undefined;
+    const handoff = async (): Promise<ProviderContext> => {
+      options?.signal?.throwIfAborted();
+      return (providerContext ??= materializeProviderContext({
+        context: nextContext,
+        signal: options?.signal,
+      }));
+    };
+    return streamFn(model, nextContext, {
+      ...options,
+      [PROVIDER_CONTEXT_HANDOFF]: handoff,
+    } as ProviderStreamOptions & NonNullable<Parameters<StreamFn>[2]>);
   };
 }

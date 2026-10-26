@@ -1,231 +1,302 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { GIT_COAUTHOR_PREFERENCE_KEY as coauthor } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db.js";
+import * as stateDatabase from "./openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
+import { readUserProfileVersion } from "./user-profile-events.js";
 import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  formatUserProfileAvatarEtag,
-  getProfileAvatar,
+  getUserProfileListItem,
+  readUserProfileSnapshotSync as readSnapshot,
+} from "./user-profile-list-item.test-support.js";
+import {
+  getUserProfileDisplay as displayProfile,
+  prepareUserProfileCatalog,
+} from "./user-profile-list.js";
+import {
   linkEmail,
-  listProfiles,
-  resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
+} from "./user-profile-writes.worker.js";
+import { createProfileAvatarReader } from "./user-profiles-avatar.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
+import {
+  avatarPng,
+  avatarResponse,
+  useProfileDatabase,
+} from "./user-profiles-fixture.test-support.js";
+import {
+  inspectProfileAvatarInDatabase as inspectAvatar,
+  selectProfileDisplayEntries as readDisplays,
+  selectResolvedUserProfileMetadataById as readMetadata,
+} from "./user-profiles-internal.js";
+import { migrateLegacyTailscaleProfileIdentities as migrateIdentities } from "./user-profiles-tailscale-migration.js";
+import {
+  adoptTailscaleProfileAvatar as adoptAvatar,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
 } from "./user-profiles.js";
 
-const statePaths: string[] = [];
+const { options, tempDirs, hydrate, github } = useProfileDatabase("openclaw-user-profiles-");
 
-function stateOptions() {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
-  const path = join(directory, "openclaw.sqlite");
-  statePaths.push(path);
-  return { path };
+const ensureProvider = (login: string, name?: string) =>
+  ensureProfileForTailscaleIdentity({ login, name }, options);
+const ensureEmail = (address: string) => ensureProfileForEmail(address, options);
+const avatar = (id: string) => getProfileAvatar(id, options);
+const preferences = (id: string) => getUserPreferences(id, undefined, options);
+
+const avatarUrl = "https://avatars.example.test/profile";
+function duringWriterAdmission(run: () => void) {
+  const original = stateDatabase.runOpenClawStateWriteTransaction;
+  vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce((...args) => {
+    run();
+    return original(...args);
+  });
 }
-
-function fixtureImage(path: string): Buffer {
-  return readFileSync(join(process.cwd(), path));
-}
-
-function imageFetch(bytes: Uint8Array, mime: string) {
-  return vi.fn(
-    async () => new Response(Uint8Array.from(bytes).buffer, { headers: { "content-type": mime } }),
-  );
-}
-
-async function ensureTailscaleProfileWithAvatar(
-  identity: Parameters<typeof ensureProfileForTailscaleIdentity>[0],
-  options: Parameters<typeof ensureProfileForTailscaleIdentity>[1],
-  fetchOptions: Parameters<typeof adoptTailscaleProfileAvatar>[3],
-) {
-  const profile = ensureProfileForTailscaleIdentity(identity, options);
-  return await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, fetchOptions);
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
 
 describe("user profiles", () => {
-  it("lazily ensures and resolves lowercased email aliases idempotently", () => {
-    const options = stateOptions();
-    const database = openOpenClawStateDatabase(options).db;
-    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
-    expect(tableExists(database, "user_profiles")).toBe(false);
-    expect(tableExists(database, "user_profile_identities")).toBe(false);
+  it.each([false, true])(
+    "display lookup leaves absent storage absent (database exists: %s)",
+    (exists) => {
+      const database = exists ? openOpenClawStateDatabase(options).db : undefined;
+      expect(() => displayProfile("missing-profile", options)).toThrow("user profile not found");
+      if (database) {
+        expect(tableExists(database, "user_profiles")).toBe(false);
+      } else {
+        expect(existsSync(options.path)).toBe(false);
+      }
+    },
+  );
 
-    const first = ensureProfileForEmail("  Ada@Example.COM ", options);
-    const second = ensureProfileForEmail("ada@example.com", options);
+  it.each(["email", "provider"])("reuses a %s profile created during writer admission", (kind) => {
+    ensureEmail("schema-ready@example.test");
+    const ensure =
+      kind === "email"
+        ? () => ensureEmail("racing@example.test")
+        : () => ensureProvider("racing@github");
+    let competing: ReturnType<typeof ensureProfileForEmail> | undefined;
+    duringWriterAdmission(() => {
+      competing = ensure();
+    });
+    expect(ensure()).toEqual(competing);
+    expect(competing).toBeDefined();
+    expect(readSnapshot(options).profiles).toHaveLength(2);
+  });
 
-    expect(tableExists(openOpenClawStateDatabase(options).db, "user_profiles")).toBe(true);
-    expect(tableExists(openOpenClawStateDatabase(options).db, "user_profile_identities")).toBe(
-      true,
+  it("publishes a normalized provider subject only once", () => {
+    const identity = { login: "ada@github" };
+    const profile = ensureProfileForTailscaleIdentity(identity, options);
+    const db = openOpenClawStateDatabase(options).db;
+    db.prepare("UPDATE user_profile_identities SET subject = ? WHERE provider = ?").run(
+      "ada",
+      "github",
     );
-    expect(
-      openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
-    ).toBe(versionBefore);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(6);
-    expect(second).toEqual(first);
-    expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
-    expect(listProfiles(options)).toEqual([
-      expect.objectContaining({ id: first.id, emails: ["ada@example.com"] }),
+    const version = readUserProfileVersion();
+    expect(ensureProfileForTailscaleIdentity(identity, options)).toEqual(profile);
+    expect(readUserProfileVersion()).toBe(version + 1);
+    expect(db.prepare("SELECT subject FROM user_profile_identities").all()).toEqual([
+      { subject: "login:ada" },
     ]);
+    expect(ensureProfileForTailscaleIdentity(identity, options)).toEqual(profile);
+    expect(readUserProfileVersion()).toBe(version + 1);
   });
 
-  it("resolves provider identities without storing them as emails", () => {
-    const options = stateOptions();
+  it.each(["unadmitted", "admitted"] as const)(
+    "preserves metadata and display reads on a %s handle across role schema changes",
+    (mode) => {
+      const profile = ensureEmail("reader@example.test");
+      setUserProfileRole(profile.id, "maintainer", options);
+      expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
+      const reader =
+        mode === "unadmitted"
+          ? new (requireNodeSqlite().DatabaseSync)(options.path, { readOnly: true })
+          : openNodeSqliteDatabase(options.path, { readOnly: true });
+      enableNodeSqliteKyselyStatementCache(reader);
+      if (mode !== "unadmitted") {
+        admitSqliteSchema(reader);
+      }
+      try {
+        const role = "maintainer";
+        expect(readMetadata(reader, profile.id)).toMatchObject({ id: profile.id, role });
+        expect(readDisplays(reader, [profile.id])).toMatchObject([
+          [profile.id, { id: profile.id, role, has_avatar: 1 }],
+        ]);
+        if (mode === "admitted") {
+          expect(inspectAvatar(reader, profile.id)).toMatchObject({
+            profile: { id: profile.id, role },
+            hasAvatar: true,
+            avatar: { byteLength: 3 },
+          });
+        } else {
+          expect(() => inspectAvatar(reader, profile.id)).toThrow(
+            "Profile avatar reads require admitted schema facts",
+          );
+        }
+        openOpenClawStateDatabase(options).db.exec("ALTER TABLE user_profiles DROP COLUMN role");
+        runSqliteReadOperationSync(reader, () => {
+          expect(readMetadata(reader, profile.id)).not.toHaveProperty("role");
+          expect(readDisplays(reader, [profile.id])[0]?.[1]).not.toHaveProperty("role");
+          if (mode === "admitted") {
+            expect(inspectAvatar(reader, profile.id)).toMatchObject({
+              profile: { id: profile.id },
+              hasAvatar: true,
+              avatar: { byteLength: 3 },
+            });
+          }
+        });
+      } finally {
+        reader.close();
+      }
+    },
+  );
 
-    const first = ensureProfileForTailscaleIdentity(
-      { login: "Ada@GitHub", name: "Ada Lovelace" },
-      options,
-    );
-    const second = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Different Provider Name" },
-      options,
-    );
-
-    expect(second.id).toBe(first.id);
-    expect(second.displayName).toBe("Ada Lovelace");
-    expect(listProfiles(options)).toEqual([
-      expect.objectContaining({ id: first.id, emails: [], displayName: "Ada Lovelace" }),
-    ]);
+  it("keeps immutable owners isolated when a numeric GitHub login is renamed and reused", () => {
+    const accountA = github(10, "10", { initialName: "Account A" });
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setAvatar(accountA.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
     expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare(
-          "SELECT provider, subject, profile_id FROM user_profile_identities ORDER BY provider, subject",
-        )
-        .all(),
-    ).toEqual([{ provider: "github", subject: "ada", profile_id: first.id }]);
+      setUserPreferences(accountA.id, { theme: "claw", [coauthor]: true }, options),
+    ).toMatchObject({ ok: true });
+    const renamed = github(10, "new-login", {
+      initialName: "Provider Renamed A",
+      name: "GitHub Renamed",
+    });
+    expect(github(10, "new-login")).toEqual(renamed);
+    const accountB = github(20, "10", { initialName: "Account B" });
+    expect(renamed.id).toBe(accountA.id);
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      githubIdentity: { login: "10" },
+      hasAvatar: false,
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(preferences(accountB.id)).toEqual({});
+    expect(ensureProvider("10@github").id).toBe(accountB.id);
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      githubIdentity: { login: "new-login" },
+      hasAvatar: true,
+    });
+    expect(avatar(accountA.id)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(preferences(accountA.id)).toEqual({ theme: "claw", [coauthor]: true });
   });
 
-  it("keeps dotted Tailscale logins on the email alias path", () => {
-    const options = stateOptions();
-
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "Person@Gmail.COM", name: "Person Example" },
-      options,
-    );
-
-    expect(ensureProfileForEmail("person@gmail.com", options).id).toBe(profile.id);
-    expect(profile.displayName).toBe("Person Example");
-    expect(listProfiles(options)).toEqual([
-      expect.objectContaining({ id: profile.id, emails: ["person@gmail.com"] }),
-    ]);
-  });
-
-  it("adopts a Tailscale name only while the display-name slot is empty", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Ada Provider" },
-      options,
-    );
-
-    setDisplayName(profile.id, null, options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-    ).toMatchObject({ displayName: "Ada Adopted" });
-
-    setDisplayName(profile.id, "User Chosen", options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
-    ).toMatchObject({ displayName: "User Chosen" });
-  });
-
-  it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
-    const options = stateOptions();
-    const source = ensureProfileForEmail("source@example.com", options);
-    const target = ensureProfileForEmail("target@example.com", options);
-
-    const linked = linkEmail("source@example.com", target.id, options);
-
-    expect(ensureProfileForEmail("source@example.com", options).id).toBe(target.id);
-    expect(linked).toMatchObject({
+  it("persists GitHub names on the surviving merge head", async () => {
+    const target = github(10, "Ada", { alias: "ada" });
+    setDisplayName(target.id, "Ada", options);
+    const source = ensureEmail("alias@example.com");
+    setDisplayName(source.id, "Source Custom", options);
+    const updated = github(10, "Ada", { name: "Ada Lovelace", email: "alias@example.com" });
+    expect(updated).toMatchObject({ id: target.id, displayName: "Ada Lovelace" });
+    closeOpenClawStateDatabaseForTest();
+    await hydrate();
+    expect(displayProfile(source.id, options)).toMatchObject({
       id: target.id,
-      emails: ["source@example.com", "target@example.com"],
-      hasAvatar: false,
-    });
-    expect(listProfiles(options)).toContainEqual(
-      expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
-    );
-  });
-
-  it("compresses tombstones so durable profile references resolve to the merge head", () => {
-    const options = stateOptions();
-    const a = ensureProfileForEmail("a@example.com", options);
-    const b = ensureProfileForEmail("b@example.com", options);
-    const c = ensureProfileForEmail("c@example.com", options);
-
-    linkEmail("a@example.com", b.id, options);
-    linkEmail("a@example.com", c.id, options);
-    linkEmail("b@example.com", c.id, options);
-
-    expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
-    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
-    expect(listProfiles(options)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: a.id, mergedInto: c.id }),
-        expect.objectContaining({ id: b.id, mergedInto: c.id }),
-      ]),
-    );
-  });
-
-  it("resolves a tombstoned link target to its head without forming a cycle", () => {
-    const options = stateOptions();
-    const a = ensureProfileForEmail("a@example.com", options);
-    const b = ensureProfileForEmail("b@example.com", options);
-
-    linkEmail("a@example.com", b.id, options);
-    linkEmail("a@example.com", a.id, options);
-
-    expect(ensureProfileForEmail("a@example.com", options).id).toBe(b.id);
-    expect(listProfiles(options)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: a.id, mergedInto: b.id }),
-        expect.objectContaining({ id: b.id, mergedInto: null }),
-      ]),
-    );
-  });
-
-  it("updates display names", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-
-    expect(setDisplayName(profile.id, "Ada Lovelace", options)).toMatchObject({
-      id: profile.id,
       displayName: "Ada Lovelace",
-      emails: ["ada@example.com"],
-      hasAvatar: false,
     });
+    expect(ensureEmail("alias@example.com").id).toBe(target.id);
+  });
+
+  it("moves a reused Cloudflare email without exposing the prior verified owner", () => {
+    const email = "shared@example.test";
+    const accountA = github(10, "account-a", { email, initialName: "Account A" });
+    setDisplayName(accountA.id, "Account A Custom", options);
+    expect(setUserPreferences(accountA.id, { theme: "claw" }, options)).toMatchObject({ ok: true });
+    const accountB = github(20, "account-b", { email, initialName: "Account B" });
+    expect(accountB).toMatchObject({
+      displayName: "Account B",
+      emails: [email],
+      githubIdentity: { login: "account-b" },
+    });
+    expect(accountB.id).not.toBe(accountA.id);
+    expect(ensureProfileForEmail(email, options).id).toBe(accountB.id);
+    expect(getUserProfileListItem(accountA.id, options)).toMatchObject({
+      displayName: "Account A Custom",
+      emails: [],
+      githubIdentity: { login: "account-a" },
+    });
+    expect(preferences(accountA.id)).toEqual({ theme: "claw" });
+    expect(preferences(accountB.id)).toEqual({});
+  });
+
+  it("keeps retired GitHub attribution rows inert during verified sync", () => {
+    const matching = ensureProvider("ada@github");
+    const mismatched = ensureProvider("grace@github");
+    const db = openOpenClawStateDatabase(options).db;
+    const insert = db.prepare(
+      "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github-attribution', ?, ?, ?, 1)",
+    );
+    insert.run("10", matching.id, "ada");
+    insert.run("99", mismatched.id, "wrong-account");
+    expect(github(10, "ada")).toMatchObject({ githubIdentity: { login: "ada" } });
+    github(11, "grace");
+    expect(getUserPreferences(matching.id, [coauthor], options)).toEqual({});
+    expect(getUserPreferences(mismatched.id, [coauthor], options)).toEqual({});
+  });
+
+  it.each([false, true])(
+    "keeps co-author consent with the surviving verified account (target verified: %s)",
+    (verified) => {
+      const source = github(10, "source", { email: "source@example.com" });
+      const target = verified
+        ? github(11, "target", { email: "target@example.com" })
+        : ensureEmail("target@example.com");
+      setUserPreferences(source.id, { [coauthor]: true }, options);
+      expect(linkEmail("source@example.com", target.id, options).githubIdentity).toMatchObject({
+        login: verified ? "target" : "source",
+      });
+      expect(getUserPreferences(target.id, [coauthor], options)).toEqual(
+        verified ? {} : { [coauthor]: true },
+      );
+    },
+  );
+
+  it("adopts a Tailscale name into a blank slot and preserves racing and later custom edits", () => {
+    const profile = ensureProvider("ada@github", "Ada Provider");
+    setDisplayName(profile.id, " \t ", options);
+    const version = readUserProfileVersion();
+    expect(ensureProvider("ada@github", "Ada Adopted")).toMatchObject({
+      displayName: "Ada Adopted",
+    });
+    expect(readUserProfileVersion()).toBe(version + 1);
+    setDisplayName(profile.id, "", options);
+    duringWriterAdmission(() => {
+      setDisplayName(profile.id, "User Chosen", options);
+    });
+    expect(ensureProvider("ada@github", "Provider Changed")).toMatchObject({
+      id: profile.id,
+      displayName: "User Chosen",
+    });
+    expect(readUserProfileVersion()).toBe(version + 3);
+    expect(ensureProvider("ada@github", "Provider Changed").displayName).toBe("User Chosen");
+    expect(readUserProfileVersion()).toBe(version + 3);
   });
 
   it("updates all profiles whose aliases change", () => {
-    const options = stateOptions();
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(100);
-    const source = ensureProfileForEmail("source@example.com", options);
+    const source = ensureEmail("source@example.com");
     now.mockReturnValue(200);
-    const target = ensureProfileForEmail("target@example.com", options);
+    const target = ensureEmail("target@example.com");
     now.mockReturnValue(300);
     linkEmail("source-alias@example.com", source.id, options);
-
     now.mockReturnValue(400);
-    const linked = linkEmail("source@example.com", target.id, options);
-
-    expect(linked).toMatchObject({
+    expect(linkEmail("source@example.com", target.id, options)).toMatchObject({
       id: target.id,
       updatedAt: 400,
       emails: ["source@example.com", "target@example.com"],
     });
-    expect(listProfiles(options)).toContainEqual(
+    expect(readSnapshot(options).profiles).toContainEqual(
       expect.objectContaining({
         id: source.id,
         updatedAt: 400,
@@ -234,194 +305,58 @@ describe("user profiles", () => {
     );
   });
 
-  it("bounds generated display names to the protocol limit", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail(`${"a".repeat(300)}@example.com`, options);
-
-    expect(profile.displayName).toHaveLength(256);
-  });
-
-  it.each([
-    ["image/png", "ui/public/favicon-32.png"],
-    ["image/jpeg", "docs/whatsapp-openclaw.jpg"],
-    ["image/webp", "ui/public/app-art/android.webp"],
-  ])("adopts a bounded %s Tailscale avatar", async (mime, path) => {
-    const options = stateOptions();
-    const bytes = fixtureImage(path);
-
-    const profile = await ensureTailscaleProfileWithAvatar(
-      {
-        login: `avatar-${mime.slice("image/".length)}@github`,
-        name: "Avatar User",
-        profilePic: "https://avatars.example.test/profile",
-      },
-      options,
-      { fetchImpl: imageFetch(bytes, mime) },
-    );
-
-    expect(profile.avatarMime).toBe(mime);
-    const stored = getProfileAvatar(profile.id, options);
-    expect(stored).toMatchObject({
-      mime,
-      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+  it("preserves a user avatar written while provider bytes are in flight", async () => {
+    const entered = createDeferredCore();
+    const response = createDeferredCore<Response>();
+    const profile = ensureProvider("avatar-race@github", "Race User");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      entered.resolve();
+      return response.promise;
     });
-    expect(Buffer.from(stored?.bytes ?? []).equals(bytes)).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "oversized",
-      fetchImpl: vi.fn(
-        async () =>
-          new Response("x", {
-            headers: {
-              "content-length": String(512 * 1024 + 1),
-              "content-type": "image/png",
-            },
-          }),
-      ),
-    },
-    {
-      name: "wrong-type",
-      fetchImpl: vi.fn(
-        async () => new Response("not an image", { headers: { "content-type": "text/plain" } }),
-      ),
-    },
-    {
-      name: "failed-fetch",
-      fetchImpl: vi.fn(async () => {
-        throw new Error("network unavailable");
-      }),
-    },
-  ])("keeps the avatar empty after a $name fetch", async ({ fetchImpl }) => {
-    const options = stateOptions();
-
-    const profile = await ensureTailscaleProfileWithAvatar(
-      {
-        login: "avatar-failure@github",
-        name: "Still Authenticated",
-        profilePic: "https://avatars.example.test/profile",
-      },
-      options,
-      { fetchImpl },
-    );
-
-    expect(profile).toMatchObject({ displayName: "Still Authenticated", avatarMime: null });
-    expect(getProfileAvatar(profile.id, options)).toBeUndefined();
-  });
-
-  it("times out avatar adoption without failing profile resolution", async () => {
-    const options = stateOptions();
-    const fetchImpl = vi.fn(
-      async (_input: RequestInfo | URL, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () =>
-              reject(
-                init.signal?.reason instanceof Error
-                  ? init.signal.reason
-                  : new Error("avatar fetch aborted"),
-              ),
-            { once: true },
-          );
+    const pending = adoptAvatar(profile.id, avatarUrl, options);
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Avatar adoption did not enter its fetch");
         }),
-    );
-
-    const profile = await ensureTailscaleProfileWithAvatar(
-      {
-        login: "avatar-timeout@github",
-        name: "Timeout User",
-        profilePic: "https://avatars.example.test/profile",
-      },
-      options,
-      { fetchImpl, timeoutMs: 10 },
-    );
-
-    expect(profile).toMatchObject({ displayName: "Timeout User", avatarMime: null });
-    expect(getProfileAvatar(profile.id, options)).toBeUndefined();
+      ]);
+      expect(setAvatar(profile.id, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
+      const version = readUserProfileVersion();
+      response.resolve(avatarResponse());
+      await pending;
+      expect(readUserProfileVersion()).toBe(version);
+      expect(avatar(profile.id)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
+    } finally {
+      response.resolve(new Response("unavailable", { status: 503 }));
+      await Promise.allSettled([pending]);
+    }
   });
 
-  it("preserves a user avatar written while provider avatar bytes are in flight", async () => {
-    const options = stateOptions();
-    let resolveFetch: ((response: Response) => void) | undefined;
-    const fetchImpl = vi.fn(
-      async () =>
-        await new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        }),
-    );
-    const pending = ensureTailscaleProfileWithAvatar(
-      {
-        login: "avatar-race@github",
-        name: "Race User",
-        profilePic: "https://avatars.example.test/profile",
-      },
-      options,
-      { fetchImpl },
-    );
-    await vi.waitFor(() => expect(resolveFetch).toBeTypeOf("function"));
-    const profileId = listProfiles(options)[0]?.id;
-    expect(profileId).toBeTruthy();
-    expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
-
-    resolveFetch?.(
-      new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    await pending;
-
-    expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
-  });
-
-  it("migrates legacy provider logins while preserving profiles and real emails", () => {
-    const options = stateOptions();
-    const provider = ensureProfileForEmail("user@github", options);
-    const email = ensureProfileForEmail("person@gmail.com", options);
+  it("migrates legacy provider logins while preserving profiles and real emails", async () => {
+    const provider = ensureEmail("user@github");
+    const email = ensureEmail("person@gmail.com");
     setDisplayName(provider.id, "User Chosen", options);
     expect(setAvatar(provider.id, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
-
-    expect(migrateLegacyTailscaleProfileIdentities(options)).toEqual({
+    expect(migrateIdentities(options)).toEqual({
       changes: ["Moved 1 legacy Tailscale provider identity out of user profile email aliases."],
       warnings: [],
     });
-    expect(migrateLegacyTailscaleProfileIdentities(options)).toEqual({ changes: [], warnings: [] });
-
-    const database = openOpenClawStateDatabase(options).db;
+    expect(migrateIdentities(options)).toEqual({ changes: [], warnings: [] });
+    const db = openOpenClawStateDatabase(options).db;
     expect(
-      database.prepare("SELECT provider, subject, profile_id FROM user_profile_identities").all(),
-    ).toEqual([{ provider: "github", subject: "user", profile_id: provider.id }]);
-    expect(database.prepare("SELECT email, profile_id FROM user_profile_emails").all()).toEqual([
+      db.prepare("SELECT provider, subject, profile_id FROM user_profile_identities").all(),
+    ).toEqual([{ provider: "github", subject: "login:user", profile_id: provider.id }]);
+    expect(db.prepare("SELECT email, profile_id FROM user_profile_emails").all()).toEqual([
       { email: "person@gmail.com", profile_id: email.id },
     ]);
-    expect(listProfiles(options)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: provider.id,
-          displayName: "User Chosen",
-          emails: [],
-          hasAvatar: true,
-        }),
-        expect.objectContaining({ id: email.id, emails: ["person@gmail.com"] }),
-      ]),
-    );
-    expect(getProfileAvatar(provider.id, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
-  });
-
-  it("does not activate user-profile tables when Doctor has no legacy aliases", () => {
-    const options = stateOptions();
-    const database = openOpenClawStateDatabase(options).db;
-
-    expect(migrateLegacyTailscaleProfileIdentities(options)).toEqual({ changes: [], warnings: [] });
-    expect(tableExists(database, "user_profiles")).toBe(false);
-    expect(tableExists(database, "user_profile_identities")).toBe(false);
+    await hydrate();
+    expect(displayProfile(provider.id, options).displayName).toBe("User Chosen");
+    expect(avatar(provider.id)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
   });
 
   it("rejects oversized and unsupported avatar uploads", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-
+    const profile = ensureEmail("ada@example.com");
     expect(setAvatar(profile.id, new Uint8Array(512 * 1024 + 1), "image/png", options)).toEqual({
       ok: false,
       error: { code: "avatar_too_large", maxBytes: 512 * 1024 },
@@ -431,59 +366,90 @@ describe("user profiles", () => {
       error: { code: "unsupported_avatar_mime", mime: "image/gif" },
     });
   });
+});
 
-  it("stores an allowlisted avatar", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
+describe("avatar database lifetime", () => {
+  it.each(["unavailable", "wrong type", "image"])(
+    "keeps %s avatar adoption on its original database after handle replacement",
+    async (responseKind) => {
+      const fetched = responseKind === "image";
+      const originalDirectory = tempDirs.make("openclaw-avatar-original-");
+      const otherDirectory = tempDirs.make("openclaw-avatar-other-");
+      const env = { OPENCLAW_STATE_DIR: originalDirectory };
+      const sourceOptions = { env };
+      const profile = ensureProfileForEmail("avatar-lifetime@example.test", sourceOptions);
+      const original = openOpenClawStateDatabase(sourceOptions);
+      const originalOptions = { path: original.path };
+      const entered = createDeferredCore();
+      const response = createDeferredCore<Response>();
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        entered.resolve();
+        return response.promise;
+      });
+      const pending = adoptAvatar(profile.id, avatarUrl, sourceOptions);
+      try {
+        await entered.promise;
+        closeOpenClawStateDatabaseForTest();
+        expect(original.db.isOpen).toBe(false);
+        setDisplayName(profile.id, "Edited during fetch", originalOptions);
+        env.OPENCLAW_STATE_DIR = otherDirectory;
+        const other = ensureProfileForEmail("other@example.test", sourceOptions);
+        const bytes = avatarPng();
+        response.resolve(
+          fetched
+            ? avatarResponse(bytes)
+            : responseKind === "wrong type"
+              ? new Response("not an image", { headers: { "content-type": "text/plain" } })
+              : new Response("unavailable", { status: 503 }),
+        );
 
-    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toEqual({
-      ok: true,
-      value: expect.objectContaining({
-        id: profile.id,
-        avatarMime: "image/png",
-        emails: ["ada@example.com"],
-        hasAvatar: true,
-      }),
-    });
-    expect(getProfileAvatar(profile.id, options)).toEqual({
-      bytes: new Uint8Array([1, 2, 3]),
-      mime: "image/png",
-      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-      updatedAt: expect.any(Number),
-    });
-    expect(listProfiles(options)).toEqual([
-      expect.objectContaining({ id: profile.id, hasAvatar: true }),
-    ]);
-  });
+        await expect(pending).resolves.toMatchObject({
+          id: profile.id,
+          displayName: "Edited during fetch",
+          avatarMime: fetched ? "image/png" : null,
+        });
+        expect(getProfileAvatar(profile.id, originalOptions)?.bytes).toEqual(
+          fetched ? Uint8Array.from(bytes) : undefined,
+        );
+        expect(readSnapshot(sourceOptions).profiles).toEqual([
+          expect.objectContaining({ id: other.id, hasAvatar: false }),
+        ]);
+      } finally {
+        response.resolve(new Response("unavailable", { status: 503 }));
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
 
-  it("keeps distinct avatar ETags when updates share a millisecond", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-    vi.spyOn(Date, "now").mockReturnValue(100);
-
-    expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
-    const first = getProfileAvatar(profile.id, options);
-    expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
-    const second = getProfileAvatar(profile.id, options);
-
-    expect(first?.updatedAt).toBe(second?.updatedAt);
-    expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
-      formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
-    );
-  });
-
-  it("keeps distinct avatar ETags when MIME changes with identical bytes", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-    const bytes = new Uint8Array([1, 2, 3]);
-
-    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    const png = getProfileAvatar(profile.id, options);
-    expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
-    const webp = getProfileAvatar(profile.id, options);
-
-    expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
-      formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
-    );
-  });
+  it.each([false, true])(
+    "refreshes foreign avatar commits through the originally selected database (resident=%s)",
+    async (resident) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-avatar-read-owner-") };
+      const profile = ensureProfileForEmail("avatar-reader@example.test", { env });
+      expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", { env }).ok).toBe(true);
+      const { path } = openOpenClawStateDatabase({ env });
+      const release = resident ? (await prepareUserProfileCatalog({ path })).release : () => {};
+      const reader = createProfileAvatarReader(profile.id, resident ? { path } : { env });
+      const prepared = await reader.inspect();
+      const revision = readUserProfileVersion();
+      const bytes = new Uint8Array([2, 3]);
+      const foreign = new (requireNodeSqlite().DatabaseSync)(path);
+      try {
+        foreign
+          .prepare("UPDATE user_profiles SET avatar = ?, avatar_sha256 = ? WHERE id = ?")
+          .run(bytes, createHash("sha256").update(bytes).digest("hex"), profile.id);
+        expect(readUserProfileVersion()).toBe(revision);
+        expect(prepared.isCurrent()).toBe(true);
+        env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-avatar-read-other-");
+        await expect(prepared.loadBytes()).resolves.toBeUndefined();
+        const refreshed = await reader.inspect();
+        expect(refreshed.profile?.id).toBe(profile.id);
+        expect(refreshed.avatar?.byteLength).toBe(bytes.byteLength);
+        await expect(refreshed.loadBytes()).resolves.toMatchObject({ bytes });
+      } finally {
+        release();
+        foreign.close();
+      }
+    },
+  );
 });

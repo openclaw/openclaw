@@ -1,21 +1,25 @@
-// Real Gateway WebSocket proof for agent delivery fallback, response ordering, and idempotency.
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import type { RawData, WebSocket } from "ws";
-import { rawDataToString } from "../infra/ws.js";
-import { createDeferred } from "../shared/deferred.js";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import type { WebSocket } from "ws";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { agentCommand, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const idempotencyKey = "gateway-agent-rpc-contract";
+const payloads = [{ text: "assistant reply" }];
+const agentParams = { sessionKey: "main", deliver: true, bestEffortDeliver: true, idempotencyKey };
 
 type AgentResponse = {
   type?: string;
   id?: string;
   ok?: boolean;
-  payload?: {
-    runId?: string;
-    status?: string;
-  };
+  payload?: { status?: string; result?: object };
 };
 
 let harness: GatewayServerHarness;
@@ -24,133 +28,92 @@ beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
-beforeEach(() => {
-  vi.mocked(agentCommand).mockReset();
-});
+beforeEach(() => prepareGatewayReplyRuntimeForTest());
 
-afterAll(async () => {
-  await harness.close();
-});
+afterAll(() => harness.close());
 
-function sendAgentRequest(params: {
-  ws: WebSocket;
-  id: string;
-  idempotencyKey: string;
-  message: string;
-}): void {
-  params.ws.send(
-    JSON.stringify({
-      type: "req",
-      id: params.id,
-      method: "agent",
-      params: {
-        message: params.message,
-        sessionKey: "main",
-        deliver: true,
-        bestEffortDeliver: true,
-        idempotencyKey: params.idempotencyKey,
-      },
-    }),
-  );
+function sendAgentRequest(ws: WebSocket, id: string, message: string): void {
+  const params = { ...agentParams, message };
+  ws.send(JSON.stringify({ type: "req", id, method: "agent", params }));
 }
 
-describe("gateway agent RPC contracts", () => {
-  test("downgrades ambiguous delivery and replays one ordered run across reconnect", async () => {
-    const runCompletion = createDeferred();
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
-      await runCompletion.promise;
-    });
-
-    const idempotencyKey = "gateway-agent-rpc-contract";
-    const first = await harness.openClient();
-    const orderedResponses: AgentResponse[] = [];
-    const recordResponse = (data: RawData) => {
-      const frame = JSON.parse(rawDataToString(data)) as AgentResponse;
-      if (frame.type === "res" && frame.id === "agent-contract") {
-        orderedResponses.push(frame);
-      }
+test("preserves a session-only WebChat reply across ordered final response and replay", async () => {
+  const commandStarted = createDeferred();
+  const runCompletion = createDeferred();
+  vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
+    commandStarted.resolve();
+    await runCompletion.promise;
+    return {
+      payloads: [{ text: "assistant reply" }],
+      meta: { durationMs: 1 },
     };
-    first.ws.on("message", recordResponse);
-    const acceptedPromise = onceMessage<AgentResponse>(
-      first.ws,
-      (frame) =>
-        frame.type === "res" &&
-        frame.id === "agent-contract" &&
-        frame.payload?.status === "accepted",
-    );
-    const terminalPromise = onceMessage<AgentResponse>(
-      first.ws,
-      (frame) =>
-        frame.type === "res" &&
-        frame.id === "agent-contract" &&
-        frame.payload?.status !== "accepted",
-    );
+  });
 
-    sendAgentRequest({
-      ws: first.ws,
-      id: "agent-contract",
-      idempotencyKey,
-      message: "prove the gateway agent RPC contract",
+  const clientOptions: Parameters<GatewayServerHarness["openClient"]>[0] = {
+    browserOrigin: `http://127.0.0.1:${harness.port}`,
+    client: { id: "webchat-ui", version: "1.0.0", platform: "test", mode: "webchat" },
+  };
+  const first = await harness.openClient(clientOptions);
+  const orderedResponses: AgentResponse[] = [];
+  const waitForResponse = (accepted: boolean) =>
+    onceMessage<AgentResponse>(
+      first.ws,
+      (frame) =>
+        frame.type === "res" &&
+        frame.id === "agent-contract" &&
+        (frame.payload?.status === "accepted") === accepted,
+    ).then((frame) => {
+      orderedResponses.push(frame);
+      return frame;
     });
+  const acceptedPromise = waitForResponse(true);
+  const terminalPromise = waitForResponse(false);
+
+  let terminal: AgentResponse;
+  try {
+    sendAgentRequest(first.ws, "agent-contract", "prove the gateway agent RPC contract");
 
     await acceptedPromise;
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
-      runId: idempotencyKey,
+    await awaitGateBeforeSettlement(
+      commandStarted.promise,
+      terminalPromise,
+      "agent completed before command dispatch",
+    );
+    expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
       channel: "webchat",
       messageChannel: "webchat",
+      runContext: { messageChannel: "webchat" },
       deliver: false,
       bestEffortDeliver: true,
     });
 
     runCompletion.resolve();
-    const terminal = await terminalPromise;
-    first.ws.off("message", recordResponse);
-    expect(orderedResponses.map((frame) => frame.payload?.status)).toEqual(["accepted", "ok"]);
-    const accepted = orderedResponses[0];
-    expect(accepted).toMatchObject({
-      type: "res",
-      id: "agent-contract",
-      ok: true,
-      payload: {
-        runId: idempotencyKey,
-        status: "accepted",
-      },
-    });
-    expect(terminal).toMatchObject({
-      type: "res",
-      id: "agent-contract",
-      ok: true,
-      payload: {
-        runId: idempotencyKey,
-        status: "ok",
-      },
-    });
+    terminal = await terminalPromise;
+    expect(orderedResponses.map(({ ok, payload }) => ({ ok, payload }))).toMatchObject([
+      { ok: true, payload: { runId: idempotencyKey, status: "accepted" } },
+      { ok: true, payload: { runId: idempotencyKey, status: "ok", result: { payloads } } },
+    ]);
+    expect(terminal.payload?.result).not.toHaveProperty("deliveryStatus");
+    expect(terminal.payload?.result).not.toHaveProperty("deliverySucceeded");
+  } finally {
+    runCompletion.resolve();
+    const responsesSettled = Promise.allSettled([acceptedPromise, terminalPromise]);
+    await closeGatewayTestWebSocket(first.ws);
+    await responsesSettled;
+  }
 
-    first.ws.close();
-    await new Promise<void>((resolve) => {
-      first.ws.once("close", () => resolve());
-    });
+  const second = await harness.openClient(clientOptions);
+  try {
+    const replayPromise = onceMessage<AgentResponse>(
+      second.ws,
+      (frame) => frame.type === "res" && frame.id === "agent-contract-replay",
+    );
+    sendAgentRequest(second.ws, "agent-contract-replay", "this duplicate must not execute");
 
-    const second = await harness.openClient();
-    try {
-      const replayPromise = onceMessage<AgentResponse>(
-        second.ws,
-        (frame) => frame.type === "res" && frame.id === "agent-contract-replay",
-      );
-      sendAgentRequest({
-        ws: second.ws,
-        id: "agent-contract-replay",
-        idempotencyKey,
-        message: "this duplicate must not execute",
-      });
-
-      const replay = await replayPromise;
-      expect(replay.payload).toEqual(terminal.payload);
-      expect(replay.payload?.status).toBe("ok");
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-    } finally {
-      second.ws.close();
-    }
-  });
+    const replay = await replayPromise;
+    expect(replay.payload).toEqual(terminal.payload);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  } finally {
+    await closeGatewayTestWebSocket(second.ws);
+  }
 });

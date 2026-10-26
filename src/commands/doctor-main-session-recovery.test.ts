@@ -1,33 +1,27 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
-import { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import {
+  inspectMainSessionRecoveryEntry,
+  noteMainSessionRecoveryIntegrity,
+} from "./doctor-main-session-recovery.js";
 
 const agentId = "main";
 const sessionKey = "agent:main:wedged-main";
 const reason = "restart recovery exhausted after 3 attempts";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-main-recovery-");
 
 describe("doctor main-session recovery integrity", () => {
   let storePath = "";
 
   beforeEach(() => {
-    storePath = path.join(tempDirs.make("openclaw-doctor-main-recovery-"), "sessions.json");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   async function writeTombstone(abortedLastRun: boolean): Promise<void> {
-    await upsertSessionEntry({ agentId, sessionKey, storePath }, {
+    await upsertSessionEntryCore({ agentId, sessionKey, storePath }, {
       sessionId: "session-wedged-main",
       updatedAt: abortedLastRun ? 0 : 1,
       status: "failed",
@@ -41,6 +35,12 @@ describe("doctor main-session recovery integrity", () => {
     } as InternalSessionEntry);
   }
 
+  function recoveryScan() {
+    const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
+    const candidate = inspectMainSessionRecoveryEntry(sessionKey, entry);
+    return { wedged: candidate ? [candidate] : [] };
+  }
+
   it("warns about a tombstone without offering stale repair", async () => {
     await writeTombstone(false);
     const warnings: string[] = [];
@@ -48,12 +48,11 @@ describe("doctor main-session recovery integrity", () => {
     const confirmRepair = vi.fn(async () => false);
 
     await noteMainSessionRecoveryIntegrity({
-      agentId,
+      ...recoveryScan(),
       storePath,
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(warnings.join("\n")).toContain("automatic restart recovery tombstoned");
@@ -71,12 +70,11 @@ describe("doctor main-session recovery integrity", () => {
     const confirmRepair = vi.fn(async () => true);
 
     await noteMainSessionRecoveryIntegrity({
-      agentId,
+      ...recoveryScan(),
       storePath,
       warnings,
       changes,
       confirmRepair,
-      countLabel,
     });
 
     expect(confirmRepair).toHaveBeenCalledWith({

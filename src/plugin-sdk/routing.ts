@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for session keys, account bindings, and message-channel routing.
- */
 export {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
@@ -21,6 +18,7 @@ export {
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
+  normalizeAgentIdStrict,
   normalizeMainKey,
   normalizeOptionalAccountId,
   parseAgentSessionKey,

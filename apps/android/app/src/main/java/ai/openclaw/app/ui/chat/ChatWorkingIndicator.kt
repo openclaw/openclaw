@@ -37,11 +37,6 @@ import java.util.Locale
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
-private const val DEFAULT_CLAW_CYCLE_MS = 2_400L
-private const val DRUMMER_CLAW_CYCLE_MS = 1_200L
-private const val FLURRY_CLAW_CYCLE_MS = 1_300L
-private const val SPIN_CLAW_CYCLE_MS = 3_600L
-private const val ZEN_CLAW_CYCLE_MS = 6_000L
 internal const val WORKING_PHRASE_SHOW_AFTER_MS = 30_000L
 internal const val WORKING_PHRASE_ROTATE_EVERY_MS = 45_000L
 
@@ -62,30 +57,25 @@ private val clawJawPath by lazy {
     ).toPath()
 }
 
-internal enum class WorkingClawStance {
-  Default,
-  Southpaw,
-  Flurry,
-  Spin,
-  Shadowbox,
-  Backflip,
-  Zen,
-  Drummer,
-  Peekaboo,
+internal enum class WorkingClawStance(
+  val weight: Int,
+  val cycleMs: Long = 2_400L,
+) {
+  Default(55),
+  Southpaw(18),
+  Flurry(5, 1_300L),
+  Spin(4, 3_600L),
+  Shadowbox(3),
+  Backflip(2),
+  Zen(2, 6_000L),
+  Drummer(2, 1_200L),
+  Peekaboo(2),
+  NodOff(2, 3_600L),
+  Curious(2),
+  OmNom(2),
+  FakeOut(1),
 }
 
-private val stanceWeights =
-  listOf(
-    WorkingClawStance.Default to 63,
-    WorkingClawStance.Southpaw to 19,
-    WorkingClawStance.Flurry to 5,
-    WorkingClawStance.Spin to 4,
-    WorkingClawStance.Shadowbox to 3,
-    WorkingClawStance.Backflip to 2,
-    WorkingClawStance.Zen to 2,
-    WorkingClawStance.Drummer to 1,
-    WorkingClawStance.Peekaboo to 1,
-  )
 private val processStanceSalt = Random.nextInt()
 
 internal fun workingClawHash(value: String): Int {
@@ -101,8 +91,8 @@ internal fun pickWorkingClawStance(
   salt: Int = processStanceSalt,
 ): WorkingClawStance {
   var roll = ((workingClawHash(runKey) xor salt).toUInt().toLong() % 1_000L).toInt()
-  stanceWeights.forEach { (stance, weight) ->
-    val buckets = weight * 10
+  WorkingClawStance.entries.forEach { stance ->
+    val buckets = stance.weight * 10
     if (roll < buckets) return stance
     roll -= buckets
   }
@@ -138,6 +128,20 @@ private val drummerJawFrames = frames(0f to -10f, 0.10f to -20f, 0.15f to 2f, 0.
 private val peekabooScaleFrames = frames(0f to 1f, 0.55f to 1f, 0.62f to 0.72f, 0.72f to 0.72f, 0.78f to 1.06f, 0.84f to 1f, 1f to 1f)
 private val peekabooYFrames = frames(0f to 0f, 0.55f to 0f, 0.62f to 5f, 0.72f to 5f, 0.78f to -1.5f, 0.84f to 0f, 1f to 0f)
 private val peekabooJawFrames = frames(0f to -10f, 0.55f to -10f, 0.62f to -2f, 0.72f to -2f, 0.78f to -28f, 0.86f to -10f, 1f to -10f)
+private val nodOffRotationFrames =
+  frames(0f to 0f, 0.10f to 0f, 0.35f to 10f, 0.55f to 14f, 0.60f to 15f, 0.64f to -3f, 0.70f to 0f, 1f to 0f)
+private val nodOffYFrames = frames(0f to 0f, 0.10f to 0f, 0.35f to 1f, 0.60f to 1.5f, 0.64f to -0.5f, 0.70f to 0f, 1f to 0f)
+private val nodOffJawFrames =
+  frames(0f to -10f, 0.10f to -10f, 0.35f to -16f, 0.60f to -21f, 0.64f to -6f, 0.70f to -24f, 0.74f to 4f, 0.80f to -22f, 0.84f to 4f, 0.90f to -10f, 1f to -10f)
+private val curiousRotationFrames = frames(0f to 0f, 0.30f to 0f, 0.40f to -14f, 0.62f to -14f, 0.70f to 4f, 0.76f to 0f, 1f to 0f)
+private val curiousJawFrames = frames(0f to -10f, 0.30f to -10f, 0.40f to -16f, 0.62f to -16f, 0.70f to -6f, 0.76f to -10f, 1f to -10f)
+private val omNomXFrames = frames(0f to 0f, 0.30f to 0f, 0.36f to 2.5f, 0.40f to 1f, 0.46f to 2.5f, 0.50f to 1f, 0.56f to 2.5f, 0.64f to 0f, 1f to 0f)
+private val omNomJawFrames =
+  frames(0f to -10f, 0.26f to -10f, 0.30f to -30f, 0.36f to 8f, 0.42f to -30f, 0.46f to 8f, 0.52f to -30f, 0.56f to 8f, 0.64f to -10f, 1f to -10f)
+private val fakeOutRotationFrames =
+  frames(0f to 0f, 0.06f to 0f, 0.10f to -4f, 0.55f to -4f, 0.58f to 3f, 0.62f to -4f, 0.66f to 3f, 0.70f to -4f, 0.74f to 3f, 0.80f to 0f, 1f to 0f)
+private val fakeOutJawFrames =
+  frames(0f to -10f, 0.06f to -10f, 0.10f to -26f, 0.55f to -26f, 0.58f to 4f, 0.62f to -24f, 0.66f to 4f, 0.70f to -22f, 0.74f to 4f, 0.80f to -10f, 1f to -10f)
 
 private fun frames(vararg values: Pair<Float, Float>): List<ClawKeyframe> = values.map { (phase, value) -> ClawKeyframe(phase, value) }
 
@@ -167,64 +171,55 @@ internal data class WorkingClawPose(
   val powScale: Float = 0.4f,
 )
 
+private data class ClawPoseFrames(
+  val jaw: List<ClawKeyframe>,
+  val rotation: List<ClawKeyframe>? = null,
+  val x: List<ClawKeyframe>? = null,
+  val y: List<ClawKeyframe>? = null,
+  val scale: List<ClawKeyframe>? = null,
+  val scaleEasing: CubicBezierEasing = easeOut,
+  val powAlpha: List<ClawKeyframe>? = null,
+  val powScale: List<ClawKeyframe>? = null,
+)
+
+private val defaultPoseFrames = ClawPoseFrames(jaw = snipFrames, rotation = flexFrames)
+private val stancePoseFrames =
+  mapOf(
+    WorkingClawStance.Spin to ClawPoseFrames(jaw = snipFrames),
+    WorkingClawStance.Shadowbox to
+      ClawPoseFrames(
+        jaw = comboJawFrames,
+        rotation = comboRotationFrames,
+        x = comboXFrames,
+        powAlpha = powAlphaFrames,
+        powScale = powScaleFrames,
+      ),
+    WorkingClawStance.Backflip to ClawPoseFrames(jaw = snipFrames, rotation = backflipRotationFrames, y = backflipYFrames),
+    WorkingClawStance.Zen to ClawPoseFrames(jaw = zenJawFrames, scale = zenScaleFrames, scaleEasing = easeInOut),
+    WorkingClawStance.Drummer to ClawPoseFrames(jaw = drummerJawFrames, rotation = drummerRotationFrames),
+    WorkingClawStance.Peekaboo to ClawPoseFrames(jaw = peekabooJawFrames, y = peekabooYFrames, scale = peekabooScaleFrames),
+    WorkingClawStance.NodOff to ClawPoseFrames(jaw = nodOffJawFrames, rotation = nodOffRotationFrames, y = nodOffYFrames),
+    WorkingClawStance.Curious to ClawPoseFrames(jaw = curiousJawFrames, rotation = curiousRotationFrames),
+    WorkingClawStance.OmNom to ClawPoseFrames(jaw = omNomJawFrames, x = omNomXFrames),
+    WorkingClawStance.FakeOut to ClawPoseFrames(jaw = fakeOutJawFrames, rotation = fakeOutRotationFrames),
+  )
+
 internal fun workingClawPose(
   stance: WorkingClawStance,
   phase: Float,
-): WorkingClawPose =
-  when (stance) {
-    WorkingClawStance.Spin ->
-      WorkingClawPose(
-        rotationY = phase * 360f,
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-    WorkingClawStance.Shadowbox ->
-      WorkingClawPose(
-        rotationZ = sampleFrames(comboRotationFrames, phase),
-        translationXDp = sampleFrames(comboXFrames, phase),
-        jawRotation = sampleFrames(comboJawFrames, phase),
-        powAlpha = sampleFrames(powAlphaFrames, phase),
-        powScale = sampleFrames(powScaleFrames, phase),
-      )
-    WorkingClawStance.Backflip ->
-      WorkingClawPose(
-        rotationZ = sampleFrames(backflipRotationFrames, phase),
-        translationYDp = sampleFrames(backflipYFrames, phase),
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-    WorkingClawStance.Zen ->
-      WorkingClawPose(
-        scale = sampleFrames(zenScaleFrames, phase, easeInOut),
-        jawRotation = sampleFrames(zenJawFrames, phase),
-      )
-    WorkingClawStance.Drummer ->
-      WorkingClawPose(
-        rotationZ = sampleFrames(drummerRotationFrames, phase),
-        jawRotation = sampleFrames(drummerJawFrames, phase),
-      )
-    WorkingClawStance.Peekaboo ->
-      WorkingClawPose(
-        translationYDp = sampleFrames(peekabooYFrames, phase),
-        scale = sampleFrames(peekabooScaleFrames, phase),
-        jawRotation = sampleFrames(peekabooJawFrames, phase),
-      )
-    WorkingClawStance.Default,
-    WorkingClawStance.Southpaw,
-    WorkingClawStance.Flurry,
-    ->
-      WorkingClawPose(
-        rotationZ = sampleFrames(flexFrames, phase),
-        jawRotation = sampleFrames(snipFrames, phase),
-      )
-  }
-
-internal fun workingClawCycleMs(stance: WorkingClawStance): Long =
-  when (stance) {
-    WorkingClawStance.Drummer -> DRUMMER_CLAW_CYCLE_MS
-    WorkingClawStance.Flurry -> FLURRY_CLAW_CYCLE_MS
-    WorkingClawStance.Spin -> SPIN_CLAW_CYCLE_MS
-    WorkingClawStance.Zen -> ZEN_CLAW_CYCLE_MS
-    else -> DEFAULT_CLAW_CYCLE_MS
-  }
+): WorkingClawPose {
+  val frames = stancePoseFrames[stance] ?: defaultPoseFrames
+  return WorkingClawPose(
+    rotationZ = frames.rotation?.let { sampleFrames(it, phase) } ?: 0f,
+    rotationY = if (stance == WorkingClawStance.Spin) phase * 360f else 0f,
+    translationXDp = frames.x?.let { sampleFrames(it, phase) } ?: 0f,
+    translationYDp = frames.y?.let { sampleFrames(it, phase) } ?: 0f,
+    scale = frames.scale?.let { sampleFrames(it, phase, frames.scaleEasing) } ?: 1f,
+    jawRotation = sampleFrames(frames.jaw, phase),
+    powAlpha = frames.powAlpha?.let { sampleFrames(it, phase) } ?: 0f,
+    powScale = frames.powScale?.let { sampleFrames(it, phase) } ?: 0.4f,
+  )
+}
 
 @Composable
 internal fun WorkingClawIcon(
@@ -236,7 +231,7 @@ internal fun WorkingClawIcon(
   val stance = remember(runKey, parked) { if (parked) WorkingClawStance.Default else pickWorkingClawStance(runKey) }
   val density = LocalDensity.current
   val animationsEnabled = rememberSystemAnimationsEnabled() && !parked
-  val cycleMs = workingClawCycleMs(stance)
+  val cycleMs = stance.cycleMs
   var phase by remember(runKey) { mutableFloatStateOf(0f) }
   LaunchedEffect(animationsEnabled, runKey, cycleMs) {
     if (!animationsEnabled) {
@@ -382,22 +377,10 @@ internal fun formatChatDurationFull(
 internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
   formatChatDurationCompact(durationMs) { count, unit ->
     when (unit) {
-      ChatDurationUnit.Day -> {
-        val days = count
-        nativeString("\${days}d", days)
-      }
-      ChatDurationUnit.Hour -> {
-        val hours = count
-        nativeString("\${hours}h", hours)
-      }
-      ChatDurationUnit.Minute -> {
-        val minutes = count
-        nativeString("\${minutes}m", minutes)
-      }
-      ChatDurationUnit.Second -> {
-        val seconds = count
-        nativeString("\${seconds}s", seconds)
-      }
+      ChatDurationUnit.Day -> nativeString("\${days}d", count)
+      ChatDurationUnit.Hour -> nativeString("\${hours}h", count)
+      ChatDurationUnit.Minute -> nativeString("\${minutes}m", count)
+      ChatDurationUnit.Second -> nativeString("\${seconds}s", count)
     }
   }
 

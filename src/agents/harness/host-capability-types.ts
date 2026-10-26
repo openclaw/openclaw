@@ -1,0 +1,224 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import type {
+  ApprovalDecision,
+  ApprovalTerminalReason,
+} from "../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ImageContent } from "../../../packages/llm-core/src/types.js";
+import type { AnyAgentTool } from "../tools/common.js";
+
+export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
+
+type AgentHarnessHostApprovalResult = Readonly<{
+  decision: ApprovalDecision | null | undefined;
+  terminalReason: ApprovalTerminalReason | null | undefined;
+}>;
+
+type AgentHarnessPreparedEnvironment = Readonly<{
+  credentialScrubEnv: Readonly<Record<string, string>>;
+  localIdentityEnv: Readonly<Record<string, string>>;
+  /** Append to effective Git parameters only in an owned local execution environment. */
+  localGitConfigParameters?: string;
+  /** Local child destination facts; must not be projected into a remote or sandbox process. */
+  localProcessEnv?: Readonly<Record<string, string>>;
+  /** Tool lookup on an owned local process; omit for remote, socket, or sandbox placement. */
+  localToolEnv?: Readonly<Record<string, string>>;
+  /** Prefix intent for runtimes with an explicitly authored native shell PATH. */
+  localToolPathPrepend?: readonly string[];
+  /** Non-secret fact used to select the local GitHub identity overlay. */
+  managedLocalIdentity: boolean;
+  /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
+  hostExecutionRequired?: true;
+}>;
+
+type AgentHarnessToolSurfaceOptions = Omit<
+  NonNullable<
+    Parameters<(typeof import("../agent-tools.js"))["createOpenClawCodingToolsAsync"]>[0]
+  >,
+  "operationalRunInstance"
+>;
+
+type AgentHarnessModelExecutionBinder = (
+  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
+
+type AgentHarnessToolSurfaceBindingOptions = Readonly<{
+  cwd?: string;
+  /** The selected native runtime permits local execution outside Gateway tool policy. */
+  nativeLocalExecution?: true;
+}>;
+
+export type AgentHarnessHostCapabilities = Readonly<{
+  kind: "agent-harness-host-capability";
+  version: 1;
+  /** Fails closed unless this exact admitted run capability remains active. */
+  assertActive: () => void;
+  /** Prepare history only when a native thread must be freshly seeded, under this run's authority. */
+  prepareBoundedSeed?: (
+    request: Readonly<{
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+      /** Final delivery allowance; valid smaller values only narrow the captured host budget. */
+      tokenBudget?: number;
+    }>,
+  ) => Promise<readonly AgentMessage[]>;
+  /**
+   * Freeze the host continuation count before tools or inference, using the native
+   * owner's admitted Gateway-local cwd. Never pass a remote/container path.
+   * Repeat calls must use the same cwd; omission preserves the harness result budget.
+   */
+  prepareContinuationRetryCount?: (workspace: Readonly<{ cwd: string }>) => void;
+  /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
+  captureRequestCustody?: () =>
+    | import("../../infra/exec-request-context.js").ExecRequestCustody
+    | undefined;
+  /** Native runtimes must install pre-tool admission for these pending workspace operations. */
+  workspaceReadiness?: Readonly<{
+    toolNames: readonly string[];
+    /** Await the existing workspace owner while preserving this run's authority. */
+    waitUntilReady: () => Promise<void>;
+  }>;
+  /** Native delegation retains the incumbent execution and requires its current authority. */
+  assertNativeSubagentSpawnAllowed?: () => void;
+  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  bindModelExecution?: AgentHarnessModelExecutionBinder;
+  /** Retains the original source for already-admitted work beyond foreground completion. */
+  retainSourceAuthority?: () =>
+    | Readonly<{
+        assertCurrent: () => void;
+        signal?: AbortSignal;
+        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        modelPolicyRequired?: boolean;
+        /** Opaque equality for compatible active input; never authority by itself. */
+        sourceIdentity?: object;
+        /** Binds later dispatches while this retained work remains active. */
+        bindModelExecution?: AgentHarnessModelExecutionBinder;
+        release: () => void;
+      }>
+    | undefined;
+  /** Reports one completed model call's output tokens to this admitted run's live total. */
+  reportOutputTokens?: (outputTokens: number) => void;
+  /** Adds native provenance only to this host's exact current admitted prompt. */
+  annotateCurrentUserTurn?: (
+    annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
+  ) => Promise<void>;
+  /** Detached admitted originals before inline projection; file readers still enforce custody. */
+  resolveInputAttachmentMedia?: () => Promise<
+    readonly Readonly<import("../../media/media-facts.js").MediaFact>[]
+  >;
+  /** Execution-only document paths after the harness confirms unsandboxed local placement. */
+  prepareInputAttachments?: (request: {
+    placement: "local-host";
+    maxChars: number;
+    /** Omit for the admitted input; supply the current input for steering. */
+    turn?: Pick<
+      import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams,
+      "media" | "userTurnTranscriptRecorder"
+    >;
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+  }) => Promise<string | undefined>;
+  /** Rebuilds retained attachments under this host's captured media policy and run authority. */
+  prepareContextMedia?: (
+    request: AgentHarnessContextMediaRequest,
+  ) => Promise<AgentHarnessContextMedia>;
+  /** Stages reply attachments under captured policy and live run authority. */
+  prepareReplyMedia?: (
+    request: {
+      /** Additional native session or transport authority, retained through publication. */
+      assertCurrent?: () => void;
+      signal?: AbortSignal;
+    } & (
+      | ({
+          workspaceRoot?: string;
+          readWorkspaceFile: (
+            relativePath: string,
+            options: { maxBytes: number; signal: AbortSignal },
+          ) => Promise<Buffer>;
+        } & (
+          | {
+              kind: "attempt";
+              attempt: import("../embedded-agent-runner/run/attempt-result.js").EmbeddedRunAttemptWithReceiptEvidence;
+            }
+          | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+        ))
+      | {
+          /** Already-admitted provider bytes, not permission to read a host path. */
+          kind: "artifact";
+          buffer: Buffer;
+          fileName: string;
+          assertCurrent: () => void;
+        }
+    ),
+  ) => Promise<
+    | {
+        kind: "attempt";
+        preparedMedia: import("../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
+      }
+    | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+  >;
+  /** Closure-bound event sink backed by the host-owned trajectory recorder. */
+  trajectory?: Readonly<{
+    recordEvent: (type: string, data?: Record<string, unknown>) => void;
+    flush: () => Promise<void>;
+  }>;
+  /** Closure-bound non-secret maps prepared before harness placement. */
+  preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Current bounded presence hint; physical activity does not identify the message source. */
+  activeComputerContext?: () => string;
+  /** Applies the exact host caller binding to a plugin-built tool surface. */
+  bindToolSurface: (tools: AnyAgentTool[], options?: Readonly<{ cwd?: string }>) => AnyAgentTool[];
+  /** @deprecated Await createToolSurfaceAsync for worker-backed exec policy. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
+  createToolSurface?: (
+    options: AgentHarnessToolSurfaceOptions,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
+  ) => AnyAgentTool[];
+  /** Prepares fresh exec policy, then creates and binds tools to this exact live host. */
+  createToolSurfaceAsync?: (
+    options: AgentHarnessToolSurfaceOptions,
+    bindingOptions?: AgentHarnessToolSurfaceBindingOptions,
+  ) => Promise<AnyAgentTool[]>;
+  /** Core-owned byte binding for a native command approval, scoped to this admitted run. */
+  prepareMutableFileApproval?: (request: { command: string; cwd?: string }) => Promise<
+    | {
+        ok: true;
+        requiresOneShot: boolean;
+        revalidate: () => Promise<{ ok: true } | { ok: false; message: string }>;
+      }
+    | { ok: false; message: string }
+  >;
+  /** Runs policy with host-fixed HookContext; callers provide only the native action tuple. */
+  runBeforeToolCall: (
+    request: Omit<
+      Parameters<(typeof import("../agent-tools.before-tool-call.js"))["runBeforeToolCallHook"]>[0],
+      "approvalMode" | "ctx"
+    > & {
+      /** Native relays may defer approval for a correlated app-server callback. */
+      approvalMode?: "request" | "defer";
+      /** Action-local facts from the native runtime; host authority remains closure-bound. */
+      nativeOperation?: Readonly<{ cwd?: string }>;
+    },
+  ) => ReturnType<(typeof import("../agent-tools.before-tool-call.js"))["runBeforeToolCallHook"]>;
+  requestApproval: (request: {
+    signal?: AbortSignal;
+    title: string;
+    description: string;
+    /** Full action evidence for authenticated reviewer surfaces, not channel messages. */
+    detail?: string;
+    severity: "info" | "warning";
+    toolName: string;
+    toolCallId?: string;
+    mcpTool?: { server: string; tool: string };
+    /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
+    isMcpToolApprovalActive?: () => boolean;
+    allowedDecisions?: ApprovalDecision[];
+    timeoutMs: number;
+    transportTimeoutMs?: number;
+  }) => Promise<{ id?: string; decision?: ApprovalDecision | null } | undefined>;
+  waitForApproval: (request: {
+    approvalId: string;
+    timeoutMs: number;
+    transportTimeoutMs?: number;
+    signal?: AbortSignal;
+  }) => Promise<AgentHarnessHostApprovalResult | undefined>;
+}>;

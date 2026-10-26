@@ -9,7 +9,7 @@ import {
 const hoisted = createDiscordOutboundHoisted();
 await installDiscordOutboundModuleSpies(hoisted);
 
-const { discordOutbound } = await import("./outbound-adapter.js");
+const { discordOutbound } = await import("./outbound-payload.js");
 
 type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
 
@@ -77,7 +77,7 @@ describe("discordOutbound shared interactive ordering", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "123456",
+      target: { kind: "channel", id: "123456" },
     });
   });
 });

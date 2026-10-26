@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
@@ -11,16 +11,21 @@ import {
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent } from "../../internal-hooks.js";
 
-const generateSlugViaLLM = vi.hoisted(() => vi.fn());
+const runEmbeddedAgent = vi.hoisted(() =>
+  vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
+);
 
-vi.mock("../../llm-slug-generator.js", () => ({ generateSlugViaLLM }));
+vi.mock("../../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent,
+}));
 
 import handler, { flushSessionMemoryWritesForTest } from "./handler.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  generateSlugViaLLM.mockReset();
+  runEmbeddedAgent.mockReset();
   await flushSessionMemoryWritesForTest();
 });
 
@@ -46,7 +51,11 @@ describe("session-memory gateway admission", () => {
         type: "message",
         id: "manual-reset-user",
         parentId: null,
-        message: { role: "user", content: "Keep a descriptive memory filename" },
+        message: {
+          role: "user",
+          content: "Keep a descriptive memory filename",
+          __openclaw: { senderIsOwner: true },
+        },
       },
       {
         type: "message",
@@ -56,14 +65,18 @@ describe("session-memory gateway admission", () => {
       },
     ]);
     const event = createInternalHookEvent("command", "reset", sessionKey, {
+      agentId: "main",
       cfg,
       previousSessionEntry: { sessionId },
       workspaceDir: tempDir,
     });
     let subordinateClosedInsideSlug: boolean | undefined;
-    generateSlugViaLLM.mockImplementationOnce(async () => {
+    runEmbeddedAgent.mockImplementationOnce(async () => {
       subordinateClosedInsideSlug = isGatewaySubordinateWorkAdmissionClosed();
-      return subordinateClosedInsideSlug ? null : "admitted-slug";
+      return {
+        payloads: subordinateClosedInsideSlug ? [] : [{ text: "admitted-slug" }],
+        meta: { durationMs: 0 },
+      };
     });
 
     await withEnvAsync(

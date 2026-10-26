@@ -1,25 +1,31 @@
-/** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
+import {
+  resolveAgentRunLifecycleTerminalFacts,
+  resolveAgentRunTerminalFacts,
+  resolveAgentRunWaitTerminalFacts,
+  type AgentRunTerminalFactInput,
+  type AgentRunTerminalFacts,
+  type AgentRunTimeoutPhase,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { asFiniteNumber as asFiniteTimestamp } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   formatAbandonedLivenessError,
   formatBlockedLivenessError,
   isAbandonedLivenessState,
   isBlockedLivenessState,
 } from "../shared/agent-liveness.js";
+import type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 import {
   AGENT_RUN_ABORTED_ERROR,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  isAbortedAgentStopReason,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
-import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
-} from "./run-timeout-attribution.js";
 
-/** Wait status reported by agent run terminal wait paths. */
-type AgentRunWaitStatus = "ok" | "error" | "timeout";
+export type { AgentRunTerminalOutcome } from "./agent-run-terminal-outcome.types.js";
 
 export type AgentRunAttemptFailureSource =
   | "prompt"
@@ -34,9 +40,14 @@ type AgentRunAttemptFailure = {
 
 type AgentRunAttemptTimeoutObservation = "compaction" | "tool_execution";
 type AgentRunAttemptTimeoutSource = "runtime" | "run_budget" | "idle" | "external";
+type AgentRunAttemptSettlementWarning = {
+  pendingStage: string;
+  elapsedMs: number;
+  timeoutMs: number;
+};
 
 export type AgentRunAttemptTerminal =
-  | { kind: "ok" }
+  | { kind: "ok"; settlementWarning?: AgentRunAttemptSettlementWarning }
   | {
       kind: "aborted";
       source: "runtime" | "external" | "yield_cleanup";
@@ -66,6 +77,7 @@ export type AgentRunAttemptTerminal =
     };
 
 type LegacyAgentRunAttemptTerminalInput = {
+  settlementWarning?: AgentRunAttemptSettlementWarning;
   aborted?: boolean;
   externalAbort?: boolean;
   idleTimedOut?: boolean;
@@ -79,13 +91,6 @@ type LegacyAgentRunAttemptTerminalInput = {
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
-const ATTEMPT_TERMINAL_KIND_RANK = {
-  ok: 0,
-  failed: 1,
-  aborted: 2,
-  timeout: 3,
-} as const;
-
 const ATTEMPT_TIMEOUT_PHASE_RANK = {
   prompt: 0,
   tool_execution: 1,
@@ -108,7 +113,7 @@ const ATTEMPT_ABORT_SOURCE_RANK = {
 
 function mergeAgentRunAttemptTimeoutPhase(
   phase: "prompt" | AgentRunAttemptTimeoutObservation,
-  observation: AgentRunAttemptTimeoutObservation | undefined,
+  observation: typeof phase | undefined,
 ): "prompt" | AgentRunAttemptTimeoutObservation {
   return observation && ATTEMPT_TIMEOUT_PHASE_RANK[observation] > ATTEMPT_TIMEOUT_PHASE_RANK[phase]
     ? observation
@@ -125,17 +130,17 @@ function getAgentRunAttemptFailure(
       : terminal.failure;
 }
 
-function withAgentRunAttemptFailure<T extends AgentRunAttemptTerminal>(
-  terminal: T,
+function withAgentRunAttemptFailure(
+  terminal: AgentRunAttemptTerminal,
   failure: AgentRunAttemptFailure | undefined,
-): T {
+): AgentRunAttemptTerminal {
   if (!failure || terminal.kind === "ok") {
     return terminal;
   }
   if (terminal.kind === "failed") {
-    return { ...terminal, ...failure } as T;
+    return { ...terminal, ...failure };
   }
-  return { ...terminal, failure } as T;
+  return { ...terminal, failure };
 }
 
 function withAgentRunAttemptTimeoutObservation(
@@ -153,6 +158,25 @@ function hasAgentRunAttemptTimeoutAbort(terminal: AgentRunAttemptTerminal): bool
   return (
     terminal.kind === "timeout" && terminal.source !== "observation" && terminal.aborted === true
   );
+}
+
+function mergeAgentRunAttemptTimeoutInterruption(
+  timeout: Extract<AgentRunAttemptTerminal, { kind: "timeout" }>,
+  interruption: Extract<AgentRunAttemptTerminal, { kind: "aborted" | "failed" }>,
+): AgentRunAttemptTerminal {
+  if (timeout.source === "observation") {
+    return withAgentRunAttemptTimeoutObservation(interruption, timeout.phase);
+  }
+  return {
+    ...timeout,
+    phase: mergeAgentRunAttemptTimeoutPhase(timeout.phase, interruption.timeoutObservation),
+    source:
+      interruption.kind === "aborted" && interruption.source === "external"
+        ? "external"
+        : timeout.source,
+    ...(((interruption.kind === "aborted" && interruption.source !== "yield_cleanup") ||
+      timeout.aborted === true) && { aborted: true as const }),
+  };
 }
 
 /** Replaces attempt failure detail without changing a stronger interruption. */
@@ -196,38 +220,13 @@ export function mergeAgentRunAttemptTerminal(
   incoming: AgentRunAttemptTerminal,
 ): AgentRunAttemptTerminal {
   if (incoming.kind === "ok") {
-    return current;
+    // A later plain completion must not erase the first recorded settlement warning.
+    return current.kind === "ok" && !current.settlementWarning ? incoming : current;
   }
   const failure = getAgentRunAttemptFailure(incoming) ?? getAgentRunAttemptFailure(current);
-  if (
-    incoming.kind === "timeout" &&
-    incoming.source === "observation" &&
-    current.kind !== "timeout"
-  ) {
-    return current.kind === "ok"
-      ? withAgentRunAttemptFailure(incoming, failure)
-      : withAgentRunAttemptFailure(
-          withAgentRunAttemptTimeoutObservation(current, incoming.phase),
-          failure,
-        );
-  }
-  if (
-    current.kind === "timeout" &&
-    current.source === "observation" &&
-    incoming.kind !== "timeout"
-  ) {
-    return incoming.kind === "failed" || incoming.kind === "aborted"
-      ? withAgentRunAttemptFailure(
-          withAgentRunAttemptTimeoutObservation(incoming, current.phase),
-          failure,
-        )
-      : withAgentRunAttemptFailure(incoming, failure);
-  }
+  let merged: AgentRunAttemptTerminal = incoming;
   if (current.kind === "timeout" && incoming.kind === "timeout") {
-    const phase =
-      ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
-        ? incoming.phase
-        : current.phase;
+    const phase = mergeAgentRunAttemptTimeoutPhase(current.phase, incoming.phase);
     const selected =
       ATTEMPT_TIMEOUT_SOURCE_RANK[incoming.source] > ATTEMPT_TIMEOUT_SOURCE_RANK[current.source]
         ? incoming
@@ -237,65 +236,27 @@ export function mergeAgentRunAttemptTerminal(
         current.phase === "compaction" || incoming.phase === "compaction"
           ? "compaction"
           : "tool_execution";
-      return withAgentRunAttemptFailure(
-        { kind: "timeout", phase: observationPhase, source: "observation" },
-        failure,
-      );
-    }
-    return withAgentRunAttemptFailure(
-      {
+      merged = { kind: "timeout", phase: observationPhase, source: "observation" };
+    } else {
+      merged = {
         kind: "timeout",
         phase,
         source: selected.source,
         ...((hasAgentRunAttemptTimeoutAbort(current) ||
           hasAgentRunAttemptTimeoutAbort(incoming)) && { aborted: true as const }),
-      },
-      failure,
-    );
-  }
-  if ((current.kind === "aborted" || current.kind === "failed") && incoming.kind === "timeout") {
-    if (incoming.source === "observation") {
-      return withAgentRunAttemptFailure(
-        withAgentRunAttemptTimeoutObservation(current, incoming.phase),
-        failure,
-      );
+      };
     }
-    const source =
-      current.kind === "aborted" && current.source === "external" ? "external" : incoming.source;
-    const phase = mergeAgentRunAttemptTimeoutPhase(incoming.phase, current.timeoutObservation);
-    return withAgentRunAttemptFailure(
-      {
-        ...incoming,
-        phase,
-        source,
-        ...(((current.kind === "aborted" && current.source !== "yield_cleanup") ||
-          incoming.aborted === true) && { aborted: true as const }),
-      },
-      failure,
-    );
-  }
-  if (current.kind === "timeout" && (incoming.kind === "aborted" || incoming.kind === "failed")) {
-    if (current.source === "observation") {
-      return withAgentRunAttemptFailure(
-        withAgentRunAttemptTimeoutObservation(incoming, current.phase),
-        failure,
-      );
-    }
-    const source =
-      incoming.kind === "aborted" && incoming.source === "external" ? "external" : current.source;
-    const phase = mergeAgentRunAttemptTimeoutPhase(current.phase, incoming.timeoutObservation);
-    return withAgentRunAttemptFailure(
-      {
-        ...current,
-        phase,
-        source,
-        ...(((incoming.kind === "aborted" && incoming.source !== "yield_cleanup") ||
-          current.aborted === true) && { aborted: true as const }),
-      },
-      failure,
-    );
-  }
-  if (
+  } else if (
+    (current.kind === "aborted" || current.kind === "failed") &&
+    incoming.kind === "timeout"
+  ) {
+    merged = mergeAgentRunAttemptTimeoutInterruption(incoming, current);
+  } else if (
+    current.kind === "timeout" &&
+    (incoming.kind === "aborted" || incoming.kind === "failed")
+  ) {
+    merged = mergeAgentRunAttemptTimeoutInterruption(current, incoming);
+  } else if (
     (current.kind === "aborted" || current.kind === "failed") &&
     (incoming.kind === "aborted" || incoming.kind === "failed")
   ) {
@@ -307,30 +268,26 @@ export function mergeAgentRunAttemptTerminal(
           : current.source;
       selected = { kind: "aborted", source };
     } else {
-      selected =
-        ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-          ? incoming
-          : current;
+      selected = current.kind === "aborted" ? current : incoming;
     }
     for (const observation of [current.timeoutObservation, incoming.timeoutObservation]) {
       if (observation) {
         selected = withAgentRunAttemptTimeoutObservation(selected, observation);
       }
     }
-    return withAgentRunAttemptFailure(selected, failure);
+    merged = selected;
   }
-  const selected =
-    ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-      ? incoming
-      : current;
-  return withAgentRunAttemptFailure(selected, failure);
+  return withAgentRunAttemptFailure(merged, failure);
 }
 
 /** Normalizes the shipped harness result shape at the Plugin SDK boundary. */
 export function normalizeAgentRunAttemptTerminal(
   input: LegacyAgentRunAttemptTerminalInput,
 ): AgentRunAttemptTerminal {
-  let terminal: AgentRunAttemptTerminal = { kind: "ok" };
+  let terminal: AgentRunAttemptTerminal = {
+    kind: "ok",
+    ...(input.settlementWarning && { settlementWarning: input.settlementWarning }),
+  };
   if (input.aborted || input.externalAbort) {
     terminal = mergeAgentRunAttemptTerminal(terminal, {
       kind: "aborted",
@@ -376,12 +333,18 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   const externalAbort =
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
+  const timeoutPhase =
+    terminal.kind === "timeout"
+      ? terminal.phase
+      : terminal.kind === "ok"
+        ? undefined
+        : terminal.timeoutObservation;
   return {
+    ...(terminal.kind === "ok" &&
+      terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
     aborted:
       (terminal.kind === "aborted" && terminal.source !== "yield_cleanup") ||
-      (terminal.kind === "timeout" &&
-        terminal.source !== "observation" &&
-        terminal.aborted === true),
+      hasAgentRunAttemptTimeoutAbort(terminal),
     cleanupYieldAborted: terminal.kind === "aborted" && terminal.source === "yield_cleanup",
     externalAbort,
     failed: failure !== undefined,
@@ -391,57 +354,72 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
     promptErrorSource: failure?.source ?? null,
     timedOut,
     timedOutByRunBudget: terminal.kind === "timeout" && terminal.source === "run_budget",
-    timedOutDuringCompaction:
-      (terminal.kind === "timeout" && terminal.phase === "compaction") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "compaction"),
-    timedOutDuringToolExecution:
-      (terminal.kind === "timeout" && terminal.phase === "tool_execution") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "tool_execution"),
+    timedOutDuringCompaction: timeoutPhase === "compaction",
+    timedOutDuringToolExecution: timeoutPhase === "tool_execution",
   };
 }
 
-const AGENT_RUN_TERMINAL_CLASSIFICATION = {
-  completed: "success",
-  hard_timeout: "timeout",
-  timed_out: "timeout",
-  cancelled: "cancellation",
-  aborted: "cancellation",
-  blocked: "failure",
-  abandoned: "failure",
-  failed: "failure",
-} as const;
-
-/** Normalized terminal reason for an agent run. */
-type AgentRunTerminalReason = keyof typeof AGENT_RUN_TERMINAL_CLASSIFICATION;
-
-/** Normalized terminal outcome for an agent run. */
-export type AgentRunTerminalOutcome = {
-  reason: AgentRunTerminalReason;
-  status: AgentRunWaitStatus;
-  error?: string;
-  stopReason?: string;
-  livenessState?: string;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-};
-
-/** Collapses terminal reasons into the four projections shared by run consumers. */
-export function classifyAgentRunTerminalOutcome(outcome: Pick<AgentRunTerminalOutcome, "reason">) {
-  return AGENT_RUN_TERMINAL_CLASSIFICATION[outcome.reason];
+export {
+  classifyAgentRunTerminalOutcome,
+  hasExecutionSettlement,
+  isDefinitiveRunLifecycle,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
+function completedBeforeOrAtTimeout(params: {
+  completed: AgentRunTerminalOutcome;
+  timeout: AgentRunTerminalOutcome;
+}): boolean {
+  return (
+    params.completed.reason === "completed" &&
+    params.completed.endedAt !== undefined &&
+    params.timeout.endedAt !== undefined &&
+    params.completed.endedAt <= params.timeout.endedAt
+  );
 }
 
-/** Raw terminal input collected from run wait/liveness/timeout paths. */
-type AgentRunTerminalInput = {
-  status: AgentRunWaitStatus;
+/** Merges observations without overwriting a proven cancellation or hard timeout. */
+export function mergeAgentRunTerminalOutcome(
+  current: AgentRunTerminalOutcome | undefined,
+  incoming: AgentRunTerminalOutcome,
+): AgentRunTerminalOutcome {
+  if (!current) {
+    return incoming;
+  }
+  if (current.reason === "superseded" || current.reason === "cancelled") {
+    // Timestamps, not callback ordering, decide whether an earlier provider timeout won.
+    if (
+      incoming.reason === "hard_timeout" &&
+      incoming.endedAt !== undefined &&
+      current.endedAt !== undefined &&
+      incoming.endedAt <= current.endedAt
+    ) {
+      return incoming;
+    }
+    return current.reason === "superseded" || incoming.reason !== "superseded" ? current : incoming;
+  }
+  // A hard timeout owns the run unless an earlier completion or cancellation is proven.
+  if (current.reason === "hard_timeout") {
+    if (
+      (incoming.reason === "superseded" || incoming.reason === "cancelled") &&
+      incoming.endedAt !== undefined &&
+      current.endedAt !== undefined &&
+      incoming.endedAt < current.endedAt
+    ) {
+      return incoming;
+    }
+    return completedBeforeOrAtTimeout({ completed: incoming, timeout: current })
+      ? incoming
+      : current;
+  }
+  if (incoming.reason === "hard_timeout") {
+    return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
+      ? current
+      : incoming;
+  }
+  return incoming;
+}
+
+type AgentRunTerminalInput = AgentRunTerminalFactInput & {
   error?: unknown;
-  stopReason?: unknown;
-  livenessState?: unknown;
-  timeoutPhase?: unknown;
-  providerStarted?: unknown;
   startedAt?: unknown;
   endedAt?: unknown;
 };
@@ -451,118 +429,62 @@ type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
 
-type AgentRunLifecycleTerminalData = Omit<AgentRunTerminalWaitInput, "status"> & {
+type AgentRunLifecycleTerminalData = AgentRunTerminalWaitInput & {
   aborted?: unknown;
-  status?: unknown;
+  fallbackExhaustedFailure?: unknown;
 };
 
 /** Shared grace window for terminal observations that may still be followed by a retry. */
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
-const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
-
-function asFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-/** True when a timeout phase should be treated as a hard agent-run timeout. */
-function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
-  const phase = normalizeAgentRunTimeoutPhase(value);
-  return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
-}
-
 /** True when an outcome should not be overwritten by ordinary later status. */
 export function isStickyAgentRunTerminalOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
 ): boolean {
-  return outcome?.reason === "hard_timeout" || outcome?.reason === "cancelled";
+  return (
+    outcome?.reason === "hard_timeout" ||
+    outcome?.reason === "superseded" ||
+    outcome?.reason === "cancelled"
+  );
 }
 
-function isCancellationStopReason(value: string | undefined): boolean {
-  return value === "rpc" || value === "stop";
-}
-
-function asAgentRunWaitStatus(value: unknown): AgentRunWaitStatus | "pending" | undefined {
-  return value === "ok" || value === "timeout" || value === "error" || value === "pending"
-    ? value
-    : undefined;
-}
-
-/** Builds the normalized terminal outcome from raw run status metadata. */
-export function buildAgentRunTerminalOutcome(
-  input: AgentRunTerminalInput,
+function formatAgentRunTerminalOutcome(
+  facts: AgentRunTerminalFacts,
+  input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
-  const stopReason = asNonEmptyString(input.stopReason);
-  const livenessState = asNonEmptyString(input.livenessState);
-  const timeoutPhase = normalizeAgentRunTimeoutPhase(input.timeoutPhase);
-  const providerStarted = normalizeProviderStarted(input.providerStarted);
-  const rawError = asNonEmptyString(input.error);
-  const restartCancelled = stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
-  // Queue and gateway-draining timeouts are wait-layer uncertainty. Provider
-  // errors need explicit timeout attribution; providerStarted only proves reach.
-  const hardTimeout =
-    isHardAgentRunTimeoutPhase(timeoutPhase) ||
-    (!restartCancelled && input.status === "timeout" && providerStarted === true);
-  const aborted = isAbortedAgentStopReason(stopReason) && !restartCancelled;
-  // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
-  // cancellation only for non-success terminal payloads from abort paths.
-  const cancelled =
-    restartCancelled || (input.status !== "ok" && isCancellationStopReason(stopReason));
-  const blocked = isBlockedLivenessState(livenessState);
-  const abandoned = isAbandonedLivenessState(livenessState);
-  const error = hardTimeout
-    ? rawError
-    : blocked
-      ? formatBlockedLivenessError(rawError)
-      : aborted && !rawError
-        ? AGENT_RUN_ABORTED_ERROR
-        : aborted || cancelled
-          ? rawError
-          : abandoned
-            ? formatAbandonedLivenessError(rawError)
-            : rawError;
-  const reason: AgentRunTerminalReason = hardTimeout
-    ? "hard_timeout"
-    : blocked
-      ? "blocked"
-      : aborted
-        ? "aborted"
-        : cancelled
-          ? "cancelled"
-          : abandoned
-            ? "abandoned"
-            : input.status === "timeout"
-              ? "timed_out"
-              : input.status === "error"
-                ? "failed"
-                : "completed";
+  const { reason, status, ...metadata } = facts;
+  const startedAt = asFiniteTimestamp(input.startedAt);
+  const endedAt = asFiniteTimestamp(input.endedAt);
+  const rawError =
+    input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
+  const error =
+    reason === "hard_timeout"
+      ? rawError
+      : isBlockedLivenessState(facts.livenessState)
+        ? formatBlockedLivenessError(rawError)
+        : reason === "aborted" && !rawError
+          ? AGENT_RUN_ABORTED_ERROR
+          : reason === "superseded" || reason === "aborted" || reason === "cancelled"
+            ? rawError
+            : isAbandonedLivenessState(facts.livenessState)
+              ? formatAbandonedLivenessError(rawError)
+              : rawError;
   return {
     reason,
-    status:
-      reason === "completed"
-        ? "ok"
-        : reason === "hard_timeout" || reason === "timed_out"
-          ? "timeout"
-          : "error",
+    status,
     ...(error ? { error } : {}),
-    ...(stopReason ? { stopReason } : {}),
-    ...(livenessState ? { livenessState } : {}),
-    ...(timeoutPhase ? { timeoutPhase } : {}),
-    ...(providerStarted !== undefined ? { providerStarted } : {}),
-    ...(asFiniteTimestamp(input.startedAt) !== undefined
-      ? { startedAt: asFiniteTimestamp(input.startedAt) }
-      : {}),
-    ...(asFiniteTimestamp(input.endedAt) !== undefined
-      ? { endedAt: asFiniteTimestamp(input.endedAt) }
-      : {}),
+    ...metadata,
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(endedAt !== undefined ? { endedAt } : {}),
   };
 }
 
-/** Builds the canonical outcome directly from a terminal lifecycle event. */
+export function buildAgentRunTerminalOutcome(
+  input: AgentRunTerminalInput,
+): AgentRunTerminalOutcome {
+  return formatAgentRunTerminalOutcome(resolveAgentRunTerminalFacts(input), input);
+}
+
 export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   phase: "end" | "error";
   data?: AgentRunLifecycleTerminalData;
@@ -575,55 +497,18 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
     typeof data?.aborted === "boolean"
       ? {}
       : resolveAgentRunAbortLifecycleFields(input.abortSignal);
-  const stopReason = asNonEmptyString(data?.stopReason) ?? abortFields.stopReason;
-  const timeoutPhase = normalizeAgentRunTimeoutPhase(data?.timeoutPhase);
-  const lifecycleStatus = asNonEmptyString(data?.status)?.toLowerCase();
-  // Bare `aborted` is cancellation; timeout needs a structured status, stop
-  // reason, or phase so legacy lifecycle gaps cannot turn user stops into timeouts.
-  const timedOut =
-    stopReason === "timeout" ||
-    timeoutPhase !== undefined ||
-    lifecycleStatus === "timeout" ||
-    lifecycleStatus === "timed_out";
-  const aborted =
-    data?.aborted === true || abortFields.aborted === true || lifecycleStatus === "aborted";
-  const cancellationStatus =
-    lifecycleStatus === "cancelled" ||
-    lifecycleStatus === "canceled" ||
-    lifecycleStatus === "aborted";
-  const cancelled = cancellationStatus || aborted;
-  const failed =
-    input.phase === "error" ||
-    lifecycleStatus === "error" ||
-    lifecycleStatus === "failed" ||
-    stopReason === "error";
-  const normalizedStopReason =
-    !timedOut &&
-    cancelled &&
-    !isAbortedAgentStopReason(stopReason) &&
-    !isCancellationStopReason(stopReason) &&
-    (stopReason === undefined || cancellationStatus)
-      ? aborted
-        ? "aborted"
-        : "stop"
-      : stopReason;
-  const outcome = buildAgentRunTerminalOutcome({
-    status: timedOut ? "timeout" : cancelled || failed ? "error" : "ok",
+  const facts = resolveAgentRunLifecycleTerminalFacts({ phase: input.phase, data, abortFields });
+  return formatAgentRunTerminalOutcome(facts, {
     error: data?.error,
-    stopReason: normalizedStopReason,
-    livenessState: data?.livenessState,
-    timeoutPhase,
-    providerStarted: data?.providerStarted,
     startedAt: input.startedAt ?? data?.startedAt,
     endedAt: input.endedAt ?? data?.endedAt,
   });
-  return stopReason && outcome.stopReason !== stopReason ? { ...outcome, stopReason } : outcome;
 }
 
-function hasRestartAbortReason(value: unknown): boolean {
+function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => boolean): boolean {
   let candidate = value;
   for (let depth = 0; depth < 3; depth += 1) {
-    if (isAgentRunRestartAbortReason(candidate)) {
+    if (matches(candidate)) {
       return true;
     }
     if (!(candidate instanceof Error)) {
@@ -641,7 +526,6 @@ function hasRestartAbortReason(value: unknown): boolean {
   return false;
 }
 
-/** Maps the closed embedded-attempt terminal into the canonical run outcome. */
 export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   terminal: AgentRunAttemptTerminal;
   promptTimeoutOutcome?: {
@@ -653,6 +537,8 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
   abortSignal?: AbortSignal;
 }): AgentRunTerminalOutcome {
   const projected = projectAgentRunAttemptTerminal(input.terminal);
+  // Yield cleanup can retain a synthetic aborted assistant after stripping its transcript entry.
+  const assistant = projected.cleanupYieldAborted ? undefined : input.assistant;
   const abortFields = resolveAgentRunAbortLifecycleFields(input.abortSignal);
   const timedOut = projected.timedOut || abortFields.stopReason === "timeout";
   const timedOutDuringPrompt =
@@ -661,14 +547,16 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
     input.promptTimeoutOutcome?.timeoutPhase ?? (timedOutDuringPrompt ? "provider" : undefined);
   const providerStarted =
     input.promptTimeoutOutcome?.providerStarted ?? (timedOutDuringPrompt ? true : undefined);
-  const restartAborted = hasRestartAbortReason(projected.promptError);
+  const restartAborted = hasNestedAbortReason(projected.promptError, isAgentRunRestartAbortReason);
+  const superseded = hasNestedAbortReason(projected.promptError, isAgentRunSupersededAbortReason);
   const assistantStopReason =
-    projected.promptErrorSource !== null ? undefined : input.assistant?.stopReason;
+    projected.promptErrorSource !== null ? undefined : assistant?.stopReason;
   const unattributedAttemptTimeout =
     projected.timedOut && timeoutPhase === undefined && providerStarted !== true;
   const stopReason = unattributedAttemptTimeout
     ? undefined
-    : (abortFields.stopReason ??
+    : ((superseded ? AGENT_RUN_SUPERSEDED_STOP_REASON : undefined) ??
+      abortFields.stopReason ??
       (restartAborted ? AGENT_RUN_RESTART_ABORT_STOP_REASON : undefined) ??
       (!timedOut && projected.aborted ? "aborted" : undefined) ??
       (!timedOut ? assistantStopReason : undefined));
@@ -682,8 +570,7 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
       : "ok";
   return buildAgentRunTerminalOutcome({
     status,
-    error:
-      projected.promptErrorSource !== null ? projected.promptError : input.assistant?.errorMessage,
+    error: projected.promptErrorSource !== null ? projected.promptError : assistant?.errorMessage,
     stopReason,
     livenessState: input.promptTimeoutOutcome?.livenessState,
     timeoutPhase,
@@ -695,77 +582,9 @@ export function buildAgentRunTerminalOutcomeFromAttempt(input: {
 export function buildAgentRunTerminalOutcomeFromWaitResult(
   wait: AgentRunTerminalWaitInput | undefined,
 ): AgentRunTerminalOutcome | undefined {
-  const status = asAgentRunWaitStatus(wait?.status);
-  if (!status || status === "pending") {
+  if (!wait) {
     return undefined;
   }
-  return buildAgentRunTerminalOutcome({
-    status,
-    error: wait?.error,
-    stopReason: wait?.stopReason,
-    livenessState: wait?.livenessState,
-    timeoutPhase: wait?.timeoutPhase,
-    providerStarted: wait?.providerStarted,
-    startedAt: wait?.startedAt,
-    endedAt: wait?.endedAt,
-  });
-}
-
-function completedBeforeOrAtTimeout(params: {
-  completed: AgentRunTerminalOutcome;
-  timeout: AgentRunTerminalOutcome;
-}): boolean {
-  return (
-    params.completed.reason === "completed" &&
-    typeof params.completed.endedAt === "number" &&
-    typeof params.timeout.endedAt === "number" &&
-    params.completed.endedAt <= params.timeout.endedAt
-  );
-}
-
-/** Merges later terminal observations without overwriting sticky cancellation/hard-timeout state. */
-export function mergeAgentRunTerminalOutcome(
-  current: AgentRunTerminalOutcome | undefined,
-  incoming: AgentRunTerminalOutcome,
-): AgentRunTerminalOutcome {
-  if (!current) {
-    return incoming;
-  }
-  if (current.reason === "cancelled") {
-    // A cancellation callback can arrive before the already-recorded provider
-    // timeout; timestamps, not callback ordering, identify the terminal owner.
-    if (
-      incoming.reason === "hard_timeout" &&
-      typeof incoming.endedAt === "number" &&
-      typeof current.endedAt === "number" &&
-      incoming.endedAt <= current.endedAt
-    ) {
-      return incoming;
-    }
-    return current;
-  }
-  // A hard timeout owns the run unless later evidence proves completion ended
-  // before that timeout; late abort/error cleanup must not downgrade it.
-  if (current.reason === "hard_timeout") {
-    if (
-      incoming.reason === "cancelled" &&
-      typeof incoming.endedAt === "number" &&
-      typeof current.endedAt === "number" &&
-      incoming.endedAt < current.endedAt
-    ) {
-      return incoming;
-    }
-    return completedBeforeOrAtTimeout({ completed: incoming, timeout: current })
-      ? incoming
-      : current;
-  }
-  if (incoming.reason === "cancelled") {
-    return incoming;
-  }
-  if (incoming.reason === "hard_timeout") {
-    return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
-      ? current
-      : incoming;
-  }
-  return incoming;
+  const facts = resolveAgentRunWaitTerminalFacts(wait);
+  return facts ? formatAgentRunTerminalOutcome(facts, wait) : undefined;
 }

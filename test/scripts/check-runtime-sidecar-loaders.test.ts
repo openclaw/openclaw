@@ -1,100 +1,54 @@
-// Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
-import { describe, expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,
   findRuntimeSidecarLoaderViolations,
-} from "../../scripts/check-runtime-sidecar-loaders.mjs";
+} from "../../scripts/check-runtime-sidecar-loaders.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
-describe("check-runtime-sidecar-loaders", () => {
-  it("flags hidden createRequire runtime sidecars that are not build entries", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      export function loadRuntime() {
-        return require("./missing.runtime.js");
-      }
-    `;
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+const requirePrelude =
+  'import { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\n';
 
-    expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
-    ).toEqual([
-      {
-        line: 5,
-        specifier: "./missing.runtime.js",
-        sourcePath: "src/tasks/missing.runtime.ts",
-        reason:
-          'hidden local runtime loader "./missing.runtime.js" resolves to src/tasks/missing.runtime.ts, but that source is not an explicit tsdown entry',
-      },
-    ]);
-  });
+function check(source: string, entries: string[] = []) {
+  const file = "src/example/example-registry.ts";
+  const ast = parser.parseSourceFile(file, source);
+  return expect(findRuntimeSidecarLoaderViolations(source, file, new Set(entries), ast));
+}
 
-  it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      export function loadRuntime() {
-        return require("./task-registry-control.runtime.js");
-      }
-    `;
+it("allows hidden createRequire runtime sidecars when the source is an explicit build entry", () => {
+  check(`${requirePrelude}require("./example-control.runtime.js");`, [
+    "src/example/example-control.runtime.ts",
+  ]).toStrictEqual([]);
+});
 
-    expect(
-      findRuntimeSidecarLoaderViolations(
-        source,
-        "src/tasks/task-registry.ts",
-        new Set(["src/tasks/task-registry-control.runtime.ts"]),
-      ),
-    ).toStrictEqual([]);
-  });
+it("resolves candidate arrays used by source/build fallback loops", () => {
+  check(`${requirePrelude}
+    const CANDIDATES = ["./control.runtime.js", "./control.runtime.ts"] as const;
+    for (const candidate of CANDIDATES) { require(candidate); }
+  `).toEqual([
+    {
+      line: 5,
+      specifier: "./control.runtime.js",
+      sourcePath: "src/example/control.runtime.ts",
+      reason:
+        'hidden local runtime loader "./control.runtime.js" resolves to src/example/control.runtime.ts, but that source is not an explicit tsdown entry',
+    },
+  ]);
+});
 
-  it("resolves candidate arrays used by source/build fallback loops", () => {
-    const source = `
-      import { createRequire } from "node:module";
-      const require = createRequire(import.meta.url);
-      const CANDIDATES = ["./control.runtime.js", "./control.runtime.ts"] as const;
-      export function loadRuntime() {
-        for (const candidate of CANDIDATES) {
-          return require(candidate);
-        }
-      }
-    `;
+it("ignores bundler-visible dynamic imports", () => {
+  check(
+    'const runtimePromise: Promise<typeof import("./control.runtime.js")> = import("./control.runtime.js");',
+  ).toStrictEqual([]);
+});
 
-    expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
-    ).toEqual([
-      {
-        line: 7,
-        specifier: "./control.runtime.js",
-        sourcePath: "src/tasks/control.runtime.ts",
-        reason:
-          'hidden local runtime loader "./control.runtime.js" resolves to src/tasks/control.runtime.ts, but that source is not an explicit tsdown entry',
-      },
-    ]);
-  });
-
-  it("ignores bundler-visible dynamic imports", () => {
-    const source = `
-      let runtimePromise: Promise<typeof import("./control.runtime.js")> | undefined;
-      export function loadRuntime() {
-        runtimePromise ??= import("./control.runtime.js");
-        return runtimePromise;
-      }
-    `;
-
-    expect(
-      findRuntimeSidecarLoaderViolations(source, "src/tasks/task-registry.ts", new Set()),
-    ).toStrictEqual([]);
-  });
-
-  it("collects explicit tsdown entry sources", () => {
-    expect(
-      collectTsdownEntrySources([
-        {
-          entry: {
-            index: "src/index.ts",
-            "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
-          },
-        },
-      ]),
-    ).toEqual(new Set(["src/index.ts", "src/tasks/task-registry-control.runtime.ts"]));
-  });
+it("collects explicit tsdown entry sources", () => {
+  const entry = {
+    index: "src/index.ts",
+    "example-control.runtime": "src/example/example-control.runtime.ts",
+  };
+  expect(collectTsdownEntrySources([{ entry }])).toEqual(
+    new Set(["src/index.ts", "src/example/example-control.runtime.ts"]),
+  );
 });

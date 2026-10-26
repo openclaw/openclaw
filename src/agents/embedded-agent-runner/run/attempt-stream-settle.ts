@@ -1,84 +1,95 @@
-/**
- * Settles async tools and compaction, then snapshots the completed stream.
- */
+import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  isAnthropicServerToolClearingEnabled,
+  isCompactionReplayCheckpoint,
+  resolveCompactionReplayEligibility,
+  stripCompactionReplayCheckpoint,
+} from "@openclaw/ai/transports";
+import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
+import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
+import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import type { AgentMessage } from "../../runtime/index.js";
-import type { AgentSession, SessionManager } from "../../sessions/index.js";
-import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
-import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
+import { configuredModelSupportsNativeVideo } from "../../model-input.js";
+import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
+import type { SandboxContext } from "../../sandbox/types.js";
+import type { AgentSession, SessionManager, SettingsManager } from "../../sessions/index.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { withPreparedSessionCapabilityRead } from "../../subagents/spawn/subagent-session-store.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
+import { hasNonzeroUsage, normalizeUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+  resolvePreparedExtraParams,
+} from "../extra-params.js";
 import { log } from "../logger.js";
+import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
+import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
-  completePromptCacheObservation,
-  type PromptCacheBreak,
-  type PromptCacheChange,
-} from "../prompt-cache-observability.js";
+  type ProviderPromptState,
+  wrapStreamFnWithProviderPromptState,
+} from "../provider-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
-  flushSessionManagerTranscript,
-  normalizeCompactionRecoveryTranscriptTail,
-} from "./attempt-transcript-helpers.js";
+  resolveEmbeddedAgentApiKey,
+  resolveEmbeddedAgentBaseStreamFn,
+  selectEmbeddedAgentStream,
+} from "../stream-resolution.js";
+import type { ProviderThinkLevel } from "../utils.js";
+import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
-  type CompletionRequiredAsyncTaskWaitResult,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
-} from "./attempt.context-engine-helpers.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+} from "./attempt-context-engine-helpers.js";
+import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
+import { normalizeCompactionRecoveryTranscriptTail } from "./attempt-transcript-helpers.js";
 import {
   hasActiveCompactionRetryWork,
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSession>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
 type PromptCacheRetention = Parameters<typeof buildContextEnginePromptCacheInfo>[0]["retention"];
-type ToolSearchTargetTranscriptProjections = Parameters<
-  typeof projectToolSearchTargetTranscriptMessages
->[1];
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
-
-type StreamSettleResult = {
-  promptError: unknown;
-  promptErrorSource: AgentRunAttemptFailureSource | null;
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-  messagesSnapshot: AgentMessage[];
-  sessionIdUsed: string;
-  lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
-  currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
-  currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
-  attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  cacheBreak: PromptCacheBreak | null;
-  lastCallUsage: NormalizedUsage | undefined;
-  promptCache: EmbeddedRunAttemptResult["promptCache"];
-};
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
   sessionManager: SessionManager;
-  sessionLockController: AttemptSessionLockController;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
     promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
-    sessionIdUsed: string;
   };
   readLifecycleState: () => {
     aborted: boolean;
@@ -86,7 +97,8 @@ export async function settleEmbeddedAttemptStream(input: {
     timedOutDuringCompaction: boolean;
   };
   markTimedOutDuringCompaction: () => void;
-  runAbortDeadlineAtMs: number;
+  getRunAbortDeadlineAtMs: () => number | undefined;
+  onRunAbortDeadlineChanged: (listener: () => void) => () => void;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -95,87 +107,61 @@ export async function settleEmbeddedAttemptStream(input: {
   }) => Promise<void> | void;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   prePromptMessageCount: number;
-  toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjections;
+  nestedToolActivityState: AttemptNestedToolActivityState;
   cache: {
-    observabilityEnabled: boolean;
-    changesForTurn: PromptCacheChange[] | null;
+    getObservation?: () => PromptCacheRequestObservation | undefined;
     retention: PromptCacheRetention;
   };
   shouldFlushForContextEngine: boolean;
-}): Promise<StreamSettleResult> {
+}) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-  let { promptError, promptErrorSource, sessionIdUsed } = state;
 
-  if (
-    shouldWaitForCompletionRequiredAsyncTasks({
-      sessionKey: attempt.sessionKey,
-      toolMetas: subscription.toolMetas,
-      yieldDetected: state.yieldAborted,
-    })
-  ) {
-    const getAsyncStartedToolMetas = () =>
-      subscription.toolMetas
-        .filter(
-          (
-            entry,
-          ): entry is {
-            toolName: string;
-            asyncStarted?: boolean;
-            asyncTaskRunId?: string;
-            asyncTaskId?: string;
-          } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-        )
-        .map((entry) => ({
-          toolName: entry.toolName,
-          asyncStarted: entry.asyncStarted,
-          asyncTaskRunId: entry.asyncTaskRunId,
-          asyncTaskId: entry.asyncTaskId,
-        }));
-    const completionRequiredAsyncDeadlineAtMs = Math.max(
-      Date.now(),
-      input.runAbortDeadlineAtMs - 500,
-    );
-    let asyncTaskWait: CompletionRequiredAsyncTaskWaitResult;
-    try {
-      asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: getAsyncStartedToolMetas,
+  try {
+    if (
+      shouldWaitForCompletionRequiredAsyncTasks({
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: completionRequiredAsyncDeadlineAtMs,
+        toolMetas: subscription.toolMetas,
+        yieldDetected: state.yieldAborted,
+        abortSignal: input.runAbortSignal,
+      })
+    ) {
+      const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
+        getToolMetas: () =>
+          subscription.toolMetas.filter(
+            (entry) => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+          ),
+        sessionKey: attempt.sessionKey,
+        getDeadlineAtMs: () => {
+          const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+          return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+        },
+        onDeadlineChanged: input.onRunAbortDeadlineChanged,
         abortSignal: input.runAbortSignal,
       });
-    } catch (err) {
-      // Timeouts AND user aborts must still settle so the attempt reaches
-      // after-turn (transcript flush, agent-end side effects). Rethrowing here
-      // unwinds the whole lane task and silently starves every agent_end
-      // consumer for aborted runs.
-      const lifecycle = input.readLifecycleState();
-      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
-        throw err;
+      // An aborted run legitimately leaves async tasks unfinished; stamping a
+      // timeout failure here would reclassify the abort as an errored completion.
+      if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
+        state.promptError = new Error(
+          `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
+        );
+        state.promptErrorSource = "prompt";
       }
-      asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: getAsyncStartedToolMetas,
-        sessionKey: attempt.sessionKey,
-        deadlineAtMs: Date.now(),
-      });
     }
-    // An aborted run legitimately leaves async tasks unfinished; stamping a
-    // timeout failure here would reclassify the abort as an errored completion.
-    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-      promptError = new Error(
-        `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
-      );
-      promptErrorSource = "prompt";
-      state.promptError = promptError;
-      state.promptErrorSource = promptErrorSource;
+  } catch (err) {
+    // Cancelled task observation must still reach after-turn settlement. The
+    // lifecycle owner already records timeout versus user abort; another read
+    // here could wait indefinitely behind the same database coordinator.
+    const lifecycle = input.readLifecycleState();
+    if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
+      throw err;
     }
   }
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
-  const wasCompactingBefore = activeSession.isCompacting;
+  const wasCompacting = activeSession.isCompacting;
   const snapshot = activeSession.messages.slice();
-  const wasCompactingAfter = activeSession.isCompacting;
-  const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+  const preCompactionSnapshot = wasCompacting ? null : snapshot;
   const preCompactionSessionId = activeSession.sessionId;
   const aggregateTimeoutMs = 60_000;
 
@@ -186,12 +172,24 @@ export async function settleEmbeddedAttemptStream(input: {
         prePromptMessageCount: input.prePromptMessageCount,
       });
       const attemptAccepted =
-        !promptError &&
+        !state.promptError &&
         !input.readLifecycleState().aborted &&
         !input.readLifecycleState().timedOut &&
         !state.yieldAborted &&
         currentAssistant?.stopReason === "stop";
-      await input.onBlockReplyFlush({ reason: "pre_compaction", attemptAccepted });
+      // The flush rides the same delivery chain the finalize-phase join just
+      // bounded; a wedged lane (including the supported blockReplyTimeoutMs: 0
+      // path) must not park settlement until the 48h run budget either.
+      await joinWithRunLivenessDeadline({
+        joinWork: () => input.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted }),
+        runAbortSignal: input.runAbortSignal,
+        onTimeout: () => {
+          log.warn(
+            `block-reply flush did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+              `proceeding with settlement: runId=${attempt.runId}`,
+          );
+        },
+      });
     }
 
     const compactionRetryWait = state.yieldAborted
@@ -219,54 +217,18 @@ export async function settleEmbeddedAttemptStream(input: {
     if (!isRunnerAbortError(err)) {
       throw err;
     }
-    if (!promptError) {
-      promptError = err;
-      promptErrorSource = "compaction";
-      state.promptError = promptError;
-      state.promptErrorSource = promptErrorSource;
+    if (!state.promptError) {
+      state.promptError = err;
+      state.promptErrorSource = "compaction";
     }
     if (!input.isProbeSession) {
       log.debug(`compaction wait aborted: runId=${attempt.runId} sessionId=${attempt.sessionId}`);
     }
   }
 
-  let compactionOccurredThisAttempt = false;
-  let messagesSnapshot: AgentMessage[] = [];
-  let lastAssistant: AssistantMessage | undefined;
-  let currentAttemptAssistant: AssistantMessage | undefined;
-  let currentAttemptCompletedAssistant: AssistantMessage | undefined;
-  let attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
-  let cacheBreak: PromptCacheBreak | null = null;
-  let lastCallUsage: NormalizedUsage | undefined;
-  let promptCache: EmbeddedRunAttemptResult["promptCache"];
-
-  await input.withOwnedSessionWriteLock(async () => {
+  const captureStreamSnapshot = () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
-    compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
-    appendAttemptCacheTtlIfNeeded({
-      sessionManager,
-      timedOutDuringCompaction,
-      compactionOccurredThisAttempt,
-      config: attempt.config,
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-      modelApi: attempt.model.api,
-      isCacheTtlEligibleProvider,
-    });
-
-    if (timedOutDuringCompaction) {
-      const removedEntries = normalizeCompactionRecoveryTranscriptTail({
-        activeSession,
-        sessionManager,
-      });
-      if (removedEntries > 0 && !input.isProbeSession) {
-        log.warn(
-          `normalized compaction timeout transcript tail: removedEntries=${removedEntries} ` +
-            `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-        );
-      }
-    }
-
+    const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
     const snapshotSelection = selectCompactionTimeoutSnapshot({
       timedOutDuringCompaction,
       preCompactionSnapshot,
@@ -280,39 +242,21 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
-    const modelMessagesSnapshot = snapshotSelection.messagesSnapshot;
-    messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-      modelMessagesSnapshot,
-      input.toolSearchTargetTranscriptProjections,
-    );
-    sessionIdUsed = snapshotSelection.sessionIdUsed;
-    // Projected target-tool assistants are transcript evidence, not model
-    // turns. Letting one own terminal state hides its parent tool's outcome.
-    lastAssistant = modelMessagesSnapshot
-      .slice()
-      .toReversed()
-      .find((message): message is AssistantMessage => message.role === "assistant");
-    currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot: modelMessagesSnapshot,
+    const messagesSnapshot = snapshotSelection.messagesSnapshot;
+    const lastAssistant = messagesSnapshot.findLast((message) => message.role === "assistant");
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
-    currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
-    attemptUsage = subscription.getUsageTotals();
-    cacheBreak = input.cache.observabilityEnabled
-      ? completePromptCacheObservation({
-          sessionId: attempt.sessionId,
-          promptCacheKey: attempt.promptCacheKey,
-          sessionKey: attempt.sessionKey,
-          usage: attemptUsage,
-        })
-      : null;
+    const currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
+    const attemptUsage = subscription.getUsageTotals();
     const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
       compactionOccurred: compactionOccurredThisAttempt,
     });
     const completedAssistantUsage = normalizeUsage(currentAttemptCompletedAssistant?.usage);
-    lastCallUsage =
+    const lastCallUsage =
       subscription.getLastAssistantUsage() ??
       (hasNonzeroUsage(completedAssistantUsage)
         ? completedAssistantUsage
@@ -322,71 +266,461 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const promptCacheObservation =
-      input.cache.observabilityEnabled &&
-      (cacheBreak || input.cache.changesForTurn || typeof attemptUsage?.cacheRead === "number")
-        ? {
-            broke: Boolean(cacheBreak),
-            ...(typeof cacheBreak?.previousCacheRead === "number"
-              ? { previousCacheRead: cacheBreak.previousCacheRead }
-              : {}),
-            ...(typeof cacheBreak?.cacheRead === "number"
-              ? { cacheRead: cacheBreak.cacheRead }
-              : typeof attemptUsage?.cacheRead === "number"
-                ? { cacheRead: attemptUsage.cacheRead }
-                : {}),
-            changes: cacheBreak?.changes ?? input.cache.changesForTurn,
-          }
-        : undefined;
     const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
       provider: attempt.provider,
       modelId: attempt.modelId,
     });
-    promptCache = buildContextEnginePromptCacheInfo({
+    const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
-      observation: promptCacheObservation,
+      observation: input.cache.getObservation?.(),
       lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
         lastCallUsage,
         assistantTimestamp: usageAssistant?.timestamp,
         fallbackLastCacheTouchAt,
       }),
     });
+    return {
+      compactionOccurredThisAttempt,
+      messagesSnapshot,
+      sessionIdUsed: snapshotSelection.sessionIdUsed,
+      lastAssistant,
+      currentAttemptAssistant,
+      currentAttemptCompletedAssistant,
+      attemptUsage,
+      lastCallUsage,
+      promptCache,
+    };
+  };
 
-    if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
-      try {
-        sessionManager.appendCustomEntry("openclaw:prompt-error", {
-          timestamp: Date.now(),
-          runId: attempt.runId,
-          sessionId: attempt.sessionId,
+  let captured: ReturnType<typeof captureStreamSnapshot>;
+  try {
+    captured = await input.withOwnedTranscriptWrite(() =>
+      withSessionManagerAppend(sessionManager, async () => {
+        const { timedOutDuringCompaction } = input.readLifecycleState();
+        const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
+        const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
+        await appendAttemptCacheTtlIfNeeded({
+          sessionManager,
+          timedOutDuringCompaction,
+          compactionOccurredThisAttempt,
+          config: attempt.config,
           provider: attempt.provider,
-          model: attempt.modelId,
-          api: attempt.model.api,
-          error: formatErrorMessage(promptError),
+          modelId: attempt.modelId,
+          modelApi: attempt.model.api,
+          modelRoute: {
+            baseUrl: attempt.model.baseUrl,
+            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+          },
+          isCacheTtlEligibleProvider,
+          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
         });
-      } catch (entryErr) {
-        log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
-      }
-    }
 
-    if (input.shouldFlushForContextEngine) {
-      flushSessionManagerTranscript(sessionManager);
+        if (timedOutDuringCompaction) {
+          const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
+            activeSession,
+            sessionManager,
+          });
+          if (removedEntries > 0 && !input.isProbeSession) {
+            log.warn(
+              `normalized compaction timeout transcript tail: removedEntries=${removedEntries} ` +
+                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+            );
+          }
+        }
+
+        const streamSnapshot = captureStreamSnapshot();
+
+        if (
+          state.promptError &&
+          state.promptErrorSource === "prompt" &&
+          !streamSnapshot.compactionOccurredThisAttempt &&
+          !attempt.abortSignal?.aborted
+        ) {
+          try {
+            await sessionManager.appendCustomEntryAsync("openclaw:prompt-error", {
+              timestamp: Date.now(),
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              provider: attempt.provider,
+              model: attempt.modelId,
+              api: attempt.model.api,
+              error: formatErrorMessage(state.promptError),
+            });
+          } catch (entryErr) {
+            // Worker errors lose object identity; use the live owner's cancellation reason.
+            attempt.abortSignal?.throwIfAborted();
+            input.runAbortSignal.throwIfAborted();
+            log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
+          }
+        }
+
+        if (input.shouldFlushForContextEngine) {
+          sessionManager.flushPendingPersistence();
+        }
+        return streamSnapshot;
+      }),
+    );
+  } catch (error) {
+    const abortedByAttempt = attempt.abortSignal?.aborted && error === attempt.abortSignal.reason;
+    const abortedByRun = input.runAbortSignal.aborted && error === input.runAbortSignal.reason;
+    if (!abortedByAttempt && !abortedByRun) {
+      throw error;
     }
-  });
+    // Cancellation fences writes, but after-turn still needs the settled messages and usage.
+    captured = captureStreamSnapshot();
+  }
 
   return {
-    promptError,
-    promptErrorSource,
+    promptError: state.promptError,
+    promptErrorSource: state.promptErrorSource,
     timedOutDuringCompaction: input.readLifecycleState().timedOutDuringCompaction,
-    compactionOccurredThisAttempt,
-    messagesSnapshot,
-    sessionIdUsed,
-    lastAssistant,
-    currentAttemptAssistant,
-    currentAttemptCompletedAssistant,
-    attemptUsage,
-    cacheBreak,
-    lastCallUsage,
-    promptCache,
+    ...captured,
+    successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
+  };
+}
+
+export async function prepareEmbeddedAttemptTransport(input: {
+  assertCronRootCurrent?: () => void;
+  attempt: EmbeddedRunAttemptParams;
+  contextEngineInfo?: ContextEngineInfo;
+  session: AgentSession;
+  settingsManager: SettingsManager;
+  providerThinkingLevel: ProviderThinkLevel | undefined;
+  onCurrentTurnImageFailure?: (count: number) => void;
+  sessionAgentId: string;
+  workspaceDir: string;
+  workspaceOnly: boolean;
+  agentDir: string;
+  abortSignal: AbortSignal;
+  getProviderRuntimeHandle: () => ProviderRuntimePluginHandle;
+  sandboxSessionKey: string;
+  sandbox?: SandboxContext | null;
+  codeModeControlsEnabled: boolean;
+  providerPromptState: {
+    state: ProviderPromptState;
+    effectiveContextTokenBudget: number;
+    recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  };
+}) {
+  const attempt = input.attempt;
+  const session = input.session;
+  const assertAdmittedCurrent = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    input.abortSignal,
+  );
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
+  // Observation initializes the account entry; capture Access authority only after it exists.
+  const recordServiceTier =
+    runtime?.accountCatalog &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+      ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
+      : undefined;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(attempt);
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
+  // Rebuild each turn from the session's original stream base so prior-turn
+  // wrappers do not pin us to stale provider/API transport behavior.
+  const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
+    session,
+  });
+  const resolvedTransport = resolveExplicitSettingsTransport({
+    settingsManager: input.settingsManager,
+    sessionTransport: session.agent.transport,
+  });
+  if (attempt.cyberAccessProgram !== undefined && attempt.provider !== "openai") {
+    throw new Error(
+      "Explicit access programs are unsupported by this provider. Reset Access to the model default or select an OpenAI model.",
+    );
+  }
+  const streamExtraParamsOverride = {
+    ...attempt.streamParams,
+    fastMode: attempt.fastMode,
+    ...(attempt.cyberAccessProgram !== undefined
+      ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
+      : {}),
+    // Memory extraction must see the original history, not a provider summary.
+    ...(attempt.trigger === "memory"
+      ? { anthropicServerCompaction: false, responsesServerCompaction: false }
+      : {}),
+  };
+  const selectedAuth = attempt.runtimePlan?.auth;
+  const auth = selectedAuth?.selectedAuthMode
+    ? { mode: selectedAuth.selectedAuthMode, authFlow: selectedAuth.selectedAuthFlow }
+    : undefined;
+  const extraParamsContext = {
+    extraParamsOverride: streamExtraParamsOverride,
+    thinkingLevel: input.providerThinkingLevel,
+    agentId: input.sessionAgentId,
+    workspaceDir: input.workspaceDir,
+    model: attempt.model,
+    resolvedTransport,
+  };
+  const resolvedExtraParams =
+    attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
+    resolvePreparedExtraParams({
+      ...extraParamsContext,
+      cfg: attempt.config,
+      transportConfig: attempt.transportConfig,
+      provider: attempt.provider,
+      modelId: attempt.modelId,
+      providerRuntimeHandle: input.getProviderRuntimeHandle(),
+      agentDir: input.agentDir,
+      auth,
+    });
+  const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
+  const suppressResponsesCompaction =
+    attempt.model.api === "openai-responses" &&
+    (attempt.trigger === "memory" ||
+      (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true));
+  const effectiveExtraParams = suppressResponsesCompaction
+    ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
+    : resolvedExtraParams;
+  const providerStreamFn = registerProviderStreamForModel({
+    model: attempt.model,
+    cfg: attempt.transportConfig ?? attempt.config,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+    auth,
+  });
+  const transportApiKey = await resolveEmbeddedAgentApiKey({
+    provider: attempt.model.provider,
+    resolvedApiKey: attempt.resolvedApiKey,
+    authStorage: attempt.authStorage,
+  });
+  const {
+    streamFn,
+    strategy: streamStrategy,
+    wrapApiKey,
+  } = selectEmbeddedAgentStream({
+    currentStreamFn: defaultSessionStreamFn,
+    providerStreamFn,
+    sessionId: attempt.sessionId,
+    promptCacheKey: attempt.promptCacheKey,
+    signal: input.abortSignal,
+    model: attempt.model,
+    resolvedApiKey: attempt.resolvedApiKey,
+    transportAuthAvailable: Boolean(transportApiKey?.trim()),
+    authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
+    authStorage: attempt.authStorage,
+    assertCurrent: assertRunCurrent,
+  });
+  const boundaryStreamFn = wrapStreamFnWithMessageTransform(
+    streamFn,
+    (messages) => messages,
+    async ({ context, ...provider }) => {
+      assertRunCurrent?.();
+      const prepared = await materializeProviderContext({
+        ...provider,
+        context,
+        workspaceDir: input.workspaceDir,
+        agentWorkspaceDir: attempt.workspaceDir,
+        workspaceOnly: input.workspaceOnly,
+        localRoots: input.workspaceOnly
+          ? undefined
+          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+        sandbox:
+          input.sandbox?.enabled && input.sandbox.fsBridge
+            ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
+            : undefined,
+      });
+      assertRunCurrent?.();
+      return prepared;
+    },
+  );
+  const providerInput = configuredModelSupportsNativeVideo({
+    cfg: attempt.config,
+    provider: attempt.model.provider,
+    modelId: attempt.model.id,
+    api: attempt.model.api,
+  })
+    ? [...attempt.model.input, "video" as const]
+    : undefined;
+  // A direct provider transport replaces the session SDK stream, so attach
+  // turn-owned thinking provenance to the selected transport as well.
+  session.agent.streamFn = (model, context, options) => {
+    const providerOptions = {
+      ...options,
+      openclawThinkingExplicit: attempt.thinkingExplicit,
+      ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+    };
+    // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
+    return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
+      boundaryStreamFn(model, context, providerOptions),
+    );
+  };
+  // Install inside provider/config wrappers so their full onPayload chain runs
+  // before admission hashes the request body that the built-in transport sends.
+  session.agent.streamFn = wrapStreamFnWithProviderPromptState({
+    streamFn: session.agent.streamFn,
+    ...input.providerPromptState,
+  });
+  session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
+    streamFn: session.agent.streamFn,
+    acknowledgment: attempt.providerReviewAcknowledgment,
+    runId: attempt.runId,
+    assertCurrent: () => {
+      input.abortSignal.throwIfAborted();
+      assertRunCurrent?.();
+    },
+  });
+  const providerTextTransforms = resolveProviderTextTransforms({
+    provider: attempt.provider,
+    config: attempt.config,
+    workspaceDir: input.workspaceDir,
+    runtimeHandle: input.getProviderRuntimeHandle(),
+  });
+  if (providerTextTransforms?.input?.length) {
+    session.agent.streamFn = wrapStreamFnTextTransforms({
+      streamFn: session.agent.streamFn,
+      input: providerTextTransforms.input,
+      transformSystemPrompt: false,
+    });
+  }
+  const nativeWebSearchPolicyContext = {
+    // Provider-hosted search bypasses local execute hooks, so its request must
+    // honor the same execution cap without changing foreground function schemas.
+    webSearchEnabled:
+      attempt.disableTools !== true &&
+      attempt.toolOverrides?.webSearch !== false &&
+      (!attempt.toolExecutionAllow ||
+        isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
+    runtimeToolAllowlist: attempt.toolsAllow,
+    sessionKey: input.sandboxSessionKey,
+    sandboxToolPolicy: input.sandbox?.tools,
+    messageProvider: attempt.messageProvider ?? attempt.messageChannel,
+    agentAccountId: attempt.agentAccountId,
+    groupId: attempt.groupId,
+    groupChannel: attempt.groupChannel,
+    groupSpace: attempt.groupSpace,
+    spawnedBy: attempt.spawnedBy,
+    senderId: attempt.senderId,
+    senderName: attempt.senderName,
+    senderUsername: attempt.senderUsername,
+    senderE164: attempt.senderE164,
+  };
+
+  const { nativeWebSearchAllowedByToolPolicy } = await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      session.agent,
+      attempt.config,
+      attempt.provider,
+      attempt.modelId,
+      streamExtraParamsOverride,
+      input.providerThinkingLevel,
+      input.sessionAgentId,
+      input.workspaceDir,
+      attempt.model,
+      input.agentDir,
+      resolvedTransport,
+      {
+        preparedExtraParams: effectiveExtraParams,
+        transportConfig: attempt.transportConfig,
+        modelCallUrgency: resolveModelCallUrgency(attempt),
+        auth,
+        nativeWebSearchPolicyContext,
+      },
+    ),
+  );
+  if (input.codeModeControlsEnabled) {
+    session.agent.streamFn = createCodexNativeWebSearchWrapper(session.agent.streamFn, {
+      config: attempt.config,
+      agentDir: input.agentDir,
+      agentId: input.sessionAgentId,
+      ...nativeWebSearchPolicyContext,
+      nativeWebSearchAllowedByToolPolicy,
+      codeModeToolSurfaceEnabled: true,
+    });
+  }
+  const effectivePromptCacheRetention = resolveCacheRetention(
+    effectiveExtraParams,
+    attempt.provider,
+    attempt.model.api,
+    attempt.modelId,
+  );
+  const agentTransportOverride = resolveAgentTransportOverride({
+    settingsManager: input.settingsManager,
+    effectiveExtraParams,
+  });
+  const effectiveAgentTransport = agentTransportOverride ?? session.agent.transport;
+  session.agent.transport = effectiveAgentTransport;
+  const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
+  const serverToolClearingEnabled =
+    contextPruning?.mode === "cache-ttl" &&
+    isAnthropicServerToolClearingEnabled(attempt.model, transportApiKey);
+  if (serverToolClearingEnabled) {
+    // One owner: the decision that suspends client-side pruning also hands the
+    // clearing request to the transport, so neither can happen without the other.
+    const baseStreamFn = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      const requestOptions = { ...options, cacheTtlPruning: { tools: contextPruning?.tools } };
+      return baseStreamFn(model, context, requestOptions);
+    };
+  }
+  // Agent turns carry no credential, and provider wrappers classify auth from
+  // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
+  session.agent.streamFn = wrapApiKey(session.agent.streamFn);
+  if (suppressResponsesCompaction) {
+    // Checkpoints already stored by older builds must not replace the engine's selection.
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
+      messages.some(
+        (message) =>
+          message.role === "assistant" && isCompactionReplayCheckpoint(message.providerReplay),
+      )
+        ? messages.map((message) =>
+            message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message,
+          )
+        : messages,
+    );
+  }
+  if (recordServiceTier && selectedCredential && selectedCredential.source !== "harness") {
+    session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
+      session.agent.streamFn,
+      (model, observation) =>
+        !input.abortSignal.aborted &&
+        recordServiceTier({
+          modelId: model.id,
+          runtimeId: "openclaw",
+          api: model.api,
+          baseUrl: model.baseUrl,
+          ...observation,
+        }),
+      {
+        runId: attempt.runId,
+        sessionId: attempt.sessionId,
+        accountRoute: selectedCredential.identityKey,
+      },
+    );
+  }
+  return {
+    serverToolClearingEnabled,
+    compactionReplayEnabled:
+      !suppressResponsesCompaction &&
+      resolveCompactionReplayEligibility(attempt.model, {
+        extraParams: effectiveExtraParams,
+        apiKey: transportApiKey,
+      }),
+    effectiveAgentTransport,
+    effectiveExtraParams,
+    effectivePromptCacheRetention,
+    providerTextTransforms,
+    streamStrategy,
   };
 }

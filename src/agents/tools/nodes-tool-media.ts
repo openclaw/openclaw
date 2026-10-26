@@ -1,8 +1,3 @@
-/**
- * Nodes media action executor.
- *
- * Captures camera/photos/screen media from paired nodes and formats media-safe tool results.
- */
 import crypto from "node:crypto";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
@@ -12,18 +7,19 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  type CameraArtifactFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
   resolveCameraClipTarget,
   resolveCameraSnapTargets,
+  withCameraArtifactBatch,
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { mediaPathMatchesFormat } from "../../cli/nodes-media-utils.js";
 import {
   parseScreenRecordPayload,
-  parseScreenSnapshotPayload,
   screenRecordTempPath,
   screenSnapshotFormatForPath,
   screenSnapshotTempPath,
@@ -31,6 +27,7 @@ import {
   writeScreenSnapshotToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { parseScreenSnapshotResult } from "../../plugins/computer-use-contract.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
@@ -38,440 +35,323 @@ import {
   readFiniteNumberParam,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  readToolStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callGatewayTool } from "./gateway.js";
-import { resolveNode, resolveNodeId } from "./nodes-utils.js";
+import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
+import { resolveAgentNode } from "./nodes-utils.js";
+import { textResult } from "./tool-results.js";
 
-export const MEDIA_INVOKE_ACTIONS = {
-  "camera.snap": "camera_snap",
-  "camera.clip": "camera_clip",
-  "photos.latest": "photos_latest",
-  "screen.record": "screen_record",
-  "screen.snapshot": "screen_snapshot",
-  // file-transfer commands: redirect to dedicated tools for better result
-  // formatting and media-store handling. The gateway still enforces the
-  // underlying node-invoke path policy for raw callers.
-  "file.fetch": "file_fetch",
-  "dir.list": "dir_list",
-  "dir.fetch": "dir_fetch",
-  "file.write": "file_write",
-} as const;
-
-// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool is the preferred
-// agent UX. Gateway node-invoke policy still protects raw node.invoke callers.
-export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
-  "file.fetch",
-  "dir.list",
-  "dir.fetch",
-  "file.write",
-]);
-
-type NodeMediaAction =
-  | "camera_snap"
-  | "photos_latest"
-  | "camera_clip"
-  | "screen_record"
-  | "screen_snapshot";
 const MAX_RECORDING_DURATION_MS = 300_000;
-const RECORDING_INVOKE_GRACE_MS = 30_000;
-const RECORDING_TRANSPORT_GRACE_MS = 30_000;
 
-type ExecuteNodeMediaActionParams = {
-  action: NodeMediaAction;
+export async function executeNodeMediaAction(input: {
+  action: "camera_snap" | "photos_latest" | "camera_clip" | "screen_record" | "screen_snapshot";
   params: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
-};
-
-function resolveRecordingTimeouts(params: {
-  input: Record<string, unknown>;
-  gatewayOpts: GatewayCallOptions;
-  durationMs: number;
-}): { gatewayOpts: GatewayCallOptions; invokeTimeoutMs: number } {
-  const invokeTimeoutMs =
-    readPositiveIntegerParam(params.input, "invokeTimeoutMs") ??
-    params.durationMs + RECORDING_INVOKE_GRACE_MS;
-  // The Gateway transport starts before the forwarded node timer and must outlive it.
-  // Keep explicit transport and invoke overrides independent so callers can cancel either layer.
-  const transportTimeoutMs =
-    params.gatewayOpts.timeoutMs ?? invokeTimeoutMs + RECORDING_TRANSPORT_GRACE_MS;
-  return {
-    gatewayOpts: { ...params.gatewayOpts, timeoutMs: transportTimeoutMs },
-    invokeTimeoutMs,
+}): Promise<AgentToolResult<unknown>> {
+  const { params, modelHasVision, imageSanitization } = input;
+  const resolvedNode = await resolveAgentNode(
+    input.gatewayOpts,
+    readToolStringParam(input.params, "node", { required: true }),
+  );
+  const invoke = async (
+    command: string,
+    commandParams: Record<string, unknown>,
+    recordingDurationMs?: number,
+  ) => {
+    const timeouts =
+      recordingDurationMs === undefined
+        ? undefined
+        : resolveNodesToolInvokeTimeouts({
+            input: input.params,
+            gatewayOpts: input.gatewayOpts,
+            operationTimeoutMs: recordingDurationMs,
+          });
+    const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(
+      timeouts?.gatewayOpts ?? input.gatewayOpts,
+      {
+        nodeId: resolvedNode.nodeId,
+        command,
+        params: commandParams,
+        ...(timeouts ? { timeoutMs: timeouts.invokeTimeoutMs } : {}),
+        idempotencyKey: crypto.randomUUID(),
+      },
+    );
+    return raw?.payload;
   };
-}
-
-export async function executeNodeMediaAction(
-  input: ExecuteNodeMediaActionParams,
-): Promise<AgentToolResult<unknown>> {
   switch (input.action) {
     case "camera_snap":
-      return await executeCameraSnap(input);
-    case "photos_latest":
-      return await executePhotosLatest(input);
-    case "camera_clip":
-      return await executeCameraClip(input);
-    case "screen_record":
-      return await executeScreenRecord(input);
-    case "screen_snapshot":
-      return await executeScreenSnapshot(input);
-  }
-  throw new Error("Unsupported node media action");
-}
-
-async function sanitizeNodePhotoResult(params: {
-  kind: "snaps" | "photos";
-  content: AgentToolResult<unknown>["content"];
-  details: Array<Record<string, unknown>>;
-  imageSanitization: ImageSanitizationLimits;
-}): Promise<AgentToolResult<unknown>> {
-  if (params.details.length === 0) {
-    params.content.push({ type: "text", text: "No photos found." });
-  }
-  const mediaUrls = params.details
-    .map((entry) => entry.path)
-    .filter((entry): entry is string => typeof entry === "string");
-  return await sanitizeToolResultImages(
-    {
-      content: params.content,
-      details:
-        params.details.length > 0 ? { [params.kind]: params.details, media: { mediaUrls } } : [],
-    },
-    params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
-    params.imageSanitization,
-  );
-}
-
-async function executeCameraSnap({
-  params,
-  gatewayOpts,
-  modelHasVision,
-  imageSanitization,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
-  const nodeId = resolvedNode.nodeId;
-  const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
-  const facing =
-    facingRaw === "both" || facingRaw === "front" || facingRaw === "back"
-      ? facingRaw
-      : (() => {
+    case "photos_latest": {
+      let facing: "front" | "back" | "both" | undefined;
+      let limit = DEFAULT_PHOTOS_LIMIT;
+      if (input.action === "camera_snap") {
+        const value = normalizeLowercaseStringOrEmpty(params.facing) || "front";
+        if (value !== "both" && value !== "front" && value !== "back") {
           throw new Error("invalid facing (front|back|both)");
-        })();
-  const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? 1600;
-  const quality =
-    readFiniteNumberParam(params, "quality", {
-      min: 0,
-      max: 1,
-      message: "quality must be between 0 and 1",
-    }) ?? 0.95;
-  const delayMs = readNonNegativeIntegerParam(params, "delayMs");
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
-  if (deviceId && facing === "both" && resolvedNode.platform?.toLowerCase() !== "linux") {
-    throw new Error("facing=both is not allowed when deviceId is set");
-  }
-  const targets = resolveCameraSnapTargets({
-    facing,
-    platform: resolvedNode.platform,
-    deviceId,
-  });
-
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown>> = [];
-
-  for (const target of targets) {
-    const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-      nodeId,
-      command: "camera.snap",
-      params: {
-        facing: target.requestFacing,
-        maxWidth,
-        quality,
-        format: "jpg",
-        delayMs,
-        deviceId,
-      },
-      idempotencyKey: crypto.randomUUID(),
-    });
-    const payload = parseCameraSnapPayload(raw?.payload);
-    const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
-    if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-      throw new Error(`unsupported camera.snap format: ${payload.format}`);
-    }
-
-    const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-    const filePath = cameraTempPath({
-      kind: "snap",
-      facing: target.artifactFacing,
-      ext: isJpeg ? "jpg" : "png",
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload,
-      expectedHost: resolvedNode.remoteIp,
-      invalidPayloadMessage: "invalid camera.snap payload",
-    });
-    if (modelHasVision && payload.base64) {
-      content.push({
-        type: "image",
-        data: payload.base64,
-        mimeType: imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+        }
+        facing = value;
+      } else {
+        limit = Math.min(readPositiveIntegerParam(params, "limit") ?? limit, MAX_PHOTOS_LIMIT);
+      }
+      const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? DEFAULT_PHOTOS_MAX_WIDTH;
+      const quality =
+        readFiniteNumberParam(params, "quality", {
+          min: 0,
+          max: 1,
+          message: "quality must be between 0 and 1",
+        }) ?? (facing ? 0.95 : DEFAULT_PHOTOS_QUALITY);
+      let photos: ValidatedNodePhoto[] = [];
+      if (facing) {
+        const delayMs = readNonNegativeIntegerParam(params, "delayMs");
+        const deviceId = normalizeOptionalString(params.deviceId);
+        const targets = resolveCameraSnapTargets({
+          facing,
+          platform: resolvedNode.platform,
+          deviceId,
+        });
+        for (const target of targets) {
+          const payload = await invoke("camera.snap", {
+            facing: target.requestFacing,
+            maxWidth,
+            quality,
+            format: "jpg",
+            delayMs,
+            deviceId,
+          });
+          const photo = parseCameraSnapPayload(payload, { expectedHost: resolvedNode.remoteIp });
+          photos.push({
+            ...validateNodePhoto(photo, "camera.snap"),
+            facing: target.artifactFacing,
+          });
+        }
+      } else {
+        const payload = await invoke("photos.latest", { limit, maxWidth, quality });
+        if (!isRecord(payload) || !Array.isArray(payload.photos)) {
+          throw new Error("invalid photos.latest payload");
+        }
+        if (payload.photos.length > limit) {
+          throw new Error(
+            `photos.latest returned ${payload.photos.length} photos; requested at most ${limit}`,
+          );
+        }
+        // Validate the complete native batch before the shared owner writes private artifacts.
+        photos = payload.photos.map((photoRaw) => {
+          const photo = parseCameraSnapPayload(photoRaw, { expectedHost: resolvedNode.remoteIp });
+          return Object.assign(validateNodePhoto(photo, "photos.latest"), {
+            createdAt: isRecord(photoRaw) ? photoRaw.createdAt : undefined,
+          });
+        });
+      }
+      const kind: "snaps" | "photos" = facing ? "snaps" : "photos";
+      const command = kind === "snaps" ? "camera.snap" : "photos.latest";
+      const generatedPaths = photos.map(({ facing: artifactFacing, isJpeg }) =>
+        cameraTempPath({
+          kind: "snap",
+          ...(artifactFacing ? { facing: artifactFacing } : { id: crypto.randomUUID() }),
+          ext: isJpeg ? "jpg" : "png",
+        }),
+      );
+      // The batch owns every written photo until the final sanitized result is published.
+      return await withCameraArtifactBatch(generatedPaths, async (filePaths) => {
+        const content: AgentToolResult<unknown>["content"] = [];
+        const details: Array<Record<string, unknown> & { path: string }> = [];
+        for (const [
+          index,
+          { photo, facing: artifactFacing, createdAt, isJpeg },
+        ] of photos.entries()) {
+          const filePath = filePaths[index];
+          if (filePath === undefined) {
+            throw new Error("missing camera batch output path");
+          }
+          await writeCameraPayloadToFile({
+            filePath,
+            payload: photo,
+            expectedHost: resolvedNode.remoteIp,
+            invalidPayloadMessage: `invalid ${command} payload`,
+          });
+          content.push(
+            modelHasVision && photo.base64
+              ? {
+                  type: "image",
+                  data: photo.base64,
+                  mimeType:
+                    imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+                }
+              : {
+                  type: "text",
+                  text: `${artifactFacing ? "Camera" : "Library"} photo saved to ${filePath}.`,
+                },
+          );
+          details.push({
+            ...(artifactFacing ? { facing: artifactFacing } : { index }),
+            path: filePath,
+            width: photo.width,
+            height: photo.height,
+            ...(typeof createdAt === "string" ? { createdAt } : {}),
+          });
+        }
+        if (details.length === 0) {
+          content.push({ type: "text", text: "No photos found." });
+        }
+        const mediaUrls = details.map((entry) => entry.path);
+        const sanitized = await sanitizeToolResultImages(
+          {
+            content,
+            details:
+              details.length > 0 ? { [kind]: details, media: { mediaUrls, outbound: false } } : [],
+          },
+          kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
+          imageSanitization,
+        );
+        // When vision attempted to supply inline image blocks, the per-photo saved-path
+        // text was skipped; append an accurate summary based on whether images survived
+        // sanitization so the model always receives the private saved file path(s)
+        // without claiming images were loaded when none entered context.
+        const attemptedVisionImages = content.some((block) => block.type === "image");
+        if (attemptedVisionImages && details.length > 0) {
+          const retainedImageCount = sanitized.content.filter(
+            (block) => block.type === "image",
+          ).length;
+          const savedPaths = details.map((entry) => JSON.stringify(entry.path)).join(", ");
+          const text =
+            retainedImageCount > 0
+              ? `Loaded ${retainedImageCount} photo${retainedImageCount === 1 ? "" : "s"} into private model context for inspection; not attached or sent to the user. Saved to ${savedPaths}. Share explicitly only when the user asks.`
+              : `Photo${details.length === 1 ? "" : "s"} saved to ${savedPaths}; not attached or sent to the user. Share explicitly only when the user asks.`;
+          return {
+            ...sanitized,
+            content: [...sanitized.content, { type: "text", text }],
+          };
+        }
+        return sanitized;
       });
-    } else {
-      content.push({ type: "text", text: `Camera photo saved to ${filePath}.` });
     }
-    details.push({
-      facing: target.artifactFacing,
-      path: filePath,
-      width: payload.width,
-      height: payload.height,
-    });
-  }
-
-  return await sanitizeNodePhotoResult({ kind: "snaps", content, details, imageSanitization });
-}
-
-async function executePhotosLatest({
-  params,
-  gatewayOpts,
-  modelHasVision,
-  imageSanitization,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
-  const nodeId = resolvedNode.nodeId;
-  const limit = Math.min(
-    readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
-    MAX_PHOTOS_LIMIT,
-  );
-  const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? DEFAULT_PHOTOS_MAX_WIDTH;
-  const quality =
-    readFiniteNumberParam(params, "quality", {
-      min: 0,
-      max: 1,
-      message: "quality must be between 0 and 1",
-    }) ?? DEFAULT_PHOTOS_QUALITY;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-    nodeId,
-    command: "photos.latest",
-    params: {
-      limit,
-      maxWidth,
-      quality,
-    },
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const payload = raw?.payload;
-  if (!isRecord(payload) || !Array.isArray(payload.photos)) {
-    throw new Error("invalid photos.latest payload");
-  }
-  if (payload.photos.length > limit) {
-    throw new Error(
-      `photos.latest returned ${payload.photos.length} photos; requested at most ${limit}`,
-    );
-  }
-
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown>> = [];
-
-  // Reject every malformed batch member before creating any capture artifact.
-  const photos = payload.photos.map((photoRaw) => {
-    const photo = parseCameraSnapPayload(photoRaw);
-    const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
-    if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-      throw new Error(`unsupported photos.latest format: ${photo.format}`);
-    }
-    return { photoRaw, photo, normalizedFormat };
-  });
-
-  for (const [index, { photoRaw, photo, normalizedFormat }] of photos.entries()) {
-    const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-    const filePath = cameraTempPath({
-      kind: "snap",
-      ext: isJpeg ? "jpg" : "png",
-      id: crypto.randomUUID(),
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload: photo,
-      expectedHost: resolvedNode.remoteIp,
-      invalidPayloadMessage: "invalid photos.latest payload",
-    });
-
-    if (modelHasVision && photo.base64) {
-      content.push({
-        type: "image",
-        data: photo.base64,
-        mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+    case "camera_clip":
+    case "screen_record": {
+      let cameraTarget: ReturnType<typeof resolveCameraClipTarget> | undefined;
+      if (input.action === "camera_clip") {
+        const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
+        if (facing !== "front" && facing !== "back") {
+          throw new Error("invalid facing (front|back)");
+        }
+        cameraTarget = resolveCameraClipTarget({ facing, platform: resolvedNode.platform });
+      }
+      const durationMs = Math.min(
+        readPositiveIntegerParam(params, "durationMs") ??
+          (typeof params.duration === "string"
+            ? parseDurationMs(params.duration)
+            : cameraTarget
+              ? 3000
+              : 10_000),
+        MAX_RECORDING_DURATION_MS,
+      );
+      let fps: number | undefined;
+      let screenIndex: number | undefined;
+      if (!cameraTarget) {
+        fps =
+          readFiniteNumberParam(params, "fps", {
+            min: 0,
+            minExclusive: true,
+            message: "fps must be greater than 0",
+          }) ?? 10;
+        screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
+      }
+      const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
+      const raw = await invoke(
+        cameraTarget ? "camera.clip" : "screen.record",
+        cameraTarget
+          ? {
+              facing: cameraTarget.requestFacing,
+              durationMs,
+              includeAudio,
+              format: "mp4",
+              deviceId: normalizeOptionalString(params.deviceId),
+            }
+          : { durationMs, screenIndex, fps, format: "mp4", includeAudio },
+        durationMs,
+      );
+      if (cameraTarget) {
+        const payload = parseCameraClipPayload(raw);
+        const filePath = await writeCameraClipPayloadToFile({
+          payload,
+          facing: cameraTarget.artifactFacing,
+          expectedHost: resolvedNode.remoteIp,
+        });
+        return textResult(`FILE:${filePath}`, {
+          facing: cameraTarget.artifactFacing,
+          path: filePath,
+          durationMs: payload.durationMs,
+          hasAudio: payload.hasAudio,
+        });
+      }
+      const payload = parseScreenRecordPayload(raw);
+      const ext = payload.format || "mp4";
+      const outPath = normalizeOptionalString(params.outPath);
+      assertMediaOutPathFormat({ command: "screen.record", outPath, format: ext });
+      const filePath = outPath ?? screenRecordTempPath({ ext });
+      const written = await writeScreenRecordToFile(filePath, payload.base64);
+      return textResult(`FILE:${written.path}`, {
+        path: written.path,
+        durationMs: payload.durationMs,
+        fps: payload.fps,
+        screenIndex: payload.screenIndex,
+        hasAudio: payload.hasAudio,
       });
-    } else {
-      content.push({ type: "text", text: `Library photo saved to ${filePath}.` });
     }
-
-    const createdAt = isRecord(photoRaw) ? photoRaw.createdAt : undefined;
-    details.push({
-      index,
-      path: filePath,
-      width: photo.width,
-      height: photo.height,
-      ...(typeof createdAt === "string" ? { createdAt } : {}),
-    });
+    case "screen_snapshot": {
+      const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
+      const maxWidth = readPositiveIntegerParam(params, "maxWidth");
+      const outPath = normalizeOptionalString(params.outPath);
+      // The node owns the encoding choice, so ask for the one the caller's filename
+      // already promises instead of letting the default contradict it.
+      const requestedFormat = outPath ? screenSnapshotFormatForPath(outPath) : undefined;
+      const payload = parseScreenSnapshotResult(
+        await invoke("screen.snapshot", {
+          screenIndex,
+          maxWidth,
+          format: requestedFormat,
+        }),
+      );
+      const ext = payload.format === "png" ? "png" : "jpg";
+      assertMediaOutPathFormat({ command: "screen.snapshot", outPath, format: ext });
+      const filePath = outPath ?? screenSnapshotTempPath({ ext });
+      const written = await writeScreenSnapshotToFile(filePath, payload.base64);
+      return textResult(`FILE:${written.path}`, {
+        path: written.path,
+        format: payload.format,
+        displayFrameId: payload.displayFrameId,
+        screenIndex: payload.screenIndex,
+        width: payload.width,
+        height: payload.height,
+        media: {
+          mediaUrl: written.path,
+          // Inspected screenshots stay private; the FILE: path in the result
+          // text supports explicit sharing when the user asks.
+          outbound: false,
+        },
+      });
+    }
+    default:
+      throw new Error(`Unknown action: ${String(input.action satisfies never)}`);
   }
-
-  return await sanitizeNodePhotoResult({ kind: "photos", content, details, imageSanitization });
 }
 
-async function executeCameraClip({
-  params,
-  gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
-  const nodeId = resolvedNode.nodeId;
-  const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
-  if (facing !== "front" && facing !== "back") {
-    throw new Error("invalid facing (front|back)");
+function validateNodePhoto(
+  photo: ReturnType<typeof parseCameraSnapPayload>,
+  command: "camera.snap" | "photos.latest",
+) {
+  const format = normalizeLowercaseStringOrEmpty(photo.format);
+  if (format !== "jpg" && format !== "jpeg" && format !== "png") {
+    throw new Error(`unsupported ${command} format: ${photo.format}`);
   }
-  const target = resolveCameraClipTarget({ facing, platform: resolvedNode.platform });
-  const durationMs = Math.min(
-    readPositiveIntegerParam(params, "durationMs") ??
-      (typeof params.duration === "string" ? parseDurationMs(params.duration) : 3000),
-    MAX_RECORDING_DURATION_MS,
-  );
-  const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const deviceId =
-    typeof params.deviceId === "string" && params.deviceId.trim()
-      ? params.deviceId.trim()
-      : undefined;
-  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
-    nodeId,
-    command: "camera.clip",
-    params: {
-      facing: target.requestFacing,
-      durationMs,
-      includeAudio,
-      format: "mp4",
-      deviceId,
-    },
-    timeoutMs: timeouts.invokeTimeoutMs,
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const payload = parseCameraClipPayload(raw?.payload);
-  const filePath = await writeCameraClipPayloadToFile({
-    payload,
-    facing: target.artifactFacing,
-    expectedHost: resolvedNode.remoteIp,
-  });
-  return {
-    content: [{ type: "text", text: `FILE:${filePath}` }],
-    details: {
-      facing: target.artifactFacing,
-      path: filePath,
-      durationMs: payload.durationMs,
-      hasAudio: payload.hasAudio,
-    },
-  };
+  return { photo, isJpeg: format !== "png" };
 }
 
-async function executeScreenRecord({
-  params,
-  gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
-  const durationMs = Math.min(
-    readPositiveIntegerParam(params, "durationMs") ??
-      (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
-    MAX_RECORDING_DURATION_MS,
-  );
-  const fps =
-    readFiniteNumberParam(params, "fps", {
-      min: 0,
-      minExclusive: true,
-      message: "fps must be greater than 0",
-    }) ?? 10;
-  const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
-  const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
-  const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
-    nodeId,
-    command: "screen.record",
-    params: {
-      durationMs,
-      screenIndex,
-      fps,
-      format: "mp4",
-      includeAudio,
-    },
-    timeoutMs: timeouts.invokeTimeoutMs,
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const payload = parseScreenRecordPayload(raw?.payload);
-  const ext = payload.format || "mp4";
-  const outPath = normalizeOptionalString(params.outPath);
-  assertMediaOutPathFormat({ command: "screen.record", outPath, format: ext });
-  const filePath = outPath ?? screenRecordTempPath({ ext });
-  const written = await writeScreenRecordToFile(filePath, payload.base64);
-  return {
-    content: [{ type: "text", text: `FILE:${written.path}` }],
-    details: {
-      path: written.path,
-      durationMs: payload.durationMs,
-      fps: payload.fps,
-      screenIndex: payload.screenIndex,
-      hasAudio: payload.hasAudio,
-    },
-  };
-}
-
-async function executeScreenSnapshot({
-  params,
-  gatewayOpts,
-}: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
-  const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
-  const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
-  const maxWidth = readPositiveIntegerParam(params, "maxWidth");
-  const outPath = normalizeOptionalString(params.outPath);
-  // The node owns the encoding choice, so ask for the one the caller's filename
-  // already promises instead of letting the default contradict it.
-  const requestedFormat = outPath ? screenSnapshotFormatForPath(outPath) : undefined;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-    nodeId,
-    command: "screen.snapshot",
-    params: { screenIndex, maxWidth, format: requestedFormat },
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const payload = parseScreenSnapshotPayload(raw?.payload);
-  const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
-  if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
-    throw new Error(`unsupported screen.snapshot format: ${payload.format}`);
-  }
-  const ext = normalizedFormat === "png" ? "png" : "jpg";
-  assertMediaOutPathFormat({ command: "screen.snapshot", outPath, format: ext });
-  const filePath = outPath ?? screenSnapshotTempPath({ ext });
-  const written = await writeScreenSnapshotToFile(filePath, payload.base64);
-  return {
-    content: [{ type: "text", text: `FILE:${written.path}` }],
-    details: {
-      path: written.path,
-      format: payload.format,
-      displayFrameId: payload.displayFrameId,
-      screenIndex: payload.screenIndex,
-      width: payload.width,
-      height: payload.height,
-      media: {
-        mediaUrl: written.path,
-      },
-    },
-  };
-}
+type ValidatedNodePhoto = ReturnType<typeof validateNodePhoto> & {
+  facing?: CameraArtifactFacing;
+  createdAt?: unknown;
+};
 
 /**
  * Refuses to write media whose bytes contradict the caller's filename.
@@ -491,14 +371,6 @@ function assertMediaOutPathFormat(params: {
   throw new Error(
     `${params.command} returned ${params.format}; outPath must use a matching extension (got ${extnameFromAnyPath(params.outPath)})`,
   );
-}
-
-function requireString(params: Record<string, unknown>, key: string): string {
-  const raw = params[key];
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new Error(`${key} required`);
-  }
-  return raw.trim();
 }
 
 const DEFAULT_PHOTOS_LIMIT = 1;

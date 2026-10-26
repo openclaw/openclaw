@@ -173,12 +173,19 @@ flow:
               - --json
             - json: true
               timeoutMs: 30000
-        - set: promptsCapture
-          value:
-            expr: "JSON.parse(await fs.readFile(path.join(trajectoryExport.outputDir, 'prompts.json'), 'utf8'))"
+        - call: env.gateway.call
+          saveAs: sessionUsage
+          args:
+            - sessions.usage
+            - key:
+                ref: sessionKey
+              agentId: qa
+              range: all
+              limit: 1
+              includeContextWeight: true
         - set: instructionProfileReport
           value:
-            expr: "promptsCapture.systemPromptReport?.injectedWorkspaceFiles?.find((entry) => path.basename(String(entry.path ?? '')) === config.instructionFile)"
+            expr: "sessionUsage.sessions?.find((session) => session.key === sessionKey)?.contextWeight?.injectedWorkspaceFiles?.find((entry) => path.basename(String(entry.path ?? '')) === config.instructionFile)"
         - set: trajectoryEvents
           value:
             expr: "(await fs.readFile(path.join(trajectoryExport.outputDir, 'events.jsonl'), 'utf8')).split(/\\r?\\n/u).filter((line) => line.trim()).map((line) => JSON.parse(line))"
@@ -191,7 +198,7 @@ flow:
             - recursive: true
               force: true
         - assert:
-            expr: "config.instructionContents.includes(config.contextMarker) && instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.rawChars === config.instructionContents.trimEnd().length && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length && providerPromptEvidence.length > 0 && providerPromptEvidence.every((entry) => ['responses-sdk', 'native-codex-websocket', 'native-codex-sse'].includes(entry?.egress) && ['initial', 'encrypted-content-retry'].includes(entry?.payloadVariant) && ['instructions', 'input.developer', 'input.system'].includes(entry?.promptSource) && Number.isInteger(entry?.expectedChars) && entry.expectedChars > 0 && entry.observedChars === entry.expectedChars && entry.matchesAssembledPrompt === true && Object.keys(entry).toSorted().join(',') === 'egress,expectedChars,matchesAssembledPrompt,observedChars,payloadVariant,promptSource') && !JSON.stringify(providerPromptEvidence).includes(config.contextMarker)"
+            expr: "config.instructionContents.includes(config.contextMarker) && instructionProfileReport?.missing === false && instructionProfileReport?.truncated === false && instructionProfileReport?.rawChars === config.instructionContents.trimEnd().length && instructionProfileReport?.injectedChars === config.instructionContents.trimEnd().length && providerPromptEvidence.length > 0 && providerPromptEvidence.every((entry) => ['responses-sdk', 'native-codex-websocket', 'native-codex-sse'].includes(entry?.egress) && ['initial', 'reasoning-stripped', 'compaction-stripped'].includes(entry?.payloadVariant) && ['instructions', 'input.developer', 'input.system'].includes(entry?.promptSource) && Number.isInteger(entry?.expectedChars) && entry.expectedChars > 0 && entry.observedChars === entry.expectedChars && entry.matchesAssembledPrompt === true && Object.keys(entry).toSorted().join(',') === 'egress,expectedChars,matchesAssembledPrompt,observedChars,payloadVariant,promptSource') && !JSON.stringify(providerPromptEvidence).includes(config.contextMarker)"
             message:
               expr: "`current-run provider prompt evidence mismatch: ${JSON.stringify({ runId: turn.started.runId, instructionProfileReport, providerPromptEvidence })}`"
         - call: waitForCondition
@@ -202,7 +209,8 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const rawMessages = history.messages ?? [];
+                    const messages = projectQaToolMessages(rawMessages);
                     const textOf = (value) => typeof value === 'string'
                       ? value
                       : Array.isArray(value)

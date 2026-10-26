@@ -1,19 +1,19 @@
-import type { FollowupRun } from "./queue/types.js";
-
-type ReplyOperationAdmissionSnapshot =
-  | { status: "owned" }
-  | { status: "accepted"; mode: "steer" | "followup" }
-  | {
-      status: "skipped";
-      reason: "active-run" | "aborted" | "lifecycle-invalidated" | "queue-cap";
-    };
-
-export type ReplyOperationRunState = {
-  admission?: ReplyOperationAdmissionSnapshot;
-};
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import type {
+  FollowupRun,
+  ReplyOperation,
+  ReplyOperationRunState,
+  ReplyPreRunRejectionCode,
+} from "../../sessions/session-controller.contracts.js";
+import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
+import type { SessionEventExecution } from "./session-event-contract.js";
+export type {
+  ReplyOperationRunState,
+  ReplyPreRunRejectionCode,
+} from "../../sessions/session-controller.contracts.js";
 
 // Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {
@@ -26,15 +26,81 @@ export function resolveReplyOperationRunState(
   return (options as ReplyOptionsWithOperationRunState | undefined)?.[REPLY_OPERATION_RUN_STATE];
 }
 
-export function bindQueueDispositionToRunState(
-  run: FollowupRun,
-  state: ReplyOperationRunState | undefined,
+/** Either source owner can prevent its retained background work from adding delivery. */
+export function resolveReplySessionEventDelivery(
+  options: object | undefined,
+  run: { internalEventExecution?: Pick<SessionEventExecution, "deliver"> },
+): false | undefined {
+  return run.internalEventExecution?.deliver === false ||
+    resolveReplyOperationRunState(options)?.sessionEventDelivery === false
+    ? false
+    : undefined;
+}
+
+export function recordReplyOperationAgentTurn(
+  states: readonly ReplyOperationRunState[] | undefined,
+  owner: ReplyOperation | undefined,
+  outcome?:
+    | { kind: "aborted" | "rejected" }
+    | {
+        kind: "settled";
+        status: "ok" | "failed";
+        result: Pick<
+          EmbeddedAgentRunResult,
+          "messagingToolSentTargets" | "asyncWorkStarted" | "acceptedSessionSpawns"
+        >;
+      },
 ): void {
-  const observe = run.onQueueDisposition;
-  run.onQueueDisposition = (disposition) => {
-    observe?.(disposition);
-    if (state && disposition !== "queue-cap-old") {
-      state.admission = { status: "skipped", reason: "queue-cap" };
+  for (const state of states ?? []) {
+    state.agentTurn = resolveAgentTurnExecutionStatus(
+      outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
+    );
+    if (outcome?.kind === "settled") {
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
+      state.backgroundWorkStarted = Boolean(
+        outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
+      );
+    } else if (!owner || state.agentTurnOwner !== owner) {
+      state.messagingToolSentTargets = undefined;
+      state.backgroundWorkStarted = false;
     }
+    state.agentTurnOwner = owner;
+  }
+}
+
+export function recordReplyFollowupAdmission(
+  state: ReplyOperationRunState | undefined,
+  params: {
+    explicitFollowup: boolean;
+    requesterMismatch: boolean;
+    unavailableSteer: boolean;
+    followupRun: FollowupRun;
+  },
+): void {
+  if (!state) {
+    return;
+  }
+  state.admission = {
+    status: "accepted",
+    mode: "followup",
+    ...(params.explicitFollowup
+      ? { reason: "explicit-followup" as const }
+      : params.requesterMismatch
+        ? { reason: "requester-mismatch" as const }
+        : params.unavailableSteer &&
+            params.followupRun.currentInboundEventKind !== "room_event" &&
+            (!params.followupRun.run.inputProvenance ||
+              params.followupRun.run.inputProvenance.kind === "external_user")
+          ? { reason: "steering-unavailable" as const }
+          : {}),
   };
+}
+
+export function recordReplyPreRunRejection(
+  state: ReplyOperationRunState | undefined,
+  rejection: ReplyPreRunRejectionCode | undefined,
+): void {
+  if (state && rejection) {
+    state.preRunRejection ??= rejection;
+  }
 }

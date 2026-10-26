@@ -1,154 +1,62 @@
+// @vitest-environment node
 // Control UI tests cover chat responsive behavior.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { chromium, webkit, type Browser, type Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
+import { closeBrowserPage, withBrowserPage } from "../../test-helpers/browser-page.ts";
 import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
-  type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  canRunChatLayoutBrowser,
+  chromiumExecutablePath,
+  createChatLayoutBrowser,
+  expectFiniteRect,
+  getBoundingBox,
+  getRect,
+  readUiCss,
+  mountMcpAppSurfaceFixture,
+  rectsOverlap,
+  waitForLayoutSettled,
+  type ControlRect,
+} from "./chat-layout.browser.test-support.ts";
 
-const VIEWPORTS = [
-  [320, 568],
-  [375, 812],
-  [430, 932],
-  [768, 1024],
-  [1024, 768],
-  [1366, 900],
-  [1440, 900],
-] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
-// The shared real-app page still cold-boots Vite's full Control UI graph once;
-// under CI contention that first render can starve well past 10s.
-const APP_FIRST_RENDER_TIMEOUT_MS = 30_000;
-const FULL_APP_TEST_OPTIONS = {
-  // Shared-page interactions mutate viewport, pointer, and composer state. Keep
-  // each as a sequential barrier so they cannot overlap one another.
-  concurrent: false,
-  timeout: 60_000,
-} as const;
 const LONG_SESSION_RAIL_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
 ).join("");
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip;
 
-let sharedBrowser: Browser | null = null;
-let sharedLayoutContext: BrowserContext | null = null;
-let sharedAppPage: Page | null = null;
-let sharedAppPagePromise: Promise<Page> | null = null;
-const sharedAppPageErrors: string[] = [];
+const layoutBrowser = createChatLayoutBrowser();
+const { openBrowserPage } = layoutBrowser;
 let realChatServer: ControlUiE2eServer | null = null;
-let cachedUiCss: string | null = null;
-
-const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
-const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
-const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
-const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%2Emp4?download=1";
-
-function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
-  return installMockGateway(page, {
-    agentModel: "openai/gpt-5.5",
-    ...scenario,
-  });
-}
-
-async function getSharedAppPage(): Promise<Page> {
-  sharedAppPagePromise ??= createSharedAppPage();
-  return await sharedAppPagePromise;
-}
-
-async function createSharedAppPage(): Promise<Page> {
-  if (!realChatServer) {
-    throw new Error("Expected the Control UI server to be ready");
-  }
-  // The five app assertions use disjoint fixture messages and reset mutable
-  // page state, so one lazy boot preserves coverage without five graph loads.
-  const page = await openBrowserPage(1366, 900, { isolated: true });
-  try {
-    page.on("pageerror", (error) => sharedAppPageErrors.push(error.message));
-    await page.route("https://cdn.example/**", (route) => route.abort());
-    await installResponsiveChatGateway(page, {
-      assistantName: "Claw",
-      historyMessages: [
-        {
-          content: [{ text: SHARED_APP_CONTEXT_TEXT, type: "text" }],
-          model: "openai/gpt-5.5",
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 5, 9, 51),
-          usage: { cacheRead: 2_400, input: 19_600, output: 126 },
-        },
-        {
-          content: `MEDIA:${SHARED_APP_IMAGE_URL}`,
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 0),
-        },
-        {
-          content: "Encoded transcript video",
-          __openclaw: { media: [{ url: SHARED_APP_VIDEO_URL, contentType: "video/mp4" }] },
-          role: "user",
-          timestamp: Date.UTC(2026, 6, 9, 10, 1),
-        },
-        {
-          content: [{ text: SHARED_APP_SLASH_TEXT, type: "text" }],
-          role: "assistant",
-          timestamp: Date.UTC(2026, 6, 9, 10, 2),
-        },
-      ],
-    });
-    await page.goto(`${realChatServer.baseUrl}chat/main`, {
-      waitUntil: "domcontentloaded",
-      timeout: APP_FIRST_RENDER_TIMEOUT_MS,
-    });
-    await page.getByText(SHARED_APP_SLASH_TEXT).waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-    sharedAppPage = page;
-    return page;
-  } catch (error) {
-    await closeBrowserPage(page);
-    throw error;
-  }
-}
-
-type ControlRect = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  clientHeight?: number;
-  scrollHeight?: number;
-  scrollTop?: number;
-  text?: string;
-  display?: string;
-};
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
+  crowdedComposerFooter?: boolean;
   direct?: boolean;
-  sessionRailBody?: string;
-  sessionRailDocked?: boolean;
-  singleAgent?: boolean;
+  goalMode?: boolean;
   slashMenu?: boolean;
 };
 
-function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
-  for (const key of ["x", "y", "width", "height"] as const) {
-    expect(Number.isFinite(rect[key])).toBe(true);
-  }
-}
-
-async function getBoundingBox(page: Page, selector: string) {
-  const box = await page.locator(selector).boundingBox();
-  if (box === null) {
-    throw new Error(`Expected bounding box for ${selector}`);
-  }
-  expectFiniteRect(box);
-  return box;
+/**
+ * Corner radii are expressed as their base step times the live corner scale,
+ * so these expectations stay true on engines that draw continuous curvature
+ * (`--openclaw-corner-radius-scale: 1.25`) and on engines that do not.
+ */
+async function readCornerScale(page: Page): Promise<number> {
+  return await page.evaluate(() =>
+    Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-corner-radius-scale"),
+    ),
+  );
 }
 
 function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
@@ -159,26 +67,6 @@ function expectControlRect(rect: ControlRect | null, label: string): ControlRect
   return rect;
 }
 
-function readUiCss(): string {
-  if (cachedUiCss !== null) {
-    return cachedUiCss;
-  }
-  const files = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/layout.mobile.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/text.css",
-    "ui/src/styles/chat/grouped.css",
-    "ui/src/styles/chat/tool-cards.css",
-    "ui/src/styles/chat/question-card.css",
-    "ui/src/styles/chat/sidebar.css",
-  ];
-  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
-  return cachedUiCss;
-}
-
 function iconSvg() {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>`;
 }
@@ -187,38 +75,217 @@ function activityAlignmentHtml() {
   return `
     <div class="chat-thread" role="log">
       <div class="chat-thread-inner">
-        <div class="chat-group tool chat-group--activity">
-          <div class="chat-avatar tool">A</div>
+        <div class="chat-group tool">
+          <div class="chat-group-messages" data-tool-column-reference>Inspecting the available tools.</div>
+        </div>
+        <div class="chat-group tool chat-group--activity chat-group--with-footer">
           <div class="chat-group-messages">
             <div class="chat-activity-group is-open">
-              <button class="chat-activity-group__summary chat-activity-group__summary--error" type="button">
+              <button class="chat-inline-disclosure chat-activity-group__summary" type="button" aria-expanded="true">
                 <span class="chat-activity-group__icon">${iconSvg()}</span>
-                <span class="chat-activity-group__label">Activity: 2 tools</span>
+                <span class="chat-tool-disclosure__content">
+                  <span class="chat-activity-group__label">Activity: 2 tools</span>
+                </span>
+                <span class="chat-tool-row__chevron">${iconSvg()}</span>
               </button>
               <div class="chat-activity-group__body">
                 <div class="chat-bubble chat-bubble--tool-shell" data-activity-call-row>
                   <div class="chat-tools-inline">
                     <div class="chat-tool-msg-collapse">
-                      <button class="chat-tool-msg-summary" type="button">
+                      <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" type="button" aria-expanded="false">
                         <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                        <span class="chat-tool-msg-summary__label">Bash</span>
-                        <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                        <span class="chat-tool-disclosure__content">
+                          <span class="chat-tool-msg-summary__label">Bash</span>
+                          <span class="chat-tool-msg-summary__names">search a deliberately long workspace path without extra card chrome</span>
+                        </span>
+                        <span class="chat-tool-row__chevron">${iconSvg()}</span>
                       </button>
                     </div>
                   </div>
                 </div>
                 <div class="chat-bubble chat-bubble--tool-shell">
                   <div class="chat-tool-msg-collapse">
-                    <button class="chat-tool-msg-summary chat-tool-msg-summary--error" type="button">
+                    <button class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row" data-failed-call-row type="button" aria-expanded="false">
                       <span class="chat-tool-msg-summary__icon">${iconSvg()}</span>
-                      <span class="chat-tool-msg-summary__label">Tool error</span>
-                      <span class="chat-tool-msg-summary__names">Bash</span>
+                      <span class="chat-tool-disclosure__content">
+                        <span class="chat-tool-msg-summary__label">Bash</span>
+                        <span class="chat-tool-msg-summary__names">Bash</span>
+                      </span>
+                      <span class="chat-tool-row__chevron">${iconSvg()}</span>
                     </button>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+type AvatarPlacement = "gutter" | "footer" | "none";
+
+// Mirrors every group shape the transcript renders: turn-ending own/peer user and
+// assistant groups (hidden, revealed, persistent footers, and a streaming reply
+// whose footer row is still empty), plus work, activity and live narration blocks
+// that belong to the turn of the answer after them and therefore have no footer
+// row. Each avatar
+// placement renders the same turns: gutter avatars, footer avatars in direct
+// threads, or none for subagent sessions.
+function uniformTurnSpacingHtml(placement: AvatarPlacement) {
+  const copy = `<div class="chat-group-footer-actions"><button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button></div>`;
+  const row = (group: string) => `<div class="chat-virtual-row">${group}</div>`;
+  const gutterAvatar = (role: string) =>
+    placement === "gutter" ? `<div class="chat-avatar ${role}">A</div>` : "";
+  const meta = (name: string, role: string) =>
+    `<div class="chat-group-footer__meta">${
+      placement === "footer" && role === "user" ? '<span class="chat-author-avatar"></span>' : ""
+    }<span class="chat-sender-name">${name}</span></div>`;
+  const message = (role: string, modifiers: string, text: string, footer: string) => `
+    <div class="chat-group ${role} ${modifiers} chat-group--with-footer">
+      ${gutterAvatar(role)}
+      <div class="chat-group-messages"><div class="chat-bubble"><div class="chat-text">${text}</div></div></div>
+      ${footer}
+    </div>`;
+  const persistent = (inner: string) =>
+    `<div class="chat-group-footer chat-group-footer--persistent-identity">${inner}</div>`;
+  const tool = (classes: string, summary: string) => `
+    <div class="chat-group tool chat-group--turn-block ${classes}">
+      <div class="chat-group-messages">
+        <div class="chat-activity-group chat-work-group">
+          <button class="chat-inline-disclosure chat-activity-group__summary" type="button">${summary}</button>
+          <div class="chat-work-group__separator"></div>
+        </div>
+      </div>
+    </div>`;
+  // Live narration renders as an assistant group marked as a turn block.
+  const narration = (text: string) => `
+    <div class="chat-group assistant chat-group--turn-block chat-group--with-footer">
+      <div class="chat-group-messages"><div class="chat-bubble"><div class="chat-text">${text}</div></div></div>
+    </div>`;
+  return `
+    <div class="chat-thread${placement === "footer" ? " chat-thread--direct" : ""}" role="log">
+      <div class="chat-thread-inner chat-thread-inner--virtual">
+        <div class="chat-virtual-sizer" style="height: 1600px;">
+          <div class="chat-virtual-block">
+            ${[
+              message("user", "", "Own prompt", persistent(`${copy}${meta("You", "user")}`)),
+              tool("chat-group--work", "Worked for 10s"),
+              message(
+                "assistant",
+                "",
+                "Reply after work",
+                `<div class="chat-group-footer">${meta("Assistant", "assistant")}${copy}</div>`,
+              ),
+              message(
+                "user",
+                "chat-group--peer",
+                "Peer prompt",
+                persistent(`${meta("Peer", "user")}${copy}`),
+              ),
+              tool("chat-group--activity chat-group--with-footer", "Activity: 2 tools"),
+              message(
+                "assistant",
+                "chat-group--meta-revealed",
+                "Revealed reply",
+                `<div class="chat-group-footer">${meta("Assistant", "assistant")}${copy}</div>`,
+              ),
+              message(
+                "user",
+                "chat-group--meta-revealed",
+                "Revealed own prompt",
+                persistent(`${copy}${meta("You", "user")}`),
+              ),
+              narration("Checking the footer layout first."),
+              tool("chat-group--activity chat-group--with-footer", "Activity: 1 tool"),
+              narration("Comparing the two layouts."),
+              message(
+                "assistant",
+                "",
+                "Streaming reply",
+                '<div class="chat-group-footer" aria-hidden="true"></div>',
+              ),
+            ]
+              .map(row)
+              .join("")}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function runBlockSpacingHtml() {
+  return `
+    <div class="chat-thread chat-thread--direct" role="log">
+      <div class="chat-thread-inner">
+        <div class="chat-group assistant chat-group--with-footer" data-run-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble" data-run-block="text"><div class="chat-text">Opening text</div></div>
+            <div class="chat-bubble" data-run-block="detail"><div class="chat-text">Detail text</div></div>
+            <div class="chat-bubble chat-bubble--tool-shell" data-run-block="tool">Tool row</div>
+            <div class="chat-activity-group" data-run-block="list">
+              <div class="chat-activity-group__body">
+                <div class="chat-group-messages">
+                  <div class="chat-bubble" data-expanded-row="text">Expanded detail</div>
+                  <div class="chat-bubble chat-bubble--tool-shell" data-expanded-row="tool">Expanded tool row</div>
+                </div>
+              </div>
+            </div>
+            <div class="chat-bubble" data-run-block="activity-reply"><div class="chat-text">Activity result</div></div>
+            <div class="chat-activity-group chat-work-group" data-run-block="work">
+              <button class="chat-inline-disclosure chat-activity-group__summary" type="button">Worked for 10s</button>
+              <div class="chat-work-group__separator"></div>
+            </div>
+            <div class="chat-bubble" data-run-block="reply"><div class="chat-text">Final reply</div></div>
+          </div>
+          <div class="chat-group-footer">
+            <span class="chat-sender-name">Assistant</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-group user chat-group--with-footer" data-next-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Next turn</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
+        </div>
+        <div class="chat-group user chat-group--with-footer" data-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Persistent identity turn</div></div>
+          </div>
+          <div class="chat-group-footer chat-group-footer--persistent-identity">
+            <span class="chat-sender-name">You</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-group assistant chat-group--with-footer" data-after-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">After persistent identity</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+        </div>
+        <div class="chat-group user chat-group--with-footer chat-group--meta-revealed" data-revealed-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Revealed persistent identity</div></div>
+          </div>
+          <div class="chat-group-footer chat-group-footer--persistent-identity">
+            <span class="chat-sender-name">You</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-group assistant chat-group--with-footer" data-after-revealed-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">After revealed identity</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
         </div>
       </div>
     </div>
@@ -235,100 +302,46 @@ function chatFooterActionsHtml() {
   `;
 }
 
-function chatControlsHtml(opts: { agent?: boolean } = {}) {
-  const showAgent = opts.agent !== false;
-  return `
-    <div class="chat-mobile-controls-wrapper">
-      <button class="btn btn--sm btn--icon chat-controls-mobile-toggle" aria-expanded="true" aria-controls="chat-mobile-controls-dropdown">${iconSvg()}</button>
-      <div id="chat-mobile-controls-dropdown" class="chat-controls-dropdown open">
-        <div class="chat-controls">
-          <div class="chat-controls__session-row${showAgent ? "" : " chat-controls__session-row--single-agent"}">
-            ${
-              showAgent
-                ? `<label class="field chat-controls__session chat-controls__agent">
-                    <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Alpha</option><option>Beta</option></select>
-                  </label>`
-                : ""
-            }
-            <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat thread"><option>Daily planning</option></select>
-            </label>
-            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="" data-chat-thinking-value="" aria-label="Chat model">gpt-5 · High</summary>
-            </details>
-          </div>
-          <div class="chat-controls__thinking">
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active">${iconSvg()}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
-      <div class="chat-view-menu-wrapper">
-        <wa-dropdown class="chat-view-menu" aria-label="View">
-          <button slot="trigger" class="chat-view-menu-trigger" type="button" aria-label="View">
-            ${iconSvg()}
-          </button>
-          <wa-dropdown-item class="chat-view-menu__item" type="checkbox">Reasoning</wa-dropdown-item>
-        </wa-dropdown>
-      </div>
       <div class="chat-composer-model-control">
-        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">Default model · Off</span>
-            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+        <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+          <details class="chat-controls__inline-select chat-controls__model-picker">
+          <summary class="chat-controls__inline-select-trigger chat-controls__model-trigger" data-chat-composer-model="true" aria-label="Chat model: GPT-5.6 Luna">
+            <span class="chat-controls__inline-select-label">GPT-5.6 Luna</span>
           </summary>
-          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
-            <div class="chat-controls__combined-model-list">
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
-              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+          <div class="chat-controls__inline-select-menu chat-controls__model-menu">
+            <div class="chat-controls__model-search-wrap"><input class="chat-controls__model-search" placeholder="Search models" /></div>
+            <div class="chat-controls__model-options">
+              <button class="chat-controls__inline-select-option chat-controls__model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">claude-sonnet-4-6</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-luna</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">gpt-5.6-sol</button>
+              <button class="chat-controls__inline-select-option chat-controls__model-option">openrouter/auto</button>
             </div>
-            <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
-        </details>
+          </details>
+          <details class="chat-controls__inline-select chat-controls__permission-picker">
+          <summary class="chat-controls__inline-select-trigger chat-controls__permission-trigger" aria-label="Permissions: Guarded">
+            <span class="chat-controls__permission-icon" aria-hidden="true">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__permission-menu">
+            <button class="chat-controls__permission-option">Guarded</button>
+          </div>
+          </details>
+          <details class="chat-controls__inline-select chat-controls__effort-picker">
+          <summary class="chat-controls__inline-select-trigger chat-controls__effort-trigger" data-chat-composer-effort="true" aria-label="Effort">
+            <span class="chat-controls__inline-select-label">Medium</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__effort-menu">
+            <div class="chat-controls__reasoning-panel">Effort</div>
+          </div>
+          </details>
+        </div>
       </div>
     </div>
-  `;
-}
-
-function chatHeaderControlsHtml(hidden = false) {
-  return `
-    <main class="content content--chat" data-chat-header-responsive-fixture>
-      <section class="content-header${hidden ? " content-header--chat-hidden" : ""}"${hidden ? ' inert aria-hidden="true"' : ""}>
-        <div>
-          <div class="chat-controls__session-row">
-            <label class="field chat-controls__session chat-controls__agent">
-              <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Valentina</option></select>
-            </label>
-            <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat thread"><option>main</option></select>
-            </label>
-            <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
-              <summary class="chat-controls__inline-select-trigger" data-chat-model-select="true" data-chat-thinking-select="true" data-chat-select-value="gpt-5.5" data-chat-thinking-value="" aria-label="Chat model">gpt-5.5 · High</summary>
-            </details>
-          </div>
-        </div>
-        <div class="page-meta">
-          <div class="chat-controls">
-            <button class="btn btn--sm btn--icon" aria-label="Refresh chat data">${iconSvg()}</button>
-            <span class="chat-controls__separator">|</span>
-            <button class="btn btn--sm btn--icon active" aria-label="Toggle assistant thinking">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active" aria-label="Toggle tool calls">${iconSvg()}</button>
-            <button class="btn btn--sm btn--icon active" aria-label="Show cron sessions">${iconSvg()}</button>
-          </div>
-        </div>
-      </section>
-      <section class="card chat"></section>
-    </main>
   `;
 }
 
@@ -339,14 +352,13 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
         <div class="topnav-shell">
           <div class="topnav-shell__actions">
             <button class="topbar-search">${iconSvg()}</button>
-            <div>${chatControlsHtml({ agent: !opts.singleAgent })}</div>
           </div>
         </div>
       </header>
       <main class="content content--chat">
-        <section class="card chat">
+        <section class="chat">
           <div class="chat-split-container">
-            <div class="chat-main${opts.sessionRailDocked ? " chat-main--rail-docked" : ""}" style="flex: 1 1 100%">
+            <div class="chat-main" style="flex: 1 1 100%">
               <div class="chat-thread${opts.direct ? " chat-thread--direct" : ""}" role="log">
                 <div class="chat-thread-inner">
                   <div class="chat-group user">
@@ -362,7 +374,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <div class="chat-bubble">
                         <div class="chat-text">
                           <p>The chat shell should stay compact and readable.</p>
-                          <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
+                          <div class="code-block-wrapper"><pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre></div>
                         </div>
                       </div>
                     </div>
@@ -377,32 +389,19 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                 </div>
               </div>
               ${
-                opts.sessionRailBody !== undefined
-                  ? `<openclaw-chat-session-rail>
-                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Session companion">
-                      <header class="chat-session-rail__header">
-                        <div class="chat-session-rail__header-copy">
-                          <strong class="chat-session-rail__headline">Reviewing the session</strong>
-                        </div>
-                      </header>
-                      <div class="chat-session-rail__thread">
-                        <article class="chat-session-rail__exchange">
-                          <div class="chat-session-rail__question">What should I check next?</div>
-                          <div class="chat-session-rail__answer">${opts.sessionRailBody}</div>
-                        </article>
-                      </div>
-                      <footer class="chat-session-rail__composer">
-                        <label class="chat-session-rail__prompt">
-                          <input class="chat-session-rail__input" type="text" placeholder="What should I know?" />
-                        </label>
-                        <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit">${iconSvg()}</button>
-                      </footer>
-                    </section>
-                  </openclaw-chat-session-rail>`
+                opts.crowdedComposerFooter
+                  ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
+                    <span class="agent-chat__typing-avatars" aria-hidden="true">
+                      <span class="chat-author-avatar">A</span>
+                      <span class="chat-author-avatar">B</span>
+                      <span class="chat-author-avatar">C</span>
+                    </span>
+                    <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
+                  </div>`
                   : ""
               }
               <div class="agent-chat__composer-shell">
-                <div class="agent-chat__input">
+                <div class="agent-chat__input" data-composer-layout="multiline">
                   ${
                     opts.slashMenu
                       ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
@@ -427,6 +426,15 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>`
                       : ""
                   }
+                  <div class="agent-chat__composer-lede">
+                  ${
+                    opts.goalMode
+                      ? `<div class="agent-chat__goal-mode composer-context-strip">
+                        <span class="agent-chat__goal-mode-label composer-context-strip__label"><span class="composer-context-strip__icon">${iconSvg()}</span><span class="composer-context-strip__label-text">Goal</span></span>
+                        <span class="agent-chat__goal-mode-hint composer-context-strip__text">Enter your objective.</span>
+                      </div>`
+                      : ""
+                  }
                   ${
                     opts.composerAttachment
                       ? `<div class="chat-attachments-preview">
@@ -441,53 +449,40 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       : ""
                   }
                   <div class="agent-chat__composer-status-stack"> </div>
+                  </div>
                   <div class="agent-chat__composer-input-row">
-                    <details class="agent-chat__attach-menu">
-                      <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
-                      <div class="agent-chat__attach-menu-popover" role="menu">
-                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
-                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
-                        <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
-                      </div>
-                    </details>
                     <div class="agent-chat__composer-combobox">
                       <textarea rows="1">Queued follow-up for the active operator session</textarea>
                     </div>
-                    <div class="agent-chat__composer-actions">
-                      <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
-                    </div>
                   </div>
                   <div class="agent-chat__composer-footer">
-                    ${composerControlsHtml()}
-                    <div class="agent-chat__composer-meta">
+                    <div class="agent-chat__composer-lead">
+                      <details class="agent-chat__attach-menu">
+                        <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
+                        <div class="agent-chat__attach-menu-popover" role="menu">
+                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
+                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
+                          <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
+                        </div>
+                      </details>
+                    </div>
+                    <div class="agent-chat__composer-trail">
+                    <div class="agent-chat__composer-meta agent-chat__composer-context">
                       <div class="context-usage">
                         <details>
-                          <summary class="context-ring" role="status" aria-label="Thread context usage: 46k/200k (23%)">
+                          <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
                             <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                               <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
                               <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
                             </svg>
                           </summary>
-                          <section class="context-usage__popover">
-                            <div class="context-usage__section-label context-usage__plan-header">
-                              <span>Plan usage</span>
-                              <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
-                                <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
-                              </a>
-                            </div>
-                            <div class="context-usage__limits">
-                              <div class="context-usage__limit">
-                                <div class="context-usage__limit-head">
-                                  <span class="context-usage__limit-label">Weekly · all models</span>
-                                  <span class="context-usage__limit-meta"><strong>72%</strong></span>
-                                </div>
-                                <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
-                              </div>
-                            </div>
-                          </section>
                         </details>
                       </div>
-                      <span class="agent-chat__token-count">8</span>
+                    </div>
+                    ${composerControlsHtml()}
+                      <div class="agent-chat__composer-actions">
+                        <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -500,12 +495,27 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
   `;
 }
 
+async function syncFixtureComposerPopoverAnchor(page: Page) {
+  // The session companion runs the same composer surface, so the pane's own
+  // composer is named by its shell rather than by the shared surface class.
+  await page.locator(".agent-chat__composer-shell > .agent-chat__input").evaluate((node) => {
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop ?? 0;
+    const composerTop = node.getBoundingClientRect().top;
+    node.style.setProperty(
+      "--chat-composer-popover-max-height",
+      `${Math.max(0, composerTop - viewportTop - 28)}px`,
+    );
+  });
+}
+
 async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
     );
+    await syncFixtureComposerPopoverAnchor(page);
     return page;
   } catch (error) {
     await closeBrowserPage(page);
@@ -513,55 +523,55 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
   }
 }
 
-async function openBrowserPage(
-  width: number,
-  height: number,
-  options: { isolated?: boolean } = {},
-): Promise<Page> {
-  sharedBrowser ??= await chromium.launch({
-    executablePath: chromiumExecutablePath,
-    headless: true,
-  });
-  if (options.isolated) {
-    return await sharedBrowser.newPage({ viewport: { width, height } });
+async function openSessionRailFixture(width: number, height: number) {
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      <div style="display:flex;height:100dvh">
+        <div class="sidebar-region sidebar-region--right sidebar-region--open${width <= 768 ? " sidebar-region--narrow" : ""}" style="--side-panel-width:400px;--side-panel-height:360px">
+          <div class="sidebar-region__header">Current session</div>
+          <div class="sidebar-region__primary" data-region="main">Conversation</div>
+          <div class="sidebar-region__right-runtime">
+            <div class="side-panel">
+              <header class="rail-header side-panel__header" data-region-header="side">Side chat</header>
+              <div class="side-panel__body">
+                <div class="side-panel__panel" data-region="side">
+                  <openclaw-chat-session-rail>
+                    <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
+                      <div class="chat-session-rail__thread">
+                        <article class="chat-session-rail__exchange">
+                          <div class="chat-group user chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">What should I check next?</div></div></div>
+                          <div class="chat-group assistant chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">${LONG_SESSION_RAIL_BODY}</div></div></div>
+                          <span class="chat-session-rail__pr-checks">2 passed</span>
+                          <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
+                        </article>
+                      </div>
+                      <form class="agent-chat__input chat-session-rail__composer">
+                        <div class="agent-chat__composer-input-row">
+                          <label class="agent-chat__composer-combobox chat-session-rail__prompt">
+                            <textarea class="chat-session-rail__input" rows="1" placeholder="What should I know?"></textarea>
+                          </label>
+                        </div>
+                        <div class="agent-chat__composer-footer">
+                          <div class="agent-chat__composer-trail">
+                            <div class="agent-chat__composer-actions"><button class="chat-send-btn">${iconSvg()}</button></div>
+                          </div>
+                        </div>
+                      </form>
+                    </section>
+                  </openclaw-chat-session-rail>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </body></html>`);
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
   }
-  // Static setContent fixtures do not mutate context-owned storage or routes,
-  // so they can share one context while their pages remain concurrent.
-  sharedLayoutContext ??= await sharedBrowser.newContext();
-  const page = await sharedLayoutContext.newPage();
-  await page.setViewportSize({ width, height });
-  return page;
-}
-
-async function closeBrowserPage(page: Page): Promise<void> {
-  await page.close().catch(() => {});
-}
-
-async function waitForLayoutSettled(page: Page): Promise<void> {
-  // Raw DOM mutations skip Playwright's actionability wait. Allow style invalidation
-  // to land, then observe one stable frame before measuring viewport bounds.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
-  );
-}
-
-async function getRect(page: Page, selector: string) {
-  const rect = await page.locator(selector).evaluate((node) => {
-    const bounds = (node as HTMLElement).getBoundingClientRect();
-    return {
-      left: bounds.left,
-      right: bounds.right,
-      top: bounds.top,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
-    };
-  });
-  expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
-  return rect;
 }
 
 async function getTextContentRect(page: Page, selector: string) {
@@ -583,31 +593,6 @@ async function getTextContentRect(page: Page, selector: string) {
   return rect;
 }
 
-function rectsOverlap(
-  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
-  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
-) {
-  return (
-    first.x < second.x + second.width &&
-    first.x + first.width > second.x &&
-    first.y < second.y + second.height &&
-    first.y + first.height > second.y
-  );
-}
-
-async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
-  const page = await openBrowserPage(width, height);
-  try {
-    await page.setContent(
-      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
-    );
-    return page;
-  } catch (error) {
-    await closeBrowserPage(page);
-    throw error;
-  }
-}
-
 async function expectNoHorizontalOverflow(page: Page) {
   const metrics = await page.evaluate(() => ({
     body: document.body.scrollWidth,
@@ -620,290 +605,484 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
-    sharedBrowser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
-    sharedLayoutContext = await sharedBrowser.newContext();
+    await layoutBrowser.start();
     realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
-    await sharedAppPage?.close();
-    sharedAppPage = null;
-    sharedAppPagePromise = null;
     await realChatServer?.close();
     realChatServer = null;
-    await sharedLayoutContext?.close();
-    sharedLayoutContext = null;
-    await sharedBrowser?.close();
-    sharedBrowser = null;
+    await layoutBrowser.close();
   });
 
-  it(
-    "does not replay a consumed session rail open generation after round trips or remounts",
-    FULL_APP_TEST_OPTIONS,
-    async () => {
-      const page = await getSharedAppPage();
-      const result = await page.evaluate(async () => {
-        await customElements.whenDefined("openclaw-chat-session-rail");
-        localStorage.setItem("openclaw.chat.observerHud.display", "pill");
-        type Rail = HTMLElement & {
-          companion: {
-            exchanges: [];
-            pendingQuestion: null;
-            failedQuestion: null;
-            hint: null;
-            draft: string;
-          };
-          connected: boolean;
-          consumedOpenRequest: number;
-          onOpenRequestConsumed: (openRequest: number) => void;
-          onVisibilityChange: (visible: boolean) => void;
-          openRequest: number;
-          sessionKey: string;
-          updateComplete: Promise<boolean>;
-        };
-        const createRail = () => document.createElement("openclaw-chat-session-rail") as Rail;
-        let rail = createRail();
-        let consumedOpenRequest = 0;
-        let visibleReports = 0;
-        const configureRail = (nextRail: Rail) => {
-          nextRail.companion = {
-            exchanges: [],
-            pendingQuestion: null,
-            failedQuestion: null,
-            hint: null,
-            draft: "What changed?",
-          };
-          nextRail.connected = true;
-          nextRail.consumedOpenRequest = consumedOpenRequest;
-          nextRail.onOpenRequestConsumed = (openRequest) => {
-            consumedOpenRequest = openRequest;
-          };
-          nextRail.onVisibilityChange = (visible) => {
-            if (visible) {
-              visibleReports += 1;
-            }
-          };
-        };
-        configureRail(rail);
-        rail.sessionKey = "agent:main:a";
-        document.body.append(rail);
-        await rail.updateComplete;
-        const mode = () =>
-          rail.querySelector(".chat-session-rail--expanded") ? "expanded" : "pill";
-        const update = async (sessionKey: string, openRequest: number) => {
-          rail.sessionKey = sessionKey;
-          rail.openRequest = openRequest;
-          rail.consumedOpenRequest = consumedOpenRequest;
-          await rail.updateComplete;
-          return mode();
-        };
-
-        const sameElementModes = [
-          await update("agent:main:a", 1),
-          await update("agent:main:b", 0),
-          await update("agent:main:a", 1),
-          await update("agent:main:a", 2),
-        ];
-        rail.remove();
-        rail = createRail();
-        configureRail(rail);
-        rail.sessionKey = "agent:main:a";
-        rail.openRequest = 2;
-        document.body.append(rail);
-        await rail.updateComplete;
-        const remountMode = mode();
-        const nextGenerationMode = await update("agent:main:a", 3);
-
-        const snapshot = {
-          sameElementModes,
-          remountMode,
-          nextGenerationMode,
-          storedPreference: localStorage.getItem("openclaw.chat.observerHud.display"),
-          visibleReports,
-        };
-        rail.remove();
-        localStorage.removeItem("openclaw.chat.observerHud.display");
-        return snapshot;
-      });
-
-      expect(result).toEqual({
-        sameElementModes: ["expanded", "pill", "pill", "expanded"],
-        remountMode: "pill",
-        nextGenerationMode: "expanded",
-        storedPreference: "pill",
-        visibleReports: 3,
-      });
-    },
-  );
-
-  it.each([
-    [320, 568],
-    [1366, 900],
-    [1440, 1400],
-  ] as const)("keeps the first message clear of the topbar at %sx%s", async (width, height) => {
-    const page = await openFixture(width, height);
-    try {
-      const spacing = await page.evaluate(() => {
-        const thread = document.querySelector<HTMLElement>(".chat-thread");
-        const firstMessage = document.querySelector<HTMLElement>(
-          ".chat-thread-inner > .chat-group",
-        );
-        if (!thread || !firstMessage) {
-          return null;
-        }
-        return {
-          inset: firstMessage.getBoundingClientRect().top - thread.getBoundingClientRect().top,
-          paddingTop: Number.parseFloat(getComputedStyle(thread).paddingTop),
-        };
-      });
-
-      expect(spacing).not.toBeNull();
-      expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
-      expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps the native gateway picker as compact as sidebar menus", async () => {
-    const page = await openBrowserPage(800, 600);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+  it("waits through delayed layout updates", async () => {
+    await withBrowserPage(openBrowserPage(320, 568), async (page) => {
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <wa-dropdown class="chat-pane__gateway-menu">
-            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
-            <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
-          </wa-dropdown>
-        </body></html>`,
+        '<div id="delayed-layout" style="position:absolute;top:0">Layout</div>',
       );
-
-      const styles = await page.evaluate(() => {
-        const dropdown = document.querySelector<HTMLElement>(".chat-pane__gateway-menu")!;
-        const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-        const item = dropdown.querySelector<HTMLElement>(".chat-pane__gateway-menu-item")!;
-        const menuStyle = getComputedStyle(menu);
-        const itemStyle = getComputedStyle(item);
-        return {
-          menu: {
-            borderRadius: menuStyle.borderRadius,
-            padding: menuStyle.padding,
-          },
-          item: {
-            borderRadius: itemStyle.borderRadius,
-            fontSize: itemStyle.fontSize,
-            minHeight: itemStyle.minHeight,
-            padding: itemStyle.padding,
-          },
+      await page.locator("#delayed-layout").evaluate((node) => {
+        const element = node as HTMLElement;
+        const nativeGetBoundingClientRect = element.getBoundingClientRect.bind(element);
+        let scheduled = false;
+        element.getBoundingClientRect = () => {
+          const rect = nativeGetBoundingClientRect();
+          element.dataset.lastObservedTop = String(rect.top);
+          if (!scheduled) {
+            scheduled = true;
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                element.style.top = "12px";
+              });
+            });
+          }
+          return rect;
         };
       });
 
-      expect(styles).toEqual({
-        menu: { borderRadius: "8px", padding: "6px" },
-        item: {
-          borderRadius: "8px",
-          fontSize: "13px",
-          minHeight: "30px",
-          padding: "0px 8px",
-        },
-      });
-    } finally {
-      await closeBrowserPage(page);
-    }
+      await waitForLayoutSettled(page, "#delayed-layout");
+
+      expect(
+        await page
+          .locator("#delayed-layout")
+          .evaluate((node) => Number((node as HTMLElement).dataset.lastObservedTop)),
+      ).toBe(12);
+    });
   });
 
-  it("pins the collapsed session rail to the pane header edge", async () => {
-    const page = await openBrowserPage(922, 282);
-    try {
+  it("keeps a constrained no-face header to one flex gap", async () => {
+    await withBrowserPage(openBrowserPage(360, 180), async (page) => {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <div class="chat-split-view__cell" style="width: 922px; height: 282px;">
-            <div class="chat-pane__header">Current session</div>
-            <div class="chat-split-view__pane">
-              <div class="chat-main" style="height: 100%;">
-                <div class="chat-session-rail chat-session-rail--pill">
-                  <span class="chat-session-rail__status" data-health="on-track">On track</span>
-                  <span class="chat-session-rail__headline">Investigating repository guidance</span>
-                </div>
+          <div class="chat-pane__header" style="width: 320px;">
+            <div class="chat-pane__header-leading">
+              <div class="chat-pane__crumbs">
+                <span class="chat-pane__session-title">
+                  <span class="chat-pane__session-title-text">A deliberately long session title for the no-face header</span>
+                </span>
+              </div>
+            </div>
+            <div class="chat-pane__header-trailing">
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">A</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">B</button>
+                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">C</button>
               </div>
             </div>
           </div>
         </body></html>`,
       );
 
-      const header = await getBoundingBox(page, ".chat-pane__header");
-      const observer = await getBoundingBox(page, ".chat-session-rail");
+      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
+        const leading = header.querySelector<HTMLElement>(".chat-pane__header-leading")!;
+        const trailing = header.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
+        const title = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+        const leadingRect = leading.getBoundingClientRect();
+        const trailingRect = trailing.getBoundingClientRect();
+        return {
+          gap: trailingRect.left - leadingRect.right,
+          regionClasses: [...header.children].map((child) => child.className),
+          titleClientWidth: title.clientWidth,
+          titleScrollWidth: title.scrollWidth,
+        };
+      });
 
-      expect(observer.y).toBeCloseTo(header.y + header.height, 0);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      expect(geometry.regionClasses).toEqual([
+        "chat-pane__header-leading",
+        "chat-pane__header-trailing",
+      ]);
+      expect(geometry.gap).toBeCloseTo(4, 0);
+      expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
+    });
   });
 
-  it("keeps a Done status disjoint from a long compact session headline", async () => {
-    const page = await openBrowserPage(320, 240);
-    try {
+  it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
+    await withBrowserPage(openBrowserPage(720, 180), async (page) => {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-session-rail chat-session-rail--pill" style="width: 190px">
-            <span class="chat-session-rail__status" data-health="done">Done</span>
-            <button class="chat-session-rail__expand" type="button">
-              <span class="chat-session-rail__headline">A deliberately long completed-session headline</span>
-            </button>
-            <button class="chat-session-rail__hide" type="button">Hide</button>
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 640px;">
+            <div class="chat-pane__header chat-pane__header--closable">
+              <div class="chat-pane__crumbs">
+                <div class="chat-pane__project-row">
+                  <div class="chat-pane__workspace-menu">
+                    <button class="oc-menu-trigger chat-pane__workspace-chip" type="button">
+                      <span class="oc-menu-item__label">${iconSvg()}<span>openclaw</span></span>
+                    </button>
+                    <div class="oc-overlay oc-menu" popover="manual" role="menu"></div>
+                  </div>
+                </div>
+                <div class="chat-pane__session-trail">
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__parent-session" type="button">
+                    <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
+                  </button>
+                  <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                  <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                    <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                  </button>
+                </div>
+              </div>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost chat-pane__layout-trigger" type="button" aria-label="Layout">Layout</button>
+              </div>
+            </div>
           </div>
         </body></html>`,
       );
 
-      const status = await getBoundingBox(page, ".chat-session-rail__status");
-      const headline = await getBoundingBox(page, ".chat-session-rail__headline");
-      const expand = await getBoundingBox(page, ".chat-session-rail__expand");
+      const readState = () =>
+        page.locator(".chat-pane__header").evaluate((header) => {
+          const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
+          const parentText = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+          const childText = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+          const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const child = header.querySelector<HTMLElement>(".chat-pane__session-title")!;
+          const headerRect = header.getBoundingClientRect();
+          const parentRect = parent.getBoundingClientRect();
+          const childRect = child.getBoundingClientRect();
+          return {
+            firstSeparator: getComputedStyle(separators[0]!).display,
+            secondSeparator: getComputedStyle(separators[1]!).display,
+            parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+            childEllipses: childText.scrollWidth > childText.clientWidth,
+            headerWidth: headerRect.width,
+            nestedTrailWidth: childRect.right - parentRect.left,
+            overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
+          };
+        });
 
-      expect(status.x + status.width).toBeLessThanOrEqual(headline.x);
-      expect(headline.x + headline.width).toBeLessThanOrEqual(expand.x + expand.width);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      const normal = await readState();
+      expect(normal).toMatchObject({
+        firstSeparator: "block",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(normal.nestedTrailWidth).toBeLessThanOrEqual(normal.headerWidth / 2 + 1);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "320px";
+      });
+      const narrow = await readState();
+      expect(narrow).toMatchObject({
+        firstSeparator: "none",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(narrow.nestedTrailWidth).toBeLessThanOrEqual(narrow.headerWidth / 2 + 1);
+    });
   });
 
   it.each([
-    [430, 720],
-    [1366, 900],
-  ] as const)("right-aligns activity rows with call bubbles at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
+    { label: "desktop", width: 1366, height: 900, hasTouch: false },
+    { label: "mobile touch", width: 430, height: 720, hasTouch: true },
+  ])("keeps activity disclosures compact on $label", async ({ width, height, hasTouch }) => {
+    await withBrowserPage(
+      openBrowserPage(width, height, { hasTouch, isolated: true }),
+      async (page) => {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
+        );
+
+        await expectNoHorizontalOverflow(page);
+        const activityGroup = await getRect(page, ".chat-activity-group");
+        const activitySummary = await getRect(page, ".chat-activity-group__summary");
+        const failedSummary = await getRect(page, "[data-failed-call-row]");
+        const toolColumn = await getRect(page, "[data-tool-column-reference]");
+        expect(activitySummary.width).toBeLessThan(activityGroup.width);
+        expect(failedSummary.width).toBeLessThan(activityGroup.width);
+        expect(activityGroup.left).toBeCloseTo(toolColumn.left, 0);
+        const styles = await page.evaluate(() => {
+          const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
+          const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
+          const chevron = activity.querySelector<HTMLElement>(".chat-tool-row__chevron")!;
+          const toolRows = [
+            ...document.querySelectorAll<HTMLElement>(
+              ".chat-activity-group__body .chat-tool-msg-summary",
+            ),
+          ];
+          const firstToolStyle = getComputedStyle(toolRows[0]!);
+          const firstToolRect = toolRows[0]!.getBoundingClientRect();
+          const secondToolRect = toolRows[1]!.getBoundingClientRect();
+          return {
+            activity: getComputedStyle(activity).userSelect,
+            activityBackground: getComputedStyle(activity).backgroundColor,
+            activityPaddingBlock: [
+              getComputedStyle(activity).paddingTop,
+              getComputedStyle(activity).paddingBottom,
+            ],
+            chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
+            tool: firstToolStyle.userSelect,
+            toolPaddingBlock: [firstToolStyle.paddingTop, firstToolStyle.paddingBottom],
+            toolRowGap: secondToolRect.top - firstToolRect.bottom,
+          };
+        });
+        const { toolRowGap, ...disclosureStyles } = styles;
+        expect(disclosureStyles).toEqual({
+          activity: "none",
+          activityBackground: "rgba(0, 0, 0, 0)",
+          activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
+          // Summary gap (8px) less the chevron's own -3px inset.
+          chevronGap: 5,
+          tool: "none",
+          toolPaddingBlock: ["3px", "3px"],
+        });
+        expect(toolRowGap).toBeGreaterThanOrEqual(0);
+        expect(toolRowGap).toBeLessThanOrEqual(2);
+      },
+    );
+  });
+
+  it.each([
+    { label: "desktop gutter", placement: "gutter", width: 1366, hasTouch: false, turnGap: 16 },
+    { label: "narrow touch footer", placement: "footer", width: 390, hasTouch: true, turnGap: 12 },
+    { label: "wide touch none", placement: "none", width: 1366, hasTouch: true, turnGap: 12 },
+  ] as const)(
+    "separates every consecutive turn by the same space on $label",
+    async ({ placement, width, hasTouch, turnGap }) => {
+      await withBrowserPage(
+        openBrowserPage(width, 1800, { hasTouch, isolated: true }),
+        async (page) => {
+          // Isolate the final-layout contract from the 200ms settle-in transform.
+          await page.setContent(
+            `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${uniformTurnSpacingHtml(placement)}</body></html>`,
+          );
+          await waitForLayoutSettled(page, ".chat-virtual-row .chat-group");
+
+          const layout = await page.evaluate(() =>
+            [...document.querySelectorAll<HTMLElement>(".chat-virtual-row > .chat-group")].map(
+              (group) => {
+                const box = group.getBoundingClientRect();
+                const content = group
+                  .querySelector<HTMLElement>(":scope > .chat-group-messages")!
+                  .getBoundingClientRect();
+                const footer = group
+                  .querySelector<HTMLElement>(":scope > .chat-group-footer")
+                  ?.getBoundingClientRect();
+                return {
+                  inTurnBlock: group.classList.contains("chat-group--turn-block"),
+                  top: box.top,
+                  bottom: box.bottom,
+                  contentTop: content.top,
+                  contentBottom: content.bottom,
+                  footer: footer
+                    ? {
+                        offset: footer.top - content.bottom,
+                        height: footer.height,
+                        toEdge: box.bottom - footer.bottom,
+                      }
+                    : null,
+                  gapAfter: Number.parseFloat(getComputedStyle(group).marginBlockEnd),
+                };
+              },
+            ),
+          );
+
+          expect(layout).toHaveLength(11);
+          for (const [index, group] of layout.entries()) {
+            const next = layout[index + 1];
+            if (group.inTurnBlock) {
+              // Work, activity and live narration blocks belong to the answer's
+              // turn: no footer row, only the inline run-frame gap to what follows.
+              expect(group.footer).toBeNull();
+              expect(group.gapAfter).toBe(8);
+              expect(next!.contentTop - group.contentBottom).toBeCloseTo(8, 1);
+              continue;
+            }
+            // Every turn ends in one footer row of the context's size; the turn
+            // gap is the only space before whatever comes next.
+            expect(group.gapAfter).toBe(turnGap);
+            expect(group.footer).toEqual({
+              offset: expect.closeTo(2, 1),
+              height: 24,
+              toEdge: expect.closeTo(0, 1),
+            });
+            if (next) {
+              expect(next.top - group.bottom).toBeCloseTo(turnGap, 1);
+              expect(next.contentTop - group.contentBottom).toBeCloseTo(2 + 24 + turnGap, 1);
+            }
+          }
+        },
+      );
+    },
+  );
+
+  it.each([
+    { label: "desktop", width: 1366, hasTouch: false },
+    { label: "mobile", width: 430, hasTouch: true },
+    { label: "wide touch", width: 1366, hasTouch: true },
+  ])("keeps transcript turn and run block spacing on $label", async ({ width, hasTouch }) => {
+    await withBrowserPage(
+      openBrowserPage(width, 900, { hasTouch, isolated: true }),
+      async (page) => {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${runBlockSpacingHtml()}</body></html>`,
+        );
+
+        const gaps = await page.evaluate(() => {
+          const rect = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const gap = (before: string, after: string) => rect(after).top - rect(before).bottom;
+          return {
+            intraTurn: gap('[data-run-block="text"]', '[data-run-block="detail"]'),
+            textToTool: gap('[data-run-block="detail"]', '[data-run-block="tool"]'),
+            toolToList: gap('[data-run-block="tool"]', '[data-run-block="list"]'),
+            listToReply: gap('[data-run-block="list"]', '[data-run-block="activity-reply"]'),
+            replyToWork: gap('[data-run-block="activity-reply"]', '[data-run-block="work"]'),
+            workToReply: gap('[data-run-block="work"]', '[data-run-block="reply"]'),
+            expandedTextToTool: gap('[data-expanded-row="text"]', '[data-expanded-row="tool"]'),
+            workedForSeparator: gap(
+              '[data-run-block="work"] > button',
+              ".chat-work-group__separator",
+            ),
+            turn: gap('[data-run-block="reply"]', "[data-next-turn] .chat-bubble"),
+            persistentTurn: gap(
+              "[data-persistent-turn] .chat-bubble",
+              "[data-after-persistent-turn] .chat-bubble",
+            ),
+            revealedPersistentTurn: gap(
+              "[data-revealed-persistent-turn] .chat-bubble",
+              "[data-after-revealed-turn] .chat-bubble",
+            ),
+            simpleToPersistentTurn: gap(
+              "[data-next-turn] .chat-bubble",
+              "[data-persistent-turn] .chat-bubble",
+            ),
+          };
+        });
+
+        expect(gaps).toEqual({
+          intraTurn: 2,
+          textToTool: 8,
+          toolToList: 8,
+          listToReply: 8,
+          replyToWork: 8,
+          workToReply: 8,
+          expandedTextToTool: 6,
+          workedForSeparator: 0,
+          // Footer offset + 24px footer row + turn gap (16px, or 12px on touch).
+          turn: hasTouch ? 38 : 42,
+          persistentTurn: hasTouch ? 38 : 42,
+          revealedPersistentTurn: hasTouch ? 38 : 42,
+          simpleToPersistentTurn: hasTouch ? 38 : 42,
+        });
+      },
+    );
+  });
+
+  it("keeps custom avatar sizing and the user edge neutral", async () => {
+    await withBrowserPage(openBrowserPage(430, 720), async (page) => {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/styles/identity-avatar.css")}</style></head><body>
+        <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
+        <img class="chat-avatar user" src="/avatar/user" alt="User" />
+      </body></html>`);
+
+      const avatars = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>(".chat-avatar")].map((avatar) => {
+          const style = getComputedStyle(avatar);
+          const bounds = avatar.getBoundingClientRect();
+          return {
+            width: bounds.width,
+            height: bounds.height,
+            boxSizing: style.boxSizing,
+            objectFit: style.objectFit,
+            padding: style.padding,
+            borderWidth: style.borderTopWidth,
+          };
+        }),
       );
 
-      await expectNoHorizontalOverflow(page);
-      const callRow = await getRect(page, "[data-activity-call-row]");
-      const errorSummary = await getRect(page, ".chat-tool-msg-summary--error");
-      expect(Math.abs(callRow.right - errorSummary.right)).toBeLessThanOrEqual(1);
-      expect(Math.abs(callRow.height - errorSummary.height)).toBeLessThanOrEqual(1);
-      const styles = await page.evaluate(() => {
-        const call = document.querySelector<HTMLElement>("[data-activity-call-row]")!;
-        return {
-          activity: getComputedStyle(
-            document.querySelector<HTMLElement>(".chat-activity-group__summary")!,
-          ).userSelect,
-          callBackground: getComputedStyle(call).backgroundColor,
-          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-            .userSelect,
-        };
-      });
-      expect(styles).toEqual({
-        activity: "text",
-        callBackground: "rgba(0, 0, 0, 0)",
-        tool: "text",
-      });
-    } finally {
-      await closeBrowserPage(page);
-    }
+      expect(avatars).toEqual([
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "0px",
+        },
+        {
+          width: 36,
+          height: 36,
+          boxSizing: "border-box",
+          objectFit: "cover",
+          padding: "0px",
+          borderWidth: "0px",
+        },
+      ]);
+
+      for (const theme of ["dark", "light"]) {
+        const edge = await page.evaluate((mode) => {
+          document.documentElement.dataset.themeMode = mode;
+          const probe = document.createElement("span");
+          probe.style.outline = "1px solid color-mix(in srgb, var(--text) 8%, transparent)";
+          document.body.append(probe);
+          const neutralOutline = getComputedStyle(probe).outline;
+          const avatar = document.querySelector("img.chat-avatar.user");
+          if (!avatar) {
+            throw new Error("Expected user avatar fixture");
+          }
+          const avatarStyle = getComputedStyle(avatar);
+          const result = {
+            borderWidth: avatarStyle.borderTopWidth,
+            neutralOutline,
+            outline: avatarStyle.outline,
+            outlineOffset: avatarStyle.outlineOffset,
+          };
+          probe.remove();
+          return result;
+        }, theme);
+        expect(edge.outline).toBe(edge.neutralOutline);
+        expect(edge.borderWidth).toBe("0px");
+        expect(edge.outlineOffset).toBe("-1px");
+      }
+    });
+  });
+
+  it("hides image avatars when the mobile transcript drops their grid column", async () => {
+    await withBrowserPage(openBrowserPage(430, 720), async (page) => {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread">
+            <div class="chat-group assistant chat-group--with-footer">
+              <img class="chat-avatar assistant" alt="Assistant" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'/%3E" />
+              <div class="chat-group-messages">
+                <div class="chat-bubble"><div class="chat-text">Completed work remains readable.</div></div>
+              </div>
+              <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      const avatar = page.locator(".chat-avatar");
+      for (const width of [430, 400, 390, 320, 401, 768, 769, 1366]) {
+        await page.setViewportSize({ width, height: 720 });
+        if (width <= 768) {
+          await expectBrowser(avatar).toBeHidden();
+        } else {
+          await expectBrowser(avatar).toBeVisible();
+          const image = await avatar.boundingBox();
+          const text = await page.locator(".chat-text").boundingBox();
+          expect(image!.x + image!.width).toBeLessThanOrEqual(text!.x);
+        }
+      }
+    });
+  });
+
+  it("paints a visible outline when a chat image action receives keyboard focus", async () => {
+    await withBrowserPage(openBrowserPage(390, 844), async (page) => {
+      await page.setContent(`<style>${readUiCss()}</style>
+        <button class="chat-tool-card__preview-image-button">Open image</button>`);
+      await page.keyboard.press("Tab");
+      const button = page.locator("button");
+      await expectBrowser(button).toBeFocused();
+      await expectBrowser(button).toHaveCSS("outline-style", "solid");
+      await expectBrowser(button).toHaveCSS("outline-width", "2px");
+    });
   });
 
   it("applies configured chat width to tool rows and composer without changing defaults", async () => {
@@ -913,11 +1092,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ? 'style="--chat-thread-max-width: 82%; --chat-message-max-width: 100%"'
         : "";
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <section class="card chat" ${style}>
+        <section class="chat" ${style}>
           <div class="chat-thread chat-thread--direct" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group tool">
-                <div class="chat-avatar tool">A</div>
                 <div class="chat-group-messages" data-tool-lane>
                   <div class="chat-bubble chat-bubble--tool-shell" data-tool-shell>
                     <div class="chat-tool-msg-collapse">Tool output</div>
@@ -925,16 +1103,24 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 </div>
               </div>
               <div class="chat-group tool chat-group--activity">
-                <div class="chat-avatar tool">A</div>
                 <div class="chat-group-messages" data-activity-lane>
                   <div class="chat-activity-group">Activity</div>
                 </div>
               </div>
+              <div class="chat-group assistant chat-group--with-footer">
+                <div class="chat-group-messages" data-frame-lane>
+                  <div class="chat-activity-group">Framed activity</div>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="chat-prs" data-chat-prs>Pull requests</div>
-          <div class="agent-chat__composer-shell" data-composer>
-            <div class="agent-chat__input">Composer</div>
+          <div class="chat-footer">
+            <div class="agent-chat__composer-shell" data-composer>
+              <div class="chat-footer__context">
+                <div class="chat-prs" data-chat-prs>Pull requests</div>
+              </div>
+              <div class="agent-chat__input">Composer</div>
+            </div>
           </div>
         </section>
       </body></html>`);
@@ -944,10 +1130,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return { center: bounds.x + bounds.width / 2, width: bounds.width };
         };
         return {
-          activity: rect("[data-activity-lane]"),
+          activity: rect("[data-activity-lane] .chat-activity-group"),
           composer: rect("[data-composer]"),
           prs: rect("[data-chat-prs]"),
           shell: rect("[data-tool-shell]"),
+          framedActivity: rect("[data-frame-lane] .chat-activity-group"),
           thread: rect(".chat-thread-inner"),
           tool: rect("[data-tool-lane]"),
         };
@@ -962,9 +1149,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
       expect(defaults.shell.width).toBeCloseTo(760, 0);
       expect(defaults.activity.width).toBeCloseTo(760, 0);
+      expect(defaults.framedActivity.width).toBeCloseTo(defaults.activity.width, 0);
 
       const configured = await renderFixture(true);
-      for (const key of ["activity", "shell", "tool"] as const) {
+      for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
         expect(configured[key].width).toBeCloseTo(configured.thread.width, 0);
       }
       expect(configured.composer.width).toBeCloseTo(configured.prs.width, 0);
@@ -978,80 +1166,113 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("gives inline MCP Apps the full assistant message column", async () => {
-    const page = await openBrowserPage(1366, 900);
-    try {
+  it("keeps the desktop model picker label-to-chevron gap at 4px", async () => {
+    await withBrowserPage(openBrowserPage(800, 800), async (page) => {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-thread chat-thread--direct" role="log">
-          <div class="chat-thread-inner">
-            <div class="chat-group assistant chat-group--with-footer">
-              <div class="chat-group-messages">
-                <div class="chat-bubble">
-                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
-                    <div class="chat-tool-card__preview-panel">
-                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
-                    </div>
-                  </div>
+        <div class="agent-chat__composer-shell">
+          <div class="agent-chat__input">
+            <div class="chat-controls__model-settings">
+              <div class="chat-controls__inline-select">
+                <div class="chat-controls__inline-select-trigger chat-controls__model-trigger">
+                  <span class="chat-controls__inline-select-label">Model</span>
+                  <span class="chat-controls__inline-select-chevron">${iconSvg()}</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
       </body></html>`);
+      const measuredGap = await page.evaluate(() => {
+        const label = document
+          .querySelector<HTMLElement>(".chat-controls__inline-select-label")!
+          .getBoundingClientRect();
+        const chevron = document
+          .querySelector<HTMLElement>(".chat-controls__inline-select-chevron")!
+          .getBoundingClientRect();
+        return chevron.left - label.right;
+      });
+      expect(measuredGap).toBeCloseTo(4, 0);
+    });
+  });
 
-      await expectNoHorizontalOverflow(page);
-      const widths = await page.evaluate(() => ({
-        app: document.querySelector("mcp-app-view")!.getBoundingClientRect().width,
-        bubble: document.querySelector<HTMLElement>(".chat-bubble")!.getBoundingClientRect().width,
-        messages: document
-          .querySelector<HTMLElement>(".chat-group-messages")!
-          .getBoundingClientRect().width,
-      }));
-      expect(widths.bubble).toBeCloseTo(widths.messages, 0);
-      expect(widths.app).toBeGreaterThan(600);
-    } finally {
-      await closeBrowserPage(page);
-    }
+  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
+    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
+      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
+        await customElements.whenDefined("mcp-app-view");
+        const readFrameBackground = async (boardSurface?: string) => {
+          if (boardSurface) {
+            owner.style.setProperty("--board-surface", boardSurface);
+          } else {
+            owner.style.removeProperty("--board-surface");
+          }
+          const view = document.createElement("mcp-app-view") as HTMLElement & {
+            updateComplete: Promise<boolean>;
+          };
+          owner.replaceChildren(view);
+          await view.updateComplete;
+          const mount = view.querySelector(".mount");
+          if (!mount) {
+            throw new Error("MCP App mount is missing");
+          }
+          const frame = document.createElement("iframe");
+          mount.append(frame);
+          return getComputedStyle(frame).backgroundColor;
+        };
+        return {
+          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
+          inline: await readFrameBackground(),
+        };
+      });
+
+      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
+      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
+    });
   });
 
   it("keeps wrapped message footers inside measured virtual rows", async () => {
-    const page = await openBrowserPage(1366, 900);
-    try {
+    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div class="chat-thread" style="width: 220px; height: 400px;">
             <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 220px;">
               <div class="chat-virtual-sizer" style="height: 400px;">
-                <div class="chat-virtual-row" data-first-row style="transform: translateY(0px);">
-                  <div
-                    class="chat-group assistant chat-group--with-footer"
-                    style="--chat-message-max-width: 120px;"
-                  >
-                    <div class="chat-avatar assistant">A</div>
-                    <div class="chat-group-messages">
-                      <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
-                    </div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <span class="chat-group-timestamp">9:41 PM</span>
+                <div class="chat-virtual-block">
+                  <div class="chat-virtual-row" data-first-row >
+                    <div
+                      class="chat-group assistant chat-group--with-footer"
+                      style="--chat-message-max-width: 120px;"
+                    >
+                      <div class="chat-avatar assistant">A</div>
+                      <div class="chat-group-messages">
+                        <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
                       </div>
-                      <div class="chat-group-footer-actions">
-                        <button type="button">${iconSvg()}</button>
-                        <button type="button">${iconSvg()}</button>
-                        <button type="button">${iconSvg()}</button>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <span class="chat-sender-name">Assistant</span>
+                          <span class="chat-group-timestamp">9:41 PM</span>
+                        </div>
+                        <div class="chat-group-footer-actions">
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-                <div class="chat-virtual-row" data-second-row>
-                  <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                  <div class="chat-virtual-row" data-second-row>
+                    <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </body></html>`,
       );
+      await waitForLayoutSettled(page, "[data-first-row], .chat-group-footer");
 
       const layout = await page.evaluate(() => {
         const first = document.querySelector<HTMLElement>("[data-first-row]")!;
@@ -1059,15 +1280,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const avatar = first.querySelector<HTMLElement>(".chat-avatar")!;
         const bubble = first.querySelector<HTMLElement>(".chat-bubble")!;
         const footer = first.querySelector<HTMLElement>(".chat-group-footer")!;
-        second.style.transform = `translateY(${first.getBoundingClientRect().height}px)`;
         const firstRect = first.getBoundingClientRect();
         const secondRect = second.getBoundingClientRect();
         const avatarRect = avatar.getBoundingClientRect();
         const bubbleRect = bubble.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         return {
-          avatarBottom: avatarRect.bottom,
-          bubbleBottom: bubbleRect.bottom,
+          avatarTop: avatarRect.top,
+          bubbleTop: bubbleRect.top,
           firstBottom: firstRect.bottom,
           footerBottom: footerRect.bottom,
           footerHeight: footerRect.height,
@@ -1076,46 +1296,229 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.footerHeight).toBeGreaterThan(24);
-      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
+      expect(layout.avatarTop - layout.bubbleTop).toBeCloseTo(0, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
-      expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      expect(Math.abs(layout.secondTop - layout.firstBottom)).toBeLessThanOrEqual(1);
+    });
   });
 
-  it("keeps attached images within narrow message lanes", async () => {
-    const page = await openBrowserPage(320, 568);
-    try {
+  it("keeps attributed user avatar fallbacks beside the message after identity resolution", async () => {
+    await withBrowserPage(openBrowserPage(860, 900), async (page) => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div data-image-lane style="width: 180px;">
-            <div class="chat-message-images">
-              <img
-                class="chat-message-image"
-                width="600"
-                height="100"
-                alt="Wide attachment"
-                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='100'%3E%3C/svg%3E"
-              />
+          <div class="chat-thread" style="width: 768px;">
+            <div class="chat-thread-inner" style="width: 768px;">
+              <div class="chat-group user chat-group--with-footer">
+                <span class="chat-avatar-slot">
+                  <img
+                    class="chat-avatar user"
+                    alt="Collin Johnson"
+                    src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'%3E%3Crect width='36' height='36' fill='purple'/%3E%3C/svg%3E"
+                  />
+                  <div class="chat-avatar user chat-avatar--sender-initials">C</div>
+                </span>
+                <div class="chat-group-messages">
+                  <div class="chat-bubble"><div class="chat-text">A newly sent message.</div></div>
+                </div>
+                <div class="chat-group-footer">
+                  <div class="chat-group-footer__meta">
+                    <span class="chat-sender-name">collinjohnsonw</span>
+                    <span class="chat-group-timestamp">now</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </body></html>`,
       );
-      await page.locator(".chat-message-image").waitFor();
+      const messageAvatarSlot = page.locator(".chat-group .chat-avatar-slot");
+      await messageAvatarSlot.locator("img").waitFor();
 
-      const lane = await getRect(page, "[data-image-lane]");
-      const image = await getRect(page, ".chat-message-image");
-      expect(image.width).toBeLessThanOrEqual(lane.width + 1);
-      expect(image.width / image.height).toBeCloseTo(6, 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      const readLayout = async () =>
+        await page.evaluate(() => {
+          const group = document.querySelector<HTMLElement>(".chat-group.user")!;
+          const bubble = group.querySelector<HTMLElement>(".chat-bubble")!;
+          const visibleAvatar = [...group.querySelectorAll<HTMLElement>(".chat-avatar")].find(
+            (avatar) => getComputedStyle(avatar).display !== "none",
+          )!;
+          const groupRect = group.getBoundingClientRect();
+          const bubbleRect = bubble.getBoundingClientRect();
+          const avatarRect = visibleAvatar.getBoundingClientRect();
+          return {
+            avatarLeft: avatarRect.left,
+            avatarRight: avatarRect.right,
+            bubbleRight: bubbleRect.right,
+            groupRight: groupRect.right,
+          };
+        });
+
+      const imageLayout = await readLayout();
+      expect(await messageAvatarSlot.evaluate((slot) => getComputedStyle(slot).display)).toBe(
+        "grid",
+      );
+      await messageAvatarSlot.evaluate((slot) => slot.classList.add("is-fallback"));
+      const fallbackLayout = await readLayout();
+
+      for (const layout of [imageLayout, fallbackLayout]) {
+        expect(layout.avatarLeft).toBeGreaterThanOrEqual(layout.bubbleRight + 9);
+        expect(layout.avatarRight).toBeLessThanOrEqual(layout.groupRight + 1);
+      }
+
+      await page
+        .locator(".chat-thread")
+        .evaluate((thread) => thread.classList.add("chat-thread--direct"));
+      expect(await messageAvatarSlot.evaluate((slot) => getComputedStyle(slot).display)).toBe(
+        "none",
+      );
+      await page
+        .locator(".chat-thread")
+        .evaluate((thread) => thread.classList.remove("chat-thread--direct"));
+      await page.setViewportSize({ width: 390, height: 900 });
+      expect(await messageAvatarSlot.evaluate((slot) => getComputedStyle(slot).display)).toBe(
+        "none",
+      );
+    });
   });
 
+  it.each([
+    ["dark", false],
+    ["light", true],
+  ])(
+    "keeps a sent gallery above its text bubble without hover changes in %s mode (sender tint: %s)",
+    async (theme, tinted) => {
+      await withBrowserPage(openBrowserPage(1280, 900), async (page) => {
+        const tile = (index: number) => `
+        <span class="chat-image-frame" data-tile="${index}">
+          <button class="chat-message-image-button" type="button">
+            <img class="chat-message-image" width="640" height="640" alt="Image ${index}"
+              src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='640'%3E%3Crect width='640' height='640' fill='%23865cff'/%3E%3C/svg%3E" />
+          </button>
+        </span>`;
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
+            style="--chat-sender-hue: 208">
+            <div class="chat-bubble chat-bubble--with-images">
+              <div
+                class="chat-message-images chat-message-images--gallery chat-message-images--five"
+              >
+                ${Array.from({ length: 5 }, (_, index) => tile(index + 1)).join("")}
+              </div>
+              <div class="chat-text">oi</div>
+            </div>
+          </div>
+        </body></html>`,
+        );
+        await page.locator(".chat-message-image").first().waitFor();
+        const geometry = await page.locator(".chat-bubble").evaluate((bubble) => {
+          const gallery = bubble.querySelector<HTMLElement>(".chat-message-images")!;
+          const text = bubble.querySelector<HTMLElement>(".chat-text")!;
+          const frames = [...gallery.querySelectorAll<HTMLElement>(".chat-image-frame")];
+          const boxes = frames.map((frame) => frame.getBoundingClientRect());
+          const galleryBox = gallery.getBoundingClientRect();
+          const textBox = text.getBoundingClientRect();
+          return {
+            background: getComputedStyle(bubble).backgroundColor,
+            firstRow: boxes.filter((box) => Math.round(box.top) === Math.round(boxes[0]!.top))
+              .length,
+            fourthAlignedWithSecond: Math.abs(boxes[3]!.left - boxes[1]!.left) <= 1,
+            lastRowRightAligned: Math.abs(boxes[4]!.right - galleryBox.right) <= 1,
+            textGap: textBox.top - galleryBox.bottom,
+            textRightAligned: Math.abs(textBox.right - galleryBox.right) <= 1,
+            tileSize: boxes[0]!.width,
+          };
+        });
+        expect(geometry).toMatchObject({
+          background: "rgba(0, 0, 0, 0)",
+          firstRow: 3,
+          fourthAlignedWithSecond: true,
+          lastRowRightAligned: true,
+          textGap: 8,
+          textRightAligned: true,
+        });
+        expect(geometry.tileSize).toBeCloseTo(128, 0);
+        for (const hovered of [true, false]) {
+          if (hovered) {
+            await page.locator(".chat-message-image").first().hover();
+          } else {
+            await page.mouse.move(0, 0);
+          }
+          expect(
+            await page.locator(".chat-bubble").evaluate((bubble) => ({
+              background: getComputedStyle(bubble).backgroundColor,
+              shadow: getComputedStyle(bubble).boxShadow,
+            })),
+          ).toEqual({ background: "rgba(0, 0, 0, 0)", shadow: "none" });
+        }
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps every sent-image text shape on the user bubble surface (sender tint: %s)",
+    async (tinted) => {
+      await withBrowserPage(openBrowserPage(1280, 900), async (page) => {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
+            style="--chat-sender-hue: 208">
+            <div class="chat-bubble" data-reference>Text-only message</div>
+            <div class="chat-bubble chat-bubble--with-images">
+              <div class="chat-text" data-shape="text">Short text</div>
+            </div>
+            <div class="chat-bubble chat-bubble--with-images">
+              <div class="chat-message-disclosure" data-shape="disclosure">
+                <div class="chat-message-disclosure__content">
+                  <div class="chat-text">Collapsed text</div>
+                </div>
+              </div>
+            </div>
+            <div class="chat-bubble chat-bubble--with-images">
+              <div class="chat-text" data-shape="json">
+                <pre><code class="language-json">{"ready":true}</code></pre>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+        );
+        for (const theme of ["dark", "light"] as const) {
+          await page.evaluate(
+            (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+            theme,
+          );
+          const surfaces = await page.locator("[data-shape]").evaluateAll((elements) =>
+            elements.map((element) => {
+              const style = getComputedStyle(element);
+              return {
+                backgroundColor: style.backgroundColor,
+                color: style.color,
+                padding: style.padding,
+              };
+            }),
+          );
+          const reference = await page.locator("[data-reference]").evaluate((bubble) => ({
+            backgroundColor: getComputedStyle(bubble).backgroundColor,
+            color: getComputedStyle(bubble).color,
+          }));
+          expect(surfaces[0]).toEqual({ ...reference, padding: "10px 14px" });
+          expect(surfaces[1]).toEqual(surfaces[0]);
+          expect(surfaces[2]).toEqual(surfaces[0]);
+          expect(
+            await page
+              .locator(".chat-bubble--with-images")
+              .evaluateAll((bubbles) =>
+                bubbles.every(
+                  (bubble) => getComputedStyle(bubble).backgroundColor === "rgba(0, 0, 0, 0)",
+                ),
+              ),
+          ).toBe(true);
+        }
+      });
+    },
+  );
+
   it("wraps long question and approval metadata inside narrow cards", async () => {
-    const page = await openBrowserPage(320, 568);
-    try {
+    await withBrowserPage(openBrowserPage(320, 568), async (page) => {
       const longToken = `workspace${"x".repeat(240)}session`;
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -1150,14 +1553,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(metrics.valueRight).toBeLessThanOrEqual(metrics.rowRight + 1);
       expect(metrics.headingRight).toBeLessThanOrEqual(metrics.cardRight + 1);
       expect(metrics.rowRight).toBeLessThanOrEqual(metrics.cardRight + 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
+    });
   });
 
   it("reserves command text space for flush tool-card actions", async () => {
-    const page = await openBrowserPage(320, 568);
-    try {
+    await withBrowserPage(openBrowserPage(320, 568), async (page) => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div class="chat-tool-card chat-tool-card--flush" style="width: 220px;">
@@ -1183,203 +1583,219 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.commandContentRight).toBeLessThanOrEqual(layout.actionLeft + 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
+    });
   });
 
-  it(
-    "remeasures a populated composer when the viewport width changes",
-    FULL_APP_TEST_OPTIONS,
-    async () => {
-      const page = await getSharedAppPage();
-      const errorStart = sharedAppPageErrors.length;
-      try {
-        await page.setViewportSize({ width: 900, height: 800 });
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-        await textarea.fill(
-          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
-            2,
-          ),
-        );
-        await waitForLayoutSettled(page);
-        const wideHeight = (await textarea.boundingBox())?.height ?? 0;
+  it("keeps tool-card header actions visible without hover", async () => {
+    await withBrowserPage(openBrowserPage(430, 720), async (page) => {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-tool-card">
+            <div class="chat-tool-card__header">
+              <span>ui/src/styles/chat/tool-cards.css</span>
+              <div class="chat-tool-card__actions">
+                <button class="chat-tool-card__action-btn" type="button">${iconSvg()}</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
 
-        await page.setViewportSize({ width: 430, height: 800 });
-        await page.waitForFunction((previousHeight) => {
-          const element = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          return element !== null && element.getBoundingClientRect().height > previousHeight + 1;
-        }, wideHeight);
-        const narrowHeight = (await textarea.boundingBox())?.height ?? 0;
-        expect(narrowHeight).toBeGreaterThan(wideHeight + 1);
-
-        await page.setViewportSize({ width: 900, height: 800 });
-        await page.waitForFunction((previousHeight) => {
-          const element = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          return element !== null && element.getBoundingClientRect().height < previousHeight - 1;
-        }, narrowHeight);
-        expect(
-          sharedAppPageErrors
-            .slice(errorStart)
-            .filter((message) => message.includes("ResizeObserver loop")),
-        ).toEqual([]);
-      } finally {
-        await page.locator(".agent-chat__composer-combobox > textarea").fill("");
-        await page.setViewportSize({ width: 1366, height: 900 });
-      }
-    },
-  );
-
-  it(
-    "reveals, pins, and dismisses message context from the timestamp",
-    FULL_APP_TEST_OPTIONS,
-    async () => {
-      const page = await getSharedAppPage();
-      try {
-        await page.setViewportSize({ width: 1366, height: 900 });
-        const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
-        const details = group.locator("details.msg-meta");
-        const context = details.locator(".msg-meta__details");
-        const summary = details.locator(".msg-meta__summary");
-        const messageText = group.locator(".chat-text").first();
-        await messageText.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-        const initialLayout = await group.evaluate((node) => {
-          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
-          return {
-            footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
-          };
-        });
-        expect(await context.isVisible()).toBe(false);
-
-        // Travel like a real pointer: the footer overlay is pointer-gated until
-        // the group is hovered, so enter through the message body first.
-        await messageText.hover();
-        await summary.hover();
-        // The reveal is state-driven, so the re-render can lag the hover event
-        // under CPU contention; poll instead of a one-shot visibility read.
-        await context.waitFor({ state: "visible", timeout: 10_000 });
-        const hoverLayout = await group.evaluate((node) => {
-          const footer = node.querySelector<HTMLElement>(".chat-group-footer")!;
-          const summaryNode = node.querySelector<HTMLElement>(".msg-meta__summary")!;
-          const detailsOverlay = node.querySelector<HTMLElement>(".msg-meta__details")!;
-          return {
-            contextBottom: detailsOverlay.getBoundingClientRect().bottom,
-            footerHeight: footer.getBoundingClientRect().height,
-            groupHeight: (node as HTMLElement).getBoundingClientRect().height,
-            summaryTop: summaryNode.getBoundingClientRect().top,
-          };
-        });
-        expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
-        expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
-        expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
-
-        await page.mouse.move(0, 0);
-        await context.waitFor({ state: "hidden", timeout: 10_000 });
-
-        await messageText.hover();
-        await summary.hover();
-        // Escape only owns pinned disclosures; it must not corrupt an active
-        // hover preview before the click converts that preview into a pin.
-        await page.keyboard.press("Escape");
-        await summary.click();
-        await page.mouse.move(0, 0);
-        // Click-to-open must survive the pointer leaving the message group.
-        await context.waitFor({ state: "visible", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBe("");
-
-        await page.mouse.click(0, 0);
-        await context.waitFor({ state: "hidden", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBeNull();
-
-        await messageText.hover();
-        await summary.click();
-        await context.waitFor({ state: "visible", timeout: 10_000 });
-        await page.keyboard.press("Escape");
-        await context.waitFor({ state: "hidden", timeout: 10_000 });
-        expect(await details.getAttribute("open")).toBeNull();
-      } finally {
-        await page.keyboard.press("Escape");
-        await page.mouse.move(0, 0);
-      }
-    },
-  );
-
-  it(
-    "renders encoded media extensions from assistant output and transcript fields",
-    FULL_APP_TEST_OPTIONS,
-    async () => {
-      const page = await getSharedAppPage();
-      const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
-      const video = page.locator(`video[src="${SHARED_APP_VIDEO_URL}"]`);
-      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await video.waitFor({ state: "attached", timeout: 10_000 });
-      expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
-      expect(await video.getAttribute("src")).toBe(SHARED_APP_VIDEO_URL);
-    },
-  );
+      expect(
+        await page
+          .locator(".chat-tool-card__header > .chat-tool-card__actions")
+          .evaluate((node) => getComputedStyle(node).opacity),
+      ).toBe("1");
+    });
+  });
 
   it.each([
-    [393, 852],
+    [320, 568],
+    [900, 500],
     [1366, 900],
+    [1440, 1400],
   ] as const)(
-    "anchors received bubbles left and sent bubbles right at %sx%s",
+    "keeps transcript roles, insets, and composer surfaces aligned at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        const roles = await page.evaluate(() => {
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
+      await withBrowserPage(openFixture(width, height), async (page) => {
+        const spacing = await page.evaluate(() => {
+          const thread = document.querySelector<HTMLElement>(".chat-thread");
+          const firstMessage = document.querySelector<HTMLElement>(
+            ".chat-thread-inner > .chat-group",
+          );
+          if (!thread || !firstMessage) {
+            return null;
+          }
+          return {
+            inset: firstMessage.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+            paddingTop: Number.parseFloat(getComputedStyle(thread).paddingTop),
+          };
+        });
+
+        expect(spacing).not.toBeNull();
+        expect(spacing?.paddingTop).toBeGreaterThanOrEqual(20);
+        expect(spacing?.inset).toBeCloseTo(spacing?.paddingTop ?? 0, 0);
+        if (height > 500) {
+          const roles = await page.evaluate(() => {
+            const rectFor = (selector: string) => {
+              const node = document.querySelector(selector) as HTMLElement | null;
+              if (!node) {
+                return null;
+              }
+              const rect = node.getBoundingClientRect();
+              return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              };
+            };
+            return {
+              assistantLane: rectFor(".chat-group.assistant .chat-group-messages"),
+              assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
+              transcript: rectFor(".chat-thread-inner"),
+              transcriptViewport: rectFor(".chat-thread"),
+              composer: rectFor(".agent-chat__composer-shell"),
+              userLane: rectFor(".chat-group.user .chat-group-messages"),
+              userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
+            };
+          });
+
+          const assistantLane = expectControlRect(roles.assistantLane, "assistant message lane");
+          const assistantBubble = expectControlRect(roles.assistantBubble, "assistant bubble");
+          const transcript = expectControlRect(roles.transcript, "transcript");
+          const transcriptViewport = expectControlRect(
+            roles.transcriptViewport,
+            "transcript viewport",
+          );
+          const userLane = expectControlRect(roles.userLane, "user message lane");
+          const userBubble = expectControlRect(roles.userBubble, "user bubble");
+
+          expect(
+            Math.abs(
+              transcript.x +
+                transcript.width / 2 -
+                (transcriptViewport.x + transcriptViewport.width / 2),
+            ),
+          ).toBeLessThanOrEqual(1);
+          if (width <= 768) {
+            const composer = expectControlRect(roles.composer, "composer");
+            expect(transcript.x).toBeCloseTo(composer.x, 0);
+            expect(transcript.width).toBeCloseTo(composer.width, 0);
+          } else {
+            expect(transcript.width).toBeCloseTo(768, 0);
+          }
+          expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
+          expect(
+            Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),
+          ).toBeLessThanOrEqual(1);
+          expect(userLane.x).toBeGreaterThan(assistantLane.x);
+          expect(userBubble.width).toBeLessThan(userLane.width);
+          expect(assistantBubble.width).toBeLessThan(assistantLane.width);
+        }
+
+        const geometry = await page.evaluate(() => {
+          const styleFor = (selector: string) => {
+            const node = document.querySelector<HTMLElement>(selector);
             if (!node) {
               return null;
             }
-            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
             return {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
+              borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+              cornerShape: style.getPropertyValue("corner-shape"),
+              paddingBottom: Number.parseFloat(style.paddingBottom),
+              paddingLeft: Number.parseFloat(style.paddingLeft),
+              paddingRight: Number.parseFloat(style.paddingRight),
+              paddingTop: Number.parseFloat(style.paddingTop),
             };
           };
           return {
-            assistantLane: rectFor(".chat-group.assistant .chat-group-messages"),
-            assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
-            userLane: rectFor(".chat-group.user .chat-group-messages"),
-            userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
+            assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+            bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
+            codeBlock: styleFor(".code-block-wrapper"),
+            composer: styleFor(".agent-chat__composer-shell > .agent-chat__input"),
+            footer: styleFor(".agent-chat__composer-footer"),
+            textarea: styleFor(".agent-chat__composer-combobox > textarea"),
           };
         });
 
-        const assistantLane = expectControlRect(roles.assistantLane, "assistant message lane");
-        const assistantBubble = expectControlRect(roles.assistantBubble, "assistant bubble");
-        const userLane = expectControlRect(roles.userLane, "user message lane");
-        const userBubble = expectControlRect(roles.userBubble, "user bubble");
+        for (const style of Object.values(geometry)) {
+          expect(style).not.toBeNull();
+        }
 
-        expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),
-        ).toBeLessThanOrEqual(1);
-        expect(userLane.x).toBeGreaterThan(assistantLane.x);
-        expect(userBubble.width).toBeLessThan(userLane.width);
-        expect(assistantBubble.width).toBeLessThan(assistantLane.width);
-      } finally {
-        await closeBrowserPage(page);
-      }
+        expect(geometry.codeBlock?.borderRadius).toBeGreaterThan(0);
+        expect(geometry.bubble).toMatchObject({
+          borderRadius: geometry.codeBlock?.borderRadius,
+          cornerShape: geometry.codeBlock?.cornerShape,
+          paddingTop: 16,
+          paddingRight: 16,
+          paddingBottom: 16,
+          paddingLeft: 16,
+        });
+        // Assistant replies render flat (no bubble card): zero horizontal inset
+        // keeps the text on the tool-row left edge.
+        expect(geometry.assistantBubble?.paddingLeft).toBe(0);
+        expect(geometry.assistantBubble?.paddingRight).toBe(0);
+        // The composer rests one radius step above the bubble: it is the surface
+        // the thread sits on, not another card in the same stack.
+        expect(geometry.composer?.borderRadius).toBe(20 * (await readCornerScale(page)));
+
+        // The editor's horizontal inset belongs to its row, not to the control,
+        // so the text keeps one origin while the surface changes shape.
+        const textareaBlockInset = width <= 768 || (width <= 932 && height <= 500) ? 10 : 6;
+        expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
+        expect(geometry.textarea?.paddingRight).toBe(0);
+        expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
+        expect(geometry.textarea?.paddingLeft).toBe(0);
+        const shortLandscape = width <= 932 && height <= 500;
+        const footerInset = width <= 768 || shortLandscape ? 4 : 8;
+        expect(geometry.footer?.paddingLeft).toBe(footerInset);
+        expect(geometry.footer?.paddingRight).toBe(footerInset);
+        // Multiline keeps optical breathing room inside the footer on both edges;
+        // the outer margin only docks the complete row above the surface edge.
+        expect(geometry.footer?.paddingTop).toBe(width <= 768 ? 4 : shortLandscape ? 2 : 6);
+        expect(geometry.footer?.paddingBottom).toBe(width <= 768 ? 4 : shortLandscape ? 0 : 6);
+
+        // The resting shape is two stacked regions, not one line that may grow
+        // into two: a draft that fits on a single line still leaves the surface at
+        // its multiline floor, with the whole action row below the editor.
+        const { surface, editor, actionRow } = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const [element, ...others] = document.querySelectorAll<HTMLElement>(selector);
+            if (!element || others.length > 0) {
+              throw new Error(`Expected one layout element: ${selector}`);
+            }
+            const {
+              x,
+              y,
+              width: rectWidth,
+              height: rectHeight,
+              top,
+              bottom,
+            } = element.getBoundingClientRect();
+            return { x, y, width: rectWidth, height: rectHeight, top, bottom };
+          };
+          return {
+            surface: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            editor: rectFor(".agent-chat__composer-combobox > textarea"),
+            actionRow: rectFor(".agent-chat__composer-footer"),
+          };
+        });
+        for (const rect of [surface, editor, actionRow]) {
+          expectFiniteRect(rect);
+        }
+        expect(surface.height).toBeGreaterThanOrEqual(98);
+        expect(actionRow.top).toBeGreaterThanOrEqual(editor.bottom - 1);
+        expect(surface.bottom - actionRow.bottom).toBeGreaterThanOrEqual(0);
+      });
     },
   );
 
-  it.each([
-    [1366, 900],
-    [1920, 1080],
-  ] as const)(
+  it.each([[1366, 900]] as const)(
     "centers overflowing direct messages on the composer axis at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height, { direct: true });
-      try {
+      await withBrowserPage(openFixture(width, height, { direct: true }), async (page) => {
         await page.evaluate(() => {
           const thread = document.querySelector<HTMLElement>(".chat-thread");
           const inner = document.querySelector<HTMLElement>(".chat-thread-inner");
@@ -1417,160 +1833,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(thread.width).toBeCloseTo(768, 0);
         expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
         expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
-      } finally {
-        await closeBrowserPage(page);
-      }
+      });
     },
   );
-
-  it.each([
-    [393, 852],
-    [1366, 900],
-    [1920, 1080],
-  ] as const)("uses compact radii and optical chat-box insets at %sx%s", async (width, height) => {
-    const page = await openFixture(width, height);
-    try {
-      const geometry = await page.evaluate(() => {
-        const styleFor = (selector: string) => {
-          const node = document.querySelector<HTMLElement>(selector);
-          if (!node) {
-            return null;
-          }
-          const style = getComputedStyle(node);
-          return {
-            borderRadius: Number.parseFloat(style.borderTopLeftRadius),
-            paddingBottom: Number.parseFloat(style.paddingBottom),
-            paddingLeft: Number.parseFloat(style.paddingLeft),
-            paddingRight: Number.parseFloat(style.paddingRight),
-            paddingTop: Number.parseFloat(style.paddingTop),
-          };
-        };
-        return {
-          assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
-          bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
-          composer: styleFor(".agent-chat__input"),
-          footer: styleFor(".agent-chat__composer-footer"),
-          textarea: styleFor(".agent-chat__composer-combobox > textarea"),
-        };
-      });
-
-      expect(geometry.assistantBubble).not.toBeNull();
-      expect(geometry.bubble).not.toBeNull();
-      expect(geometry.composer).not.toBeNull();
-      expect(geometry.footer).not.toBeNull();
-      expect(geometry.textarea).not.toBeNull();
-
-      expect(geometry.bubble?.borderRadius).toBe(10);
-      expect(
-        new Set([
-          geometry.bubble?.paddingTop,
-          geometry.bubble?.paddingRight,
-          geometry.bubble?.paddingBottom,
-          geometry.bubble?.paddingLeft,
-        ]),
-      ).toEqual(new Set([16]));
-      // Assistant replies render flat (no bubble card): zero horizontal inset
-      // keeps the text on the tool-row left edge.
-      expect(geometry.assistantBubble?.paddingLeft).toBe(0);
-      expect(geometry.assistantBubble?.paddingRight).toBe(0);
-      expect(geometry.composer?.borderRadius).toBe(10);
-
-      const composerInset = width <= 768 ? 4 : 8;
-      const textareaBlockInset = width <= 768 ? 10 : composerInset;
-      expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
-      expect(geometry.textarea?.paddingRight).toBe(composerInset);
-      expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
-      expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
-      expect(geometry.footer?.paddingLeft).toBe(composerInset);
-      expect(geometry.footer?.paddingRight).toBe(composerInset);
-      // #105866 splits the block inset evenly around the footer so the
-      // settings chip centers between the divider and the card edge.
-      expect(geometry.footer?.paddingTop).toBe(composerInset / 2);
-      expect(geometry.footer?.paddingBottom).toBe(composerInset / 2);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it.each([
-    [1120, 740],
-    [1366, 900],
-    [1440, 900],
-  ] as const)("keeps desktop chat controls in one row at %sx%s", async (width, height) => {
-    const page = await openHeaderFixture(width, height);
-    try {
-      await expectNoHorizontalOverflow(page);
-      const controls = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector);
-          const rect = node?.getBoundingClientRect();
-          return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
-        };
-        return {
-          session: rectFor('[data-chat-session-select="true"]'),
-          agent: rectFor('[data-chat-agent-filter="true"]'),
-          model: rectFor('[data-chat-model-select="true"]'),
-          action: rectFor(".page-meta .btn--icon"),
-        };
-      });
-      const rowY = [
-        controls.session?.y,
-        controls.agent?.y,
-        controls.model?.y,
-        controls.action?.y,
-      ].filter((value): value is number => typeof value === "number");
-      expect(rowY.length).toBe(4);
-      expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
-      const agent = expectControlRect(controls.agent, "agent");
-      const session = expectControlRect(controls.session, "session");
-      expect(agent.x).toBeLessThan(session.x);
-      expect(session.width / agent.width).toBeGreaterThan(1.25);
-      expect(session.width / agent.width).toBeLessThan(1.55);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("collapses the desktop chat controls row when scroll state hides it", async () => {
-    const page = await openHeaderFixture(1366, 900, { hidden: true });
-    try {
-      const hiddenState = await page.evaluate(() => {
-        const header = document.querySelector(".content-header") as HTMLElement | null;
-        const rect = header?.getBoundingClientRect();
-        const style = header ? getComputedStyle(header) : null;
-        return {
-          height: rect?.height ?? -1,
-          opacity: style?.opacity ?? "",
-          pointerEvents: style?.pointerEvents ?? "",
-        };
-      });
-      expect(hiddenState.height).toBeLessThanOrEqual(1);
-      expect(hiddenState.opacity).toBe("0");
-      expect(hiddenState.pointerEvents).toBe("none");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it.each(VIEWPORTS)("keeps the chat shell inside the viewport at %sx%s", async (width, height) => {
-    const page = await openFixture(width, height);
-    try {
-      await expectNoHorizontalOverflow(page);
-      const code = await getBoundingBox(page, ".chat-text pre");
-      expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
 
   it.each([
     [320, 568],
     [1366, 900],
   ] as const)(
-    "keeps short assistant footer actions below the bubble at %sx%s",
+    "keeps short assistant names and actions compact below the bubble at %sx%s",
     async (width, height) => {
-      const page = await openBrowserPage(width, height);
-      try {
+      await withBrowserPage(openBrowserPage(width, height), async (page) => {
         await page.setContent(
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
             <div class="chat-thread" role="log">
@@ -1599,20 +1872,25 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const text = await getTextContentRect(page, ".chat-text p");
         const actions = await getRect(page, ".chat-group-footer-actions");
         expect(text.bottom).toBeLessThanOrEqual(actions.top - 1);
-      } finally {
-        await closeBrowserPage(page);
-      }
+        const bubble = await getRect(page, ".chat-bubble");
+        const name = await getRect(page, ".chat-sender-name");
+        const icon = await getRect(page, ".chat-group-footer-actions button svg");
+        // Turn spacing belongs after this whole set, not above its metadata.
+        expect(name.top - bubble.bottom).toBeLessThanOrEqual(10);
+        expect(icon.top - bubble.bottom).toBeLessThanOrEqual(10);
+      });
     },
   );
 
   it.each([
-    [320, 568],
-    [1366, 900],
-  ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+    [320, 568, "dark"],
+    [1366, 900, "light"],
+  ] as const)(
+    "wraps inline code without clipping or detached punctuation at %sx%s in %s",
+    async (width, height, themeMode) => {
+      await withBrowserPage(openBrowserPage(width, height), async (page) => {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
           <div class="chat-thread" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group assistant">
@@ -1620,156 +1898,154 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 <div class="chat-group-messages">
                   <div class="chat-bubble">
                     <div class="chat-text">
-                      <p><code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
+                      <p><code data-long-code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+          <div class="chat-text" data-inline-punctuation><p>Use <code>status</code>; then <code>restart</code>.</p></div>
         </body></html>`,
-      );
-
-      await expectNoHorizontalOverflow(page);
-      const bubble = await getRect(page, ".chat-bubble");
-      const inlineCode = await getRect(page, ".chat-text p code");
-      expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it.each(["dark", "light"] as const)(
-    "keeps mobile controls inside the viewport with touch targets in %s mode",
-    async (themeMode) => {
-      const page = await openFixture(320, 568);
-      try {
-        await page.evaluate(
-          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
-          themeMode,
         );
-        const dropdown = await getBoundingBox(page, ".chat-controls-dropdown.open");
-        expect(dropdown.x).toBeGreaterThanOrEqual(8);
-        expect(dropdown.x + dropdown.width).toBeLessThanOrEqual(312);
-        await expectNoHorizontalOverflow(page);
-        const mobileControls = await page.evaluate(() => {
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const rect = node.getBoundingClientRect();
-            return {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-              text: node.textContent?.trim() ?? "",
-              display: getComputedStyle(node).display,
-            };
-          };
-          return {
-            agent: rectFor('[data-chat-agent-filter="true"]'),
-            session: rectFor('[data-chat-session-select="true"]'),
-            model: rectFor('[data-chat-model-select="true"]'),
-            compactCount: document.querySelectorAll('[data-chat-thinking-select-compact="true"]')
-              .length,
-          };
-        });
-        const agent = expectControlRect(mobileControls.agent, "agent");
-        const session = expectControlRect(mobileControls.session, "session");
-        const model = expectControlRect(mobileControls.model, "model");
-        expect(session.y).toBe(agent.y);
-        expect(agent.x).toBeLessThan(session.x);
-        expect(session.width / agent.width).toBeGreaterThan(1.25);
-        expect(session.width / agent.width).toBeLessThan(1.55);
-        expect(model.display).not.toBe("none");
-        expect(model.text).toBe("gpt-5 · High");
-        expect(mobileControls.compactCount).toBe(0);
 
-        const sizes = await page
-          .locator(".chat-controls-mobile-toggle, .chat-controls-dropdown .btn--icon")
-          .evaluateAll((nodes) =>
-            nodes.map((node) => {
-              const rect = (node as HTMLElement).getBoundingClientRect();
-              return { width: rect.width, height: rect.height };
-            }),
-          );
-        expect(sizes.length).toBeGreaterThan(0);
-        for (const size of sizes) {
-          expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        await expectNoHorizontalOverflow(page);
+        const bubble = await getRect(page, ".chat-bubble");
+        const inlineCode = await getRect(page, "[data-long-code]");
+        expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
+        const spacing = await page.locator("[data-inline-punctuation] code").evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const punctuation = node.nextSibling;
+            if (!(punctuation instanceof Text)) {
+              throw new Error("Expected punctuation text after inline code");
+            }
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const textRect = range.getBoundingClientRect();
+            range.setStart(punctuation, 0);
+            range.setEnd(punctuation, 1);
+            const punctuationRect = range.getBoundingClientRect();
+            range.detach();
+            const chipRect = (node as HTMLElement).getBoundingClientRect();
+            const paragraph = (node as HTMLElement).parentElement;
+            if (!paragraph) {
+              throw new Error("Expected inline code inside a paragraph");
+            }
+            return {
+              horizontalGap: punctuationRect.left - textRect.right,
+              chipHeight: chipRect.height,
+              lineHeight: Number.parseFloat(getComputedStyle(paragraph).lineHeight),
+            };
+          }),
+        );
+
+        expect(spacing).toHaveLength(2);
+        for (const { horizontalGap, chipHeight, lineHeight } of spacing) {
+          // The gap is the chip's em-derived inset plus its border, so a quarter of
+          // the 14px prose size holds on every platform.
+          expect(horizontalGap).toBeLessThanOrEqual(3.75);
+          // Measure the chip against the paragraph's CSS line box rather than a text
+          // rect: the chip's content height follows the monospace font's default line
+          // spacing, which differs by several px between macOS and Linux.
+          expect(lineHeight).toBeGreaterThan(0);
+          expect(chipHeight).toBeLessThanOrEqual(lineHeight + 1);
         }
-      } finally {
-        await closeBrowserPage(page);
-      }
+      });
     },
   );
 
-  it("keeps composer actions touch-sized on phones", async () => {
-    const page = await openFixture(320, 568);
-    try {
-      const sizes = await page.locator(".chat-send-btn").evaluateAll((nodes) =>
-        nodes.map((node) => {
-          const rect = (node as HTMLElement).getBoundingClientRect();
-          return { width: rect.width, height: rect.height };
-        }),
-      );
-      expect(sizes.length).toBeGreaterThan(0);
-      for (const size of sizes) {
-        expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-      }
-      const attach = await getRect(page, ".agent-chat__input-btn--attach");
-      expect(attach.width).toBeGreaterThanOrEqual(36);
-      expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+  it.each(["dark", "light"] as const)(
+    "fits short table cards to their columns in %s mode",
+    async (themeMode) => {
+      await withBrowserPage(openBrowserPage(800, 400), async (page) => {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-text">
+              <div data-table-lane style="width: 680px">
+                <table data-short-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+              <div data-narrow-table-lane style="width: 160px">
+                <table data-narrow-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+            </div>
+          </body></html>`,
+        );
 
-  it("aligns the reasoning default action with the reasoning heading", async () => {
-    const page = await openBrowserPage(520, 600);
-    try {
+        const geometry = await page.evaluate(() => {
+          const rectFor = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const shortTable = rectFor("[data-short-table]");
+          const lastCell = rectFor("[data-short-table] tbody td:last-child");
+          return {
+            laneWidth: rectFor("[data-table-lane]").width,
+            narrowLaneWidth: rectFor("[data-narrow-table-lane]").width,
+            narrowTableWidth: rectFor("[data-narrow-table]").width,
+            shortTableWidth: shortTable.width,
+            trailingGap: shortTable.right - lastCell.right,
+          };
+        });
+
+        expect(geometry.shortTableWidth).toBeLessThan(geometry.laneWidth);
+        expect(geometry.trailingGap).toBeLessThanOrEqual(1);
+        expect(geometry.narrowTableWidth).toBeCloseTo(geometry.narrowLaneWidth, 0);
+      });
+    },
+  );
+
+  it("shows the current effort beside its heading in the accent color", async () => {
+    await withBrowserPage(openBrowserPage(393, 852), async (page) => {
       await page.setContent(`
         <!doctype html>
         <html>
           <head><style>${readUiCss()}</style></head>
           <body>
             <div class="chat-controls__reasoning-panel">
-              <div class="chat-controls__reasoning-heading">
-                <span class="chat-controls__inline-select-section-label">Reasoning</span>
-                <button class="chat-controls__reasoning-default">(Default is High)</button>
+              <div class="chat-controls__reasoning-head">
+                <span class="chat-controls__effort-heading">Effort</span>
+                <span class="chat-controls__effort-value">Extra high</span>
               </div>
             </div>
+            <span data-accent-probe style="color: var(--accent)"></span>
           </body>
         </html>
       `);
 
-      const [headingBox, defaultBox] = await Promise.all([
-        page.locator(".chat-controls__reasoning-heading > span").boundingBox(),
-        page.locator(".chat-controls__reasoning-default").boundingBox(),
-      ]);
-      expect(headingBox).not.toBeNull();
-      expect(defaultBox).not.toBeNull();
-      if (!headingBox || !defaultBox) {
-        throw new Error("Expected reasoning labels to have layout boxes");
-      }
-      expect(defaultBox.x).toBeGreaterThanOrEqual(headingBox.x + headingBox.width - 1);
+      const layout = await page.evaluate(() => {
+        const heading = document
+          .querySelector<HTMLElement>(".chat-controls__effort-heading")!
+          .getBoundingClientRect();
+        const valueNode = document.querySelector<HTMLElement>(".chat-controls__effort-value")!;
+        const value = valueNode.getBoundingClientRect();
+        return {
+          accentColor: getComputedStyle(document.querySelector<HTMLElement>("[data-accent-probe]")!)
+            .color,
+          heading: { right: heading.right, y: heading.y, height: heading.height },
+          value: {
+            color: getComputedStyle(valueNode).color,
+            x: value.x,
+            y: value.y,
+            height: value.height,
+          },
+        };
+      });
+
+      expect(layout.value.x).toBeGreaterThanOrEqual(layout.heading.right);
       expect(
-        Math.abs(defaultBox.y + defaultBox.height / 2 - (headingBox.y + headingBox.height / 2)),
-      ).toBeLessThanOrEqual(2);
-    } finally {
-      await closeBrowserPage(page);
-    }
+        Math.abs(
+          layout.value.y + layout.value.height / 2 - (layout.heading.y + layout.heading.height / 2),
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(layout.value.color).toBe(layout.accentColor);
+    });
   });
 
-  it("keeps the expanded mobile composer tight, scrollable, and separated from the thread", async () => {
-    const page = await openFixture(393, 852);
-    try {
+  it("keeps the expanded mobile composer inset, scrollable, and flush with the thread", async () => {
+    await withBrowserPage(openFixture(393, 852), async (page) => {
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      // Comfortably past a quarter of the tallest viewport this case runs at,
+      // so the assertion below proves the cap and the scroll, not the draft.
       await textarea.fill(
-        Array.from({ length: 8 }, (_value, index) => `Mobile composer line ${index + 1}`).join(
+        Array.from({ length: 16 }, (_value, index) => `Mobile composer line ${index + 1}`).join(
           "\n",
         ),
       );
@@ -1777,7 +2053,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textareaNode = node as HTMLTextAreaElement;
         textareaNode.style.height = `${textareaNode.scrollHeight}px`;
       });
-      await page.waitForTimeout(220);
+      await page.locator(".context-ring").evaluate(finishElementAnimations);
 
       const layout = await page.evaluate(() => {
         const rectFor = (selector: string) => {
@@ -1801,13 +2077,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return {
           attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
           attachIcon: rectFor('.agent-chat__input-btn[aria-label="Add attachment"] svg'),
-          input: rectFor(".agent-chat__input"),
+          input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
           meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
           context: rectFor(".context-ring"),
           send: rectFor(".chat-send-btn"),
-          settings: rectFor(".chat-view-menu-trigger"),
-          settingsIcon: rectFor(".chat-view-menu-trigger svg"),
           shell: rectFor(".agent-chat__composer-shell"),
           textarea:
             textareaNode && textareaRect
@@ -1821,6 +2095,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 }
               : null,
           thread: rectFor(".chat-thread"),
+          viewportHeight: window.innerHeight,
           viewportWidth: window.innerWidth,
         };
       });
@@ -1832,9 +2107,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const model = expectControlRect(layout.model, "model selector");
       const context = expectControlRect(layout.context, "context control");
       const send = expectControlRect(layout.send, "primary action");
-      const settings = expectControlRect(layout.settings, "settings control");
       const attach = expectControlRect(layout.attach, "attachment control");
-      const settingsIcon = expectControlRect(layout.settingsIcon, "settings icon");
       const attachIcon = expectControlRect(layout.attachIcon, "attachment icon");
       const textareaRect = expectControlRect(layout.textarea, "composer textarea");
       const textareaMetrics = layout.textarea;
@@ -1848,69 +2121,93 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         throw new Error("Expected textarea sizing metrics");
       }
 
-      const fiveLineHeight =
-        textareaMetrics.lineHeight * 5 + textareaMetrics.paddingTop + textareaMetrics.paddingBottom;
-      expect(textareaRect.height).toBeLessThanOrEqual(fiveLineHeight + 1);
+      // The editor grows against the viewport, not against a line count: past a
+      // quarter of the screen the surface stops moving and the draft scrolls
+      // inside it, so a long draft can never push the thread off the page.
+      expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
-      expect(input.y - (thread.y + thread.height)).toBeGreaterThanOrEqual(5.5);
-      expect(shell.x).toBeLessThanOrEqual(8);
-      expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(8);
+      expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
+      expect(shell.x).toBeCloseTo(20, 0);
+      expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
-      expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
-      expect(context.x).toBeGreaterThanOrEqual(model.x + model.width - 1);
+      expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
       expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
-      for (const control of [model, settings, context]) {
+      for (const control of [model, context]) {
         expect(
-          Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+          Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
         ).toBeLessThanOrEqual(2);
       }
-      expect(meta.y).toBeGreaterThanOrEqual(settings.y - 1);
-      expect(settingsIcon.width).toBeGreaterThanOrEqual(18);
-      expect(settingsIcon.height).toBeGreaterThanOrEqual(18);
-      expect(attachIcon.width).toBeGreaterThanOrEqual(18);
-      expect(attachIcon.height).toBeGreaterThanOrEqual(18);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      expect(meta.y).toBeGreaterThanOrEqual(model.y - 1);
+      expect(attachIcon.width).toBeGreaterThanOrEqual(16);
+      expect(attachIcon.height).toBeGreaterThanOrEqual(16);
+    });
+  });
+
+  it("keeps transient footer controls from crushing mobile model settings", async () => {
+    await withBrowserPage(openFixture(320, 568, { crowdedComposerFooter: true }), async (page) => {
+      await expectNoHorizontalOverflow(page);
+      const layout = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector)!;
+          const rect = node.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            clientWidth: node.clientWidth,
+            scrollWidth: node.scrollWidth,
+            overflow: style.overflow,
+            textOverflow: style.textOverflow,
+          };
+        };
+        return {
+          viewport: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+          },
+          controls: rectFor(".agent-chat__composer-controls"),
+          footer: rectFor(".agent-chat__composer-footer"),
+          input: rectFor(".agent-chat__input"),
+          meta: rectFor(".agent-chat__composer-meta"),
+          settings: rectFor(".chat-controls__model-trigger"),
+          typing: rectFor(".agent-chat__typing-indicator--outside"),
+        };
+      });
+
+      expect(layout.viewport).toEqual({ width: 320, height: 568 });
+      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
+      expect(layout.settings.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
+      expect(layout.settings.x + layout.settings.width).toBeLessThanOrEqual(
+        layout.footer.x + layout.footer.width + 1,
+      );
+      expect(layout.typing.x).toBeGreaterThanOrEqual(0);
+      expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(layout.viewport.width);
+      expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+      expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+      expect(rectsOverlap(layout.settings, layout.meta)).toBe(false);
+      expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
+    });
   });
 
   it.each([
     [320, 568],
-    [375, 812],
-    [667, 375],
-    [768, 500],
-  ] as const)(
-    "keeps the composer model menu inside the mobile viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        await page.locator('[data-chat-composer-model="true"]').click();
-        const menu = await getBoundingBox(page, ".chat-controls__inline-select-menu--combined");
-        const reasoning = await getBoundingBox(page, ".chat-controls__reasoning-panel");
-        expect(menu.x).toBeGreaterThanOrEqual(0);
-        expect(menu.x + menu.width).toBeLessThanOrEqual(width + 1);
-        expect(reasoning.x).toBeGreaterThanOrEqual(0);
-        expect(reasoning.x + reasoning.width).toBeLessThanOrEqual(width + 1);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each([
-    [320, 568],
-    [393, 852],
+    [430, 932],
+    [768, 1024],
+    [1024, 768],
     [568, 320],
-    [1366, 900],
     [1920, 1080],
   ] as const)(
     "keeps the composer bottom controls, attachment, and primary action aligned at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
+      await withBrowserPage(openFixture(width, height), async (page) => {
         await expectNoHorizontalOverflow(page);
-        // Measure the settled footer row after the context ring's 200ms entrance animation.
-        await page.waitForTimeout(220);
+        const code = await getBoundingBox(page, ".chat-text pre");
+        expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
+        // Wall-clock sleeps can expire before Chromium advances compositor animations
+        // on a contended CI runner. Measure the footer after its finite entrance effect.
+        await page.locator(".context-ring").evaluate(finishElementAnimations);
         const controls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
@@ -1918,25 +2215,51 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               return null;
             }
             const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
             return {
               x: rect.x,
               y: rect.y,
               width: rect.width,
               height: rect.height,
-              display: getComputedStyle(node).display,
+              clientWidth: node.clientWidth,
+              scrollWidth: node.scrollWidth,
+              display: style.display,
+              overflow: style.overflow,
+              textOverflow: style.textOverflow,
+            };
+          };
+          const paddingFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const style = getComputedStyle(node);
+            return {
+              end: Number.parseFloat(style.paddingInlineEnd),
+              start: Number.parseFloat(style.paddingInlineStart),
             };
           };
           return {
-            chat: rectFor(".card.chat"),
+            chat: rectFor(".chat"),
             shell: rectFor(".agent-chat__composer-shell"),
-            input: rectFor(".agent-chat__input"),
+            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
             thread: rectFor(".chat-thread"),
             footer: rectFor(".agent-chat__composer-footer"),
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
+            modelSettings: rectFor(".chat-controls__model-trigger"),
+            modelTrigger: rectFor(".chat-controls__model-trigger"),
+            modelTriggerPadding: paddingFor(".chat-controls__model-trigger"),
+            modelLabel: rectFor(
+              ".chat-controls__model-trigger .chat-controls__inline-select-label",
+            ),
+            effortTrigger: rectFor(".chat-controls__effort-trigger"),
+            effortTriggerPadding: paddingFor(".chat-controls__effort-trigger"),
+            effortLabel: rectFor(
+              ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+            ),
             context: rectFor(".context-ring"),
-            settings: rectFor(".chat-view-menu-trigger"),
             attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
@@ -1951,11 +2274,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
         const context = expectControlRect(controls.context, "composer context control");
-        const settings = expectControlRect(controls.settings, "composer settings control");
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [footer, textarea, meta, model, context, settings, attach, send]) {
+        for (const control of [footer, textarea, meta, model, context, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -1965,41 +2287,96 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         }
         expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
         expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        expect(settings.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
         expect(model.y).toBeGreaterThanOrEqual(textarea.y);
         expect(context.y).toBeGreaterThanOrEqual(textarea.y);
-        expect(
-          Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
-        ).toBeLessThanOrEqual(2);
-        expect(attach.x + attach.width).toBeLessThanOrEqual(textarea.x + 1);
-        expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
-        expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
+        // The multiline footer is one row: the leading attachment control and
+        // trailing action group share its vertical bounds without overlapping.
+        expect(attach.y).toBeGreaterThanOrEqual(footer.y - 1);
+        expect(attach.y + attach.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+        expect(send.y).toBeGreaterThanOrEqual(footer.y - 1);
+        expect(send.y + send.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+        // Footer controls stay below the editor, pinned to opposite edges of the
+        // surface, and neither may drift back up into the text.
+        expect(attach.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
+        expect(send.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
+        expect(attach.x).toBeLessThan(send.x);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
-        expect(rectsOverlap(settings, send)).toBe(false);
-        const composerFontSize = await page
-          .locator(".agent-chat__composer-combobox > textarea")
-          .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
-        if (width <= 768) {
-          expect(composerFontSize).toBe(16);
-          expect(model.width).toBeGreaterThanOrEqual(width === 320 ? 32 : 64);
-          expect(model.width).toBeLessThanOrEqual(footer.width);
-          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, settings, context]) {
-            expect(
-              Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
-            ).toBeLessThanOrEqual(2);
+        const contextModelGap = model.x - (context.x + context.width);
+        expect(contextModelGap).toBeGreaterThanOrEqual(-1);
+        expect(
+          Math.abs(context.y + context.height / 2 - (model.y + model.height / 2)),
+        ).toBeLessThanOrEqual(2);
+        const composerFontSizes = await page.evaluate(() => {
+          const textareaNode = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          const selectors = [
+            ".chat-controls__model-trigger .chat-controls__inline-select-label",
+            ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+          ];
+          if (!textareaNode) {
+            throw new Error("Missing composer textarea");
           }
-          expect(footer.height).toBeLessThanOrEqual(49.1);
-          expect(settings.width).toBeGreaterThanOrEqual(36);
-          expect(settings.height).toBeGreaterThanOrEqual(36);
+          const fontSize = (node: Element, pseudo?: string) =>
+            Number.parseFloat(getComputedStyle(node, pseudo).fontSize);
+          return {
+            labels: selectors.map((selector) => {
+              const label = document.querySelector(selector);
+              if (!label) {
+                throw new Error(`Missing composer label: ${selector}`);
+              }
+              return fontSize(label);
+            }),
+            placeholder: fontSize(textareaNode, "::placeholder"),
+            textarea: fontSize(textareaNode),
+          };
+        });
+        expect(composerFontSizes).toEqual({
+          labels: [13, 13],
+          placeholder: 14,
+          textarea: 14,
+        });
+        if (width === 320) {
+          expect(attach.width).toBeGreaterThanOrEqual(36);
+          expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        }
+        if (width <= 480) {
+          const modelSettings = expectControlRect(
+            controls.modelSettings,
+            "composer model settings",
+          );
+          expect(model.width).toBeGreaterThanOrEqual(40);
+          expect(model.width).toBeLessThanOrEqual(footer.width);
+          expect(modelSettings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(modelSettings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(modelSettings.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
         } else {
-          expect(composerFontSize).toBe(14);
-          expect(send.width).toBeCloseTo(36, 2);
-          expect(send.height).toBeCloseTo(36, 2);
+          const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
+          const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
+          const effortTrigger = expectControlRect(
+            controls.effortTrigger,
+            "composer thinking trigger",
+          );
+          const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
+          expect(controls.modelTriggerPadding).not.toBeNull();
+          expect(controls.effortTriggerPadding).not.toBeNull();
+          for (const label of [modelLabel, effortLabel]) {
+            expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+          }
+          expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
+          expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
+        }
+        if (width <= 768) {
+          expect(send.width).toBeCloseTo(32, 2);
+          expect(send.height).toBeCloseTo(32, 2);
+          expect(footer.height).toBeLessThanOrEqual(53);
+        } else {
+          // The editor reads at input size, while the controls around it stay
+          // chrome-sized — that difference is what marks the text as the
+          // subject of the surface.
+          expect(send.width).toBeCloseTo(32, 2);
+          expect(send.height).toBeCloseTo(32, 2);
         }
 
         if (width >= 1600) {
@@ -2008,7 +2385,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(
             Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
           ).toBeLessThanOrEqual(1);
-          expect(input.height).toBeLessThanOrEqual(112);
+          expect(input.height).toBeLessThanOrEqual(119);
         }
 
         if (width > height && height <= 500) {
@@ -2016,671 +2393,993 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
           expect(textarea.height).toBeLessThanOrEqual(56.1);
         }
-      } finally {
-        await closeBrowserPage(page);
-      }
+      });
     },
   );
 
   it.each([
     [320, 568],
-    [393, 852],
+    [844, 390],
+    [1440, 1000],
   ] as const)(
-    "insets attachment previews from the composer edge at %sx%s",
+    "aligns attachment previews with draft text without clipping remove targets at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height, { composerAttachment: true });
-      try {
-        await expectNoHorizontalOverflow(page);
-        const input = await getBoundingBox(page, ".agent-chat__input");
-        const preview = await getBoundingBox(page, ".chat-attachments-preview");
-        const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
-        const previewPaddingTop = await page
-          .locator(".chat-attachments-preview")
-          .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
+      await withBrowserPage(
+        openFixture(width, height, { composerAttachment: true }),
+        async (page) => {
+          await expectNoHorizontalOverflow(page);
+          await page.locator(".chat-attachment-remove").focus();
+          await page.locator(".chat-attachment-remove").evaluate(finishElementAnimations);
+          await page.locator(".agent-chat__input").evaluate((node) => {
+            node.scrollTop = 0;
+          });
+          const { input, preview, attachment, remove, topHits, textStart } = await page.evaluate(
+            () => {
+              const elementFor = (selector: string) => {
+                const [element, ...others] = document.querySelectorAll(selector);
+                if (!element || others.length > 0) {
+                  throw new Error(`Expected one layout element: ${selector}`);
+                }
+                return element;
+              };
+              const rectFor = (selector: string) => {
+                const {
+                  x,
+                  y,
+                  width: rectWidth,
+                  height: rectHeight,
+                } = elementFor(selector).getBoundingClientRect();
+                return { x, y, width: rectWidth, height: rectHeight };
+              };
+              const removeNode = elementFor(".chat-attachment-remove");
+              const removeRect = rectFor(".chat-attachment-remove");
+              const textarea = elementFor(".agent-chat__composer-combobox > textarea");
+              return {
+                input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+                preview: rectFor(".chat-attachments-preview"),
+                attachment: rectFor(".chat-attachment-thumb"),
+                remove: removeRect,
+                topHits: [1, 3].map(
+                  (offset) =>
+                    document.elementFromPoint(
+                      removeRect.x + removeRect.width / 2,
+                      removeRect.y + offset,
+                    ) === removeNode,
+                ),
+                textStart:
+                  textarea.getBoundingClientRect().x +
+                  Number.parseFloat(getComputedStyle(textarea).paddingLeft),
+              };
+            },
+          );
+          for (const rect of [input, preview, attachment, remove]) {
+            expectFiniteRect(rect);
+          }
 
-        expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(10);
-        expect(preview.x).toBeGreaterThanOrEqual(input.x);
-        expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
-      } finally {
-        await closeBrowserPage(page);
-      }
+          expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
+          expect(Math.abs(attachment.x - textStart)).toBeLessThanOrEqual(0.5);
+          expect(preview.x).toBeGreaterThanOrEqual(input.x);
+          expect(remove.y).toBeGreaterThanOrEqual(preview.y);
+          expect(remove.x + remove.width).toBeLessThanOrEqual(preview.x + preview.width);
+          expect(remove.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(remove.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(topHits).toEqual([true, true]);
+
+          await page.locator(".chat-attachments-preview").evaluate((node) => {
+            const firstAttachment = node.querySelector(".chat-attachment-thumb")!;
+            for (let index = 0; index < 7; index++) {
+              node.append(firstAttachment.cloneNode(true));
+            }
+            node.scrollLeft = node.scrollWidth;
+          });
+          const lastRemove = page.locator(".chat-attachment-remove").last();
+          await lastRemove.focus();
+          await lastRemove.evaluate(finishElementAnimations);
+          const rightHits = await lastRemove.evaluate((node) => {
+            const bounds = node.getBoundingClientRect();
+            return [1, 3].map(
+              (offset) =>
+                document.elementFromPoint(bounds.right - offset, bounds.y + bounds.height / 2) ===
+                node,
+            );
+          });
+          expect(rightHits).toEqual([true, true]);
+        },
+      );
     },
   );
 
-  it("collapses sidebar columns into one tabbed column below the pane breakpoint", async () => {
-    const page = await openBrowserPage(900, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 620px; height: 600px; display: flex;">
-            <div class="sidebar-region sidebar-region--narrow">
-              <main class="sidebar-region__primary">Primary chat</main>
-              <section class="sidebar-column sidebar-column--collapsed">
-                <div class="sidebar-column__header">
-                  <div class="sidebar-column__tabs">
-                    <button class="sidebar-column__tab" aria-selected="true">Details</button>
-                    <button class="sidebar-column__tab" aria-selected="false">Discussion</button>
-                  </div>
+  it.each([
+    { dock: "narrow", width: 620, height: 600 },
+    { dock: "bottom", width: 900, height: 300 },
+    { dock: "bottom", width: 900, height: 1000 },
+  ])(
+    "keeps both stacked panels usable at $width×$height ($dock)",
+    async ({ dock, width, height }) => {
+      await withBrowserPage(openBrowserPage(1000, 1100), async (page) => {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div style="width: ${width}px; height: ${height}px; display: flex;">
+            <div class="sidebar-region sidebar-region--${dock} sidebar-region--open" style="--side-panel-height: 360px">
+              <main class="sidebar-region__primary" data-region="main">Primary chat</main>
+              <section class="side-panel">
+                <div class="rail-header side-panel__header" data-region-header="side">Details</div>
+                <div class="side-panel__body">
+                  <div class="side-panel__panel" data-region="side">Active detail panel</div>
                 </div>
-                <div class="sidebar-column__body">Active detail panel</div>
               </section>
             </div>
           </div>
         </body></html>`,
-      );
+        );
 
-      await expectNoHorizontalOverflow(page);
-      const primary = await getRect(page, ".sidebar-region__primary");
-      const sidebar = await getRect(page, ".sidebar-column--collapsed");
-      expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
-      expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
-      expect(sidebar.width).toBeGreaterThanOrEqual(618);
-      expect(await page.locator(".sidebar-column__tab").count()).toBe(2);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps crowded task sections independently scrollable in the side rail", async () => {
-    const page = await openBrowserPage(1000, 700);
-    try {
-      const taskRows = Array.from(
-        { length: 10 },
-        (_, index) => `<div class="chat-tasks-rail__task">Task ${index + 1}</div>`,
-      ).join("");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 760px; height: 320px; display: flex;">
-            <div class="chat-workbench chat-workbench--tasks-open chat-workbench--workspace-collapsed">
-              <div class="chat-workbench__main">thread</div>
-              <aside class="chat-tasks-rail">
-                <div class="chat-tasks-rail__scroll">
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Running</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Finished</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                </div>
-              </aside>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const sections = await page.$$eval(".chat-tasks-rail__section", (nodes) =>
-        nodes.map((node) => {
-          const section = node as HTMLElement;
-          section.scrollTop = 100;
-          return {
-            clientHeight: section.clientHeight,
-            overflowY: getComputedStyle(section).overflowY,
-            scrollHeight: section.scrollHeight,
-            scrollTop: section.scrollTop,
-          };
-        }),
-      );
-
-      expect(sections).toHaveLength(2);
-      for (const section of sections) {
-        expect(section.overflowY).toBe("auto");
-        expect(section.scrollHeight).toBeGreaterThan(section.clientHeight);
-        expect(section.scrollTop).toBeGreaterThan(0);
-      }
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("docks the tasks rail as a full-width bottom strip in a narrow pane", async () => {
-    const page = await openBrowserPage(1200, 700);
-    try {
-      // chat-pane sets --tasks-dock-bottom instead of --tasks-open when the
-      // pane is too narrow for a side column; the strip spans the pane and
-      // sits below the thread, composing with a bottom-docked workspace rail.
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 640px; height: 640px; display: flex;">
-            <div class="chat-workbench chat-workbench--dock-bottom chat-workbench--tasks-dock-bottom">
-              <aside class="chat-workspace-rail">workspace strip</aside>
-              <aside class="chat-tasks-rail">
-                <div class="chat-tasks-rail__scroll">
-                  <section class="chat-tasks-rail__section">Running</section>
-                  <section class="chat-tasks-rail__section">Finished</section>
-                </div>
-              </aside>
-              <div class="chat-workbench__main">thread</div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const layout = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector<HTMLElement>(selector);
-          const rect = node?.getBoundingClientRect();
-          return rect
-            ? {
-                left: rect.left,
-                right: rect.right,
-                top: rect.top,
-                bottom: rect.bottom,
-                width: rect.width,
-                height: rect.height,
-              }
-            : null;
-        };
-        return {
-          workbench: rectFor(".chat-workbench"),
-          main: rectFor(".chat-workbench__main"),
-          workspace: rectFor(".chat-workspace-rail"),
-          tasks: rectFor(".chat-tasks-rail"),
-        };
+        await expectNoHorizontalOverflow(page);
+        const primary = await getRect(page, ".sidebar-region__primary");
+        const sidebar = await getRect(page, '[data-region="side"]');
+        expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
+        expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
+        expect(sidebar.width).toBeGreaterThanOrEqual(width - 2);
+        expect(primary.height).toBeGreaterThan(80);
+        expect(sidebar.height).toBeGreaterThan(80);
+        expect(sidebar.bottom - primary.top).toBe(height);
+        if (dock === "bottom" && height === 1000) {
+          expect(sidebar.height).toBe(360);
+        }
+        expect(await page.locator(".side-panel").count()).toBe(1);
       });
-
-      const workbench = layout.workbench;
-      const tasks = layout.tasks;
-      const workspace = layout.workspace;
-      expect(workbench).not.toBeNull();
-      expect(tasks).not.toBeNull();
-      expect(workspace).not.toBeNull();
-      // Full pane width, below both the thread and the workspace strip.
-      expect(Math.abs((tasks?.width ?? 0) - (workbench?.width ?? 0))).toBeLessThanOrEqual(1);
-      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((workspace?.bottom ?? 0) - 1);
-      expect(tasks?.top ?? 0).toBeGreaterThanOrEqual((layout.main?.bottom ?? 0) - 1);
-      expect(tasks?.height ?? 0).toBeGreaterThanOrEqual(160);
-      expect(tasks?.height ?? 0).toBeLessThanOrEqual(237);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps the bottom-docked rail path and summary rows unclipped", async () => {
-    const page = await openBrowserPage(760, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-workbench chat-workbench--dock-bottom" style="height: 620px;">
-            <div class="chat-workbench__main"></div>
-            <aside class="chat-workspace-rail">
-              <div class="chat-workspace-rail__header">
-                <div class="chat-workspace-rail__title">
-                  <span class="chat-workspace-rail__eyebrow">Session</span>
-                  <strong>Workspace</strong>
-                </div>
-              </div>
-              <div class="chat-workspace-rail__path">/Users/steipete/.openclaw/workspace</div>
-              <div class="chat-workspace-rail__summary">
-                <span>0 changed</span><span>0 read</span><span>0 artifacts</span><span>15 shown</span>
-              </div>
-              <div class="chat-workspace-rail__scroll">
-                <section class="chat-workspace-rail__section">
-                  <div class="chat-workspace-rail__section-title">Project files</div>
-                  ${Array.from(
-                    { length: 12 },
-                    (_value, index) =>
-                      `<div class="chat-workspace-rail__file">notes-file-${index}.md</div>`,
-                  ).join("")}
-                </section>
-              </div>
-            </aside>
-          </div>
-        </body></html>`,
-      );
-
-      const rail = await getRect(page, ".chat-workspace-rail");
-      const railPath = await getRect(page, ".chat-workspace-rail__path");
-      const summary = await getRect(page, ".chat-workspace-rail__summary");
-      // The strip is height-bounded; fixed rows must not shrink below their
-      // content, only the scroll section gives way.
-      expect(rail.height).toBeLessThanOrEqual(237);
-      expect(railPath.height).toBeGreaterThanOrEqual(30);
-      expect(summary.height).toBeGreaterThanOrEqual(20);
-      expect(summary.top).toBeGreaterThanOrEqual(railPath.bottom - 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+    },
+  );
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
-    const page = await openFixture(568, 320, { composerAttachment: true });
-    try {
-      await page
-        .locator(".agent-chat__composer-combobox > textarea")
-        .fill(
-          Array.from(
-            { length: 10 },
-            (_value, index) =>
-              `Landscape proof line ${index + 1}: keep transcript visible while this long draft scrolls inside the bounded composer.`,
-          ).join("\n"),
-        );
+    await withBrowserPage(
+      openFixture(568, 320, { composerAttachment: true, goalMode: true }),
+      async (page) => {
+        await page
+          .locator(".agent-chat__composer-combobox > textarea")
+          .fill(
+            Array.from(
+              { length: 10 },
+              (_value, index) =>
+                `Landscape proof line ${index + 1}: keep transcript visible while this long draft scrolls inside the bounded composer.`,
+            ).join("\n"),
+          );
 
-      const initial = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector) as HTMLElement | null;
-          if (!node) {
-            return null;
-          }
-          const rect = node.getBoundingClientRect();
-          return {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            clientHeight: node.clientHeight,
-            scrollHeight: node.scrollHeight,
-            scrollTop: node.scrollTop,
+        const initial = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              clientHeight: node.clientHeight,
+              scrollHeight: node.scrollHeight,
+              scrollTop: node.scrollTop,
+            };
           };
-        };
-        return {
-          input: rectFor(".agent-chat__input"),
-          thread: rectFor(".chat-thread"),
-          textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-        };
-      });
+          return {
+            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            thread: rectFor(".chat-thread"),
+            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
+          };
+        });
 
-      const input = expectControlRect(initial.input, "composer");
-      const thread = expectControlRect(initial.thread, "chat thread");
-      const textarea = expectControlRect(initial.textarea, "composer textarea");
-      expect(input.height).toBeLessThanOrEqual(320 * 0.38);
-      expect(thread.height).toBeGreaterThanOrEqual(320 * 0.4 - 1);
-      if (
-        input.scrollHeight === undefined ||
-        input.clientHeight === undefined ||
-        textarea.scrollHeight === undefined ||
-        textarea.clientHeight === undefined
-      ) {
-        throw new Error("Expected scroll metrics for short-landscape composer");
-      }
-      expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
-
-      const scrolled = await page.evaluate(() => {
-        const composer = document.querySelector(".agent-chat__input") as HTMLElement | null;
-        if (composer) {
-          composer.scrollTop = composer.scrollHeight;
+        const input = expectControlRect(initial.input, "composer");
+        const thread = expectControlRect(initial.thread, "chat thread");
+        const textarea = expectControlRect(initial.textarea, "composer textarea");
+        expect(input.height).toBeLessThanOrEqual(320 * 0.38);
+        expect(thread.height).toBeGreaterThanOrEqual(320 * 0.4 - 1);
+        if (
+          input.scrollHeight === undefined ||
+          input.clientHeight === undefined ||
+          textarea.scrollHeight === undefined ||
+          textarea.clientHeight === undefined
+        ) {
+          throw new Error("Expected scroll metrics for short-landscape composer");
         }
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector) as HTMLElement | null;
-          if (!node) {
-            return null;
-          }
-          const rect = node.getBoundingClientRect();
-          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-        };
-        return {
-          shell: rectFor(".agent-chat__composer-shell"),
-          input: rectFor(".agent-chat__input"),
-          meta: rectFor(".agent-chat__composer-meta"),
-          model: rectFor(".chat-composer-model-control"),
-          settings: rectFor(".chat-view-menu-trigger"),
-          send: rectFor(".chat-send-btn"),
-        };
-      });
+        expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+        expect(
+          await page
+            .locator(".agent-chat__input")
+            .evaluate((node) => getComputedStyle(node).overflowY),
+        ).toBe("auto");
+        expect(
+          await page.locator(".agent-chat__goal-mode").evaluate((node) => {
+            const style = getComputedStyle(node);
+            return {
+              borderBottomStyle: style.borderBottomStyle,
+              borderLeftStyle: style.borderLeftStyle,
+              borderRadius: style.borderRadius,
+              marginBottom: style.marginBottom,
+            };
+          }),
+        ).toEqual({
+          borderBottomStyle: "solid",
+          borderLeftStyle: "none",
+          borderRadius: "0px",
+          marginBottom: "0px",
+        });
+        expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
 
-      const scrolledShell = expectControlRect(scrolled.shell, "scrolled composer shell");
-      const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
-      for (const [label, control] of [
-        ["composer metadata", scrolled.meta],
-        ["composer model control", scrolled.model],
-        ["composer settings control", scrolled.settings],
-      ] as const) {
-        const rect = expectControlRect(control, label);
-        expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
-        expect(rect.y + rect.height).toBeLessThanOrEqual(
-          scrolledInput.y + scrolledInput.height + 1,
+        const scrolled = await page.evaluate(() => {
+          const composer = document.querySelector(
+            ".agent-chat__composer-shell > .agent-chat__input",
+          ) as HTMLElement | null;
+          if (composer) {
+            composer.scrollTop = composer.scrollHeight;
+          }
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          };
+          return {
+            shell: rectFor(".agent-chat__composer-shell"),
+            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            meta: rectFor(".agent-chat__composer-meta"),
+            model: rectFor(".chat-composer-model-control"),
+            scrollTop: composer?.scrollTop ?? 0,
+            send: rectFor(".chat-send-btn"),
+          };
+        });
+
+        const scrolledShell = expectControlRect(scrolled.shell, "scrolled composer shell");
+        const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
+        expect(scrolled.scrollTop).toBeGreaterThan(0);
+        for (const [label, control] of [
+          ["composer metadata", scrolled.meta],
+          ["composer model control", scrolled.model],
+        ] as const) {
+          const rect = expectControlRect(control, label);
+          expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
+          expect(rect.y + rect.height).toBeLessThanOrEqual(
+            scrolledInput.y + scrolledInput.height + 1,
+          );
+        }
+        const send = expectControlRect(scrolled.send, "composer send control");
+        expect(send.y).toBeGreaterThanOrEqual(scrolledShell.y - 1);
+        expect(send.y + send.height).toBeLessThanOrEqual(
+          scrolledShell.y + scrolledShell.height + 1,
         );
-      }
-      const send = expectControlRect(scrolled.send, "composer send control");
-      expect(send.y).toBeGreaterThanOrEqual(scrolledShell.y - 1);
-      expect(send.y + send.height).toBeLessThanOrEqual(scrolledShell.y + scrolledShell.height + 1);
-    } finally {
-      await closeBrowserPage(page);
-    }
+      },
+    );
   });
 
   it("keeps short-landscape slash menu visible inside the bounded composer", async () => {
-    const page = await openFixture(568, 320, {
-      composerAttachment: true,
-      slashMenu: true,
-    });
-    try {
-      await page.locator(".agent-chat__composer-combobox > textarea").fill("/review");
+    await withBrowserPage(
+      openFixture(568, 320, {
+        composerAttachment: true,
+        slashMenu: true,
+      }),
+      async (page) => {
+        await page.locator(".agent-chat__composer-combobox > textarea").fill("/review");
 
-      const initial = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector) as HTMLElement | null;
-          if (!node) {
-            return null;
-          }
-          const rect = node.getBoundingClientRect();
+        const initial = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              clientHeight: node.clientHeight,
+              scrollHeight: node.scrollHeight,
+              scrollTop: node.scrollTop,
+            };
+          };
           return {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            clientHeight: node.clientHeight,
-            scrollHeight: node.scrollHeight,
-            scrollTop: node.scrollTop,
+            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            menu: rectFor(".slash-menu"),
+            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
+            footer: rectFor(".agent-chat__composer-footer"),
+          };
+        });
+
+        const input = expectControlRect(initial.input, "composer");
+        const menu = expectControlRect(initial.menu, "slash menu");
+        const textarea = expectControlRect(initial.textarea, "composer textarea");
+        expect(input.height).toBeLessThanOrEqual(320 * 0.38);
+        if (input.scrollHeight === undefined || input.clientHeight === undefined) {
+          throw new Error("Expected scroll metrics for slash-menu composer");
+        }
+        expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+        expect(menu.y).toBeGreaterThanOrEqual(input.y - 1);
+        expect(menu.y + menu.height).toBeLessThanOrEqual(input.y + input.height + 1);
+        expect(menu.height).toBeGreaterThanOrEqual(48);
+        expect(menu.height).toBeLessThanOrEqual(89);
+        expect(textarea.y).toBeGreaterThan(menu.y);
+
+        const scrolled = await page.evaluate(() => {
+          const composer = document.querySelector(
+            ".agent-chat__composer-shell > .agent-chat__input",
+          ) as HTMLElement | null;
+          if (composer) {
+            composer.scrollTop = composer.scrollHeight;
+          }
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          };
+          return {
+            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            footer: rectFor(".agent-chat__composer-footer"),
+          };
+        });
+
+        const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
+        const footer = expectControlRect(scrolled.footer, "composer footer");
+        expect(footer.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
+        expect(footer.y + footer.height).toBeLessThanOrEqual(
+          scrolledInput.y + scrolledInput.height + 1,
+        );
+      },
+    );
+  });
+
+  it("keeps mobile slash command copy in separate grid tracks", async () => {
+    await withBrowserPage(openBrowserPage(390, 844), async (page) => {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="slash-menu" style="position: relative">
+          <div class="slash-menu-item" role="option">
+            <span class="slash-menu-icon">${iconSvg()}</span>
+            <span class="slash-menu-copy">
+              <span class="slash-menu-name">/session <span class="slash-menu-args">idle max-age &lt;duration|off&gt;</span></span>
+              <span class="slash-menu-desc">Manage session-level settings (for example /session idle).</span>
+            </span>
+          </div>
+        </div>
+      </body></html>`);
+
+      const geometry = await page.locator(".slash-menu-copy").evaluate((copy) => {
+        const name = copy.querySelector<HTMLElement>(".slash-menu-name")!;
+        const description = copy.querySelector<HTMLElement>(".slash-menu-desc")!;
+        const nameRect = name.getBoundingClientRect();
+        const descriptionRect = description.getBoundingClientRect();
+        return {
+          copyOverflow: copy.scrollWidth - copy.clientWidth,
+          gap: descriptionRect.left - nameRect.right,
+        };
+      });
+
+      expect(geometry.copyOverflow).toBeLessThanOrEqual(1);
+      expect(geometry.gap).toBeGreaterThanOrEqual(8);
+    });
+  });
+
+  it("keeps a long task panel full-width with a fixed header and an internal body scroll", async () => {
+    const page = await openBrowserPage(980, 844);
+    const stepCount = 14;
+    const steps = Array.from(
+      { length: stepCount },
+      (
+        _,
+        index,
+      ) => `<li class="session-progress-card__step session-progress-card__step--${index < 5 ? "completed" : index === 5 ? "in_progress" : "pending"}">
+        <span class="session-progress-card__step-marker">${iconSvg()}</span>
+        <span class="session-progress-card__step-text">Plan step ${index + 1}</span>
+      </li>`,
+    ).join("");
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}
+        body { margin: 0; padding: 32px; background: var(--bg); }
+        .agent-chat__composer-shell { width: 760px; margin: 0 auto; }
+        .session-progress-card__summary :is(
+          .session-progress-card__summary-title,
+          .session-progress-card__heading-actions,
+          .session-progress-card__current,
+          .session-progress-card__summary-count,
+          .session-progress-card__summary-chevron
+        ) { transition: none; }
+      </style></head><body>
+        <div class="agent-chat__composer-shell">
+          <div class="chat-footer__context">
+          <div class="agent-chat__progress-float">
+            <details class="session-progress-card session-progress-card--composer" open>
+              <summary class="session-progress-card__summary">
+                <span class="session-progress-card__summary-indicator">
+                  <span class="session-run-spinner"></span>
+                </span>
+                <span class="session-progress-card__summary-collapsed">
+                  <span class="session-progress-card__current">Abrir a interface</span>
+                </span>
+                <span class="session-progress-card__summary-count session-progress-card__summary-count--collapsed">1/${stepCount}</span>
+                <span class="session-progress-card__summary-expanded">
+                  <span class="session-progress-card__summary-title">Task progress</span>
+                  <span class="session-progress-card__heading-actions">6 of ${stepCount}</span>
+                </span>
+                <span class="session-progress-card__summary-chevron">${iconSvg()}</span>
+              </summary>
+              <div class="session-progress-card__body"><ol class="session-progress-card__steps">${steps}</ol></div>
+            </details>
+          </div>
+          <div class="chat-queue">
+            <div class="chat-queue__scroll">
+              <div class="chat-queue__item chat-queue__item--no-avatar">
+                <span class="chat-queue__leading">${iconSvg()}</span>
+                <span class="chat-queue__copy"><span class="chat-queue__text">Queued after the plan</span></span>
+                <span class="chat-queue__actions"><button class="chat-queue__remove">${iconSvg()}</button></span>
+              </div>
+            </div>
+          </div>
+          <div class="agent-chat__goal-float">
+            <div class="agent-chat__goal agent-chat__goal--active" data-expanded="false">
+              <div class="agent-chat__goal-row">
+                <span class="agent-chat__goal-icon">${iconSvg()}</span>
+                <span class="agent-chat__goal-copy">
+                  <span class="agent-chat__goal-label">Pursuing goal</span>
+                  <span class="agent-chat__goal-objective">Ship the aligned stack</span>
+                </span>
+                <span class="agent-chat__goal-elapsed">14m</span>
+                <span class="agent-chat__goal-actions">
+                  <button class="agent-chat__goal-action agent-chat__goal-expand">${iconSvg()}</button>
+                </span>
+              </div>
+            </div>
+          </div>
+          </div>
+          <div class="agent-chat__input">Composer</div>
+        </div>
+        <span id="failed-outcome-probe" class="session-progress-card__summary-count" data-outcome="failed">Failed</span>
+        <span id="danger-color-probe" style="color: var(--danger)">Danger</span>
+      </body></html>`);
+      await page.evaluate(() => {
+        document.documentElement.dataset.themeMode = "light";
+      });
+
+      const summary = page.locator(".session-progress-card__summary");
+      const card = page.locator(".session-progress-card--composer");
+      const body = page.locator(".session-progress-card__body");
+      const list = page.locator(".session-progress-card__steps");
+      const widthBefore = (await card.boundingBox())?.width;
+      const readSummaryState = () =>
+        page.evaluate(() => {
+          const style = (selector: string) =>
+            getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+          const bounds = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const spinner = style(".session-progress-card__summary-indicator .session-run-spinner");
+          return {
+            cardBackground: style(".session-progress-card--composer").backgroundColor,
+            summaryBackground: style(".session-progress-card__summary").backgroundColor,
+            titleColor: style(".session-progress-card__summary-title").color,
+            actionsColor: style(".session-progress-card__heading-actions").color,
+            currentColor: style(".session-progress-card__current").color,
+            countColor: style(".session-progress-card__summary-count--collapsed").color,
+            chevronColor: style(".session-progress-card__summary-chevron").color,
+            spinnerBorderColor: spinner.borderColor,
+            spinnerBorderTopColor: spinner.borderTopColor,
+            titleLeft: bounds(".session-progress-card__summary-title").left,
+            firstMarkerLeft: bounds(".session-progress-card__step-marker").left,
+            y: bounds(".session-progress-card__summary").y,
+          };
+        });
+      const setSummaryHover = async (hovered: boolean) => {
+        if (hovered) {
+          await summary.hover();
+        } else {
+          await page.mouse.move(0, 0);
+        }
+        const state = await page.waitForFunction(
+          (expected) =>
+            document
+              .querySelector<HTMLElement>(".session-progress-card__summary")!
+              .matches(":hover") === expected,
+          hovered,
+        );
+        await state.dispose();
+      };
+      const expandedBefore = await readSummaryState();
+      const { shellBounds, stackSurfaces, warnGoalSurfaces } = await page.evaluate(() => {
+        const snapshot = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector)!;
+          const bounds = node.getBoundingClientRect();
+          return {
+            background: getComputedStyle(node).backgroundColor,
+            borderColor: getComputedStyle(node).borderColor,
+            boxShadow: getComputedStyle(node).boxShadow,
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top,
+            bottom: bounds.bottom,
+            topLeftRadius: getComputedStyle(node).borderTopLeftRadius,
+            topRightRadius: getComputedStyle(node).borderTopRightRadius,
+            bottomLeftRadius: getComputedStyle(node).borderBottomLeftRadius,
+            bottomRightRadius: getComputedStyle(node).borderBottomRightRadius,
           };
         };
+        const goal = document.querySelector<HTMLElement>(".agent-chat__goal")!;
+        const activeSurface = snapshot(".agent-chat__goal");
+        const warnSurfaces = ["blocked", "budget_limited", "usage_limited"].map((state) => {
+          goal.className = `agent-chat__goal agent-chat__goal--${state}`;
+          return { state, surface: snapshot(".agent-chat__goal") };
+        });
+        goal.className = "agent-chat__goal agent-chat__goal--active";
+        const shell = document
+          .querySelector<HTMLElement>(".agent-chat__composer-shell")!
+          .getBoundingClientRect();
         return {
-          input: rectFor(".agent-chat__input"),
-          menu: rectFor(".slash-menu"),
-          textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-          footer: rectFor(".agent-chat__composer-footer"),
+          shellBounds: { left: shell.left, right: shell.right },
+          stackSurfaces: [
+            snapshot(".session-progress-card--composer"),
+            snapshot(".chat-queue"),
+            activeSurface,
+            snapshot(".agent-chat__input"),
+          ],
+          warnGoalSurfaces: warnSurfaces,
         };
       });
-
-      const input = expectControlRect(initial.input, "composer");
-      const menu = expectControlRect(initial.menu, "slash menu");
-      const textarea = expectControlRect(initial.textarea, "composer textarea");
-      expect(input.height).toBeLessThanOrEqual(320 * 0.38);
-      if (input.scrollHeight === undefined || input.clientHeight === undefined) {
-        throw new Error("Expected scroll metrics for slash-menu composer");
+      await setSummaryHover(true);
+      const widthAfter = (await card.boundingBox())?.width;
+      const expandedAfter = await readSummaryState();
+      expect(widthBefore).toBeCloseTo(760, 1);
+      expect(widthAfter).toBeCloseTo(widthBefore ?? 0, 1);
+      for (const surface of stackSurfaces) {
+        expect(surface.left).toBeCloseTo(shellBounds.left, 1);
+        expect(surface.right).toBeCloseTo(shellBounds.right, 1);
       }
-      expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-      expect(menu.y).toBeGreaterThanOrEqual(input.y - 1);
-      expect(menu.y + menu.height).toBeLessThanOrEqual(input.y + input.height + 1);
-      expect(menu.height).toBeGreaterThanOrEqual(48);
-      expect(menu.height).toBeLessThanOrEqual(89);
-      expect(textarea.y).toBeGreaterThan(menu.y);
-
-      const scrolled = await page.evaluate(() => {
-        const composer = document.querySelector(".agent-chat__input") as HTMLElement | null;
-        if (composer) {
-          composer.scrollTop = composer.scrollHeight;
+      expect(new Set(stackSurfaces.slice(0, 3).map(({ background }) => background))).toHaveProperty(
+        "size",
+        1,
+      );
+      for (const [index, surface] of stackSurfaces.entries()) {
+        expect(Number.parseFloat(surface.topLeftRadius)).toBeGreaterThan(0);
+        expect(surface.topRightRadius).toBe(surface.topLeftRadius);
+        expect(surface.bottomLeftRadius).toBe(surface.topLeftRadius);
+        expect(surface.bottomRightRadius).toBe(surface.topLeftRadius);
+        if (index > 0) {
+          expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
-        const rectFor = (selector: string) => {
-          const node = document.querySelector(selector) as HTMLElement | null;
-          if (!node) {
-            return null;
-          }
-          const rect = node.getBoundingClientRect();
-          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-        };
+      }
+      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
+      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
+      for (const { state, surface } of warnGoalSurfaces) {
+        expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
+        expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
+      }
+      expect(new Set(warnGoalSurfaces.map(({ surface }) => surface.borderColor))).toHaveProperty(
+        "size",
+        1,
+      );
+      expect(expandedBefore.titleLeft).toBeCloseTo(expandedBefore.firstMarkerLeft, 1);
+      expect(expandedAfter.cardBackground).toBe(expandedBefore.cardBackground);
+      expect(expandedAfter.summaryBackground).toBe(expandedBefore.summaryBackground);
+      expect(expandedAfter.titleColor).not.toBe(expandedBefore.titleColor);
+      expect(expandedAfter.actionsColor).not.toBe(expandedBefore.actionsColor);
+      expect(expandedAfter.chevronColor).not.toBe(expandedBefore.chevronColor);
+
+      const bodyLayout = await body.evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        const visibleItems = [...node.querySelectorAll(".session-progress-card__step")].filter(
+          (child) => {
+            const row = child.getBoundingClientRect();
+            return row.bottom <= bounds.bottom + 1 && row.top >= bounds.top - 1;
+          },
+        ).length;
         return {
-          input: rectFor(".agent-chat__input"),
-          footer: rectFor(".agent-chat__composer-footer"),
+          clientHeight: node.clientHeight,
+          overflowY: getComputedStyle(node).overflowY,
+          scrollHeight: node.scrollHeight,
+          visibleItems,
         };
       });
+      expect(bodyLayout.overflowY).toBe("auto");
+      expect(bodyLayout.scrollHeight).toBeGreaterThan(bodyLayout.clientHeight);
+      expect(bodyLayout.visibleItems).toBeGreaterThan(0);
+      expect(bodyLayout.visibleItems).toBeLessThan(stepCount);
+      expect(await list.evaluate((node) => getComputedStyle(node).overflowY)).toBe("visible");
+      const openStackAxes = await page.evaluate(() => {
+        const centerX = (selector: string) => {
+          const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return rect.left + rect.width / 2;
+        };
+        const left = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().left;
+        return {
+          iconCenters: [
+            ...[
+              ...document.querySelectorAll<HTMLElement>(".session-progress-card__step-marker > *"),
+            ].map((icon) => {
+              const rect = icon.getBoundingClientRect();
+              return rect.left + rect.width / 2;
+            }),
+            centerX(".chat-queue__leading svg"),
+            centerX(".agent-chat__goal-icon svg"),
+          ],
+          contentLefts: [
+            left(".session-progress-card__step-text"),
+            left(".chat-queue__copy"),
+            left(".agent-chat__goal-label"),
+          ],
+          trailingCenterDelta:
+            centerX(".session-progress-card__summary-chevron svg") -
+            centerX(".agent-chat__goal-expand svg"),
+        };
+      });
+      expect(
+        Math.max(...openStackAxes.iconCenters) - Math.min(...openStackAxes.iconCenters),
+      ).toBeLessThan(0.5);
+      expect(
+        Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
+      ).toBeLessThan(0.5);
+      expect(Math.abs(openStackAxes.trailingCenterDelta)).toBeLessThan(0.5);
+      await body.evaluate((node) => {
+        node.scrollTop = node.scrollHeight;
+      });
+      expect((await summary.boundingBox())?.y).toBeCloseTo(expandedBefore.y, 1);
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
-      const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
-      const footer = expectControlRect(scrolled.footer, "composer footer");
-      expect(footer.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
-      expect(footer.y + footer.height).toBeLessThanOrEqual(
-        scrolledInput.y + scrolledInput.height + 1,
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await body.evaluate((node) => {
+          node.scrollTop = 0;
+        });
+        await page.locator(".agent-chat__composer-shell").screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "task-progress-expanded-with-queue.png"),
+        });
+      }
+
+      await setSummaryHover(false);
+      await card.evaluate((node) => node.removeAttribute("open"));
+      const collapsedState = await page.waitForFunction(
+        () =>
+          !document.querySelector(".session-progress-card--composer")!.hasAttribute("open") &&
+          getComputedStyle(
+            document.querySelector<HTMLElement>(".session-progress-card__summary-collapsed")!,
+          ).display !== "none",
       );
+      await collapsedState.dispose();
+      const collapsedBefore = await readSummaryState();
+      await setSummaryHover(true);
+      const collapsedAfter = await readSummaryState();
+      expect(collapsedAfter.cardBackground).toBe(collapsedBefore.cardBackground);
+      expect(collapsedAfter.summaryBackground).toBe(collapsedBefore.summaryBackground);
+      expect(collapsedAfter.currentColor).not.toBe(collapsedBefore.currentColor);
+      expect(collapsedAfter.countColor).not.toBe(collapsedBefore.countColor);
+      expect(collapsedAfter.chevronColor).not.toBe(collapsedBefore.chevronColor);
+      expect(collapsedAfter.spinnerBorderColor).toBe(collapsedBefore.spinnerBorderColor);
+      expect(collapsedAfter.spinnerBorderTopColor).toBe(collapsedBefore.spinnerBorderTopColor);
+      const collapsed = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        const current = rect(".session-progress-card__current");
+        const count = rect(".session-progress-card__summary-count--collapsed");
+        const chevron = rect(".session-progress-card__summary-chevron");
+        const iconCenter = (selector: string) => {
+          const bounds = rect(selector);
+          return bounds.left + bounds.width / 2;
+        };
+        return {
+          countLeft: count.left,
+          countRight: count.right,
+          currentRight: current.right,
+          chevronLeft: chevron.left,
+          iconCenters: [
+            iconCenter(".session-progress-card__summary-indicator > *"),
+            iconCenter(".chat-queue__leading svg"),
+            iconCenter(".agent-chat__goal-icon svg"),
+          ],
+          trailingCenterDelta:
+            iconCenter(".session-progress-card__summary-chevron svg") -
+            iconCenter(".agent-chat__goal-expand svg"),
+        };
+      });
+      expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
+      expect(collapsed.countRight).toBeLessThanOrEqual(collapsed.chevronLeft);
+      expect(Math.max(...collapsed.iconCenters) - Math.min(...collapsed.iconCenters)).toBeLessThan(
+        0.5,
+      );
+      expect(Math.abs(collapsed.trailingCenterDelta)).toBeLessThan(0.5);
+      const closedRowCenters = await page.evaluate(() => {
+        const centerY = (selector: string) => {
+          const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          return bounds.top + bounds.height / 2;
+        };
+        return [
+          centerY(".session-progress-card__summary-indicator > *"),
+          centerY(".session-progress-card__current"),
+          centerY(".session-progress-card__summary-count--collapsed"),
+          centerY(".session-progress-card__summary-chevron > svg"),
+        ];
+      });
+      expect(Math.max(...closedRowCenters) - Math.min(...closedRowCenters)).toBeLessThan(0.5);
+      await page.locator("#failed-outcome-probe").evaluate(finishElementAnimations);
+      const outcomeColors = await page.evaluate(() => ({
+        danger: getComputedStyle(document.querySelector("#danger-color-probe")!).color,
+        failed: getComputedStyle(document.querySelector("#failed-outcome-probe")!).color,
+      }));
+      expect(outcomeColors.failed).toBe(outcomeColors.danger);
+      if (artifactDir) {
+        await page.locator(".agent-chat__composer-shell").screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "task-progress-collapsed-with-queue.png"),
+        });
+      }
     } finally {
       await closeBrowserPage(page);
     }
+  });
+
+  it("allows pointer selection in the embedded side-chat transcript", async () => {
+    await withBrowserPage(openBrowserPage(1024, 768), async (page) => {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
+          <div class="chat-session-rail__thread">
+            <article class="chat-session-rail__exchange">
+              <div class="chat-bubble">
+                <span data-selection-target>Copy this side chat answer.</span>
+              </div>
+            </article>
+          </div>
+        </section>
+      </body></html>`);
+
+      const target = page.locator("[data-selection-target]");
+      const box = await target.boundingBox();
+      if (!box) {
+        throw new Error("Expected side-chat selection target");
+      }
+      await page.mouse.move(box.x + 1, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 8 });
+      await page.mouse.up();
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "side-chat-selection.png"),
+        });
+      }
+
+      expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe(
+        "Copy this side chat answer.",
+      );
+    });
   });
 
   it.each([
     [320, 568],
-    [393, 852],
-    [568, 320],
-  ] as const)(
-    "keeps mobile model and settings popovers inside the viewport at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        const modelTrigger = page.locator('[data-chat-composer-model="true"]');
-        await modelTrigger.click();
-
-        const modelMenu = await getRect(page, ".chat-controls__inline-select-menu--combined");
-        expect(modelMenu.left).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.right).toBeLessThanOrEqual(width);
-        expect(modelMenu.top).toBeGreaterThanOrEqual(0);
-        expect(modelMenu.bottom).toBeLessThanOrEqual(height);
-
-        await modelTrigger.click();
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each([
-    [768, 900],
     [1024, 768],
-    [1366, 900],
   ] as const)(
-    "keeps the left-aligned desktop settings popover inside the viewport at %sx%s",
+    "keeps embedded side-chat scrolling, composer, and metadata within its panel at %sx%s",
     async (width, height) => {
-      const page = await openFixture(width, height);
-      try {
-        await page.locator(".chat-view-menu").evaluate((node) => {
-          node.setAttribute("open", "");
-        });
-        await waitForLayoutSettled(page);
-
-        const settingsMenu = await getRect(page, ".chat-view-menu[open]");
-        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.right).toBeLessThanOrEqual(width);
-        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
-        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  describe("slash command keyboard navigation", () => {
-    let page: Page;
-
-    beforeAll(async () => {
-      page = await getSharedAppPage();
-      await page.setViewportSize({ width: 568, height: 320 });
-      await page.getByText(SHARED_APP_SLASH_TEXT).waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-      await textarea.fill("/");
-      await textarea.focus();
-    });
-
-    afterAll(async () => {
-      await page.locator(".agent-chat__composer-combobox > textarea").fill("");
-      await page.setViewportSize({ width: 1366, height: 900 });
-    });
-
-    it("scrolls the keyboard-active slash option into view in short landscape", async () => {
-      const initiallyHidden = await page.evaluate(() => {
-        const menu = document.querySelector<HTMLElement>(".slash-menu");
-        const options = Array.from(
-          document.querySelectorAll<HTMLElement>(".slash-menu-item[role='option']"),
-        );
-        const hiddenOption = options.find((option) => {
-          const menuRect = menu?.getBoundingClientRect();
-          const optionRect = option.getBoundingClientRect();
-          return Boolean(menuRect && optionRect.bottom > menuRect.bottom + 1);
-        });
-        if (!menu || !hiddenOption) {
-          throw new Error("Expected an initially hidden slash option");
-        }
-        menu.scrollTop = 0;
-        const menuRect = menu.getBoundingClientRect();
-        const itemRect = hiddenOption.getBoundingClientRect();
-        return {
-          id: hiddenOption.id,
-          index: options.indexOf(hiddenOption),
-          visible: itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1,
-        };
-      });
-      expect(initiallyHidden.visible).toBe(false);
-
-      for (let index = 0; index < initiallyHidden.index; index += 1) {
-        await page.keyboard.press("ArrowDown");
-      }
-      await page.waitForFunction((expectedId) => {
-        const input = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        return input?.getAttribute("aria-activedescendant") === expectedId;
-      }, initiallyHidden.id);
-      await page.waitForFunction((expectedId) => {
-        const active = document.getElementById(expectedId);
-        const menu = active?.closest<HTMLElement>(".slash-menu");
-        if (!active || !menu) {
-          return false;
-        }
-        const menuRect = menu.getBoundingClientRect();
-        const activeRect = active.getBoundingClientRect();
-        return activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1;
-      }, initiallyHidden.id);
-
-      const result = await page.evaluate(() => {
-        const input = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        const menu = document.querySelector<HTMLElement>(".slash-menu");
-        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
-        if (!input || !menu || !active) {
-          throw new Error("Expected active slash option after keyboard navigation");
-        }
-        const menuRect = menu.getBoundingClientRect();
-        const activeRect = active.getBoundingClientRect();
-        return {
-          activeDescendant: input.getAttribute("aria-activedescendant"),
-          focusedTag: document.activeElement?.tagName,
-          scrollTop: menu.scrollTop,
-          visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
-        };
-      });
-
-      expect(result.focusedTag).toBe("TEXTAREA");
-      expect(result.activeDescendant).toBe(initiallyHidden.id);
-      expect(result.scrollTop).toBeGreaterThan(0);
-      expect(result.visible).toBe(true);
-    });
-  });
-
-  it("uses the compact mobile grid when the agent filter is not rendered", async () => {
-    const page = await openFixture(320, 568, { singleAgent: true });
-    try {
-      await expectNoHorizontalOverflow(page);
-      expect(await page.locator('[data-chat-agent-filter="true"]').count()).toBe(0);
-      const session = await getBoundingBox(page, '[data-chat-session-select="true"]');
-      const model = await getBoundingBox(page, '[data-chat-model-select="true"]');
-      expect(model.y).toBeGreaterThan(session.y);
-      expect(model.width).toBe(session.width);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it.each([
-    [1024, 768],
-    [1366, 900],
-  ] as const)(
-    "scrolls long session-rail conversations instead of expanding the overlay at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height, {
-        sessionRailBody: LONG_SESSION_RAIL_BODY,
-      });
-      try {
-        const panel = await page.locator(".chat-session-rail").evaluate((node) => {
-          const element = node as HTMLElement;
+      await withBrowserPage(openSessionRailFixture(width, height), async (page) => {
+        await expectNoHorizontalOverflow(page);
+        const panel = await page.evaluate(() => {
+          const element = document.querySelector<HTMLElement>(".chat-session-rail")!;
+          const host = document.querySelector<HTMLElement>(".side-panel__panel")!;
           return {
             clientHeight: element.clientHeight,
+            hostHeight: host.clientHeight,
             position: getComputedStyle(element).position,
           };
         });
-        expect(panel.position).toBe("absolute");
-        expect(panel.clientHeight).toBeLessThanOrEqual(680);
+        expect(panel.position).toBe("relative");
+        expect(panel.clientHeight).toBeLessThanOrEqual(panel.hostHeight);
+        expect(panel.hostHeight).toBeLessThanOrEqual(height);
 
-        const body = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-          const style = getComputedStyle(node as HTMLElement);
-          return {
-            overflowY: style.overflowY,
-            clientHeight: (node as HTMLElement).clientHeight,
-            scrollHeight: (node as HTMLElement).scrollHeight,
-          };
-        });
+        const body = await page.locator(".chat-session-rail__thread").evaluate((node) => ({
+          overflowY: getComputedStyle(node).overflowY,
+          clientHeight: node.clientHeight,
+          scrollHeight: node.scrollHeight,
+        }));
         expect(body.overflowY).toBe("auto");
         expect(body.clientHeight).toBeLessThan(body.scrollHeight);
-
         const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-          const element = node as HTMLElement;
-          element.scrollTop = element.scrollHeight;
-          return element.scrollTop;
+          node.scrollTop = node.scrollHeight;
+          return node.scrollTop;
         });
         expect(scrollTop).toBeGreaterThan(0);
-      } finally {
-        await closeBrowserPage(page);
-      }
+        const rail = await getRect(page, ".chat-session-rail");
+        const composer = await getRect(page, ".chat-session-rail__composer");
+        expect(composer.bottom).toBeLessThanOrEqual(rail.bottom + 1);
+        const geometry = await page.evaluate(() => {
+          const rect = (selector: string) => {
+            const element = document.querySelector<HTMLElement>(selector)!;
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right, width: box.width };
+          };
+          const thread = document.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+          const threadStyle = getComputedStyle(thread);
+          return {
+            composer: rect(".chat-session-rail__composer"),
+            footer: rect(".chat-session-rail__composer .agent-chat__composer-footer"),
+            input: rect(".chat-session-rail__input"),
+            send: rect(".chat-session-rail__composer .chat-send-btn"),
+            threadBorderTopWidth: threadStyle.borderTopWidth,
+            threadMarginTop: threadStyle.marginTop,
+          };
+        });
+
+        expect(geometry.input.width).toBeGreaterThan(geometry.composer.width * 0.8);
+        expect(geometry.footer.width).toBeGreaterThan(geometry.composer.width * 0.8);
+        expect(Math.abs(geometry.composer.right - geometry.send.right)).toBeLessThanOrEqual(10);
+        expect(geometry.threadBorderTopWidth).toBe("0px");
+        expect(geometry.threadMarginTop).toBe("0px");
+        const styles = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
+            return {
+              minHeight: style.minHeight,
+              overflowY: style.overflowY,
+              borderTopWidth: style.borderTopWidth,
+            };
+          };
+          return {
+            thread: read(".chat-session-rail__thread"),
+            prChecks: read(".chat-session-rail__pr-checks"),
+            hint: read(".chat-session-rail__hint"),
+          };
+        });
+
+        // PR checks and hints are metadata inside an exchange. Sharing the
+        // thread's rule would give each one a 96px scrolling bordered box; the
+        // selector list has silently merged before.
+        expect(styles.thread.minHeight).toBe("96px");
+        expect(styles.thread.overflowY).toBe("auto");
+        for (const metadata of [styles.prChecks, styles.hint]) {
+          // Relational, not a literal: the point is that these nodes do not share
+          // the thread's rule, whatever the thread's own numbers become.
+          expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
+          expect(metadata.overflowY).toBe("visible");
+          expect(metadata.borderTopWidth).toBe("0px");
+        }
+      });
     },
   );
 
-  it("renders the session rail as a mobile overlay without horizontal overflow", async () => {
-    const page = await openFixture(320, 568, {
-      sessionRailBody: LONG_SESSION_RAIL_BODY,
+  it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
+    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
+      await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-text">
+                    <p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p>
+                    <p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <section class="custodian-surface">
+          <div class="chat-bubble"><div class="chat-text">Custodian output</div></div>
+        </section>
+        <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
+        <div class="cron-run-entry__body chat-text">Cron output</div>
+      </body></html>`);
+
+      const transcriptLetterSpacing = await page
+        .locator(".chat-thread .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const custodianLetterSpacing = await page
+        .locator(".custodian-surface .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const noticeLetterSpacing = await page
+        .locator(".chat-notice .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const cronLetterSpacing = await page
+        .locator(".cron-run-entry__body.chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const bodyLetterSpacing = await page
+        .locator("body")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      expect(transcriptLetterSpacing).toBe("normal");
+      expect(custodianLetterSpacing).toBe(bodyLetterSpacing);
+      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
+      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
     });
-    try {
-      await expectNoHorizontalOverflow(page);
-      const panel = await page.locator(".chat-session-rail").evaluate((node) => {
-        const element = node as HTMLElement;
-        return {
-          clientHeight: element.clientHeight,
-          position: getComputedStyle(element).position,
-        };
-      });
-      expect(panel.position).toBe("fixed");
-      expect(panel.clientHeight).toBeLessThanOrEqual(460);
-
-      const scroll = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-        const element = node as HTMLElement;
-        return {
-          overflowY: getComputedStyle(element).overflowY,
-          clientHeight: element.clientHeight,
-          scrollHeight: element.scrollHeight,
-        };
-      });
-      expect(scroll.overflowY).toBe("auto");
-      expect(scroll.clientHeight).toBeLessThan(scroll.scrollHeight);
-
-      const scrollTop = await page.locator(".chat-session-rail__thread").evaluate((node) => {
-        const element = node as HTMLElement;
-        element.scrollTop = element.scrollHeight;
-        return element.scrollTop;
-      });
-      expect(scrollTop).toBeGreaterThan(0);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("docks an expanded session rail as a static 400px column on wide chat panes", async () => {
-    const page = await openFixture(1440, 900, {
-      sessionRailBody: LONG_SESSION_RAIL_BODY,
-      sessionRailDocked: true,
-    });
-    try {
-      const main = page.locator(".chat-main");
-      await expect(
-        main.evaluate((node) => node.classList.contains("chat-main--rail-docked")),
-      ).resolves.toBe(true);
-      const rail = await page.locator(".chat-session-rail").evaluate((node) => ({
-        position: getComputedStyle(node as HTMLElement).position,
-        width: (node as HTMLElement).getBoundingClientRect().width,
-      }));
-      expect(rail.position).toBe("static");
-      expect(rail.width).toBeCloseTo(400, 0);
-    } finally {
-      await closeBrowserPage(page);
-    }
   });
 });
+for (const engine of [chromium, webkit]) {
+  const executablePath = engine === chromium ? chromiumExecutablePath : engine.executablePath();
+  // The normal UI lane provisions Chromium; run the same regression in WebKit
+  // when installed so Safari's different intrinsic grid sizing stays covered.
+  describe.skipIf(!existsSync(executablePath))(
+    `${engine.name()} image alignment`,
+    { concurrent: false },
+    () => {
+      let browser: Browser;
+      beforeAll(async () => {
+        browser = await engine.launch({ executablePath });
+      });
+      afterAll(async () => {
+        await browser?.close();
+      });
+      it.each([
+        [1440, 1600, 1200],
+        [1440, 1800, 420],
+        [375, 1800, 420],
+      ])(
+        "keeps %ipx-wide chat image frames on their visible edges (%i×%i)",
+        async (viewportWidth, width, height) => {
+          await withBrowserPage(
+            browser.newPage({ viewport: { width: viewportWidth, height: 900 } }),
+            async (page) => {
+              const source = `data:image/svg+xml,${encodeURIComponent(
+                `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`,
+              )}`;
+              const prompt = `<div class="chat-text"><p>Review this image.</p><p>Keep paragraph spacing.</p></div>`;
+              await page.setContent(`<!doctype html><html style="--chat-text-size: 20px"><head><style>${readUiCss()}</style></head><body>
+                <main style="width: 740px; max-width: 100%; margin: auto">
+                  ${["user", "user chat-group--peer", "assistant"]
+                    .map(
+                      (role) => `<div class="chat-group ${role}">
+                        <div class="chat-group-messages">
+                          <div class="chat-bubble chat-bubble--with-images">
+                            <div class="chat-message-images chat-message-images--single">
+                              <span class="chat-image-frame"><button class="chat-message-image-button" type="button">
+                                <img class="chat-message-image" src="${source}" width="${width}" height="${height}" alt="Large attachment" />
+                              </button></span>
+                            </div>
+                            ${role === "assistant" ? prompt : `<div class="chat-message-avatar-anchor">${prompt}</div>`}
+                          </div>
+                        </div>
+                      </div>`,
+                    )
+                    .join("")}
+                </main></body></html>`);
+              await page
+                .locator("img")
+                .evaluateAll((images: HTMLImageElement[]) =>
+                  Promise.all(images.map((image) => image.decode())),
+                );
+              const rows = await page.locator(".chat-group").evaluateAll((groups) =>
+                groups.map((group) => {
+                  const box = (selector: string) =>
+                    group.querySelector(selector)!.getBoundingClientRect();
+                  const image = box("img");
+                  const frame = box(".chat-image-frame");
+                  const text = box(".chat-text");
+                  const own =
+                    group.classList.contains("user") &&
+                    !group.classList.contains("chat-group--peer");
+                  return {
+                    frameGap: frame.right - image.right,
+                    textGap: own ? text.right - image.right : image.left - text.left,
+                    mediaGap: text.top - image.bottom,
+                    user: group.classList.contains("user"),
+                    paragraphGap: box(".chat-text > p + p").top - box(".chat-text > p").bottom,
+                    width: image.width,
+                    height: image.height,
+                    laneWidth: box(".chat-group-messages").width,
+                  };
+                }),
+              );
+              for (const row of rows) {
+                expect(Math.abs(row.frameGap)).toBeLessThanOrEqual(1);
+                expect(Math.abs(row.textGap)).toBeLessThanOrEqual(1);
+                expect(row.mediaGap).toBe(row.user ? 8 : 20);
+                expect(row.paragraphGap).toBe(20);
+                expect(row.width).toBeLessThanOrEqual(Math.min(400, row.laneWidth) + 1);
+                expect(row.width / row.height).toBeCloseTo(width / height, 1);
+              }
+            },
+          );
+        },
+      );
+    },
+  );
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

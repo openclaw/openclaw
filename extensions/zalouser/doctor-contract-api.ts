@@ -1,4 +1,3 @@
-// Zalouser API module exposes the plugin public contract.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -6,15 +5,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  deleteSessionEntry,
-  deliveryContextFromSession,
-  listSessionEntries,
-  resolveStorePath,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+// session-accessor/kysely graph, so values load lazily inside async bodies.
+import type { listSessionEntriesAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveZalouserDmSessionScope } from "./src/session-scope.js";
 import {
@@ -30,7 +27,7 @@ import {
   type StoredZaloCredentials,
 } from "./src/session-state.js";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
 type LegacyZalouserCredentialSource = {
   filePath: string;
@@ -40,7 +37,7 @@ type LegacyZalouserCredentialSource = {
 type LegacyZalouserDmEntry = {
   agentId: string;
   canonicalKey: string;
-  entry: ReturnType<typeof listSessionEntries>[number]["entry"];
+  entry: Awaited<ReturnType<typeof listSessionEntriesAsync>>[number]["entry"];
   legacyKeys: string[];
   storePath: string;
 };
@@ -82,23 +79,26 @@ async function collectLegacyZalouserCredentialSources(
     .toSorted((left, right) => left.profile.localeCompare(right.profile));
 }
 
-function collectLegacyZalouserDmEntries(
+async function collectLegacyZalouserDmEntries(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  options: { readOnly?: boolean } = {},
-): LegacyZalouserDmEntry[] {
-  const entries = new Map<string, LegacyZalouserDmEntry>();
+): Promise<LegacyZalouserDmEntry[]> {
+  const { listAgentIds } = await import("openclaw/plugin-sdk/agent-scope-runtime");
+  const {
+    deliveryContextFromSession,
+    getSessionEntryAsync,
+    listSessionEntriesAsync,
+    resolveStorePath,
+  } = await import("openclaw/plugin-sdk/session-store-runtime");
+  const entries = new Map<string, LegacyZalouserDmEntry & { sourceKey: string }>();
   const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
-  const agentIds = new Set([
-    "main",
-    ...(config.agents?.list ?? []).flatMap(({ id }) => (id?.trim() ? [id.trim()] : [])),
-  ]);
+  const agentIds = new Set(["main", ...listAgentIds(config)]);
   for (const agentId of agentIds) {
     const storePath = resolveStorePath(config.session?.store, { agentId, env });
-    const storedEntries = listSessionEntries({
+    const storedEntries = await listSessionEntriesAsync({
       agentId,
+      env,
       storePath,
-      ...(options.readOnly ? { readOnly: true } : {}),
     });
     const entryByKey = new Map(storedEntries.map(({ sessionKey, entry }) => [sessionKey, entry]));
     for (const { sessionKey, entry } of storedEntries) {
@@ -126,17 +126,33 @@ function collectLegacyZalouserDmEntries(
         // Identity links can collapse peers; preserve the freshest row, preferring canonical ties.
         entry:
           canonicalEntry && canonicalEntry.updatedAt >= entry.updatedAt ? canonicalEntry : entry,
+        sourceKey:
+          canonicalEntry && canonicalEntry.updatedAt >= entry.updatedAt ? canonicalKey : sessionKey,
         legacyKeys: [],
         storePath,
       };
       pending.legacyKeys.push(sessionKey);
       if (entry.updatedAt > pending.entry.updatedAt) {
         pending.entry = entry;
+        pending.sourceKey = sessionKey;
       }
       entries.set(groupKey, pending);
     }
   }
-  return [...entries.values()];
+  const selectedEntries: LegacyZalouserDmEntry[] = [];
+  for (const { sourceKey, ...selected } of entries.values()) {
+    // Listing omits retained context; migrate the complete selected row.
+    const entry = await getSessionEntryAsync({
+      agentId: selected.agentId,
+      env,
+      storePath: selected.storePath,
+      sessionKey: sourceKey,
+    });
+    if (entry) {
+      selectedEntries.push({ ...selected, entry });
+    }
+  }
+  return selectedEntries;
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -156,6 +172,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      let utf8Warnings = 0;
       const store = params.context.openPluginStateKeyedStore<ZaloCredentialStateRecord>({
         namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
         maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
@@ -164,7 +181,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       for (const source of await collectLegacyZalouserCredentialSources(params.env)) {
         let credentials: StoredZaloCredentials | null = null;
         try {
-          const raw = JSON.parse(await fs.readFile(source.filePath, "utf8")) as unknown;
+          const raw = JSON.parse(
+            decodeUtf8Input(await fs.readFile(source.filePath), "Legacy Zalo Personal credentials"),
+          ) as unknown;
           const createdAt =
             isRecord(raw) && typeof raw.createdAt === "string" && raw.createdAt
               ? raw.createdAt
@@ -173,7 +192,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             isRecord(raw) ? { ...raw, createdAt } : raw,
             source.profile,
           );
-        } catch {
+        } catch (error) {
+          if (error instanceof Utf8InputError) {
+            warnings.push(
+              `${error.message} Left legacy source in place for profile ${source.profile}`,
+            );
+            utf8Warnings++;
+            continue;
+          }
           // Report the same fail-closed result as a structurally invalid file.
         }
         if (!credentials) {
@@ -205,20 +231,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Zalo Personal credentials for profile ${source.profile}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeStoredZaloCredentials(await store.lookup(key), source.profile);
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Zalo Personal credentials for profile ${source.profile}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Zalo Personal credentials for profile ${source.profile}`);
         await archiveLegacyStateSource({
@@ -228,7 +249,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(utf8Warnings > 0 && utf8Warnings === warnings.length
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
+      };
     },
   },
   {
@@ -243,14 +270,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       ) {
         return null;
       }
-      const pending = collectLegacyZalouserDmEntries(config, env, { readOnly: true });
+      const pending = await collectLegacyZalouserDmEntries(config, env);
       const count = pending.flatMap(({ legacyKeys }) => legacyKeys).length;
       return count > 0
         ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
         : null;
     },
     async migrateLegacyState({ config, env }) {
-      const pending = collectLegacyZalouserDmEntries(config, env);
+      const { deleteSessionEntry, upsertSessionEntry } =
+        await import("openclaw/plugin-sdk/session-store-runtime");
+      const pending = await collectLegacyZalouserDmEntries(config, env);
       const warnings: string[] = [];
       let migrated = 0;
       for (const entry of pending) {

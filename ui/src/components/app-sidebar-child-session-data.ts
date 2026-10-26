@@ -1,63 +1,145 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
+import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
+import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
-export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
+import { matchesExistingSession } from "../lib/sessions/session-row-reconcile.ts";
 
 const MAX_SESSION_LINEAGE_DEPTH = 16;
+
+type SessionLineageObservation = {
+  row: GatewaySessionRow;
+  reconcile: SessionCapability["reconcile"];
+};
+
+export type SidebarChildSessionRead = {
+  isCurrent: () => boolean;
+  reconcile: (
+    row: GatewaySessionRow,
+  ) => { status: "not-selected" } | { status: "selected"; row: GatewaySessionRow | null };
+};
+
+export type SidebarChildSessionQuery = {
+  observation?: ReturnType<SessionCapability["observeList"]>;
+  result?: SessionsListResult;
+  loading?: boolean;
+  childRead?: SidebarChildSessionRead;
+  hydration?: Promise<void>;
+  refresh?: Promise<void>;
+};
+
+function lineageRowCacheKey(row: GatewaySessionRow, key = row.key): string {
+  const agentId = row.agentId?.trim();
+  return agentId && !parseAgentSessionKey(normalizeDefaultMainSessionAliasForUi(key))
+    ? JSON.stringify([key, normalizeAgentId(agentId)])
+    : key;
+}
 
 export function collectKnownSessionRows(
   rootRows: readonly GatewaySessionRow[],
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Map<string, GatewaySessionRow> {
-  const rows = new Map(rootRows.map((row) => [row.key, row]));
-  for (const childRows of Object.values(childRowsByParent)) {
-    for (const row of childRows) {
-      rows.set(row.key, row);
-    }
+  const rows = new Map<string, GatewaySessionRow>();
+  for (const row of [...Object.values(childRowsByParent).flat(), ...rootRows]) {
+    const key = lineageRowCacheKey(row, normalizeDefaultMainSessionAliasForUi(row.key) || row.key);
+    rows.delete(key);
+    rows.set(key, row);
   }
-  return rows;
+  return new Map([...rows.values()].map((row) => [lineageRowCacheKey(row), row]));
 }
 
 export async function fetchSessionLineage(params: {
   client: GatewayBrowserClient;
+  sessions: Pick<SessionCapability, "describe">;
   sessionKey: string;
   knownRows: Map<string, GatewaySessionRow>;
   isCurrent: () => boolean;
+  captureReconcile: SessionCapability["captureReconcile"];
+  publishSelected?: (
+    row: GatewaySessionRow,
+    reconcile: SessionCapability["reconcile"],
+  ) => GatewaySessionRow | null;
+  readSelected?: () => Promise<GatewaySessionRow | undefined>;
 }): Promise<{
   rowsByParent: Record<string, GatewaySessionRow[]>;
   topmostRow: GatewaySessionRow | null;
   lookupFailed: boolean;
+  selectedObservation?: SessionLineageObservation;
 } | null> {
   const rowsByParent: Record<string, GatewaySessionRow[]> = {};
   let currentKey = params.sessionKey;
+  let currentAgentId = parseAgentSessionKey(currentKey)?.agentId ?? null;
   let topmostRow: GatewaySessionRow | null = null;
   let lookupFailed = false;
+  let selectedObservation: SessionLineageObservation | undefined;
   const visited = new Set<string>();
   try {
     // Session ancestry is untrusted persisted state. Bound traversal so a
     // malformed cycle cannot leave direct child routes spinning forever.
-    for (let depth = 0; depth < MAX_SESSION_LINEAGE_DEPTH && !visited.has(currentKey); depth += 1) {
-      visited.add(currentKey);
-      let row = params.knownRows.get(currentKey);
+    for (let depth = 0; depth < MAX_SESSION_LINEAGE_DEPTH; depth += 1) {
+      const identity = JSON.stringify([currentKey, currentAgentId]);
+      if (visited.has(identity)) {
+        break;
+      }
+      visited.add(identity);
+      const observedSelected = depth === 0 && params.readSelected;
+      let row = observedSelected
+        ? await observedSelected()
+        : [...params.knownRows.values()].find((candidate) =>
+            matchesExistingSession(candidate, currentKey, currentAgentId),
+          );
+      if (!params.isCurrent()) {
+        return null;
+      }
+      if (observedSelected && !row) {
+        break;
+      }
       if (!row) {
-        const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
-          "sessions.describe",
-          { key: currentKey },
+        const reconcile = depth === 0 ? params.captureReconcile() : undefined;
+        const described = await params.sessions.describe(
+          {
+            key: currentKey,
+            ...(!parseAgentSessionKey(currentKey) && currentAgentId
+              ? { agentId: currentAgentId }
+              : {}),
+          },
+          { client: params.client },
         );
         if (!params.isCurrent()) {
           return null;
         }
         row = described?.session
-          ? { ...described.session, runtimeSampledAt: Date.now() }
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
           : undefined;
         if (!row) {
           break;
         }
-        params.knownRows.set(row.key, row);
+        if (reconcile) {
+          selectedObservation = { row, reconcile };
+          if (params.publishSelected) {
+            row = params.publishSelected(row, reconcile) ?? undefined;
+            if (!params.isCurrent()) {
+              return null;
+            }
+            if (!row) {
+              break;
+            }
+          }
+        }
+        params.knownRows.set(lineageRowCacheKey(row), row);
       }
       topmostRow = row;
       const parentKey = resolveUiSessionNavigationParentKey(row);
@@ -66,12 +148,18 @@ export async function fetchSessionLineage(params: {
       }
       const siblings = rowsByParent[parentKey] ?? [];
       rowsByParent[parentKey] = [...siblings.filter((candidate) => candidate.key !== row.key), row];
+      // Qualified parents change owners; raw ancestors stay with the accepted row.
+      currentAgentId =
+        parseAgentSessionKey(parentKey)?.agentId ??
+        parseAgentSessionKey(row.key)?.agentId ??
+        row.agentId?.trim() ??
+        currentAgentId;
       currentKey = parentKey;
     }
   } catch {
     lookupFailed = true;
   }
-  return { rowsByParent, topmostRow, lookupFailed };
+  return { rowsByParent, topmostRow, lookupFailed, selectedObservation };
 }
 
 function mergeChildSessionRows(
@@ -93,44 +181,489 @@ function mergeChildSessionRows(
   return merged;
 }
 
-export function publishActiveSessionLineage(
+/** Retain only the routed ancestry when a refreshed child list omits it (archived or filtered). */
+function preserveActiveSessionLineageRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const preserved: Record<string, readonly GatewaySessionRow[]> = {};
+  let childKey = sessionKey?.trim();
+  const visited = new Set<string>();
+  while (childKey && !visited.has(childKey)) {
+    visited.add(childKey);
+    const parent = Object.entries(rowsByParent).find(([, rows]) =>
+      rows.some((row) => areUiSessionKeysEquivalent(row.key, childKey)),
+    );
+    if (!parent) {
+      break;
+    }
+    preserved[parent[0]] = parent[1].filter((row) => areUiSessionKeysEquivalent(row.key, childKey));
+    childKey = parent[0];
+  }
+  return preserved;
+}
+
+function mergeRefreshedChildSessionRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+  parentKey: string,
+  rows: GatewaySessionRow[],
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, rowsByParent)[parentKey] ?? [];
+  return {
+    ...rowsByParent,
+    ...mergeChildSessionRows({ [parentKey]: rows }, { [parentKey]: lineage }),
+  };
+}
+
+export function scheduleSidebarChildSessions(
   owner: {
-    activeSessionLineageRoot: GatewaySessionRow | null;
+    readonly context: ApplicationContext | undefined;
+    readonly childSessionScope: object;
+    readonly isSessionDataHostConnected: boolean;
+    retireStaleChildSessions(revalidating: ReadonlySet<string>): void;
+    needsChildSessionLoad(parentKey: string): boolean;
+    loadChildSessions(parentKey: string): Promise<void>;
+    requestSessionDataUpdate(): void;
+  },
+  readParents: () => Set<string>,
+): void {
+  const revalidating = readParents();
+  owner.retireStaleChildSessions(revalidating);
+  const context = owner.context;
+  const client = context?.gateway.snapshot.client;
+  const scope = owner.childSessionScope;
+  if (context && client && [...revalidating].some((key) => owner.needsChildSessionLoad(key))) {
+    const isCurrent = () =>
+      owner.context === context &&
+      owner.childSessionScope === scope &&
+      context.gateway.snapshot.client === client &&
+      owner.isSessionDataHostConnected;
+    let admittedParents: Set<string> | undefined;
+    void context.connectionBootstrap
+      .run(
+        scope,
+        async () => {
+          if (isCurrent()) {
+            // Expansion can change while queued; only the current presentation owns these reads.
+            admittedParents = readParents();
+            await Promise.all([...admittedParents].map((key) => owner.loadChildSessions(key)));
+          }
+        },
+        { background: true },
+      )
+      .then(() => {
+        // Completion-driven renders can run before the scheduler releases the batch key.
+        const completed = admittedParents;
+        if (completed && isCurrent() && [...readParents()].some((key) => !completed.has(key))) {
+          owner.requestSessionDataUpdate();
+        }
+      });
+  }
+}
+
+/** Admit the observed child window before publishing its sidebar presentation. */
+export function applySidebarChildSessionSnapshot(
+  params: {
+    owner: Parameters<typeof retireStaleChildSessionRows>[0];
+    sessions: SessionCapability;
+    parentKey: string;
+    query: SidebarChildSessionQuery;
+    retry: boolean;
+    isCurrent: () => boolean;
+    captureChildRead: () => SidebarChildSessionRead;
+    selectedKey: () => string | null;
+    finishLoad: () => void;
+  },
+  snapshot: SessionListSnapshot,
+): void {
+  const { owner, sessions, parentKey, query } = params;
+  if (!params.isCurrent()) {
+    return;
+  }
+  if (snapshot.loading) {
+    if (!query.loading) {
+      query.childRead = params.captureChildRead();
+    }
+    query.loading = true;
+    owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
+    owner.requestSessionDataUpdate();
+    return;
+  }
+  if (snapshot.error) {
+    if (params.retry && !query.observation) {
+      return;
+    }
+    query.loading = false;
+    owner.childSessionErrorsByParent = new Map(owner.childSessionErrorsByParent).set(
+      parentKey,
+      snapshot.error,
+    );
+    params.finishLoad();
+    return;
+  }
+  const initialResult = snapshot.result;
+  const refreshed = query.loading || !query.result;
+  query.loading = false;
+  if (!initialResult) {
+    return;
+  }
+  if (!refreshed) {
+    // A sibling observation can update held row fields without a new page.
+    // Project those facts without restarting pagination or read admission.
+    const rows = owner.childSessionRowsByParent[parentKey];
+    if (rows) {
+      const current = sessions.projectRows(rows);
+      if (current.some((row, index) => row !== rows[index])) {
+        owner.childSessionRowsByParent = {
+          ...owner.childSessionRowsByParent,
+          [parentKey]: current,
+        };
+        owner.requestSessionDataUpdate();
+      }
+    }
+    return;
+  }
+  query.result = initialResult;
+  if (query.hydration) {
+    return;
+  }
+  const childRead = query.childRead ?? params.captureChildRead();
+  const { isCurrent: ownsQuery, selectedKey } = params;
+  query.hydration = (async () => {
+    const isCurrent = () => ownsQuery() && childRead.isCurrent();
+    try {
+      const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent, initialResult });
+      if (!rows || !isCurrent()) {
+        return;
+      }
+      const accepted = rows.flatMap((row) => {
+        const outcome = childRead.reconcile(row);
+        return outcome.status === "selected" ? (outcome.row ? [outcome.row] : []) : [row];
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      // Removed children leave the window; only the routed lineage survives omission.
+      owner.childSessionRowsByParent = mergeRefreshedChildSessionRows(
+        selectedKey(),
+        owner.childSessionRowsByParent,
+        parentKey,
+        sessions.projectRows(accepted),
+      );
+      owner.loadedChildSessionKeys = new Set([...owner.loadedChildSessionKeys, parentKey]);
+      const errors = new Map(owner.childSessionErrorsByParent);
+      errors.delete(parentKey);
+      owner.childSessionErrorsByParent = errors;
+    } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
+      owner.childSessionErrorsByParent = new Map(owner.childSessionErrorsByParent).set(
+        parentKey,
+        formatUiError(error),
+      );
+    }
+  })().finally(() => {
+    if (params.isCurrent()) {
+      query.hydration = undefined;
+      params.finishLoad();
+    }
+  });
+}
+
+export function finishSidebarChildSessionLoad(
+  owner: Parameters<typeof retireStaleChildSessionRows>[0],
+  queries: Map<string, SidebarChildSessionQuery>,
+  parentKey: string,
+): void {
+  if (owner.childSessionErrorsByParent.has(parentKey)) {
+    const loaded = new Set(owner.loadedChildSessionKeys);
+    loaded.delete(parentKey);
+    owner.loadedChildSessionKeys = loaded;
+    queries.get(parentKey)?.observation?.dispose();
+    queries.delete(parentKey);
+  }
+  const next = new Set(owner.loadingChildSessionKeys);
+  next.delete(parentKey);
+  owner.loadingChildSessionKeys = next;
+  owner.requestSessionDataUpdate();
+}
+
+export function discardEmptyChildSessionSnapshot(
+  owner: {
     childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
-    context?: { sessions: Pick<SessionCapability, "reconcile"> };
-    sessionsResult: SessionsListResult | null;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    requestSessionDataUpdate(): void;
   },
   sessionKey: string,
-  lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
 ): void {
+  if (owner.childSessionRowsByParent[sessionKey]?.length === 0) {
+    const childRows = { ...owner.childSessionRowsByParent };
+    delete childRows[sessionKey];
+    owner.childSessionRowsByParent = childRows;
+    const loadedKeys = new Set(owner.loadedChildSessionKeys);
+    loadedKeys.delete(sessionKey);
+    owner.loadedChildSessionKeys = loadedKeys;
+    owner.requestSessionDataUpdate();
+  }
+}
+
+export function retireStaleChildSessionRows(
+  owner: {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    loadingChildSessionKeys: ReadonlySet<string>;
+    childSessionErrorsByParent: ReadonlyMap<string, string>;
+    requestSessionDataUpdate(): void;
+  },
+  sessionKey: string | null,
+  revalidating: ReadonlySet<string>,
+  queries: Map<string, SidebarChildSessionQuery>,
+  finishLoad: (parentKey: string) => void,
+): void {
+  for (const [key, query] of queries) {
+    if (!revalidating.has(key) && !query.refresh && !query.hydration) {
+      query.observation?.dispose();
+      queries.delete(key);
+      finishLoad(key);
+    }
+  }
+  const lineage = preserveActiveSessionLineageRows(sessionKey, owner.childSessionRowsByParent);
+  const next = { ...owner.childSessionRowsByParent };
+  let changed = false;
+  for (const [parentKey, rows] of Object.entries(next)) {
+    if (
+      owner.loadedChildSessionKeys.has(parentKey) ||
+      owner.loadingChildSessionKeys.has(parentKey) ||
+      owner.childSessionErrorsByParent.has(parentKey) ||
+      revalidating.has(parentKey)
+    ) {
+      continue;
+    }
+    const retained = lineage[parentKey];
+    if (retained?.length === rows.length) {
+      continue;
+    }
+    if (retained) {
+      next[parentKey] = retained;
+    } else {
+      delete next[parentKey];
+    }
+    changed = true;
+  }
+  if (changed) {
+    owner.childSessionRowsByParent = next;
+    owner.requestSessionDataUpdate();
+  }
+}
+
+export function retrySidebarChildSessions(
+  owner: Parameters<typeof retireStaleChildSessionRows>[0] & {
+    loadChildSessions(parentKey: string, retry: boolean): Promise<void>;
+  },
+  finishLoad: (parentKey: string) => void,
+  sessionKey: string,
+): void {
+  const retry = owner.childSessionErrorsByParent.has(sessionKey);
+  if (retry) {
+    finishLoad(sessionKey);
+    const errors = new Map(owner.childSessionErrorsByParent);
+    errors.delete(sessionKey);
+    owner.childSessionErrorsByParent = errors;
+  }
+  void owner.loadChildSessions(sessionKey, retry);
+}
+
+type SessionLineageOwner = {
+  activeSessionLineageRoot: GatewaySessionRow | null;
+  activeSessionLineageSelectedRow: GatewaySessionRow | null;
+  childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  context?: {
+    gateway?: { snapshot: { sessionKey?: string | null } };
+    sessions: Pick<SessionCapability, "reconcile" | "state">;
+  };
+  sessionsResult: SessionsListResult | null;
+};
+
+export function retainActiveSessionRow(
+  owner: SessionLineageOwner,
+  row: GatewaySessionRow,
+  previous: GatewaySessionRow | undefined,
+  inheritRow: SessionCapability["inheritRow"],
+): GatewaySessionRow {
+  const donor =
+    isUiGlobalSessionKey(row.key) &&
+    (row.sessionId !== previous?.sessionId ||
+      normalizeAgentId(row.agentId) !== normalizeAgentId(previous?.agentId))
+      ? undefined
+      : previous;
+  const accepted = inheritRow(
+    row === donor ? row : preserveRosterPresentationMetadata(row, donor),
+    row,
+    donor,
+  );
+  return assignActiveSessionRow(owner, accepted, inheritRow);
+}
+
+function assignActiveSessionRow(
+  owner: SessionLineageOwner,
+  row: GatewaySessionRow,
+  inheritRow: SessionCapability["inheritRow"],
+): GatewaySessionRow {
+  owner.activeSessionLineageSelectedRow = row;
+  if (
+    areUiSessionKeysEquivalent(owner.activeSessionLineageRoot?.key, row.key) &&
+    (!isUiGlobalSessionKey(row.key) ||
+      normalizeAgentId(owner.activeSessionLineageRoot?.agentId) === normalizeAgentId(row.agentId))
+  ) {
+    owner.activeSessionLineageRoot = row;
+  }
+  for (const [parentKey, rows] of Object.entries(owner.childSessionRowsByParent)) {
+    const current = rows.find(
+      (candidate) =>
+        areUiSessionKeysEquivalent(candidate.key, row.key) &&
+        (!isUiGlobalSessionKey(row.key) ||
+          (candidate.agentId === row.agentId && candidate.sessionId === row.sessionId)),
+    );
+    if (!current || current === row) {
+      continue;
+    }
+    const child = current.key === row.key ? row : inheritRow({ ...row, key: current.key }, row);
+    owner.childSessionRowsByParent = {
+      ...owner.childSessionRowsByParent,
+      [parentKey]: rows.map((candidate) => (candidate === current ? child : candidate)),
+    };
+  }
+  return row;
+}
+
+/** Publish the capability-owned descriptor without admitting it to another roster. */
+export function publishObservedSessionRow(
+  owner: SessionLineageOwner,
+  row: GatewaySessionRow,
+  inheritRow: SessionCapability["inheritRow"],
+): void {
+  assignActiveSessionRow(owner, row, inheritRow);
+  owner.activeSessionLineageRoot ??= row;
+}
+
+export function publishObservedSessionLineage(
+  owner: SessionLineageOwner,
+  lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
+  row: GatewaySessionRow,
+  inheritRow: SessionCapability["inheritRow"],
+): void {
+  publishObservedSessionRow(owner, row, inheritRow);
+  const current = (candidate: GatewaySessionRow) =>
+    areUiSessionKeysEquivalent(candidate.key, row.key) &&
+    candidate.agentId === row.agentId &&
+    candidate.sessionId === row.sessionId
+      ? row
+      : candidate;
   owner.childSessionRowsByParent = mergeChildSessionRows(
     owner.childSessionRowsByParent,
-    lineage.rowsByParent,
+    Object.fromEntries(
+      Object.entries(lineage.rowsByParent).map(([key, rows]) => [key, rows.map(current)]),
+    ),
   );
-  owner.activeSessionLineageRoot = lineage.topmostRow;
-  // Prefer the fetched lineage on ties, but keep a newer child-list snapshot
-  // so a delayed describe cannot regress already-settled run state.
-  const selectedRow = [
-    lineage.topmostRow,
-    ...Object.values(lineage.rowsByParent).flat(),
-    ...collectKnownSessionRows(
-      owner.sessionsResult?.sessions ?? [],
-      owner.childSessionRowsByParent,
-    ).values(),
-  ]
-    .filter(
-      (row): row is GatewaySessionRow =>
-        row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
-    )
-    .reduce<GatewaySessionRow | undefined>((freshest, row) => {
-      return !freshest || (row.updatedAt ?? 0) > (freshest.updatedAt ?? 0) ? row : freshest;
-    }, undefined);
+  owner.activeSessionLineageRoot = lineage.topmostRow ? current(lineage.topmostRow) : row;
+}
+
+export function publishActiveSessionRow(
+  owner: SessionLineageOwner,
+  row: GatewaySessionRow,
+  reconcile: SessionCapability["reconcile"],
+  inheritRow: SessionCapability["inheritRow"],
+  isCurrent: () => boolean,
+): GatewaySessionRow | null {
+  const sessions = owner.context?.sessions;
+  if (!isCurrent()) {
+    return null;
+  }
+  if (reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) !== true) {
+    return owner.activeSessionLineageSelectedRow;
+  }
+  const accepted = sessions?.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, row.key),
+  );
+  if (accepted) {
+    // A current request can still contain a timestamp-rejected row.
+    const previous = owner.activeSessionLineageSelectedRow ?? undefined;
+    return retainActiveSessionRow(owner, accepted, previous, inheritRow);
+  }
+  owner.activeSessionLineageSelectedRow = null;
+  return null;
+}
+
+export function publishActiveSessionLineage(
+  owner: SessionLineageOwner,
+  sessionKey: string,
+  lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
+  inheritRow: SessionCapability["inheritRow"],
+  isCurrent: () => boolean,
+): void {
+  if (!isCurrent()) {
+    return;
+  }
+  const previousRoot = owner.activeSessionLineageRoot;
+  const previousSelectedRow = owner.activeSessionLineageSelectedRow;
+  const preserveLineageRow = (row: GatewaySessionRow): GatewaySessionRow => {
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId?.trim() ?? null;
+    const matches = (candidate: GatewaySessionRow) =>
+      matchesExistingSession(candidate, row.key, agentId);
+    const previous =
+      previousSelectedRow && matches(previousSelectedRow)
+        ? previousSelectedRow
+        : previousRoot && matches(previousRoot)
+          ? previousRoot
+          : null;
+    // Canonical rows own process-current state; cached lineage only donates presentation.
+    const canonical = owner.sessionsResult?.sessions.find(matches);
+    const source = canonical ?? row;
+    return inheritRow(
+      preserveRosterPresentationMetadata(source, previous ?? undefined),
+      source,
+      previous ?? undefined,
+    );
+  };
+  const topmostRow = lineage.topmostRow ? preserveLineageRow(lineage.topmostRow) : null;
+  const rowsByParent = Object.fromEntries(
+    Object.entries(lineage.rowsByParent).map(([parentKey, rows]) => [
+      parentKey,
+      rows.map(preserveLineageRow),
+    ]),
+  );
+  owner.childSessionRowsByParent = mergeChildSessionRows(
+    owner.childSessionRowsByParent,
+    rowsByParent,
+  );
+  owner.activeSessionLineageRoot = topmostRow;
+  const selectedRow =
+    lineage.selectedObservation?.row ??
+    [
+      topmostRow,
+      ...Object.values(rowsByParent).flat(),
+      ...collectKnownSessionRows(
+        owner.sessionsResult?.sessions ?? [],
+        owner.childSessionRowsByParent,
+      ).values(),
+    ]
+      .filter(
+        (row): row is GatewaySessionRow =>
+          row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
+      )
+      .reduce<GatewaySessionRow | undefined>((freshest, row) => {
+        return !freshest || (row.updatedAt ?? 0) > (freshest.updatedAt ?? 0) ? row : freshest;
+      }, undefined);
   if (selectedRow) {
-    // The active list intentionally omits archived rows. Publish the routed
-    // descriptor so the chat pane and header share the sidebar's cold-load truth.
-    owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
-      archivedFilter: "all",
-    });
+    const reconcile: SessionCapability["reconcile"] =
+      lineage.selectedObservation?.reconcile ??
+      ((row, defaults, options) =>
+        owner.context?.sessions.reconcile(row, defaults, options) ?? false);
+    publishActiveSessionRow(owner, selectedRow, reconcile, inheritRow, isCurrent);
+  } else {
+    owner.activeSessionLineageSelectedRow = lineage.lookupFailed ? previousSelectedRow : null;
   }
 }
 
@@ -141,13 +674,32 @@ export function evictArchivedSessionLineage(
   if (!sessionKey) {
     return;
   }
+  const routedSessionKey = owner.context?.gateway?.snapshot.sessionKey?.trim();
+  if (routedSessionKey && areUiSessionKeysEquivalent(routedSessionKey, sessionKey)) {
+    // Sidebar lineage can momentarily retarget while the archived route remains
+    // selected. The routed descriptor still owns pane/header presentation and
+    // must survive until application navigation actually moves elsewhere.
+    return;
+  }
   const selectedRow =
     owner.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey)) ??
-    [owner.activeSessionLineageRoot, ...Object.values(owner.childSessionRowsByParent).flat()].find(
+    [
+      owner.activeSessionLineageSelectedRow,
+      owner.activeSessionLineageRoot,
+      ...Object.values(owner.childSessionRowsByParent).flat(),
+    ].find(
       (row): row is GatewaySessionRow =>
         row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
     );
   if (selectedRow?.archived === true) {
+    // Navigation has ended the archived row's temporary presentation lease.
+    // Remove it from the child cache before the next canonical list refresh.
+    owner.childSessionRowsByParent = Object.fromEntries(
+      Object.entries(owner.childSessionRowsByParent).map(([parentKey, rows]) => [
+        parentKey,
+        rows.filter((row) => !areUiSessionKeysEquivalent(row.key, sessionKey)),
+      ]),
+    );
     owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
       archivedFilter: "active",
     });

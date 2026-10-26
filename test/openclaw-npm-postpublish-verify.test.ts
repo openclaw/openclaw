@@ -1,1272 +1,702 @@
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign } from "node:crypto";
-// OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import { dirname, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
+import { build } from "tsdown";
+import { expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
+import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
-  buildPublishedInstallCommandArgs,
-  buildPublishedInstallScenarios,
-  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
-  collectInstalledBundledExtensionManifestErrors,
-  collectInstalledBundledRuntimeSidecarPaths,
-  collectInstalledContextEngineRuntimeErrors,
-  collectInstalledPluginSdkZodArtifactErrors,
-  collectInstalledRootDependencyManifestErrors,
+  collectInstalledContextEngineRuntimeErrors as contextErrors,
+  collectInstalledRootDependencyManifestErrors as dependencyErrors,
   collectInstalledPackageErrors,
   fetchRegistryJson,
-  normalizeInstalledBinaryVersion,
-  openClawNpmPostpublishVerifyUsage,
-  parseOpenClawNpmPostpublishVerifyArgs,
+  resolvePublishedInstallSourceVerification as verifySource,
   resolveInstalledBinaryCommandInvocation,
-  resolveInstalledBinaryPath,
   retryNpmRegistryProvenanceRead,
+  verifyAttestedReleasePublishWorkflow,
   verifyNpmProvenanceAttestation,
-  verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  rewriteRootRuntimeImportsToStableAliases,
+  writeStableRootRuntimeAliases,
+} from "../scripts/runtime-postbuild.mts";
+import { resolveNodeBootstrapRuntimeChunks } from "../src/gateway/worker-environments/node-bootstrap-runtime-chunks.js";
+import { collectPackageDistInventory } from "../src/infra/package-dist-inventory.js";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
+import { WORKER_BUNDLE_ENTRY_PATH } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
+import { createScriptTestHarness } from "./scripts/test-helpers.js";
 
-const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
-const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const { createTempDir } = createScriptTestHarness();
+const makeInstalledPackageRoot = (manifest?: unknown) => {
+  const root = createTempDir("openclaw-postpublish-");
+  if (manifest !== undefined) {
+    writePackageFile(root, "package.json", manifest);
+  }
+  return root;
+};
+const distScanLimits = { root: 20_000, worker: 10_000 };
 
-describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
-  it("keeps trusted release verification independent from target app dependencies", () => {
-    const source = readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
+function writeInstalledFile(root: string, relativePath: string, source = "export {};\n") {
+  const file = join(root, relativePath);
+  fs.mkdirSync(dirname(file), { recursive: true });
+  fs.writeFileSync(file, source, "utf8");
+  return file;
+}
 
-    expect(source).toContain('from "./lib/error-format.mjs"');
-    expect(source).not.toContain('from "../src/infra/errors.ts"');
-  });
+function writePackageFile(root: string, relativePath: string, value: unknown): void {
+  writeInstalledFile(root, relativePath, JSON.stringify(value));
+}
 
-  it("supports help and package-manager separators", () => {
-    expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
-      help: true,
-      version: "",
+function expectDependencyErrors(root: string, ...fragments: string[]) {
+  expect(dependencyErrors(root)).toEqual(fragments.map((part) => expect.stringContaining(part)));
+}
+
+function probeVerifier(packageRoot: string, exportName: string, timeout = 3000) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "--input-type=module",
+      "-e",
+      `import { ${exportName} as verify } from "./scripts/openclaw-npm-postpublish-verify.ts"; console.log(JSON.stringify(verify(process.argv[1]))); process.exit(0);`,
+      packageRoot,
+    ],
+    { encoding: "utf8", timeout },
+  );
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 0]);
+  return JSON.parse(result.stdout);
+}
+
+it("keeps trusted release verification independent from target app dependencies", () => {
+  const source = fs.readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
+
+  expect(source).toContain('from "./lib/error-format.mts"');
+  expect(source).not.toContain('from "../src/infra/errors.ts"');
+});
+
+it.each(["legacy", "current", "mismatched"])("verifies %s source manifests", (kind) => {
+  const sourceRoot = makeInstalledPackageRoot({ name: "openclaw", version: "2026.8.34" });
+  if (kind === "current") {
+    writeInstalledFile(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts");
+  }
+  if (kind === "mismatched") {
+    expect(() => verifySource(sourceRoot, "2026.9.7")).toThrow("source checkout version mismatch");
+  } else {
+    expect(verifySource(sourceRoot, "2026.8.34")).toEqual({
+      additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+      allowLegacyGeneratedOwnership: kind === "legacy",
     });
-    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
-      help: false,
-      version: "2026.3.23",
-    });
-  });
+  }
+});
 
-  it("rejects missing, option-like, and extra arguments before verification", () => {
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
-      openClawNpmPostpublishVerifyUsage(),
+const packageName = "openclaw";
+const version = "2026.3.23";
+const publishSha = "a".repeat(40);
+const publishRef = `refs/tags/release-publish/${publishSha.slice(0, 12)}-123`;
+const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
+type ProvenanceOptions = Parameters<typeof verifyNpmProvenanceAttestation>[0];
+const buildProvenancePayload = (
+  releaseVersion: string,
+  workflowRef: string,
+  workflowSha?: string,
+) => {
+  const workflow = {
+    repository: "https://github.com/openclaw/openclaw",
+    path: ".github/workflows/openclaw-npm-release.yml",
+    ref: workflowRef,
+  };
+  const dependency = {
+    uri: `git+https://github.com/openclaw/openclaw@${workflowRef}`,
+    digest: { gitCommit: workflowSha },
+  };
+  const digest = {
+    sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
+  };
+  return {
+    subject: [{ name: `pkg:npm/${packageName}@${releaseVersion}`, digest }],
+    predicate: {
+      buildDefinition: {
+        externalParameters: { workflow },
+        ...(workflowSha ? { resolvedDependencies: [dependency] } : {}),
+      },
+      runDetails: { builder: { id: "https://github.com/actions/runner/github-hosted" } },
+    },
+  };
+};
+const provenancePayload = buildProvenancePayload(version, "refs/heads/release/2026.3.23");
+const attestationsFor = (payload: unknown) => [
+  {
+    predicateType: "https://slsa.dev/provenance/v1",
+    bundle: {
+      dsseEnvelope: {
+        payload: Buffer.from(JSON.stringify(payload), "utf8").toString("base64"),
+      },
+    },
+  },
+];
+
+const releaseIdentity = (ref: string) => ({
+  certificateIssuer: "https://token.actions.githubusercontent.com",
+  certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${ref}`,
+});
+const makeBundleVerifier = () =>
+  vi.fn<NonNullable<ProvenanceOptions["verifyBundle"]>>(async () => undefined);
+
+function verifyProvenance(overrides: Partial<ProvenanceOptions> = {}) {
+  return expect(
+    verifyNpmProvenanceAttestation({
+      packageName,
+      version,
+      integrity,
+      attestations: attestationsFor(provenancePayload),
+      verifyBundle: async () => undefined,
+      ...overrides,
+    }),
+  );
+}
+
+it.each<[() => Response, { maxBodyBytes?: number; timeoutMs: number }, string]>([
+  [
+    () => new Response("x".repeat(65), { headers: { "content-length": "65" } }),
+    { maxBodyBytes: 64, timeoutMs: 1234 },
+    "npm registry https://registry.example/openclaw response body exceeded 64 bytes",
+  ],
+  [
+    () => new Response(new ReadableStream<Uint8Array>({ start() {} })),
+    { timeoutMs: 5 },
+    "npm registry request timed out after 5ms: https://registry.example/openclaw",
+  ],
+])("bounds registry response reading %#", async (response, options, error) => {
+  await expect(
+    fetchRegistryJson("https://registry.example/openclaw", {
+      fetchImpl: async () => response(),
+      ...options,
+    }),
+  ).rejects.toThrow(error);
+});
+
+it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {
+  const verifyBundle = makeBundleVerifier();
+  await verifyProvenance({ verifyBundle }).resolves.toBeUndefined();
+  expect(verifyBundle.mock.calls[0]?.[1]).toEqual(releaseIdentity("refs/heads/release/2026.3.23"));
+
+  const pinned = {
+    attestations: attestationsFor(buildProvenancePayload(version, publishRef, publishSha)),
+    expectedWorkflowRef: publishRef,
+    expectedWorkflowSha: publishSha,
+    verifyBundle,
+  };
+  await verifyProvenance(pinned).resolves.toBeUndefined();
+  expect(verifyBundle.mock.calls[1]?.[1]).toEqual(releaseIdentity(publishRef));
+  await verifyProvenance({ ...pinned, expectedWorkflowSha: "b".repeat(40) }).rejects.toThrow(
+    "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA",
+  );
+  await verifyProvenance({
+    attestations: attestationsFor({
+      ...provenancePayload,
+      subject: [{ name: "pkg:npm/openclaw@2026.3.24", digest: {} }],
+    }),
+  }).rejects.toThrow("does not match");
+});
+
+it("derives attested release-publish tooling only after the trusted-source check", async () => {
+  const attestations = attestationsFor(buildProvenancePayload(version, publishRef, publishSha));
+  const verifyBundle = makeBundleVerifier();
+  const verifyDerivedWorkflow = vi.fn();
+  const verify = (overrides: Partial<ProvenanceOptions> = {}) =>
+    verifyProvenance({ attestations, verifyBundle, verifyDerivedWorkflow, ...overrides });
+
+  await verify().resolves.toBeUndefined();
+  expect(verifyDerivedWorkflow).toHaveBeenCalledExactlyOnceWith({
+    ref: publishRef,
+    sha: publishSha,
+  });
+  expect(verifyBundle.mock.calls[0]?.[1]).toEqual(releaseIdentity(publishRef));
+
+  verifyBundle.mockClear();
+  await verify({
+    verifyDerivedWorkflow: () => {
+      throw new Error("protected release tooling tag is missing or unreadable.");
+    },
+  }).rejects.toThrow("protected release tooling tag is missing or unreadable.");
+  expect(verifyBundle).not.toHaveBeenCalled();
+
+  // An attested commit that does not match the tag's SHA prefix is never derived.
+  await verify({
+    attestations: attestationsFor(buildProvenancePayload(version, publishRef, "b".repeat(40))),
+  }).rejects.toThrow("has no matching workflow revision to verify");
+
+  // A partial explicit override stays strict instead of falling back to derivation.
+  verifyDerivedWorkflow.mockClear();
+  await verify({ expectedWorkflowRef: publishRef }).rejects.toThrow(
+    "does not match the approved workflow ref and SHA",
+  );
+  expect(verifyDerivedWorkflow).not.toHaveBeenCalled();
+});
+
+it("trusts derived publish tooling only at the live exact tag on main", () => {
+  const tag = publishRef.slice("refs/tags/".length);
+  const runGh = (tagSha: string, mainStatus: string) => (args: string[]) =>
+    args[1]?.includes("/git/ref/tags/")
+      ? JSON.stringify({ ref: `refs/tags/${tag}`, object: { type: "commit", sha: tagSha } })
+      : JSON.stringify({ status: mainStatus });
+  const identity = { ref: publishRef, sha: publishSha };
+
+  expect(() =>
+    verifyAttestedReleasePublishWorkflow(identity, runGh(publishSha, "ahead")),
+  ).not.toThrow();
+  expect(() =>
+    verifyAttestedReleasePublishWorkflow(identity, runGh("b".repeat(40), "ahead")),
+  ).toThrow("bound to the wrong SHA");
+  expect(() =>
+    verifyAttestedReleasePublishWorkflow(identity, runGh(publishSha, "diverged")),
+  ).toThrow("not reachable from current main");
+});
+
+it.each([
+  ["ordinary release from a feature branch", version, "refs/heads/feature/untrusted"],
+  ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
+])("rejects untrusted release provenance for %s", async (_label, releaseVersion, workflowRef) => {
+  const verifyBundle = makeBundleVerifier();
+
+  await verifyProvenance({
+    version: releaseVersion,
+    attestations: attestationsFor(buildProvenancePayload(releaseVersion, workflowRef)),
+    verifyBundle,
+  }).rejects.toThrow(
+    `does not bind ${releaseVersion} to the trusted OpenClaw GitHub release workflow`,
+  );
+  expect(verifyBundle).not.toHaveBeenCalled();
+});
+
+it("rejects a matching provenance payload when Sigstore cannot verify its bundle", async () => {
+  await verifyProvenance({
+    verifyBundle: async () => {
+      throw new Error("forged bundle");
+    },
+  }).rejects.toThrow("failed Sigstore verification");
+});
+
+it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
+  const delays: number[] = [];
+  const failures = [
+    "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+    "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
+  ];
+  const read = vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(new Error(failures[0]))
+    .mockRejectedValueOnce(new Error(failures[1]))
+    .mockResolvedValue("verified");
+  await expect(
+    retryNpmRegistryProvenanceRead(read, {
+      attempts: 3,
+      delay: async (delayMs) => void delays.push(delayMs),
+    }),
+  ).resolves.toBe("verified");
+  expect(read).toHaveBeenCalledTimes(3);
+  expect(delays).toEqual([1000, 2000]);
+});
+
+it("rejects an oversized worker before the full verifier reads its contents", () => {
+  const packageRoot = makeInstalledPackageRoot();
+
+  writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
+  const workerPath = writeInstalledFile(
+    packageRoot,
+    `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    "/* Failed to load legacy context engine runtime. */\n",
+  );
+  fs.truncateSync(workerPath, 80 * 1024 * 1024 + 1);
+
+  const errors = collectInstalledPackageErrors({
+    expectedVersion: version,
+    installedVersion: version,
+    packageRoot,
+  });
+  const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+
+  expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
+  expect(errors).not.toContain(
+    "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+  );
+});
+
+it("verifies every bundled manifest when the build filter exists before module initialization", () => {
+  const packageRoot = makeInstalledPackageRoot();
+  const errors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
+    probeVerifier(packageRoot, "collectInstalledBundledExtensionManifestErrors", 30_000),
+  );
+  expect(errors).toEqual(
+    expect.arrayContaining(
+      ["ollama", "lmstudio"].flatMap((id) => [
+        `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions", id, "package.json")}.`,
+        `installed bundled plugin artifact missing: dist/extensions/${id}/openclaw.plugin.json.`,
+      ]),
+    ),
+  );
+});
+
+it.each([
+  ["root", distScanLimits.root + 1],
+  ["worker", distScanLimits.worker],
+] as const)("bounds the %s packaged dist scan", (scope, count) => {
+  const packageRoot = makeInstalledPackageRoot();
+  if (scope === "worker") {
+    writeInstalledFile(packageRoot, "dist/root.js");
+  }
+  for (let index = 0; index < count; index += 1) {
+    writeInstalledFile(
+      packageRoot,
+      scope === "root" ? `dist/chunk-${index}.js` : `dist/worker/worker-chunk-${index}.mjs`,
     );
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
-      "Unknown openclaw npm postpublish verifier option: --tag",
-    );
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
-      "Unexpected openclaw npm postpublish verifier argument: extra",
-    );
+  }
+  expect(contextErrors(packageRoot)).toStrictEqual(
+    scope === "worker"
+      ? []
+      : [
+          `installed package root dist contains more than ${distScanLimits.root} JavaScript files; refusing to scan unbounded package contents.`,
+        ],
+  );
+});
+
+it("wraps the Windows installed npm shim without Node shell argv", () => {
+  expect(
+    resolveInstalledBinaryCommandInvocation(
+      "C:/openclaw prefix",
+      ["agent", "--message", "hello world"],
+      {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        platform: "win32",
+      },
+    ),
+  ).toEqual({
+    command: "C:\\Windows\\System32\\cmd.exe",
+    args: ["/d", "/s", "/c", '""C:\\openclaw prefix\\openclaw.cmd" agent --message "hello world""'],
+    windowsVerbatimArguments: true,
   });
 });
 
-function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
-  const distDir = join(packageRoot, "dist");
-  mkdirSync(distDir, { recursive: true });
-  for (let index = 0; index < count; index += 1) {
-    writeFileSync(join(distDir, `chunk-${index}.js`), "export {};\n", "utf8");
+it("finishes vendor call graphs while retaining root dependency checks", () => {
+  const packageRoot = makeInstalledPackageRoot({ name: "openclaw", dependencies: {} });
+  const calls = ["const value0 = opaque();"];
+  for (let index = 1; index <= 28; index++) {
+    calls.push(`const value${index} = opaque(value${index - 1}, value${index - 1});`);
+  }
+  writeInstalledFile(
+    packageRoot,
+    "dist/vendor.js",
+    `${calls.join("\n")}\nrequire("root-runtime");`,
+  );
+  // A subprocess deadline is necessary because the original synchronous graph scan never yields.
+  expect(probeVerifier(packageRoot, "collectInstalledRootDependencyManifestErrors")).toEqual([
+    "installed package root is missing declared runtime dependency 'root-runtime' for dist importers: vendor.js. Add it to package.json dependencies/optionalDependencies.",
+  ]);
+});
+
+function makeCompanionImportFixture(params: {
+  source?: string;
+  fileName?: string;
+  ownership?: unknown;
+}): string {
+  const packageRoot = makeInstalledPackageRoot({ name: "openclaw", dependencies: {} });
+  if (params.ownership !== undefined) {
+    writePackageFile(packageRoot, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH, params.ownership);
+  }
+  writeInstalledFile(
+    packageRoot,
+    `dist/${params.fileName ?? "companion-runtime.js"}`,
+    params.source ?? companionSource,
+  );
+  return packageRoot;
+}
+
+const companionSource = 'require("@discordjs/voice");';
+const discordManifest = {
+  name: "@openclaw/discord",
+  dependencies: { "@discordjs/voice": "0.19.2" },
+};
+const companionOwnership = (extensions = ["discord"]) => ({
+  chunks: {
+    "companion-runtime.js": {
+      sha256: createHash("sha256").update(companionSource).digest("hex"),
+      extensions,
+    },
+  },
+});
+const pluginRegion = (source: string) =>
+  `//#region extensions/discord/src/voice/sdk-runtime.ts\n${source}\n//#endregion`;
+const legacyCompanionSource = `import { createRequire } from "node:module";\n${pluginRegion('createRequire(import.meta.url)("@discordjs/voice");')}`;
+function makeLegacyFixture(source = legacyCompanionSource, fileName?: string) {
+  const packageRoot = makeCompanionImportFixture({ source, fileName });
+  const trustedManifestRoot = join(packageRoot, "trusted-extensions");
+  writePackageFile(trustedManifestRoot, "discord/package.json", discordManifest);
+  return {
+    packageRoot,
+    legacyErrors: () => dependencyErrors(packageRoot, [trustedManifestRoot], true),
+  };
+}
+
+it("uses generated region ownership only when the compatibility gate is enabled", () => {
+  const { packageRoot, legacyErrors } = makeLegacyFixture();
+  expectDependencyErrors(packageRoot, "@discordjs/voice");
+  expect(legacyErrors()).toStrictEqual([]);
+});
+
+it("preserves plugin ownership through hoisted static imports", () => {
+  const { packageRoot, legacyErrors } = makeLegacyFixture();
+  writeInstalledFile(
+    packageRoot,
+    "dist/plugin-runtime.js",
+    `import "./companion-runtime.js";\n${pluginRegion("export const enabled = true;")}`,
+  );
+  expect(legacyErrors()).toEqual([]);
+  writePackageFile(packageRoot, "package.json", { main: "dist/root.js" });
+  writeInstalledFile(packageRoot, "dist/root.js", 'import "./plugin-runtime.js";');
+  expect(legacyErrors()).toEqual([
+    expect.stringContaining("dist importers: companion-runtime.js."),
+  ]);
+});
+
+it("keeps legacy directory entrypoints root-owned", () => {
+  const { packageRoot, legacyErrors } = makeLegacyFixture(undefined, "nested/index.js");
+  writePackageFile(packageRoot, "package.json", { name: "openclaw", main: "dist/nested" });
+  expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
+});
+
+it("rejects legacy ownership for a loader used outside its plugin region", () => {
+  const source = `import { createRequire } from "node:module";\n${pluginRegion('const load = createRequire(import.meta.url); load("@discordjs/voice");')}\nload("@discordjs/voice");`;
+  const { legacyErrors } = makeLegacyFixture(source);
+  expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
+});
+
+it.each<[string, Parameters<typeof makeCompanionImportFixture>[0], string[]]>([
+  ["Bun built-ins", { source: 'import "bun:sqlite"; require("bun:ffi");' }, []],
+  [
+    "optional A2UI",
+    {
+      fileName: "canvas-host/a2ui/a2ui.bundle.js",
+      source: 'import("@a2ui/markdown-it").catch(() => null);',
+    },
+    [],
+  ],
+  [
+    "changed bytes",
+    { ownership: companionOwnership(), source: `${companionSource}export const changed = true;` },
+    ["companion-runtime.js"],
+  ],
+  [
+    "malformed ownership",
+    { ownership: companionOwnership(["discord", "discord"]) },
+    ["installed package runtime dependency ownership is invalid"],
+  ],
+])("checks dependency ownership for %s", (_name, fixture, errors) => {
+  expectDependencyErrors(makeCompanionImportFixture(fixture), ...errors);
+});
+
+it.each([
+  ...[
+    'import { createRequire } from "node:module"; let { load } = loaders; load = createRequire(import.meta.url); load("root-runtime");',
+    'import { createRequire } from "node:module"; const root = createRequire(import.meta.url); let make = createRequire; const load = make(import.meta.url); make = root; load("root-runtime");',
+    'import { createRequire } from "node:module"; const require = usePlugin ? createRequire(pluginPath) : createRequire(import.meta.url); require("root-runtime");',
+    'import { createRequire } from "node:module"; const require = (0, createRequire)(import.meta.url); require("root-runtime");',
+    'import * as module from "node:module"; const require = module["createRequire"](import.meta["url"]); require("root-runtime");',
+    'const { "createRequire": make } = require("node:module"); const load = make(__filename); load("root-runtime");',
+    'const { createRequire: make } = await import("node:module"); const require = make(import.meta.url); require("root-runtime");',
+    'const processNamespace = require("node:process"); const load = processNamespace.getBuiltinModule("node:module").createRequire(__filename); load("root-runtime");',
+    'import { createRequire } from "node:module"; function build(opts, key, choose) { const selection = choose ? opts : opaqueOptions(); const require = createRequire(selection[key]); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); [require] = [createRequire(import.meta.url)]; require("root-runtime"); }',
+    'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); for (require of [createRequire(import.meta.url)]) { require("root-runtime"); } }',
+    'import { createRequire as make } from "node:module"; const load = make(import.meta.url); function require(name) { return load(name); } require("root-runtime");',
+    'import { createRequire } from "node:module"; function build(root, loaders) { const [require = createRequire(root)] = loaders; require("root-runtime"); }',
+    'require("root-runtime"); var require = process.getBuiltinModule("module").createRequire(process.cwd() + "/package.json");',
+    'import { createRequire } from "node:module"; function build(options) { let alias; ({ alias = options } = {}); normalize(alias); const require = createRequire(options.filename); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; function build({ nested: { filename } = { filename: import.meta.url } }) { const require = createRequire(filename); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; import path from "node:path"; import { fileURLToPath } from "node:url"; process.chdir(path.dirname(fileURLToPath(import.meta.url))); const require = createRequire(path.resolve("bridge.cjs")); require("root-runtime");',
+    'import { createRequire } from "node:module"; function build(options) { const unused = `${options}`; const require = createRequire(options.filename); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; import path from "node:path"; function build(options, ignored = Object.assign(options, { filename: import.meta.url })) { const root = path.resolve(options.filename); const require = createRequire(root); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; function build(location) { const require = createRequire(location, location.href = import.meta.url); require("root-runtime"); }',
+    'import { createRequire } from "node:module"; import fs from "node:fs/promises"; function build(options) { const pending = fs.realpath(options.filename); normalize(pending); return (async () => { const root = await pending; const require = createRequire(root); require("root-runtime"); })(); }',
+  ].map((source): [string, string[]] => [source, ["root-runtime"]]),
+  [
+    'import { createRequire } from "node:module"; import fs from "node:fs/promises"; import path from "node:path"; async function build(opts) { const root = await fs.realpath(path.resolve(opts.root ?? process.cwd())); const require = createRequire(path.join(root, "package.json")); require("plugin-build-tool"); }',
+    [],
+  ],
+  [
+    'import { createRequire } from "node:module"; function build(options) { for (const key in options) consume(key); const require = createRequire(options.filename); require("plugin-build-tool"); }',
+    ["plugin-build-tool"],
+  ],
+] satisfies Array<[string, string[]]>)(
+  "follows lexical require ownership: %s",
+  (source, dependencies) => {
+    const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
+    writeInstalledFile(packageRoot, "dist/runtime.js", source);
+    expect(dependencyErrors(packageRoot)).toEqual(
+      dependencies.map(
+        (dependency) =>
+          `installed package root is missing declared runtime dependency '${dependency}' for dist importers: runtime.js. Add it to package.json dependencies/optionalDependencies.`,
+      ),
+    );
+  },
+);
+
+const pluginDependencies = { "fixture-runtime": "1.0.0", "fixture-lazy": "1.0.0" };
+function writePluginManifest(
+  root: string,
+  owner: string,
+  dependencies: Record<string, string> = pluginDependencies,
+) {
+  const manifest = { name: `@openclaw/${owner}`, dependencies };
+  writePackageFile(root, `dist/extensions/${owner}/package.json`, manifest);
+}
+
+async function buildInstalledFixture(
+  rootSource: string,
+  pluginSources: Record<string, string> = {},
+  extraEntries: Record<string, string> = {},
+) {
+  const root = fs.realpathSync(createTempDir("runtime-dependency-ownership-"));
+  const files = {
+    "package.json": JSON.stringify({ name: "openclaw", version: "2026.7.33", type: "module" }),
+    "src/root.js": rootSource,
+    "extensions/example/index.js": `
+      export { value } from "../../src/shared.js";
+      export const load = () => import("./lazy.js");
+    `,
+    "extensions/example/observer.js": 'export { value } from "../../src/shared.js";',
+    "src/shared.js": 'export { value } from "fixture-runtime";',
+    "extensions/example/lazy.js": 'export { lazy } from "fixture-lazy";',
+    ...pluginSources,
+  };
+  for (const [name, source] of Object.entries(files)) {
+    writeInstalledFile(root, name, source);
+  }
+  const { bundles } = await build({
+    config: false,
+    tsconfig: false,
+    cwd: root,
+    entry: {
+      root: "src/root.js",
+      "extensions/example/index": "extensions/example/index.js",
+      "extensions/example/observer": "extensions/example/observer.js",
+      ...extraEntries,
+    },
+    outDir: "dist",
+    format: "esm",
+    platform: "node",
+    dts: false,
+    logLevel: "silent",
+    deps: { neverBundle: ["fixture-runtime", "fixture-lazy"] },
+    plugins: [createRuntimeDependencyOwnershipBuildPlugin(root)],
+  });
+  try {
+    writePluginManifest(root, "example");
+    return root;
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
   }
 }
 
-describe("buildPublishedInstallScenarios", () => {
-  it("uses a single fresh scenario for plain stable releases", () => {
-    expect(buildPublishedInstallScenarios("2026.3.23")).toEqual([
-      {
-        name: "fresh-exact",
-        installSpecs: ["openclaw@2026.3.23"],
-        expectedVersion: "2026.3.23",
-      },
-    ]);
+it("preserves ownership through real postbuild runtime rewrites and forwarding aliases", async () => {
+  const root = await buildInstalledFixture("export const ready = true;", {
+    "extensions/example/index.js": 'export { value, load } from "./shared.runtime.js";',
+    "extensions/example/observer.js": 'export { value, load } from "./shared.runtime.js";',
+    "extensions/example/shared.runtime.js": `
+        export { value } from "fixture-runtime";
+        export const load = () => import("./downstream.runtime.js");
+      `,
+    "extensions/example/downstream.runtime.js": 'export { lazy } from "fixture-lazy";',
   });
+  expectDependencyErrors(root);
 
-  it("adds a stable-to-correction upgrade scenario for correction releases", () => {
-    expect(buildPublishedInstallScenarios("2026.3.23-2")).toEqual([
-      {
-        name: "fresh-exact",
-        installSpecs: ["openclaw@2026.3.23-2"],
-        expectedVersion: "2026.3.23-2",
-      },
-      {
-        name: "upgrade-from-base-stable",
-        installSpecs: ["openclaw@2026.3.23", "openclaw@2026.3.23-2"],
-        expectedVersion: "2026.3.23-2",
-      },
-    ]);
-  });
+  rewriteRootRuntimeImportsToStableAliases({ rootDir: root });
+  writeStableRootRuntimeAliases({ rootDir: root });
+
+  expectDependencyErrors(root);
 });
 
-describe("npm registry provenance verification", () => {
-  const packageName = "openclaw";
-  const version = "2026.3.23";
-  const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
-  const buildProvenancePayload = (releaseVersion: string, workflowRef: string) => ({
-    subject: [
-      {
-        name: `pkg:npm/${packageName}@${releaseVersion}`,
-        digest: {
-          sha512: Buffer.from(integrity.slice("sha512-".length), "base64").toString("hex"),
-        },
-      },
-    ],
-    predicate: {
-      buildDefinition: {
-        externalParameters: {
-          workflow: {
-            repository: "https://github.com/openclaw/openclaw",
-            path: ".github/workflows/openclaw-npm-release.yml",
-            ref: workflowRef,
-          },
-        },
-      },
-      runDetails: {
-        builder: {
-          id: "https://github.com/actions/runner/github-hosted",
-        },
-      },
+it.each<[string, Record<string, string>, Record<string, string>]>([
+  ["example", {}, {}],
+  [
+    "other",
+    {
+      "extensions/other/index.js": 'export { value } from "../../src/shared.js";',
+      "src/shared.js": `
+          export { value } from "fixture-runtime";
+          export const load = () => import("../extensions/example/lazy.js");
+        `,
+      "extensions/example/lazy.js": `
+          export { lazy } from "fixture-lazy";
+          export const back = () => import("../../src/shared.js");
+        `,
     },
-  });
-  const provenancePayload = buildProvenancePayload(version, "refs/heads/release/2026.3.23");
+    { "extensions/other/index": "extensions/other/index.js" },
+  ],
+])("checks static, dynamic and cyclic chunk ownership for %s", async (owner, sources, entries) => {
+  const root = await buildInstalledFixture("export const ready = true;", sources, entries);
+  writePluginManifest(root, owner);
+  expectDependencyErrors(root);
 
-  it("fetches npm registry JSON with bounded response handling", async () => {
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect(init).toMatchObject({
-        headers: {
-          Accept: "application/json",
-        },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      });
-      return new Response(JSON.stringify({ ok: true }));
-    });
-
-    await expect(
-      fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl: fetchImpl as typeof fetch,
-        timeoutMs: 1234,
-      }),
-    ).resolves.toEqual({ ok: true });
-  });
-
-  it("bounds oversized npm registry response bodies", async () => {
-    const fetchImpl = vi.fn(async () => {
-      return new Response("x".repeat(65), {
-        headers: { "content-length": "65" },
-      });
-    });
-
-    await expect(
-      fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl,
-        maxBodyBytes: 64,
-        timeoutMs: 1234,
-      }),
-    ).rejects.toThrow(
-      "npm registry https://registry.example/openclaw response body exceeded 64 bytes",
-    );
-  });
-
-  it("keeps npm registry timeouts active while reading response bodies", async () => {
-    const fetchImpl = vi.fn(async () => {
-      return new Response(new ReadableStream<Uint8Array>({ start() {} }));
-    });
-
-    await expect(
-      fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl,
-        timeoutMs: 5,
-      }),
-    ).rejects.toThrow(
-      "npm registry request timed out after 5ms: https://registry.example/openclaw",
-    );
-  });
-
-  it("verifies an npm registry signature against the matching public key", () => {
-    const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    const payload = `${packageName}@${version}:${integrity}`;
-    const signature = sign("sha256", Buffer.from(payload, "utf8"), keys.privateKey).toString(
-      "base64",
-    );
-
-    expect(() =>
-      verifyNpmRegistrySignatures({
-        packageName,
-        version,
-        integrity,
-        signatures: [{ keyid: "test-key", sig: signature }],
-        keys: [
-          {
-            keyid: "test-key",
-            key: keys.publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-          },
-        ],
-      }),
-    ).not.toThrow();
-  });
-
-  it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {
-    let verificationPolicy:
-      | {
-          certificateIdentityURI: string;
-          certificateIssuer: string;
-        }
-      | undefined;
-
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(JSON.stringify(provenancePayload), "utf8").toString("base64"),
-              },
-            },
-          },
-        ],
-        verifyBundle: async (_bundle, policy) => {
-          verificationPolicy = policy;
-        },
-      }),
-    ).resolves.toBeUndefined();
-    expect(verificationPolicy).toEqual({
-      certificateIssuer: "https://token.actions.githubusercontent.com",
-      certificateIdentityURI:
-        "https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/release/2026.3.23",
-    });
-
-    verificationPolicy = undefined;
-    const protectedWorkflowSha = "a".repeat(40);
-    const protectedWorkflowRef = `refs/tags/release-publish/${protectedWorkflowSha.slice(0, 12)}-123`;
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(
-                  JSON.stringify({
-                    ...provenancePayload,
-                    predicate: {
-                      ...provenancePayload.predicate,
-                      buildDefinition: {
-                        ...provenancePayload.predicate.buildDefinition,
-                        externalParameters: {
-                          workflow: {
-                            ...provenancePayload.predicate.buildDefinition.externalParameters
-                              .workflow,
-                            ref: protectedWorkflowRef,
-                          },
-                        },
-                        resolvedDependencies: [
-                          {
-                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
-                            digest: { gitCommit: protectedWorkflowSha },
-                          },
-                        ],
-                      },
-                    },
-                  }),
-                  "utf8",
-                ).toString("base64"),
-              },
-            },
-          },
-        ],
-        expectedWorkflowRef: protectedWorkflowRef,
-        expectedWorkflowSha: protectedWorkflowSha,
-        verifyBundle: async (_bundle, policy) => {
-          verificationPolicy = policy;
-        },
-      }),
-    ).resolves.toBeUndefined();
-    expect(verificationPolicy).toEqual({
-      certificateIssuer: "https://token.actions.githubusercontent.com",
-      certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${protectedWorkflowRef}`,
-    });
-
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(
-                  JSON.stringify({
-                    ...provenancePayload,
-                    predicate: {
-                      ...provenancePayload.predicate,
-                      buildDefinition: {
-                        ...provenancePayload.predicate.buildDefinition,
-                        externalParameters: {
-                          workflow: {
-                            ...provenancePayload.predicate.buildDefinition.externalParameters
-                              .workflow,
-                            ref: protectedWorkflowRef,
-                          },
-                        },
-                        resolvedDependencies: [
-                          {
-                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
-                            digest: { gitCommit: protectedWorkflowSha },
-                          },
-                        ],
-                      },
-                    },
-                  }),
-                  "utf8",
-                ).toString("base64"),
-              },
-            },
-          },
-        ],
-        expectedWorkflowRef: protectedWorkflowRef,
-        expectedWorkflowSha: "b".repeat(40),
-        verifyBundle: async () => undefined,
-      }),
-    ).rejects.toThrow(
-      "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA",
-    );
-
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(
-                  JSON.stringify({
-                    ...provenancePayload,
-                    subject: [{ name: "pkg:npm/openclaw@2026.3.24", digest: {} }],
-                  }),
-                  "utf8",
-                ).toString("base64"),
-              },
-            },
-          },
-        ],
-        verifyBundle: async () => undefined,
-      }),
-    ).rejects.toThrow("does not match");
-  });
-
-  it.each([
-    ["2026.6.33", "refs/heads/extended-stable/2026.6.33"],
-    ["2026.6.34", "refs/heads/extended-stable/2026.6.33"],
-  ])(
-    "trusts canonical extended-stable provenance for %s",
-    async (extendedStableVersion, workflowRef) => {
-      let verificationPolicy:
-        | {
-            certificateIdentityURI: string;
-            certificateIssuer: string;
-          }
-        | undefined;
-
-      await expect(
-        verifyNpmProvenanceAttestation({
-          packageName,
-          version: extendedStableVersion,
-          integrity,
-          attestations: [
-            {
-              predicateType: "https://slsa.dev/provenance/v1",
-              bundle: {
-                dsseEnvelope: {
-                  payload: Buffer.from(
-                    JSON.stringify(buildProvenancePayload(extendedStableVersion, workflowRef)),
-                    "utf8",
-                  ).toString("base64"),
-                },
-              },
-            },
-          ],
-          verifyBundle: async (_bundle, policy) => {
-            verificationPolicy = policy;
-          },
-        }),
-      ).resolves.toBeUndefined();
-      expect(verificationPolicy).toEqual({
-        certificateIssuer: "https://token.actions.githubusercontent.com",
-        certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${workflowRef}`,
-      });
-    },
+  writePluginManifest(root, owner, {});
+  expectDependencyErrors(
+    root,
+    "missing declared runtime dependency 'fixture-lazy'",
+    "missing declared runtime dependency 'fixture-runtime'",
   );
-
-  it.each([
-    ["later patch on a noncanonical branch", "2026.6.34", "refs/heads/extended-stable/2026.6.34"],
-    ["patch below 33", "2026.6.32", "refs/heads/extended-stable/2026.6.33"],
-    ["correction suffix", "2026.6.33-1", "refs/heads/extended-stable/2026.6.33"],
-  ])(
-    "rejects extended-stable provenance for %s",
-    async (_label, extendedStableVersion, workflowRef) => {
-      let verificationCalls = 0;
-
-      await expect(
-        verifyNpmProvenanceAttestation({
-          packageName,
-          version: extendedStableVersion,
-          integrity,
-          attestations: [
-            {
-              predicateType: "https://slsa.dev/provenance/v1",
-              bundle: {
-                dsseEnvelope: {
-                  payload: Buffer.from(
-                    JSON.stringify(buildProvenancePayload(extendedStableVersion, workflowRef)),
-                    "utf8",
-                  ).toString("base64"),
-                },
-              },
-            },
-          ],
-          verifyBundle: async () => {
-            verificationCalls += 1;
-          },
-        }),
-      ).rejects.toThrow(
-        `does not bind ${extendedStableVersion} to the trusted OpenClaw GitHub release workflow`,
-      );
-      expect(verificationCalls).toBe(0);
-    },
-  );
-
-  it("rejects matching provenance from an untrusted source before Sigstore verification", async () => {
-    let verificationCalls = 0;
-
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(
-                  JSON.stringify({
-                    ...provenancePayload,
-                    predicate: {
-                      ...provenancePayload.predicate,
-                      buildDefinition: {
-                        externalParameters: {
-                          workflow: {
-                            ...provenancePayload.predicate.buildDefinition.externalParameters
-                              .workflow,
-                            ref: "refs/heads/feature/untrusted",
-                          },
-                        },
-                      },
-                    },
-                  }),
-                  "utf8",
-                ).toString("base64"),
-              },
-            },
-          },
-        ],
-        verifyBundle: async () => {
-          verificationCalls += 1;
-        },
-      }),
-    ).rejects.toThrow("does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow");
-    expect(verificationCalls).toBe(0);
-  });
-
-  it("rejects a matching provenance payload when Sigstore cannot verify its bundle", async () => {
-    await expect(
-      verifyNpmProvenanceAttestation({
-        packageName,
-        version,
-        integrity,
-        attestations: [
-          {
-            predicateType: "https://slsa.dev/provenance/v1",
-            bundle: {
-              dsseEnvelope: {
-                payload: Buffer.from(JSON.stringify(provenancePayload), "utf8").toString("base64"),
-              },
-            },
-          },
-        ],
-        verifyBundle: async () => {
-          throw new Error("forged bundle");
-        },
-      }),
-    ).rejects.toThrow("failed Sigstore verification");
-  });
-
-  it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
-    let attempts = 0;
-    const delays: number[] = [];
-
-    await expect(
-      retryNpmRegistryProvenanceRead(
-        async () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new Error(
-              "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
-            );
-          }
-          if (attempts === 2) {
-            throw new Error(
-              "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
-            );
-          }
-          return "verified";
-        },
-        {
-          attempts: 3,
-          delay: async (delayMs) => {
-            delays.push(delayMs);
-          },
-        },
-      ),
-    ).resolves.toBe("verified");
-    expect(attempts).toBe(3);
-    expect(delays).toEqual([1000, 2000]);
-  });
 });
 
-describe("buildPublishedInstallCommandArgs", () => {
-  it("runs lifecycle scripts for published install verification", () => {
-    const args = buildPublishedInstallCommandArgs("/tmp/openclaw-prefix", "openclaw@2026.4.10");
-
-    expect(args).toEqual([
-      "install",
-      "-g",
-      "--prefix",
-      "/tmp/openclaw-prefix",
-      "openclaw@2026.4.10",
-      "--no-fund",
-      "--no-audit",
-    ]);
-    expect(args).not.toContain("--ignore-scripts");
-  });
+it("rejects a root-shared chunk even when a plugin owns the same dependency", async () => {
+  const root = await buildInstalledFixture('export { value } from "./shared.js";');
+  expectDependencyErrors(root, "missing declared runtime dependency 'fixture-runtime'");
 });
 
-describe("collectInstalledPackageErrors", () => {
-  function makeInstalledPackageRoot(): string {
-    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
-  }
-
-  function writeExpectedBundledExtensionManifests(
-    packageRoot: string,
-    omittedIds: readonly string[] = [],
-  ): void {
-    const omitted = new Set(omittedIds);
-    for (const relativePath of requiredBundledPluginPackPaths) {
-      const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-      if (!match || omitted.has(match[1] ?? "")) {
-        continue;
-      }
-      const packageJsonPath = join(packageRoot, relativePath);
-      mkdirSync(dirname(packageJsonPath), { recursive: true });
-      writeFileSync(packageJsonPath, "{}\n", "utf8");
-    }
-  }
-
-  it("flags version mismatches", () => {
-    const errors = collectInstalledPackageErrors({
-      expectedVersion: "2026.3.23-2",
-      installedVersion: "2026.3.23",
-      packageRoot: "/tmp/empty-openclaw",
-    });
-
-    expect(errors[0]).toBe(
-      "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
+it.each([false, true])(
+  "omits private SDK test workers from the built node distribution (QA: %s)",
+  async (qa) => {
+    const root = await buildInstalledFixture(
+      "export const ready = true;",
+      {
+        "test/helpers/sqlite-worker-fault.ts": `
+        export const marker = "qa-only";
+        export const faultWorker = () => new URL("./sqlite-worker-fault.worker.mjs", import.meta.url);
+      `,
+        "src/plugin-sdk/sqlite-runtime-testing.ts":
+          'export { marker, faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "src/plugin-sdk/test-state.ts":
+          'export { faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "extensions/qa-lab/index.js":
+          'export { marker } from "../../src/plugin-sdk/sqlite-runtime-testing.ts";',
+      },
+      {
+        "plugin-sdk/sqlite-runtime-testing": "src/plugin-sdk/sqlite-runtime-testing.ts",
+        "plugin-sdk/test-state": "src/plugin-sdk/test-state.ts",
+        ...(qa ? { "extensions/qa-lab/index": "extensions/qa-lab/index.js" } : {}),
+      },
     );
-  });
-
-  it.each(["ollama", "lmstudio"])(
-    "rejects a missing installed bundled %s provider directory",
-    (providerId) => {
-      const packageRoot = makeInstalledPackageRoot();
-
-      try {
-        writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
-        writeExpectedBundledExtensionManifests(packageRoot, [providerId]);
-
-        const missingManifestPath = join(
-          packageRoot,
-          "dist",
-          "extensions",
-          providerId,
-          "package.json",
-        );
-        const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
-
-        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([
-          expectedError,
-        ]);
-        expect(
-          collectInstalledPackageErrors({
-            expectedVersion: "2026.3.23",
-            installedVersion: "2026.3.23",
-            packageRoot,
-          }),
-        ).toContain(expectedError);
-      } finally {
-        rmSync(packageRoot, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it("rejects an installed package without its bundled extension root", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      const errors = collectInstalledBundledExtensionManifestErrors(packageRoot);
-
-      expect(errors).toEqual(
-        expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
-        ),
-      );
-      for (const excludedId of ["acpx", "qa-channel", "qa-lab"]) {
-        expect(errors.some((error) => error.includes(join("extensions", excludedId)))).toBe(false);
-      }
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps bundled manifest requirements stable after the build filter changes", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      const expectedErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
-      const filteredErrors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
-        collectInstalledBundledExtensionManifestErrors(packageRoot),
-      );
-
-      expect(filteredErrors).toStrictEqual(expectedErrors);
-      expect(filteredErrors).toEqual(
-        expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
-        ),
-      );
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("verifies every bundled manifest when the build filter exists before module initialization", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      const probe = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--eval",
-          [
-            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
-            `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
-          ].join("\n"),
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" },
-          timeout: 30_000,
-        },
-      );
-
-      expect(probe.error).toBeUndefined();
-      expect(probe.status, probe.stderr).toBe(0);
-      expect(JSON.parse(probe.stdout)).toEqual(
-        expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
-        ),
-      );
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("does not require excluded external or private plugin package manifests", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writeExpectedBundledExtensionManifests(packageRoot);
-      for (const excludedId of ["acpx", "qa-channel", "qa-lab"]) {
-        mkdirSync(join(packageRoot, "dist", "extensions", excludedId), { recursive: true });
-      }
-
-      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("requires runtime sidecars for bundled extensions included in the package", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
-      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
-        "{}\n",
-        "utf8",
-      );
-
-      expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
-        "dist/extensions/telegram/runtime-api.js",
-      );
-      expect(
-        collectInstalledPackageErrors({
-          expectedVersion: "2026.3.23",
-          installedVersion: "2026.3.23",
-          packageRoot,
-        }),
-      ).toContain(
-        "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
-      );
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("surfaces invalid installed bundled extension manifests", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
-      writeExpectedBundledExtensionManifests(packageRoot);
-      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
-        "{not-json\n",
-        "utf8",
-      );
-      writeFileSync(
-        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
-        "export {};\n",
-        "utf8",
-      );
-
-      const manifestErrors = collectInstalledBundledExtensionManifestErrors(packageRoot);
-      expect(manifestErrors).toHaveLength(1);
-      expect(manifestErrors[0]).toContain(
-        "installed bundled extension manifest invalid: failed to parse",
-      );
-      expect(manifestErrors[0]).toContain("dist/extensions/telegram/package.json");
-
-      expect(
-        collectInstalledPackageErrors({
-          expectedVersion: "2026.3.23",
-          installedVersion: "2026.3.23",
-          packageRoot,
-        }),
-      ).toContain(manifestErrors[0]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
-  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
-    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
-    try {
-      run(packageRoot);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  }
-
-  function writeInstalledFile(packageRoot: string, relativePath: string): void {
-    const filePath = join(packageRoot, relativePath);
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, "export {};\n", "utf8");
-  }
-
-  it("reports the activation runtime and every missing allowlisted sidecar", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
-        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
-        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
-        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
-      ]);
-    });
-  });
-
-  it("accepts a package with the activation runtime and allowlisted sidecars", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
-      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
-      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
-
-      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
-    });
-  });
-});
-
-describe("collectInstalledContextEngineRuntimeErrors", () => {
-  function makeInstalledPackageRoot(): string {
-    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-context-engine-"));
-  }
-
-  it("rejects packaged bundles with unresolved legacy context engine runtime loaders", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "runtime-plugins-BUG.js"),
-        'throw new Error("Failed to load legacy context engine runtime.");\n',
-        "utf8",
-      );
-
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts packaged bundles that inline the legacy context engine registration", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "runtime-plugins-OK.js"),
-        "registerContextEngineForOwner('legacy', async () => new LegacyContextEngine());\n",
-        "utf8",
-      );
-
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses unbounded packaged dist scans", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
-
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("collectInstalledPluginSdkZodArtifactErrors", () => {
-  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
-    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
-    try {
-      run(packageRoot);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  }
-
-  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
-    const filePath = join(packageRoot, ...relativePath.split("/"));
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, contents, "utf8");
-  }
-
-  it("requires the plugin-sdk zod artifact", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
-      ]);
-    });
-  });
-
-  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(
-        packageRoot,
-        "dist/zod-D2c0iocA.js",
-        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
-      );
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
-        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
-      ]);
-    });
-  });
-
-  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
-    withInstalledPackageRoot((packageRoot) => {
-      writeInstalledFile(
-        packageRoot,
-        "dist/plugin-sdk/zod.js",
-        'export { z } from "../zod-D2c0iocA.js";\n',
-      );
-      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
-
-      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
-    });
-  });
-});
-
-describe("normalizeInstalledBinaryVersion", () => {
-  it("accepts decorated CLI version output", () => {
-    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
-    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-beta.1 (9ece252)")).toBe(
-      "2026.4.8-beta.1",
-    );
-    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-alpha.1 (9ece252)")).toBe(
-      "2026.4.8-alpha.1",
-    );
-  });
-});
-
-describe("resolveInstalledBinaryPath", () => {
-  it("uses the Unix global bin path on non-Windows platforms", () => {
-    expect(resolveInstalledBinaryPath("/tmp/openclaw-prefix", "darwin")).toBe(
-      "/tmp/openclaw-prefix/bin/openclaw",
-    );
-  });
-
-  it("uses the Windows npm shim path on win32", () => {
-    expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:\\openclaw-prefix\\openclaw.cmd",
-    );
-  });
-});
-
-describe("resolveInstalledBinaryCommandInvocation", () => {
-  it("runs the Unix installed binary directly", () => {
-    expect(
-      resolveInstalledBinaryCommandInvocation("/tmp/openclaw-prefix", ["--version"], {
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/tmp/openclaw-prefix/bin/openclaw",
-      args: ["--version"],
-    });
-  });
-
-  it("wraps the Windows installed npm shim without Node shell argv", () => {
-    expect(
-      resolveInstalledBinaryCommandInvocation(
-        "C:/openclaw prefix",
-        ["agent", "--message", "hello world"],
-        {
-          comSpec: "C:\\Windows\\System32\\cmd.exe",
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        '""C:\\openclaw prefix\\openclaw.cmd" agent --message "hello world""',
+    const manifest = {
+      files: [
+        "dist/",
+        "!dist/extensions/qa-lab/**",
+        "!dist/plugin-sdk/sqlite-runtime-testing.*",
+        "!dist/plugin-sdk/test-state.*",
       ],
-      windowsVerbatimArguments: true,
-    });
-  });
-});
-
-describe("collectInstalledRootDependencyManifestErrors", () => {
-  function makeInstalledPackageRoot(): string {
-    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
-  }
-
-  function writePackageFile(root: string, relativePath: string, value: unknown): void {
-    const fullPath = join(root, relativePath);
-    mkdirSync(dirname(fullPath), { recursive: true });
-    writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  }
-
-  it("flags root dist imports whose declared runtime package name is missing", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
-        'import { Type } from "typebox";\nexport { Type };\n',
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts root dist imports when the runtime package name is declared", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {
-          typebox: "1.1.28",
-        },
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
-        'import { Type } from "typebox";\nexport { Type };\n',
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts optional or externalized runtime imports", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "optional-runtime.js"),
-        ['await import("@a2ui/markdown-it");', 'await import("@lancedb/lancedb");', ""].join("\n"),
-        "utf8",
-      );
-      writeFileSync(
-        join(packageRoot, "dist", "externalized-plugin-runtime.js"),
-        [
-          'import * as lark from "@larksuiteoapi/node-sdk";',
-          'import prism from "prism-media";',
-          "export { lark, prism };",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "plugin-sdk/channel-test-helpers.js"),
-        'import { expect, it } from "vitest";\nexport { expect, it };\n',
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("flags undeclared imports from mjs and cjs root dist files", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "esm-entry.mjs"),
-        'export { value } from "mjs-only";\n',
-        "utf8",
-      );
-      writeFileSync(
-        join(packageRoot, "dist", "cjs-entry.cjs"),
-        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
-        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("ignores import-like text inside comments", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "comment-only.js"),
-        [
-          '// import "fake-package";',
-          '/* require("fake-package-two"); */',
-          "export const ok = true;",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("ignores import-like text inside string literals", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "string-only.js"),
-        [
-          "export const help = \"run import('fake-package') after setup\";",
-          'export const note = "from \\"fake-package-two\\"";',
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("returns a structured error when installed package.json is invalid", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
-
-      const errors = collectInstalledRootDependencyManifestErrors(packageRoot);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.startsWith("installed package.json could not be parsed:")).toBe(true);
-      expect(errors[0]?.endsWith(".")).toBe(true);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses oversized root dist files", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(6 * 1024 * 1024 + 1),
-        "utf8",
-      );
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses unbounded root dist dependency scans", () => {
-    const packageRoot = makeInstalledPackageRoot();
-
-    try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.22",
-        dependencies: {},
-      });
-      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
-
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-});
+    };
+    const { files } = await resolveNodeBootstrapRuntimeChunks(
+      root,
+      await collectPackageDistInventory(root, { packageManifest: manifest }),
+      manifest.files,
+    );
+    expect(files).toEqual(expect.arrayContaining([expect.stringMatching(/^dist\/root\.m?js$/u)]));
+    expect(
+      collectPackageDistImportErrors({
+        files,
+        readText: (file) => fs.readFileSync(join(root, file), "utf8"),
+      }),
+    ).toEqual([]);
+  },
+);

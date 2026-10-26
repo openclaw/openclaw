@@ -1,0 +1,279 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { vi } from "vitest";
+import {
+  WORKER_PROTOCOL_FEATURES,
+  WORKER_RPC_SET_VERSION,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import type { SpawnResult } from "../../process/exec.js";
+import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+// Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
+// invocation-wide preparation must happen at collection, not inside a test deadline.
+import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
+import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
+
+export const BUILD = {
+  bundleHash: "a".repeat(64),
+  openclawVersion: "2026.8.13",
+  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+};
+const environmentIdentity = { environmentId: "environment-1", ownerEpoch: 2 };
+const identity = { ...environmentIdentity, sessionId: "session-1" };
+
+export function tunnelLaunchPlan(workspaceDir = "/node/workspace") {
+  return parseWorkerLaunchPlan({
+    version: 4,
+    admission: {
+      ...identity,
+      credential: "worker-credential-fixture",
+      rpcSetVersion: WORKER_RPC_SET_VERSION,
+      handshake: BUILD,
+    },
+    assignment: {
+      agentId: "main",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "runtime-token",
+      runId: "run-1",
+      turnId: "turn-1",
+      prompt: "inspect",
+      suppressPromptTranscript: true,
+      workspaceDir,
+      modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      inferenceOptions: {},
+      initialMessages: [],
+      transcript: { baseLeafId: null, nextSeq: 1 },
+      liveEvents: { ackedSeq: 0, nextSeq: 1 },
+      toolAuthority: { allowedToolNames: [] },
+    },
+  });
+}
+
+export function environment(): WorkerEnvironmentRecord {
+  return {
+    ...environmentIdentity,
+    preparation: null,
+    lastActivatedAtMs: null,
+    providerId: "device",
+    profileId: "device:node-1",
+    profileSnapshot: { settings: { device: "node-1" } },
+    provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: "node-1",
+    sharedHost: true,
+    desktop: null,
+    bootstrapReceipt: { ...BUILD, installKind: "bundle" },
+    teardownTerminalState: null,
+    attachedSessionIds: ["session-1"],
+    lastError: null,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    stateChangedAtMs: 2,
+    idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
+    state: "attached",
+    leaseId: "device-lease",
+    sshEndpoint: null,
+  };
+}
+
+export function transport(): NodeWorkerSupervisorTransport {
+  return {
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+    },
+    hasCurrentRunner: () => true,
+    listCurrentNodes: async () => [
+      createNodeWorkerBundleTestNode({
+        workerHost: {
+          environmentSession: 1,
+          workspaceQuiescence: 1,
+        },
+        commands: ["system.run"],
+      }),
+    ],
+    isCurrent: () => true,
+    invoke: withWorkspaceDrain(async ({ command }) =>
+      command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND
+        ? { ok: true, payloadJSON: "null" }
+        : { ok: false, error: { code: "UNAVAILABLE" } },
+    ),
+  };
+}
+
+export function withWorkspaceDrain(
+  invoke: NodeWorkerSupervisorTransport["invoke"],
+): NodeWorkerSupervisorTransport["invoke"] {
+  return async (request) => {
+    const input = request.params as { argv?: string[] } | undefined;
+    return input?.argv?.[0] === NODE_WORKSPACE_DRAIN_COMMAND
+      ? workspaceReply("/node/workspace", { stdout: "drained\n" })
+      : await invoke(request);
+  };
+}
+
+export function startRequest() {
+  return {
+    executionMode: "worker-turn" as const,
+    ...identity,
+    deviceId: "node-1",
+    expectedBuild: BUILD,
+  };
+}
+
+export function createManager(
+  record: ReturnType<typeof environment>,
+  overrides: Partial<Parameters<typeof createNodeWorkerTunnelManager>[0]> = {},
+) {
+  return createNodeWorkerTunnelManager({
+    gatewayDeviceId: "gateway-device-1",
+    getEnvironment: () => record,
+    listEnvironments: () => [record],
+    getTransport: transport,
+    launchNodeWorker: vi.fn(),
+    validateWorkerTurn: () => true,
+    workspaceTransfer: workspaceTransfer(),
+    ...overrides,
+  });
+}
+
+export function workspaceReply(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return { ok: true, payloadJSON: workspaceCommandPayload(workspaceDir, result) };
+}
+
+type WorkspaceActionsOptions = Parameters<typeof createNodeWorkerWorkspaceActions>[0];
+export function workspaceActions(
+  overrides: Pick<WorkspaceActionsOptions, "workspaceTransfer" | "runWorkspaceCommand"> &
+    Partial<WorkspaceActionsOptions>,
+) {
+  return createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
+    ...overrides,
+  });
+}
+
+export function workspaceTransfer(
+  operations: Partial<NodeWorkspaceTransferService> = {},
+): NodeWorkspaceTransferService {
+  const unconfigured = (): never => {
+    throw new Error("Unconfigured workspace transfer operation");
+  };
+  return {
+    initialize: unconfigured,
+    prepareAttachments: unconfigured,
+    prepareRepository: unconfigured,
+    prepareSync: unconfigured,
+    prepareUpload: unconfigured,
+    takeUpload: unconfigured,
+    discardUpload: unconfigured,
+    getSnapshot: unconfigured,
+    publishSnapshot: unconfigured,
+    authorize: unconfigured,
+    isAuthorizationCurrent: unconfigured,
+    authorizationSignal: unconfigured,
+    snapshot: unconfigured,
+    pack: unconfigured,
+    blob: unconfigured,
+    receiveUpload: unconfigured,
+    verifyBlob: unconfigured,
+    fenceEnvironment: unconfigured,
+    closeAll: unconfigured,
+    close: vi.fn(async () => {}),
+    revoke: vi.fn(async () => {}),
+    ...operations,
+  };
+}
+
+export function workspaceSnapshot(
+  root: string,
+  manifest: WorkerWorkspaceManifest = { version: 1, baseCommit: null, entries: [] },
+): NodeWorkspaceTransferSnapshot {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  return { manifest, manifestRef, rawManifest, root };
+}
+
+export function unchangedWorkspaceUpload(
+  snapshot: NodeWorkspaceTransferSnapshot,
+  stagingRoot: string,
+): ReturnType<NodeWorkspaceTransferService["takeUpload"]> {
+  return {
+    base: snapshot.manifest,
+    baseManifestRef: snapshot.manifestRef,
+    baseRaw: snapshot.rawManifest,
+    current: snapshot.manifest,
+    currentManifestRef: snapshot.manifestRef,
+    currentRaw: snapshot.rawManifest,
+    stagingRoot,
+  };
+}
+
+export function workspaceCommandPayload(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return JSON.stringify(workspaceCommandResult(workspaceDir, result));
+}
+
+export function workspaceCommandResult(workspaceDir: string, result: Partial<SpawnResult> = {}) {
+  return {
+    workspaceDir,
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+    ...result,
+  };
+}
+
+export function manifestCaptureOutput(manifestRef: string): string {
+  return JSON.stringify({
+    version: 1,
+    manifestRef,
+    memo: [],
+    metrics: {
+      contentHashCount: 0,
+      memoHitCount: 0,
+      memoTruncatedCount: 0,
+    },
+  });
+}
+
+export function seedNodeWorkspaceRepositories(
+  localPath: string,
+  remoteWorkspaceDir: string,
+): string {
+  const git = (args: string[]) =>
+    execFileSync("git", args, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    }).trim();
+  git(["init", "--quiet", localPath]);
+  git(["-C", localPath, "add", "."]);
+  const commitOptions = [
+    "user.name=Memo Test",
+    "user.email=memo@example.invalid",
+    "commit.gpgSign=false",
+  ].flatMap((option) => ["-c", option]);
+  git(["-C", localPath, ...commitOptions, "commit", "--quiet", "-m", "base"]);
+  const baseCommit = git(["-C", localPath, "rev-parse", "HEAD"]);
+  git(["clone", "--quiet", localPath, remoteWorkspaceDir]);
+  return baseCommit;
+}

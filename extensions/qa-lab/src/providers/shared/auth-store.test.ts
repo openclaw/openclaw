@@ -1,145 +1,163 @@
-// Qa Lab tests cover the SQLite-backed auth store plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { readQaAuthProfiles, writeQaAuthProfiles } from "./auth-store.js";
+import { stageQaMockAuthProfiles } from "./mock-auth.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirHarness();
+const apiKey = (provider = "openai") => ({ type: "api_key" as const, provider, key: "qa-fake" });
 
-async function createTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-auth-store-"));
-  tempDirs.push(dir);
-  return dir;
+async function writeUnreadableDatabase(databasePath: string, kind: "future" | "invalid") {
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  if (kind === "future") {
+    const database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA user_version = 999");
+    database.close();
+  } else {
+    await fs.writeFile(databasePath, "not a SQLite database");
+  }
 }
 
-describe("QA auth profile store", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+let root: string;
+let agentDir: string;
+beforeEach(async () => {
+  root = await tempDirs.makeTempDir("openclaw-qa-auth-store-");
+  agentDir = path.join(root, "agents", "main", "agent");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+});
+const write = (
+  profiles: Parameters<typeof writeQaAuthProfiles>[0]["profiles"] = { "qa-mock-openai": apiKey() },
+  replace = false,
+) => writeQaAuthProfiles({ agentId: "main", stateDir: root, profiles, replace });
+
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  vi.unstubAllEnvs();
+  await tempDirs.cleanup();
+});
+
+it.each(["old", "future", "invalid"] as const)("isolates %s host state", async (kind) => {
+  const hostStateDir = await tempDirs.makeTempDir("openclaw-qa-auth-unreadable-host-");
+  const hostDatabasePath = path.join(hostStateDir, "state", "openclaw.sqlite");
+  if (kind === "old") {
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: hostStateDir } });
+    await closeOpenClawStateDatabaseAsync();
+    const database = new DatabaseSync(hostDatabasePath);
+    database.exec(
+      "PRAGMA user_version = 6; UPDATE schema_meta SET schema_version = 6 WHERE meta_key = 'primary'",
     );
-  });
-
-  it("writes new auth profiles to SQLite without creating legacy JSON", async () => {
-    const agentDir = await createTempDir();
-
-    await writeQaAuthProfiles({
-      agentDir,
+    database.close();
+  } else {
+    await writeUnreadableDatabase(hostDatabasePath, kind);
+  }
+  const hostBefore = await fs.readFile(hostDatabasePath);
+  vi.stubEnv("OPENCLAW_STATE_DIR", hostStateDir);
+  vi.stubEnv("OPENCLAW_AGENT_DIR", path.join(hostStateDir, "relocated-agent"));
+  const staged = await Promise.all(
+    ["openai", "anthropic"].map(async (provider) => {
+      const stateDir = await tempDirs.makeTempDir("openclaw-qa-auth-concurrent-");
+      const config = await stageQaMockAuthProfiles({
+        cfg: {},
+        agentIds: ["qa"],
+        stateDir,
+        providers: [provider],
+      });
+      return { stateDir, provider, config };
+    }),
+  );
+  for (const { stateDir, provider, config } of staged) {
+    const store = await readQaAuthProfiles(path.join(stateDir, "agents", "qa", "agent"));
+    expect(Object.keys(store.profiles)).toEqual([`qa-mock-${provider}`]);
+    expect(config.auth).toEqual({
       profiles: {
-        "qa-mock-openai": {
-          type: "api_key",
-          provider: "openai",
-          key: "qa-mock-not-a-real-key",
+        [`qa-mock-${provider}`]: {
+          provider,
+          mode: "api_key",
+          displayName: `QA mock ${provider} credential`,
         },
       },
     });
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  expect(await fs.readFile(hostDatabasePath)).toEqual(hostBefore);
+  expect(process.env.OPENCLAW_STATE_DIR).toBe(hostStateDir);
+  expect(process.env.OPENCLAW_AGENT_DIR).toBe(path.join(hostStateDir, "relocated-agent"));
+});
 
-    expect(readQaAuthProfiles(agentDir).profiles["qa-mock-openai"]).toMatchObject({
+it.each(["future", "invalid", "legacy"] as const)("refuses a %s auth source", async (kind) => {
+  const sourcePath = path.join(
+    agentDir,
+    kind === "legacy" ? "auth-profiles.json" : "openclaw-agent.sqlite",
+  );
+  if (kind === "legacy") {
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(sourcePath, "{not-json");
+  } else {
+    await writeUnreadableDatabase(sourcePath, kind);
+  }
+  const before = await fs.readFile(sourcePath);
+  await expect(write()).rejects.toThrow(
+    kind === "legacy" ? "requires legacy credential migration" : "unreadable",
+  );
+  expect(await fs.readFile(sourcePath)).toEqual(before);
+});
+
+it("merges canonical credentials, then replaces profiles and clears stale metadata", async () => {
+  const profiles = {
+    existing: {
+      type: "api_key",
       provider: "openai",
-    });
-    await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    },
+    tokenProfile: {
+      type: "token",
+      provider: "github",
+      tokenRef: { source: "file", provider: "vault", id: "github/token" },
+    },
+    oauthProfile: {
+      type: "oauth",
+      provider: "chatgpt",
+      access: "qa-access-token",
+      refresh: "qa-refresh-token",
+      expires: 1_900_000_000_000,
+    },
+  } satisfies Parameters<typeof writeQaAuthProfiles>[0]["profiles"];
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles,
+      order: { openai: ["existing"] },
+      lastGood: { openai: "existing" },
+      usageStats: { existing: { cooldownUntil: Date.now() + 60_000 } },
+    },
+    agentDir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
+  );
+  const added = { "qa-mock-anthropic": apiKey("anthropic") };
+  await write(added);
+  expect((await readQaAuthProfiles(agentDir)).profiles).toEqual({ ...profiles, ...added });
+  await expect(fs.stat(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
+    code: "ENOENT",
   });
-
-  it("refuses to bypass a pending legacy auth source", async () => {
-    const agentDir = await createTempDir();
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(authPath, "{not-json", "utf8");
-
-    await expect(
-      writeQaAuthProfiles({
-        agentDir,
-        profiles: {
-          "qa-mock-openai": {
-            type: "api_key",
-            provider: "openai",
-            key: "qa-mock-not-a-real-key",
-          },
-        },
-      }),
-    ).rejects.toThrow("requires legacy credential migration");
-    await expect(fs.readFile(authPath, "utf8")).resolves.toBe("{not-json");
+  await write({ current: apiKey("anthropic") }, true);
+  const replaced = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    inheritedAuthDir: agentDir,
   });
-
-  it("merges canonical API-key, token, and OAuth profile shapes", async () => {
-    const agentDir = await createTempDir();
-    await writeQaAuthProfiles({
-      agentDir,
-      profiles: {
-        existing: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        tokenProfile: {
-          type: "token",
-          provider: "github",
-          tokenRef: { source: "file", provider: "vault", id: "github/token" },
-        },
-        oauthProfile: {
-          type: "oauth",
-          provider: "chatgpt",
-          access: "qa-access-token",
-          refresh: "qa-refresh-token",
-          expires: 1_900_000_000_000,
-        },
-      },
-    });
-
-    await writeQaAuthProfiles({
-      agentDir,
-      profiles: {
-        "qa-mock-anthropic": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "qa-mock-not-a-real-key",
-        },
-      },
-    });
-
-    expect(readQaAuthProfiles(agentDir).profiles).toMatchObject({
-      existing: { type: "api_key", provider: "openai" },
-      tokenProfile: { type: "token", provider: "github" },
-      oauthProfile: { type: "oauth", provider: "chatgpt" },
-      "qa-mock-anthropic": { type: "api_key", provider: "anthropic" },
-    });
-  });
-
-  it("can replace an existing profile set for deterministic fixture seeding", async () => {
-    const agentDir = await createTempDir();
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          stale: { type: "api_key", provider: "openai", key: "qa-stale-not-a-real-key" },
-        },
-        order: { openai: ["stale"] },
-        lastGood: { openai: "stale" },
-        usageStats: { stale: { cooldownUntil: Date.now() + 60_000 } },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false, syncExternalCli: false },
-    );
-
-    await writeQaAuthProfiles({
-      agentDir,
-      profiles: {
-        current: { type: "api_key", provider: "anthropic", key: "qa-current-not-a-real-key" },
-      },
-      replace: true,
-    });
-
-    expect(Object.keys(readQaAuthProfiles(agentDir).profiles)).toEqual(["current"]);
-    const replaced = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      inheritedAuthDir: agentDir,
-    });
-    expect(replaced.order).toBeUndefined();
-    expect(replaced.lastGood).toBeUndefined();
-    expect(replaced.usageStats).toBeUndefined();
-  });
+  expect(replaced.profiles).toEqual({ current: apiKey("anthropic") });
+  expect(replaced.order).toBeUndefined();
+  expect(replaced.lastGood).toBeUndefined();
+  expect(replaced.usageStats).toBeUndefined();
 });

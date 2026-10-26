@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for agent session entry types and persistence helpers.
- */
 export {
   buildSessionContext,
   createEventBus,
@@ -18,4 +15,10 @@ export {
   ModelRegistry,
   SessionManager,
 } from "../agents/sessions/index.js";
-export type { SessionEntry, ExtensionAPI, ExtensionContext } from "../agents/sessions/index.js";
+export type { SessionEntry } from "../agents/sessions/index.js";
+export type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionActionsV2,
+  ExtensionRuntimeV2,
+} from "../agents/sessions/extensions/types.js";

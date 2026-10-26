@@ -1,5 +1,5 @@
 // Irc tests cover runtime api plugin behavior.
-import { runDirectImportSmoke } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { runDirectImportSmoke } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it } from "vitest";
 
 describe("irc bundled api seams", () => {
@@ -14,7 +14,7 @@ process.stdout.write(JSON.stringify({
   runtime: { keys: Object.keys(runtime).sort(), type: typeof runtime.setIrcRuntime },
 }));`,
     );
-  }, 45_000);
+  });
 
   it("loads narrow public api modules in direct smoke", () => {
     expect(directSmokeStdout).toBe(

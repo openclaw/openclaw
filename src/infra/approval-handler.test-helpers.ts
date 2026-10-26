@@ -1,10 +1,12 @@
 // Provides native approval runtime stubs for approval tests.
 import { vi } from "vitest";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime.js";
+import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
 // Shared approval-runtime stubs keep channel approval tests focused on route
 // behavior instead of rebuilding the native adapter shape.
 export type ApprovalNativeRuntimeAdapterStubParams = {
+  eventKinds?: ChannelApprovalNativeRuntimeAdapter["eventKinds"];
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
   shouldHandle?: ChannelApprovalNativeRuntimeAdapter["availability"]["shouldHandle"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
@@ -15,6 +17,7 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   prepareTarget?: ChannelApprovalNativeRuntimeAdapter["transport"]["prepareTarget"];
   deliverPending?: ChannelApprovalNativeRuntimeAdapter["transport"]["deliverPending"];
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
+  onFinalized?: NonNullable<ChannelApprovalNativeRuntimeAdapter["observe"]>["onFinalized"];
 };
 
 /** Build a complete native approval adapter stub with per-test overrides. */
@@ -22,6 +25,7 @@ export function createApprovalNativeRuntimeAdapterStubs(
   params: ApprovalNativeRuntimeAdapterStubParams = {},
 ): ChannelApprovalNativeRuntimeAdapter {
   return {
+    ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
     ...(params.resolveApprovalKind ? { resolveApprovalKind: params.resolveApprovalKind } : {}),
     availability: {
       isConfigured: vi.fn().mockReturnValue(true),
@@ -46,5 +50,21 @@ export function createApprovalNativeRuntimeAdapterStubs(
       unbindPending: params.unbindPending,
       cancelDelivered: params.cancelDelivered,
     },
+    observe: {
+      onFinalized: params.onFinalized,
+    },
+  };
+}
+
+export function createSystemAgentChangeRequest(
+  sessionId: string,
+): SystemAgentApprovalRequestPayload {
+  return {
+    title: "OpenClaw change",
+    description: "restart the Gateway",
+    command: "restart the Gateway",
+    proposalHash: "a".repeat(64),
+    allowedDecisions: ["allow-once", "deny"],
+    sessionId,
   };
 }

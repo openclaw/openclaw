@@ -1,4 +1,4 @@
-// Resolves interactive plugin entries from registry metadata.
+import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
   resolvePluginInteractiveRegistrationsMatch,
   type RegisteredInteractiveHandler,
@@ -9,10 +9,7 @@ import {
   releasePluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
 import { getActivePluginRegistry } from "./runtime.js";
-
-type InteractiveDispatchResult<TResult = unknown> =
-  | { matched: false; handled: false; duplicate: false }
-  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult };
+import type { PluginInteractiveRegistration } from "./types.js";
 
 type PluginInteractiveDispatchRegistration = {
   channel: string;
@@ -26,18 +23,22 @@ type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegis
   payload: string;
 };
 
+type ChannelInteractivePayload = { data: string; namespace: string; payload: string };
+type ChannelInteractiveDispatchPayload<T> = T extends ChannelInteractivePayload
+  ? Omit<T, keyof ChannelInteractivePayload>
+  : never;
+type ChannelInteractiveDispatchBase = {
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  threadId?: string | number;
+  auth: { isAuthorizedSender: boolean };
+};
 export {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "./interactive-registry.js";
-
-function resolveActivePluginInteractiveNamespaceMatch(channel: string, data: string) {
-  return resolvePluginInteractiveRegistrationsMatch(
-    getActivePluginRegistry()?.interactiveHandlers ?? [],
-    channel,
-    data,
-  );
-}
 
 /** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
@@ -50,8 +51,15 @@ export async function dispatchPluginInteractiveHandler<
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
   afterInvoke?: (result: TResult) => Promise<void> | void;
-}): Promise<InteractiveDispatchResult<TResult>> {
-  const match = resolveActivePluginInteractiveNamespaceMatch(params.channel, params.data);
+}): Promise<
+  | { matched: false; handled: false; duplicate: false }
+  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult }
+> {
+  const match = resolvePluginInteractiveRegistrationsMatch(
+    getActivePluginRegistry()?.interactiveHandlers ?? [],
+    params.channel,
+    params.data,
+  );
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
@@ -87,4 +95,88 @@ export async function dispatchPluginInteractiveHandler<
     }
     throw error;
   }
+}
+
+/** Creates a channel dispatcher for plugin-owned interactive callbacks. */
+export function createChannelInteractiveDispatcher<
+  TChannel extends string,
+  TInteractiveKey extends PropertyKey,
+  TContext extends ChannelInteractiveDispatchBase & {
+    channel: TChannel;
+    respond: unknown;
+  } & Record<TInteractiveKey, ChannelInteractivePayload>,
+  TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
+  TDispatchInteractiveKey extends PropertyKey = TInteractiveKey,
+>(config: {
+  channel: TChannel;
+  interactiveKey: TInteractiveKey;
+  dispatchInteractiveKey?: TDispatchInteractiveKey;
+}) {
+  type Registration = PluginInteractiveRegistration<TContext, TChannel, TResult>;
+  return async (params: {
+    data: string;
+    dedupeId: string;
+    ctx: Omit<
+      TContext,
+      | TInteractiveKey
+      | "respond"
+      | "channel"
+      | "requestConversationBinding"
+      | "detachConversationBinding"
+      | "getCurrentConversationBinding"
+    > &
+      ChannelInteractiveDispatchBase &
+      Record<TDispatchInteractiveKey, ChannelInteractiveDispatchPayload<TContext[TInteractiveKey]>>;
+    respond: TContext["respond"];
+    conversation?: Parameters<
+      typeof createInteractiveConversationBindingHelpers
+    >[0]["conversation"];
+    onMatched?: () => Promise<void> | void;
+    afterInvoke?: (result: TResult) => Promise<void> | void;
+  }) =>
+    await dispatchPluginInteractiveHandler<Registration, TResult>({
+      channel: config.channel,
+      data: params.data,
+      dedupeId: params.dedupeId,
+      onMatched: params.onMatched,
+      afterInvoke: params.afterInvoke,
+      invoke: ({ registration, namespace, payload }) => {
+        const dispatchInteractiveKey = config.dispatchInteractiveKey ?? config.interactiveKey;
+        const { [dispatchInteractiveKey]: interactiveContext, ...handlerContext } = params.ctx;
+        const conversation = params.conversation ?? {
+          channel: config.channel,
+          accountId: params.ctx.accountId,
+          conversationId: params.ctx.conversationId,
+          parentConversationId: params.ctx.parentConversationId,
+          threadId: params.ctx.threadId,
+        };
+        const senderId = params.ctx.senderId?.trim();
+        const accountId = params.ctx.accountId.trim();
+        const conversationId = params.ctx.conversationId.trim();
+
+        // Unauthorized or unbound senders never receive pluginRoot, so binding helpers fail closed.
+        const bindingRegistration =
+          params.ctx.auth.isAuthorizedSender && senderId && accountId && conversationId
+            ? registration
+            : { ...registration, pluginRoot: undefined };
+        const bindingHelpers = createInteractiveConversationBindingHelpers({
+          registration: bindingRegistration,
+          senderId: params.ctx.senderId,
+          conversation,
+        });
+
+        return (registration as Registration).handler({
+          ...handlerContext,
+          channel: config.channel,
+          [config.interactiveKey]: {
+            ...interactiveContext,
+            data: params.data,
+            namespace,
+            payload,
+          },
+          respond: params.respond,
+          ...bindingHelpers,
+        } as unknown as TContext);
+      },
+    });
 }

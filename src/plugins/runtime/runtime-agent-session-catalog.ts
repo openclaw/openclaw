@@ -1,8 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
-} from "../../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { resolveAllowedModelRefCore as resolveAllowedModelRef } from "../../agents/model-selection-resolve.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionCatalogCreateTarget } from "../session-catalog.js";
@@ -19,7 +17,7 @@ type RuntimeSessionCatalogCreateTargetParams = {
  * Resolve a synchronous catalog create target through the same model/runtime
  * policy used by agent turns, without making plugins import that policy graph.
  */
-export function resolveSessionCatalogCreateTarget(
+export function resolveAgentCatalogCreateTarget(
   params: RuntimeSessionCatalogCreateTargetParams,
 ): SessionCatalogCreateTarget | undefined {
   const agentId = params.requestedAgentId ?? resolveDefaultAgentId(params.config);
@@ -41,7 +39,7 @@ export function resolveSessionCatalogCreateTarget(
       catalog: [],
       raw: model,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId,
     });
     if (!("error" in allowed)) {

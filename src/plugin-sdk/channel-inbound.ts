@@ -1,4 +1,4 @@
-// Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
+import type { DispatchFromConfigResult } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -14,6 +14,49 @@ import {
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import { runPreparedChannelTurn } from "../channels/turn/execution.js";
+import {
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
+} from "../channels/turn/lifecycle.js";
+import {
+  recordDroppedChannelTurnHistory as recordDroppedChannelTurnHistoryInternal,
+  runChannelTurn,
+} from "../channels/turn/run-channel-turn.js";
+import type {
+  AssembledChannelTurn,
+  ChannelCoreManagedTurnDeliveryAdapter,
+  ChannelProviderOwnedMessageSendingDeliveryAdapter,
+  ChannelTurnDeliveryAdapter,
+  ChannelTurnPlan,
+  ChannelTurnResult,
+  PreparedChannelTurn,
+  RunChannelTurnParams,
+} from "../channels/turn/types.js";
+import {
+  publicChannelTurn,
+  publicChannelTurnParams,
+  type PublicChannelTurnParams,
+  type PublicReplyParams,
+} from "./reply-options.js";
+export {
+  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
+} from "../channels/turn/dispatch-result.js";
+
+export { runGroupThread, type GroupThreadTurn } from "../auto-reply/group-thread.js";
+export {
+  resolveGroupThreadMentionFacts,
+  isGroupThreadRouteExclusive,
+  resolveGroupThreadConfig,
+} from "../auto-reply/group-thread-config.js";
+export type { GroupThreadMentionFacts } from "../auto-reply/group-thread.types.js";
+export { getGroupThreadDeliverySession } from "../auto-reply/group-thread-context.js";
+export {
+  readAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../channels/turn/agent-run-terminal-outcome.js";
 
 export {
   createInboundDebouncer,
@@ -80,7 +123,10 @@ export {
 } from "../channels/location.js";
 export type { LogFn } from "../channels/logging.js";
 export { logInboundDrop } from "../channels/logging.js";
-export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export {
+  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
+} from "../channels/session-envelope.js";
 export {
   classifyChannelInboundEvent,
   resolveUnmentionedGroupInboundPolicy,
@@ -88,6 +134,7 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundEnvelopeInput,
 } from "../channels/inbound-event/envelope.js";
@@ -166,29 +213,87 @@ export function buildChannelTurnContext(
  * @deprecated Use `filterChannelInboundSupplementalContext`.
  */
 export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
-export {
-  runChannelInboundEvent,
-  runPreparedInboundReply,
-  dispatchChannelInboundTurn,
-  dispatchChannelInboundReply,
-  recordDroppedChannelInboundHistory,
-  dispatchReplyFromConfigWithSettledDispatcher,
-  hasFinalInboundReplyDispatch,
-  hasVisibleInboundReplyDispatch,
-  recordChannelBotPairLoopAndCheckSuppression,
-  resolveInboundReplyDispatchCounts,
-} from "../channels/message/inbound-reply-dispatch.js";
+// Public inbound vocabulary binds to internal channel-turn vocabulary here and only here.
+// Keep internal defining modules free of SDK compatibility names.
+export type ChannelInboundEventRunnerParams<
+  TRaw,
+  TDispatchResult = DispatchFromConfigResult,
+> = PublicChannelTurnParams<TRaw, TDispatchResult, ChannelCoreManagedTurnDeliveryAdapter>;
+export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
+export type AssembledInboundReply = PublicReplyParams<AssembledChannelTurn>;
+export type ChannelInboundTurnPlan<
+  TOwnership extends "core" | "provider_message_sending" = "core",
+> = PublicReplyParams<
+  ChannelTurnPlan<
+    TOwnership extends "provider_message_sending"
+      ? ChannelProviderOwnedMessageSendingDeliveryAdapter
+      : ChannelCoreManagedTurnDeliveryAdapter
+  >
+>;
+export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 export type {
-  AssembledInboundReply,
-  ChannelBotLoopProtectionFacts,
-  ChannelInboundEventRunnerParams,
-  ChannelInboundTurnPlan,
-  ChannelInboundDroppedHistoryOptions,
-  PreparedInboundReply,
-  InboundReplyDispatchResult,
-  InboundReplyRecordOptions,
-} from "../channels/message/inbound-reply-dispatch.js";
+  ChannelTurnDroppedHistoryOptions,
+  ChannelTurnDroppedHistoryOptions as ChannelInboundDroppedHistoryOptions,
+  ChannelTurnRecordOptions,
+  ChannelTurnRecordOptions as InboundReplyRecordOptions,
+} from "../channels/turn/types.js";
+export type { DurableInboundReplyDeliveryParams } from "../channels/turn/durable-delivery.js";
+export type { ChannelBotLoopProtectionFacts } from "../channels/turn/bot-loop-protection.js";
+export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/bot-loop-protection.js";
+
+export async function runPreparedInboundReply<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  return await runPreparedChannelTurn(params);
+}
+
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: PublicChannelTurnParams<
+    TRaw,
+    TDispatchResult,
+    ChannelProviderOwnedMessageSendingDeliveryAdapter
+  >,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: PublicChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
+) {
+  const run = runChannelTurn as (
+    value: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult<TDispatchResult>>;
+  return await run(publicChannelTurnParams(params));
+}
+
+export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
+  return await dispatchAssembledChannelTurn(publicChannelTurn(params));
+}
+
+export function dispatchChannelInboundTurn(
+  params: PublicReplyParams<ChannelTurnPlan<ChannelTurnDeliveryAdapter>>,
+): Promise<ChannelTurnResult>;
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan<"provider_message_sending">,
+): Promise<ChannelTurnResult>;
+export function dispatchChannelInboundTurn(
+  params: ChannelInboundTurnPlan,
+): Promise<ChannelTurnResult>;
+export async function dispatchChannelInboundTurn(
+  params: PublicReplyParams<ChannelTurnPlan<ChannelTurnDeliveryAdapter>>,
+) {
+  const dispatch = dispatchRoutedChannelTurn as (
+    value: ChannelTurnPlan<ChannelTurnDeliveryAdapter>,
+  ) => Promise<ChannelTurnResult>;
+  return await dispatch(publicChannelTurn(params));
+}
+
 export {
+  recordDroppedChannelTurnHistoryInternal as recordDroppedChannelInboundHistory,
+  recordDroppedChannelTurnHistoryInternal as recordDroppedChannelTurnHistory,
+};
+export {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   type ChannelPartialDeliveryError,
@@ -202,8 +307,6 @@ export {
   buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  /** @deprecated Pass ordered facts as the context's `media` field. */
-  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,

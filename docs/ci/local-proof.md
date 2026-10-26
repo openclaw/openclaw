@@ -1,0 +1,752 @@
+---
+summary: "Local command equivalents, shrink-only ratchets, and Crabbox remote proof"
+title: "Local checks and Testbox"
+read_when:
+  - You want to reproduce a CI lane on your own machine
+  - You are producing Testbox or Crabbox proof for a pull request
+---
+
+## Local equivalents
+
+Strict managed commands join their process group and captured output before
+releasing temporary resources. A leader can exit before an unreferenced helper
+finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
+cleanup budget for natural group drainage and half for forced cleanup. Requiring
+forced cleanup still fails the command; live or uninspectable groups and output
+that remains open never count as successful completion. Zombie-only groups are
+already terminated, even when their new parent has not reaped them yet.
+Cancellation during natural drainage forwards its signal immediately; its grace
+ends no later than the original halfway point, preserving the recovery allowance
+and total cleanup deadline.
+
+The complete channels and gateway-methods test projects prepare their native worker
+artifacts before starting the test process. Cold compilation therefore does not
+consume the test-output watchdog's deadline. Focused selections retain lazy
+preparation; the watchdog and compiler cleanup rules remain unchanged.
+
+The lint wrapper owns Go resource limits for current CI. It applies them on
+hosts with fewer than eight available CPUs or less than 24 GiB of memory,
+without applying lint defaults to declaration preparation. Explicit Go settings
+remain inherited. Frozen revisions retain the workflow limits because their
+wrappers can predate this policy.
+
+Bounded core and eight-directory plugin lint shards can use two lint threads,
+four Go CPUs, `GOGC=100`, and an 8-GiB soft Go heap target on Linux CI. The batch
+owner must admit one child on at least four CPUs and 15 GiB of verified capacity;
+each child also requires 14 GiB of available memory for core or 10 GiB for plugins.
+The child verifies that its arguments match the admitted shard. Larger plugin
+chunks, unbounded commands, parallel children, and unknown memory keep their
+existing limits. Explicit thread and Go settings remain inherited. The larger
+heap target reduces repeated garbage collection without changing lint rules,
+target files, or declaration preparation.
+
+The runtime topology CI job also supplies `GOGC=30` and `GOMEMLIMIT=3GiB`
+defaults to `pnpm check:architecture`, preserving caller overrides. Both import
+cycle checks and the remaining architecture checks inherit these settings.
+The memory target is soft: a four-CPU, 15.42-GiB Testbox comparison on Node
+24.21.0 measured peak checker/compiler process-group RSS of 14.24 GiB without
+the defaults and 11.31 GiB with them; peak swap use fell from 4.74 GiB to zero.
+Two hosted runners shut down during the native Madge check, but their logs did
+not establish a kernel OOM. These measurements support reducing memory pressure,
+not a hard 3-GiB RSS cap or a confirmed cause for those shutdowns.
+
+On serial hosts with less than 24 GiB of memory, full lint runs core targets in
+five disjoint batches and plugins in smaller chunks. These runs retain the same
+type-aware rules and TypeScript configuration while bounding checker caches.
+Automatic Linux CI on at least four CPUs and 15 GiB of verified memory capacity
+uses sixteen-directory plugin chunks to amortize type-graph startup. Capacity
+includes physical RAM and ancestor cgroup limits. Smaller or unknown capacity,
+local runs, Windows, explicit plugin stripes, and explicit serial selections keep
+eight-directory chunks. Explicit split-core and parallel execution selections
+remain unchanged.
+
+Oxlint's type-aware backend discovers `src/tsconfig.json` and `ui/tsconfig.json`
+separately. Both inherit the root compiler options, include shared ambient
+declarations, and follow imported dependencies. Every existing lint target and
+rule still runs, including source CommonJS test preloads. The CLI `--tsconfig`
+option controls import resolution; it does not replace these discovery projects.
+
+Current CI core-test rows combine their paired stripes into one queue of fresh
+compiler processes, with the same two-child limit. Each independent graph runs
+in incremental project mode: solution-build mode can miss an added root whose
+timestamp predates restored build information. Frozen targets keep their
+original stripe invocations. Per-graph elapsed times appear in the job log.
+
+CI type jobs start without restored compiler state. Updating older build information
+can require declaration-signature computation and dependency invalidation that a
+fresh check avoids. A same-checkout six-graph comparison with one-hour-old state
+took 295.27 seconds versus 157.81 seconds cold; both runs checked every graph.
+CI therefore does not publish or restore `.artifacts/tsgo-cache`, including in the
+changed-graph queue. Local commands retain incremental state for repeated checks
+in the same checkout. Compiler selection, graph membership, concurrency, and
+frozen-target commands remain unchanged.
+
+Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
+`.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
+type/value pairs with the same public name. `eslint/no-var` remains enabled
+for all source formats; the compiler does not reject every `var` redeclaration.
+
+`eslint/no-eval` rejects direct and indirect evaluation by default. Only
+`extensions/qa-lab/src/web-runtime.ts` allows indirect evaluation, because QA
+scenario scripts need page-global declaration semantics that Playwright's
+expression evaluation does not preserve. Direct evaluation remains an error
+there. Tests that execute emitted browser scripts use isolated `node:vm`
+contexts instead of process-global evaluation.
+
+```bash
+pnpm changed:lanes                            # inspect the local changed-lane classifier for origin/main...HEAD
+pnpm check:changed                            # optional smart local check: changed formatting/typecheck/lint/guards by boundary lane
+pnpm check                                    # optional broad local check: prod tsgo + sharded lint + parallel fast guards
+pnpm check:test-types
+pnpm check:timed                              # same gate with per-stage timings
+pnpm build:strict-smoke
+pnpm check:architecture
+pnpm test:gateway:watch-regression
+OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+pnpm test                                     # vitest tests
+pnpm test:changed                             # cheap smart changed Vitest targets
+pnpm test:ui                                  # Control UI unit/browser suite
+pnpm ui:i18n:check                            # generated Control UI locale parity (release gate)
+pnpm native:i18n:baseline                     # update source-owned native extraction inventory
+pnpm native:i18n:verify                       # source inventory + Android/Apple localization safety
+pnpm native:i18n:check                        # strict local translated/platform-generated parity
+pnpm test:channels
+pnpm test:contracts:channels
+pnpm check:docs                               # docs format + lint + broken links
+pnpm build                                    # build dist when CI artifact/smoke checks matter
+pnpm ios:build                                # generate and build the iOS app project
+pnpm ci:timings                               # summarize the latest origin/main push CI run
+pnpm ci:timings:recent                        # compare recent successful main CI runs
+pnpm ci:timings:trend                         # 72h main baseline; latest 12h versus prior 12h
+node scripts/ci-run-timings.mjs <run-id>      # summarize wall time, queue time, and slowest jobs
+node scripts/ci-run-timings.mjs --latest-main # ignore issue/comment noise and choose origin/main push CI
+node scripts/ci-run-timings.mjs --recent 10   # compare recent successful main CI runs
+node scripts/ci-run-timings.mjs --trend-hours 72 --compare-hours 12 --detail-runs 100 --output .artifacts/ci-timings/trend.json
+pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json
+pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json
+pnpm test:startup:memory
+pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/mock-provider/extension-memory.json
+pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
+```
+
+Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
+check warns about obsolete translation IDs, Android generated rows, and Apple catalog
+rows awaiting the serialized locale refresh. Android warnings require standard, unreferenced,
+noninterpolated obsolete rows whose removal leaves every other byte unchanged.
+Apple warnings require standard plain generator rows absent from the active
+inventory; removing those rows must leave the exact generated catalog, including
+metadata. Obsolete rows still need valid dictionary and string-unit structure for
+Xcode, but do not need active locales or translated/nonempty copy. Unsupported
+metadata and variation shapes retain strict parity checks.
+Missing active translations or resources, active placeholder drift, invalid
+artifact syntax, and other generated-output differences remain blocking. Generator sync
+and the standalone Android and Apple checks retain their strict behavior.
+
+### Opt-in compiler evidence
+
+Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
+`pnpm tsgo:profile <graph> --deep` for deliberate multi-pass graph/pprof analysis.
+For evidence from the compiler invocation you are already running, set
+`OPENCLAW_TSGO_METRICS_DIR=.artifacts/tsgo-metrics`. Each `run-tsgo` invocation
+writes a separate JSON artifact on ordinary local developer machines; neither
+metrics nor `OPENCLAW_TSGO_PPROF_DIR` requires `OPENCLAW_LOCAL_CHECK_MODE=throttled`,
+CI, or a server-specific setup. Unset or blank metrics means no metrics imports, checks,
+files, or additional output on the normal path. This also works for test shards
+and compiler stages reached through the timed check wrappers. It does not add a
+compiler invocation or change the compiler arguments, limits, deadline, signals,
+or cleanup policy. Metrics write failures warn without replacing compiler results.
+
+Artifacts record the effective command and exit/error/signal, managed wall time
+(including cleanup, excluding evidence I/O and artifact-ownership admission),
+revision, tracked-dirty status, installed native compiler/Node versions, lockfile
+digest, OS, and effective Go limits. Unknown provenance is `null`; tracked-dirty
+status does not account for untracked inputs. Commands and paths can contain
+private local information: inspect and scrub artifacts before sharing them.
+
+On Linux, opt-in sampling reads the compiler process's `/proc` CPU counters
+(all threads) and RSS high-water mark every 100 ms. CPU and peak RSS are explicitly
+**sampled lower bounds**, not exact end-of-process totals or process-tree memory.
+They can miss the final interval; very short runs or restricted procfs can have no
+usable samples. Missing statistics are `null` with a reason, never zero-filled.
+macOS and Windows report unsupported resource sampling; wall time and provenance
+remain available. No wrapper process changes signal ownership.
+
+An explicit `--tsBuildInfoFile` supplies before/after SHA-256 evidence. Its presence
+is not a cache hit: `hit` stays `unknown`, and the OS page cache is `uncontrolled`.
+Changed, readable JSON build metadata supplies total, root, and non-root/transitive
+file counts, including library/declaration inputs. Unchanged, absent, oversized
+(over 32 MiB), or unsupported metadata leaves counts unavailable rather than
+attributing a stale graph to this run. Implicit cache paths and solution-build
+caches are not inferred. No `--listFiles`, `--showConfig`, or diagnostics pass is
+launched to fill a missing field. Use the existing `tsgo:profile` tool when you
+intentionally need those additional passes.
+
+For a bounded comparison, use the same frozen install, source revision, resource
+limits, machine, and project for three absent-build-info/reuse pairs:
+
+```bash
+mkdir -p .artifacts
+benchmark_dir=$(mktemp -d .artifacts/tsgo-benchmark.XXXXXX)
+for repeat in 1 2 3; do
+  pair="$benchmark_dir/$repeat"
+  mkdir -p "$pair"
+  OPENCLAW_TSGO_METRICS_DIR="$pair/cold" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+  OPENCLAW_TSGO_METRICS_DIR="$pair/warm" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+done
+```
+
+Honor the host's existing build lock and resource policy around this command tree;
+do not run the pairs concurrently. Stop and investigate any nonzero compiler exit
+before interpreting timing. “Cold” here means only that this pair's build-info file
+was absent; it does not mean cold OS/dependency caches. “Warm” means reuse was
+attempted with identical inputs, not a proven cache hit. Compare medians and the
+range, report all exits and missing fields, and keep before/after revisions and
+lockfile/toolchain digests beside the results. Do not delete shared caches, drop OS
+caches, or relax resource caps to manufacture a favorable comparison. The recipe
+creates only a new benchmark directory and leaves normal caches untouched.
+
+For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
+per measured invocation, or use `tsgo:profile --deep`. Go profiling requests select
+tsgo even when tsrs is the default checker. An explicit `OPENCLAW_TYPECHECKER=tsrs`
+combined with `--pprofDir` fails rather than silently omitting profiles. Keep Go-only
+profiling outside tsrs-versus-tsgo timing pairs.
+The evidence records the effective `--pprofDir`; it does not manage or delete those
+profiles. These measurements are developer evidence, not a CI pass/fail threshold.
+
+The Gateway watch regression check starts its idle CPU window only after readiness
+and the settle period. Startup and early-exit failures still fail the check. Missing
+CPU samples from an otherwise valid window fail measurement; whole-run CPU is
+reported separately and never compared with the idle thresholds.
+
+The check joins the timed watch process and its output before taking the post-run
+snapshot or removing its private HOME. If cleanup cannot be confirmed, the check
+fails and retains that HOME for inspection; `watch.home.txt` in the output
+directory records its path.
+
+The native source gate covers catalog-owned macOS, iOS, and shared Apple source
+roots. Linux-runnable source extraction requires explicit typed localized formats
+(for example, `String(format: String(localized: "Expires in %lld minutes"), minutes)`
+for an `Int`) instead of arbitrary Swift interpolation. Constrained inflected
+count resources are supported on both platforms. Use explicit verbatim text for
+user, system, or already-localized data.
+
+For staged checks, `pnpm check:changed --staged` compares the index with `HEAD`.
+Use `pnpm check:changed --staged --base <commit>` to compare the index with an
+explicit commit, including during a pending merge. Path selection, package
+classification, and the staged ratchets use that same base. Without `--staged`,
+the default comparison base remains `origin/main`.
+
+Delegated staged checks carry the selected paths and comparison base to the
+remote checker. Crabbox synchronizes working-tree files, not the local Git
+index, so remote results describe those materialized files rather than an exact
+copy of the staged snapshot. Keep the intended proof files consistent before
+using that route.
+
+## Workflow lint tools
+
+`pnpm check:workflows` requires actionlint built from the revision pinned in
+`scripts/check-workflows.mts` and `.pre-commit-config.yaml`. Released and unknown
+builds intentionally use the pinned fallback on every platform. Install Go to
+let the wrapper acquire that revision, or use the pinned pre-commit hook.
+
+The zizmor check also requires pre-commit, the Python `pre_commit` module, or
+Python 3.10+ with venv support so the wrapper can install its pinned pre-commit
+runtime. A matching installed actionlint does not remove this requirement.
+
+For offline use, have a pre-commit runtime and its zizmor hook cached, plus
+either a matching installed actionlint or the pinned actionlint hook cached.
+With pre-commit installed, prime both hook environments while online:
+
+```bash
+pre-commit run actionlint --all-files
+pre-commit run zizmor --all-files
+```
+
+## Surface ratchets
+
+Size, length, count, and measured performance limits are errors locally and
+warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
+using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
+local test runners and delegated local checks also set it. Each CI violation
+emits a file-associated GitHub warning at column zero and a job-summary entry.
+Docker proof wrappers carry the signal and relay their summaries to the runner.
+
+Oxlint keeps configured line caps and exclusions: 700 counted lines for ordinary
+TypeScript, 800 for JavaScript modules, and 1,000 for tests, with the existing
+explicit overrides. Standalone local lint reports errors. In `check:changed`,
+lint reports `max-lines` errors for selected changed files and warnings for
+untouched files included by a broader lint lane. The broad scan still reports
+semantic errors everywhere it runs. Empty or oversized change scopes, changes to
+lint configuration or dependencies, and configurations with inherited limits
+keep strict local enforcement. CI uses a temporary configuration that changes
+only enabled size-rule severity to warning. SwiftLint likewise
+reports native length, nesting, complexity, and count limits as CI warnings;
+semantic lint errors remain blocking.
+
+`pnpm check`, `pnpm check:changed`, and `pnpm check:line-cap-ratchet --base <commit>`
+reject new over-cap files and growth above inherited over-cap debt locally. The
+PR `checks-fast-baseline-ratchets` job reports this growth as warnings. Renames
+compare against the old path; unchanged or shrinking over-cap files pass the
+ratchet. Measurement uses oxlint's actual caps and comment/blank-line exclusions
+and neutralizes suppression directives only in temporary measurement copies.
+Current files are measured first; historical source and rename detection are
+needed only for files that still exceed their cap, avoiding unused blob downloads
+in partial clones.
+Main-push CI does not run the PR growth comparison; ordinary lint still reports
+all unsuppressed over-cap files.
+
+`pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
+ratchets in two managed child slots, retaining all results after ordinary
+failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
+The database-worker inventory starts first and shares the runner with at most
+one smaller check; it never runs two semantic inventories concurrently. When
+the complete current and historical source snapshots have identical paths and
+contents, its fresh current analysis also supplies the comparison counts.
+Changed snapshots retain both full analyses and historical-cache validation.
+Frozen targets without the aggregate command retain their original commands.
+
+`pnpm check:test-lines-ratchet` compares total tracked test lines with the
+integer ceiling in `config/test-lines-baseline.txt`, counting newline-terminated
+lines like `wc -l` in `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
+over-ceiling tree fails only when this change's net test-line delta against the
+comparison base is positive; non-growing changes pass with an over-ceiling notice,
+while runs without a base retain the absolute ceiling check. Run
+`pnpm check:test-lines-ratchet --prune` to lower the ceiling to the current total;
+this command never raises it. A higher ceiling requires a deliberate manual
+edit and justification in the PR, and the check reports the increase against
+the comparison base.
+
+The max-lines suppression inventory and the environment-variable count budget
+must describe the tree, and that check blocks in GitHub Actions as well as
+locally: an unlisted suppression, a stale inventory entry, or an `OPENCLAW_*`
+count that differs from the budget fails everywhere. Warning-only drift on
+`main` would otherwise fail every later local check for unrelated branches.
+Growth of either inventory relative to the merge base follows the severity
+policy above. A renamed suppressed file moves its inventory entry. After removing
+a suppression, remove its stale entry from `config/max-lines-baseline.txt`, or
+run `pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking;
+warning status does not authorize new suppressions or higher caps. The
+environment budget counts distinct `OPENCLAW_*` names in production `src/`,
+`packages/`, and `extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` in the change that adds or removes a name;
+raising it needs owner approval.
+
+The policy also covers numeric bundle, declaration, package, startup memory,
+CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+The core test shard root budget is a shared cost signal that no single change
+owns, so it warns locally as well as in CI; rebalance the shard configurations
+in `test/tsconfig/` when it reports.
+When a file or artifact exceeds a cap, extract a coherent module or investigate
+the added cost. Do not trim coverage, disable rules, or raise thresholds just
+to silence a warning.
+
+Correctness checks stay blocking, including types, semantic lint, blanket lint
+disables, assertion safety, the test timeout race ratchet, missing or malformed
+evidence, failed commands, forbidden eager imports, and exactly-once ownership.
+Public SDK inventories and generated configuration-schema baselines remain
+contract guards. Runner matrix
+caps protect shared runner-registration capacity and remain blocking. Explicit
+benchmark qualification verdicts retain their requested acceptance criteria.
+
+The workflow file-size guard in `test/scripts/ci-workflow-guards.test.ts` also
+stays blocking. GitHub refuses any workflow file above 512,000 bytes (500 KiB)
+with a run that has no jobs, so every PR and main CI run stops without a failing
+check. The guard fails at 480,000 bytes, while CI can still report it. Shrink the
+file before raising the limit; for example, share byte-identical runner
+expressions, steps, and scripts through YAML anchors and aliases.
+
+## Local check gates and changed routing
+
+### Assertion inventory reports
+
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a consistently ordered JSON
+inventory to stdout without changing the assertion baseline. The ref selects the
+committed source and baseline, including files omitted by a sparse checkout.
+Ordinary ratchet checks still inspect worktree or staged content; their `--base`
+option selects comparison ancestry, not source bytes.
+
+The report records source Git object IDs, SHA-256 hashes of the executing
+collector and policy files, and the installed parser and Node versions. It lists
+zero-count files, excluded declaration/test-support files, missing baseline paths,
+syntax diagnostics, and every parsed assertion's current policy exemption.
+Positions use one-based lines/columns and half-open source-text spans.
+
+Unused allowance means the baseline exceeds the observed policy count. It is
+accounting evidence, not proof of a repair: adding a SAFETY marker can reduce
+the count while retaining the assertion. Exemptions describe the existing guard's
+decision; they do not validate the stated invariant. Assertion fingerprints hash
+the exact assertion text, so repeated hashes are ambiguous and whitespace changes
+can change a hash. The report does not match sites between revisions or classify
+assertions semantically.
+
+Exit zero means inventory coverage is complete, not that the ratchet passed or
+debt was repaired. Parse failures or caught collection errors produce incomplete
+coverage and a nonzero exit; unknown counts and unused allowances stay `null`.
+Successful file records remain available when other files fail. A killed process
+can produce no report; absent or truncated output is incomplete evidence. Qualify
+the reported source, tooling and dependency inputs before comparing separate runs.
+
+### Config baseline count ratchet
+
+`pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
+
+Config authors must also tier new leaves for Settings. Add `advanced: false` or
+`advanced: true` at the leaf, or place the key beneath an ancestor whose tier
+all descendants should inherit. Unclassified roots fail the schema quality
+test with copy-paste stubs; paths without an ancestor are advanced by default.
+The curated common-leaf snapshot makes intentional tier changes visible in
+review.
+
+Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope:
+
+- core production changes run core prod and core test typecheck plus core lint/guards;
+- core test-only changes run only core test typecheck plus core lint;
+- root TypeScript tests and support files run root test typecheck plus targeted type-aware lint within `test/tsconfig/tsconfig.test.root.json`; the discoverable `test/tsconfig.json` inherits that source-only program. It includes `.ts`, `.tsx`, `.d.mts`, and `.d.cts`, not ordinary `.mts`/`.cts`; fixtures and built-artifact Docker clients stay outside targeted root lint;
+- extension production changes run extension prod and extension test typecheck plus extension lint;
+- extension test-only changes run extension test typecheck plus extension lint;
+- bundled channel manifests, package metadata, config schemas, UI hints, and generator owners also run the bundled channel config metadata drift check;
+- config schema/help, bundled plugin metadata, relative-import dependencies of source schema entries, generator/selector owners, and tracked config baseline changes run `pnpm config:docs:check`, including baseline files mixed with ordinary docs; all-lane and release metadata plans include it once;
+- public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts (Vitest extension sweeps stay explicit test work);
+- release metadata-only version bumps run targeted version/config/root-dependency checks;
+- unknown root/config changes fail safe to all check lanes.
+
+JavaScript and TypeScript changes under `src/`, `extensions/`, `ui/`, `packages/`,
+`scripts/`, and `test/` also run the existing full unused-export audit.
+Import-only edits and deleted source or test files can orphan exports in
+unchanged files.
+
+Schema dependency selection reuses the local relative-import graph, including re-exports and deleted leaf paths still referenced by surviving source. Shared SDK channel UI-hint and secret-input schema owners, plus the workspace sensitive-URL hint owner, are explicit roots across alias boundaries. Edits to their SDK facades are also selected without traversing unrelated facade runtime dependencies. This is not universal alias or computed-import resolution.
+
+Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. The shared Markdown render-aware chunker and its IR and render modules in `packages/markdown-core` map the same way to the Google Chat, Signal, Slack, SMS, Telegram, and WhatsApp format, send, and delivery suites: channels reach the chunker through the Plugin SDK `text-chunking` facade, deeper than the import walks follow. PR CI receives these as explicit owners beside its import consumers. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
+
+## Testbox validation
+
+Follow the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
+That workflow hydrates credentials: untrusted contributor/fork code requires
+secretless fork CI or sanitized direct AWS, never local execution or Testbox.
+The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
+cloud-worker profiles require Crabbox 0.79.2 or newer. This includes task-owned
+Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
+Testboxes alive. Missing or older binaries use a verified managed 0.79.2 release
+before provider discovery or lease work. The original binary stays untouched.
+Provider readiness and broker authentication still determine
+which configured backend can run the proof.
+The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
+the changed gate later reconstructs the exact merge base and synced final tree.
+Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
+`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+gates. Select it only for a justified memory need, not merely for more time; see
+[Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
+A native capacity check measured eight CPUs and 30.95 GiB of memory on the
+32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
+isolated runtime validation without increasing the number of jobs or workers.
+Workloads still admit work from observed resources; the runner label is not a
+capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
+
+The outer GitHub deadline can terminate active SSH commands. Both profiles have
+a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
+job deadline. Individual test deadlines also remain separate limits. The standard
+workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
+managed Crabbox 0.79.2 does not forward arbitrary workflow inputs, including
+`timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
+within its total-job budget rather than treating TTL or a larger runner as a
+deadline override.
+Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
+`--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
+`OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
+They use a newly warmed lease dedicated to that untrusted source, never a
+trusted or previously hydrated lease. Launch an installed trusted Crabbox
+binary from a clean trusted `main` checkout and fetch only the remote PR with
+`--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and stop unless resolved
+`aws.instanceProfile` is empty. Before any install/test, use trusted
+absolute-path tools to require an IMDSv2 token, prove the IAM credentials
+endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
+reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm on head change.
+Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main`
+alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA and
+package-manager pin, isolates `HOME`, installs dependencies, then executes the
+requested test.
+When an image supplies `/opt/crabbox/toolchain-archives`, the bootstrap copies
+the matching Node, pnpm wrapper, and pnpm native archives into private temporary
+storage and verifies the copied bytes against digests in the trusted script.
+It still extracts fresh Node and Corepack installations on every invocation;
+existing executables, adjacent checksums, and completion markers are not trust
+anchors. Missing or invalid cached archives use the authenticated download path.
+A candidate cannot advance the package-manager pin; update the trusted bootstrap
+and its digest anchors when advancing the toolchain.
+
+Trusted Linux hydration uses the shared Node compatibility selector and can
+seed a job-private Corepack home from the same authenticated pnpm archives.
+The shared setup action also carries authenticated pnpm archives in its warmed
+store, so hosted and Blacksmith jobs can bootstrap before dependency installation
+without downloading pnpm again. These archives do not replace the frozen-lockfile
+dependency install.
+
+With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
+Bun 1.4.3 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+It authenticates a private copy before extracting a fresh job-private `bun`
+and `bunx`, then publishes their directory after the Node PATH entry.
+The baseline archive is the default; the optimized x64 archive requires AVX
+and AVX2 evidence for every visible guest CPU. Missing CPU evidence uses baseline.
+A missing matching archive or an unsupported platform keeps the pinned npm
+installation path. A present corrupt or malformed archive fails setup instead
+of falling back to an existing Bun. `install-bun: "false"` skips both paths;
+it does not remove Bun already supplied by the runner. This reuse does not
+cover ARM, musl, or the untrusted bootstrap.
+
+Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
+--tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
+report public networking with no Tailscale state before uploading any script.
+Select owned capacity only for its required environment or an explicit operator
+request, under the proof policy above.
+
+For an explicitly authorized admin-only PR landing fallback, set
+`OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
+The mode does not replace the default hosted aggregate gate. After the exact
+prep head is pushed, the wrapper synchronously dispatches the protected-main
+publisher. That trusted workflow checksum-installs Crabbox v0.79.2, resolves its
+service principal through `/v1/whoami`, then runs sanitized brokered AWS with
+`umask 022`, the standard untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a PR-derived test plan that rejects incomplete selection. The existing changed-test owner evaluates
+every executable changed path independently and must resolve each one to
+concrete matched test files; broad fallback, skipped paths, config targets,
+deleted executable paths, and partial plans are refused. Explicit docs and
+`AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
+The exact PR base SHA, head SHA, bootstrap hash, and stable plan digest
+are bound into the prepared command. The publisher streams a launcher through
+Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
+bootstrap, prepared command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
+and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
+because proof runs during prepare-push, then rereads the live same-repository
+PR and the exact active organization-admin membership object using the repo-native
+GitHub App token with `Members(read)` (the repository-scoped workflow token is
+not treated as org authority), validates its newly created authenticated broker
+run under the same service token, ordered complete events, independently rebuilt
+prepared command and launcher upload hash, and
+publishes the distinct `openclaw/crabbox-gate` only for the exact proven
+base/head/plan binding. The publisher also proves that the PR base is the merge
+base of its immutable protected-main workflow SHA and adds that workflow SHA to
+the strict check summary. Before and after the remote run, it proves that a
+candidate live `main` is identical to or descended from that workflow SHA, then
+rereads the ref and requires the candidate to remain unchanged. A descendant
+advance during the long remote run is allowed; movement inside either
+comparison-and-reread window stops publication.
+Retained broker logs are validated when non-empty but are optional because
+Crabbox can report zero retained log bytes after a successful
+run. The publisher accepts `released` or `cleanup` as historical run phases only after validating workload identity, result, and ordered events. It separately runs blocking `crabbox stop --provider aws --id <exact-lease> --wait` from the same temporary Crabbox home and requires confirmed cleanup before publication. Pending cleanup never passes the gate; an uncertain stop retains that recovery home and reports the exact lease and next command. Only after the publisher and exact-head check succeed does the local
+wrapper derive `.local/gates.env` provider/run/lease/URL recovery metadata from
+the trusted summary; those fields are not publication authority.
+
+The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
+verification still rejects draft PRs and permits the server ruleset bypass only
+when the Crabbox check is
+completed successfully by GitHub Actions on the prepared SHA, its bound workflow
+SHA is an ancestor of a stable final live protected-main snapshot, the authenticated
+actor is still an active organization admin, and the sole unsatisfied required
+check is the normal CI gate with a recognized hosted-runner infrastructure
+failure represented by GitHub-owned job metadata with no executed workflow
+steps and no assigned `runner_name`. Job logs are never authority because PR
+code controls their text. Missing or mismatched checks, cancellation,
+action-required or stale conclusions, an assigned runner, any failed or executed
+workflow step, unknown runner backends, pending contexts, and additional
+required-check failures remain blocking. Only workflow `startup_failure` or an
+unacquired zero-step hosted job with `failure`/`timed_out` qualifies. The native
+flow repeats the full bypass verification immediately before the admin squash
+request and pins the prepared head with `--match-head-commit`. GitHub exposes
+no expected-base-OID merge precondition, so the final main read minimizes but
+cannot atomically eliminate a base movement race. Landing proof must compare
+the squash parent with that final main snapshot, not the older workflow SHA.
+The Crabbox merge path stores this comparison in
+`.local/merge-crabbox-parent-audit.json`, includes it in the completion comment,
+and reports any intervening main movement after the already-completed merge
+without claiming atomic prevention.
+
+Acquire only when the exceptional command is ready; reuse task-owned leases,
+sync on each run, and stop before handoff.
+
+Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
+one-shot Testboxes. Native Blacksmith owns synchronization; Crabbox's direct
+SSH sync controls and mass-deletion sanity checks do not run on this delegated
+path.
+
+Crabbox also terminates a local Blacksmith CLI invocation that stays in the
+sync phase for more than five minutes without post-sync output. Set
+`CRABBOX_BLACKSMITH_SYNC_TIMEOUT_MS=0` to disable that guard, or use a larger
+millisecond value for unusually large local diffs.
+
+Before a first run, check the wrapper from the repo root:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
+```
+
+The repo wrapper validates the selected Crabbox binary and provider before running. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+```
+
+A supported sibling or `PATH` binary can run directly. The wrapper automatically
+replaces an outdated selection with the plugin-managed binary; rebuilding the
+sibling checkout is no longer a prerequisite for proof.
+
+The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+The wrapper enforces workflow ref `main` while syncing the selected local source,
+so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
+
+```bash
+pnpm crabbox:run -- --provider blacksmith-testbox \
+  --blacksmith-org openclaw \
+  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+  --blacksmith-job check \
+  --blacksmith-ref main \
+  --idle-timeout 90m \
+  --ttl 240m \
+  --timing-json \
+  --shell -- \
+  "corepack pnpm check:changed"
+```
+
+Focused test rerun when clean-machine behavior is part of the proof:
+
+```bash
+pnpm crabbox:run -- --provider blacksmith-testbox \
+  --idle-timeout 90m \
+  --ttl 240m \
+  --timing-json \
+  --shell -- \
+  "corepack pnpm test <path-or-filter>"
+```
+
+Full suite on an explicitly requested clean machine:
+
+```bash
+pnpm crabbox:run -- --provider blacksmith-testbox \
+  --idle-timeout 90m \
+  --ttl 240m \
+  --timing-json \
+  --shell -- \
+  "corepack pnpm test"
+```
+
+Read the final JSON summary. The useful fields are `provider`, `leaseId`,
+`syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. For delegated
+Blacksmith Testbox runs, the Crabbox wrapper exit code and JSON summary are the
+command result. The linked GitHub Actions run owns hydration and keepalive; it
+can finish as `cancelled` when the Testbox is stopped externally after the SSH
+command has already returned. Treat that as a cleanup/status artifact unless
+the wrapper `exitCode` is non-zero or the command output shows a failed test.
+One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically;
+if a run is interrupted or cleanup is unclear, inspect live boxes and stop only
+the boxes you created:
+
+```bash
+blacksmith testbox list --all
+blacksmith testbox status --id <tbx_id>
+blacksmith testbox stop --id <tbx_id>
+```
+
+For several commands in one task, allocate on the first command and reuse its
+reported `leaseId`. Use a unique task label. Stop the lease after the last command:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --keep --label <unique-task-name> -- corepack pnpm test <first-file>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --label <unique-task-name> -- corepack pnpm test <next-file>
+node scripts/crabbox-wrapper.mjs stop --provider blacksmith-testbox <tbx_id>
+```
+
+The wrapper records allocation provenance under `.crabbox/testbox-leases`.
+Reuse requires the same physical checkout, HEAD, merge base, dependency inputs,
+preparation inputs, caller session, and label. Stop older or unrecorded leases
+and allocate through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` no longer bypasses these checks.
+Codex and Claude Code sessions provide session identity automatically.
+GitHub Actions identity includes the workflow attempt and job.
+These identities identify sessions, not individual requests. Use distinct labels
+when one session handles several tasks. A human shell requires a label for retained leases.
+Session-owned `warmup --timing-json` also records allocation provenance.
+Native Crabbox serializes commands on an owned lease. Do not share a lease between tasks.
+
+The wrapper emits `testbox-admission` and `testbox-completion` JSON records.
+They identify the caller kind, hashed session/task and checkout, HEAD, command
+digest, requested timeouts, lease ID, and invocation duration.
+Session IDs, checkout paths, and command contents are not copied into these records.
+Join them to native timing output by lease ID to find the Actions run.
+These are local diagnostics, not Blacksmith dashboard labels or billed lifetime measurements.
+The delegated provider does not enforce `--ttl`. The workflow job timeout and
+Testbox idle timeout remain the effective lifetime limits.
+
+Reuse the lease, not stale source. Blacksmith Testbox owns sync, including
+reused `--id` runs. Do not pass `--no-sync`: the wrapper rejects it before
+lease handling or delegation. A fingerprint cache hit is not a no-sync guarantee.
+
+Sync success is not proof of source identity. Verify the materialized Git tree
+before exact-candidate proof. Keep QA evidence outside the synced checkout and
+download it before another run. Do not bypass security exclusions, accept a
+mismatched tree, or silently switch providers.
+
+Untrusted contributor/fork code must use
+`CRABBOX_ENV_ALLOW=CI`, `--provider aws --no-hydrate`, and a fresh
+temporary remote `HOME` for every command; install dependencies inside that
+sanitized command before testing. Reuse only a newly warmed lease dedicated to
+the same untrusted source; never a trusted or previously hydrated lease. Never
+execute the untrusted checkout's wrapper or config locally: launch the installed
+trusted Crabbox binary from clean trusted `main` and pass `--fresh-pr` on every
+run. Keep `CRABBOX_AWS_INSTANCE_PROFILE` unset, reject a non-empty resolved
+instance profile, require a trusted remote IMDS no-role proof, and verify the
+reviewed head SHA before install/test. Bind the lease to that SHA; stop and
+rewarm after any head change. If no remote PR exists, use secretless fork CI.
+Never select `hydrate-github` or the credential-hydrated Blacksmith workflow
+for untrusted source.
+
+If Crabbox is the broken layer but Blacksmith itself works, use direct
+Blacksmith only for diagnostics such as `list`, `status`, and cleanup. Fix the
+Crabbox path before treating a direct Blacksmith run as maintainer proof.
+
+For admission/queue handling, follow the canonical proof policy above.
+For explicitly selected AWS capacity, use the
+[direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
+
+Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
+
+`.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
+
+Direct leases require Crabbox 0.79.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+
+Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
+
+Linux hydration keeps physical workspace `node_modules` directories and pnpm's
+default `.pnpm` virtual store. Only the package-content store uses the persistent
+`/var/cache/crabbox/pnpm/store` volume; its fallback lives at
+`.cache/openclaw-pnpm-store` beside the workspace dependencies. Ordinary POSIX
+sync preserves these ignored directories, so frozen reinstalls and later build
+commands use the same owned install. Hydration checks the tooling loader before
+marking the lease ready. When rehydrating an older lease, the workflow retires
+only its former root links to `/var/tmp/openclaw-pnpm/node_modules` or
+`${XDG_CACHE_HOME:-$RUNNER_TEMP/cache}/openclaw/pnpm/install/node_modules` before
+installing physical workspace dependencies, including links whose runner cache
+was already cleared. It preserves external package caches and unrelated
+dependency links.
+
+Linux hydration also installs the Control UI E2E browser prerequisites with CI's
+commands: Playwright Chromium and FFmpeg, plus WebKit with its system dependencies.
+It removes group/other write from the owned workspace ancestry and `.artifacts`,
+and later run commands inherit `umask go-w` while preserving stricter masks.
+Full UI E2E on AWS and Hetzner leases needs no manual runner repair.
+
+Native Windows daemon hydration retains its external dependency junction because
+released Crabbox native Windows delete-sync replaces workspace contents. Move
+that route to physical workspace dependencies only with a Crabbox sync version
+that preserves generated dependency directories.
+
+## Related
+
+- [Install overview](/install)
+- [Release channels](/install/development-channels)

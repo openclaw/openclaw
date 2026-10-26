@@ -1,10 +1,12 @@
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type { PluginHookSessionEndReason } from "../plugins/hook-types.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.owner-context.js";
+import type { SessionMemoryTranscript } from "./bundled/session-memory/capture.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -33,6 +35,7 @@ export function emitSessionAutoResetHook(params: {
   agentId?: string;
   workspaceDir?: string;
   storePath?: string;
+  previousSessionMemory?: SessionMemoryTranscript;
 }): void {
   if (!isSessionAutoResetReason(params.reason) || !hasSessionAutoResetListeners()) {
     return;
@@ -53,7 +56,7 @@ export function emitSessionAutoResetHook(params: {
     storePath:
       params.storePath ??
       marker?.storePath ??
-      resolveStorePath(params.cfg.session?.store, { agentId }),
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     sessionEntry: {
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
@@ -62,11 +65,16 @@ export function emitSessionAutoResetHook(params: {
     transcriptArchived: params.transcriptArchived,
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
+    previousSessionMemory: params.previousSessionMemory,
   });
 
-  void runWithGatewayIndependentRootWorkContinuation(() => triggerInternalHook(event)).catch(
-    (error: unknown) => {
-      logVerbose(`session:auto-reset hook failed: ${String(error)}`);
-    },
-  );
+  // The unawaited hook outlives the resetting turn; it must not inherit that turn's ownership.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(
+      () => triggerInternalHook(event),
+      "hooks:session-auto-reset",
+    ),
+  ).catch((error: unknown) => {
+    logVerbose(`session:auto-reset hook failed: ${String(error)}`);
+  });
 }

@@ -1,5 +1,6 @@
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
-  buildManifestModelDefinition,
+  buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { parseVeniceModelPricing } from "./pricing-api.js";
 
 const VENICE_MANIFEST_CATALOG = manifest.modelCatalog.providers.venice;
 
@@ -27,36 +29,16 @@ const VENICE_DISCOVERY_HARD_MAX_TOKENS = 131_072;
 const VENICE_DISCOVERY_TIMEOUT_MS = 10_000;
 const VENICE_DISCOVERY_CACHE_TTL_MS = 60_000;
 
-function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return {
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    cost: VENICE_DEFAULT_COST,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
-    compat: {
-      supportsUsageInStreaming: false,
-      ...entry.compat,
-    },
-  };
-}
-
-/** Venice's decorated network-free fallback catalog. */
-export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_CATALOG.models.map(
-  buildManifestModelDefinition({
-    providerId: "venice",
-    catalog: VENICE_MANIFEST_CATALOG,
-    decorate: decorateVeniceModelDefinition,
-  }),
-);
+export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "venice",
+  catalog: VENICE_MANIFEST_CATALOG,
+}).models;
 
 interface VeniceModelSpec {
   name: string;
-  privacy: "private" | "anonymized";
   availableContextTokens?: number;
   maxCompletionTokens?: number;
+  pricing?: unknown;
   capabilities?: {
     supportsReasoning?: boolean;
     supportsVision?: boolean;
@@ -67,36 +49,6 @@ interface VeniceModelSpec {
 interface VeniceModel {
   id: string;
   model_spec?: VeniceModelSpec;
-}
-
-function normalizePositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
-function resolveApiMaxCompletionTokens(params: {
-  apiModel: VeniceModel;
-  knownMaxTokens?: number;
-}): number | undefined {
-  const raw = normalizePositiveInt(params.apiModel.model_spec?.maxCompletionTokens);
-  if (!raw) {
-    return undefined;
-  }
-  const contextWindow = normalizePositiveInt(params.apiModel.model_spec?.availableContextTokens);
-  const knownMaxTokens =
-    typeof params.knownMaxTokens === "number" && Number.isFinite(params.knownMaxTokens)
-      ? Math.floor(params.knownMaxTokens)
-      : undefined;
-  const hardCap = knownMaxTokens ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
-  const fallbackContextWindow = knownMaxTokens ?? VENICE_DEFAULT_CONTEXT_WINDOW;
-  return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
-}
-
-function resolveApiSupportsTools(apiModel: VeniceModel): boolean | undefined {
-  const supportsFunctionCalling = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
-  return typeof supportsFunctionCalling === "boolean" ? supportsFunctionCalling : undefined;
 }
 
 function projectVeniceModels(
@@ -114,22 +66,27 @@ function projectVeniceModels(
       continue;
     }
     const catalogEntry = catalogById.get(apiModel.id);
-    const apiMaxTokens = resolveApiMaxCompletionTokens({
-      apiModel,
-      knownMaxTokens: catalogEntry?.maxTokens,
-    });
-    const apiSupportsTools = resolveApiSupportsTools(apiModel);
+    const liveCost = parseVeniceModelPricing(apiModel.model_spec?.pricing);
+    const knownMaxTokens = catalogEntry?.maxTokens;
+    const raw = floorPositiveFiniteNumber(apiModel.model_spec?.maxCompletionTokens);
+    let apiMaxTokens: number | undefined;
+    if (raw) {
+      const contextWindow = floorPositiveFiniteNumber(apiModel.model_spec?.availableContextTokens);
+      const knownCap = knownMaxTokens === undefined ? undefined : Math.floor(knownMaxTokens);
+      const hardCap = knownCap ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
+      const fallbackContextWindow = knownCap ?? VENICE_DEFAULT_CONTEXT_WINDOW;
+      apiMaxTokens = Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
+    }
+    const supportsTools = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
     if (catalogEntry) {
       const definition: ModelDefinitionConfig = {
         ...catalogEntry,
-        input: [...catalogEntry.input],
-        cost: { ...catalogEntry.cost },
-        ...(catalogEntry.compat ? { compat: { ...catalogEntry.compat } } : {}),
+        cost: liveCost ?? catalogEntry.cost,
       };
       if (apiMaxTokens !== undefined) {
         definition.maxTokens = apiMaxTokens;
       }
-      if (apiSupportsTools === false) {
+      if (supportsTools === false) {
         definition.compat = {
           ...definition.compat,
           supportsTools: false,
@@ -150,13 +107,14 @@ function projectVeniceModels(
         name: apiSpec?.name || apiModel.id,
         reasoning: isReasoning,
         input: hasVision ? ["text", "image"] : ["text"],
-        cost: VENICE_DEFAULT_COST,
+        cost: liveCost ?? VENICE_DEFAULT_COST,
         contextWindow:
-          normalizePositiveInt(apiSpec?.availableContextTokens) ?? VENICE_DEFAULT_CONTEXT_WINDOW,
+          floorPositiveFiniteNumber(apiSpec?.availableContextTokens) ??
+          VENICE_DEFAULT_CONTEXT_WINDOW,
         maxTokens: apiMaxTokens ?? VENICE_DEFAULT_MAX_TOKENS,
         compat: {
           supportsUsageInStreaming: false,
-          ...(apiSupportsTools === false ? { supportsTools: false } : {}),
+          ...(supportsTools === false ? { supportsTools: false } : {}),
         },
       });
     }
@@ -167,6 +125,6 @@ function projectVeniceModels(
 export const VENICE_MODEL_DISCOVERY_OPTIONS = {
   timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
   ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
-  buildRequestHeaders: () => ({ Accept: "application/json" }),
+  authentication: "none",
   projectRows: projectVeniceModels,
 } as const;

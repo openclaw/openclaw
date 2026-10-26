@@ -1,0 +1,358 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { expect, onTestFinished, vi } from "vitest";
+import { getRuntimeConfig } from "../../../config/config.js";
+import { ensureSessionEntrySync } from "../../../config/sessions/session-accessor.js";
+import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterStoreKey } from "../announce/subagent-requester-store-key.js";
+import {
+  SubagentLifecycleController,
+  type SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
+} from "./subagent-run-generation.js";
+
+export type RunEntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  execution?: SubagentRunRecord["execution"];
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+};
+
+export function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
+  const { startedAt = 2_000, endedAt, outcome, execution, ...recordOverrides } = overrides;
+  return createSubagentRunRecord({
+    runId: "run-1",
+    childSessionIdentity: { sessionId: "session-id", lifecycleRevision: "session-revision" },
+    task: "finish the task",
+    createdAt: 1_000,
+    ...recordOverrides,
+    execution: execution
+      ? { startedAt, ...execution }
+      : {
+          status: endedAt !== undefined || outcome !== undefined ? "terminal" : "running",
+          startedAt,
+          ...(endedAt === undefined ? {} : { endedAt }),
+          ...(outcome === undefined ? {} : { outcome }),
+        },
+  });
+}
+
+export type LifecycleFixtureWrite = {
+  runIds: readonly string[];
+  postimages: ReadonlyMap<string, SubagentRunRecord | null>;
+};
+export type LifecycleControllerFixtureOptions = {
+  entry: SubagentRunRecord;
+  runs?: Map<string, SubagentRunRecord>;
+  beforeWrite?: (write: LifecycleFixtureWrite) => void | Promise<void>;
+  realWorker?: boolean;
+} & Partial<SubagentLifecycleOptions>;
+
+export type LifecycleTestDrivers = {
+  createRunEntry: typeof createRunEntry;
+  createLifecycleController: (
+    options: LifecycleControllerFixtureOptions,
+  ) => SubagentLifecycleController;
+  waitForLifecycleState: <T>(assertion: () => T | Promise<T>) => Promise<T>;
+};
+export type CompleteLifecycleRun = (
+  controller: SubagentLifecycleController,
+  entry: SubagentRunRecord,
+  options?: Omit<Partial<SubagentCompletionRequest>, "runId">,
+) => Promise<void>;
+
+export function expectUndefinedFields<T>(record: T | undefined, keys: readonly (keyof T)[]) {
+  for (const key of keys) {
+    expect(record?.[key], String(key)).toBeUndefined();
+  }
+}
+
+/** Release a blocked operation and join its work even when an assertion fails. */
+export function createSubagentTestGate() {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  const work: Promise<unknown>[] = [];
+  const drain = async () => {
+    const results = await Promise.allSettled(work);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      throw failed.reason;
+    }
+  };
+  return {
+    entered: entered.promise,
+    async wait() {
+      entered.resolve();
+      await released.promise;
+    },
+    release: () => released.resolve(),
+    track<T>(pending: Promise<T>): Promise<T> {
+      work.push(pending);
+      return pending;
+    },
+    drain,
+    async [Symbol.asyncDispose]() {
+      released.resolve();
+      await drain();
+    },
+  };
+}
+
+type FixtureOwner = {
+  runs: Map<string, SubagentRunRecord>;
+  beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"];
+  realWorker?: boolean;
+};
+const fixtureOwners = new WeakMap<SubagentRunRecord, FixtureOwner>();
+const fixtureScope = new AsyncLocalStorage<FixtureOwner>();
+let workerStubInstalled = false;
+
+function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
+  if (workerStubInstalled) {
+    return;
+  }
+  workerStubInstalled = true;
+  const original = stateWorker.runOpenClawStateWorkerOperation;
+  const spy = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation(async (context, operation, options) => {
+      const owner = fixtureScope.getStore() ?? fallbackOwner;
+      if (!owner || owner.realWorker) {
+        return original(context, operation, options);
+      }
+      context.admission.assertCurrent();
+      options?.assertCurrent?.();
+      return operation({
+        // Controller policy cases persist payloads for later selected reads.
+        // Native FIFO/CAS/event authority belongs to the registered worker suites.
+        execute: vi
+          .fn()
+          .mockImplementation(
+            async (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => {
+              if (command.type !== "subagents.persistChanges") {
+                return original(context, (scope) => scope.execute(command), options);
+              }
+              const write = command.input;
+              const values = write.values.map((row) => {
+                if (typeof row.payload_json !== "string") {
+                  throw new Error("Lifecycle worker write lacks encoded row");
+                }
+                return {
+                  ...row,
+                  controller_session_key: row.controller_session_key ?? null,
+                  requester_store_path: row.requester_store_path ?? null,
+                  controller_store_path: row.controller_store_path ?? null,
+                  payload_json: row.payload_json,
+                };
+              });
+              const postimages = new Map<string, SubagentRunRecord | null>(
+                values.map((row) => [row.run_id, rowToSubagentRunRecord(row)]),
+              );
+              for (const id of write.deleteRunIds) {
+                postimages.set(id, null);
+              }
+              if (postimages.size > 0) {
+                await owner.beforeWrite?.({ runIds: [...postimages.keys()], postimages });
+              }
+              options?.assertCurrent?.();
+              saveSubagentRegistryChangesToSqlite(
+                new Map(
+                  [...postimages].filter(
+                    (entry): entry is [string, SubagentRunRecord] => entry[1] !== null,
+                  ),
+                ),
+                [...postimages.keys()],
+              );
+              return { writeId: write.writeId, notices: [] };
+            },
+          ),
+      });
+    });
+  onTestFinished(() => {
+    spy.mockRestore();
+    workerStubInstalled = false;
+  });
+}
+
+/** A single-owner policy harness may run callbacks through fake timers without caller ALS. */
+export function installLifecycleWorkerAckFixture(runs: Map<string, SubagentRunRecord>): void {
+  installPolicyWorkerStub({ runs });
+}
+
+export function readLifecycleRun(entry: SubagentRunRecord): SubagentRunRecord {
+  const owner = fixtureOwners.get(entry);
+  if (!owner) {
+    throw new Error("Lifecycle fixture entry has no controller owner");
+  }
+  const current = owner.runs.get(entry.runId);
+  if (!current) {
+    throw new Error("Lifecycle fixture execution was retired");
+  }
+  fixtureOwners.set(current, owner);
+  return current;
+}
+
+export function mutateLifecycleRun(
+  entry: SubagentRunRecord,
+  mutate: (draft: SubagentRunRecord) => void,
+): Promise<void> {
+  const owner = fixtureOwners.get(entry);
+  if (!owner) {
+    throw new Error("Lifecycle fixture entry has no controller owner");
+  }
+  return fixtureScope.run(owner, () =>
+    mutateSubagentRuns(
+      [entry.runId],
+      (rows) => {
+        const current = rows.get(entry.runId);
+        if (!current) {
+          throw new Error("Lifecycle fixture execution was retired");
+        }
+        const draft = structuredClone(current);
+        mutate(draft);
+        return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
+      },
+      { runs: owner.runs },
+    ),
+  );
+}
+
+export function createLifecycleControllerFixture(
+  {
+    entry,
+    runs = new Map([[entry.runId, entry]]),
+    beforeWrite,
+    realWorker,
+    ...overrides
+  }: LifecycleControllerFixtureOptions,
+  dependencies: Pick<
+    SubagentLifecycleOptions,
+    "callGateway" | "cleanupBrowserSessionsForLifecycleEnd"
+  > & {
+    ownersByEntry: Map<object, Pick<SubagentLifecycleOptions, "runs">>;
+  },
+) {
+  const initialRows = [...runs.values()];
+  if (!realWorker) {
+    const config = getRuntimeConfig();
+    for (const row of initialRows) {
+      if (row.expectsCompletionMessage !== true) {
+        continue;
+      }
+      const agentId = resolveSubagentRequesterAgentId(config, row);
+      if (agentId) {
+        const sessionKey = resolveRequesterStoreKey(config, row.requesterSessionKey, agentId);
+        ensureSessionEntrySync(
+          { agentId, sessionKey },
+          { sessionId: `lifecycle-requester:${sessionKey}`, updatedAt: 1 },
+        );
+      }
+    }
+  }
+  for (const row of initialRows) {
+    if (row.completion && row.delivery) {
+      continue;
+    }
+    const prepared = createSubagentRunRecord({
+      ...row,
+      completion: row.completion ?? { required: row.expectsCompletionMessage === true },
+      delivery: row.delivery ?? {
+        status: row.expectsCompletionMessage === false ? "not_required" : "pending",
+      },
+    });
+    runs.set(row.runId, copySubagentRunRuntimeOwner(row, prepared));
+  }
+  const params: SubagentLifecycleOptions = {
+    runs,
+    resumedRuns: new Set(),
+    subagentAnnounceTimeoutMs: 1_000,
+    getRuntimeConfig: () => ({}),
+    clearPendingLifecycleError: vi.fn(),
+    countPendingDescendantRuns: async () => 0,
+    getLatestRunForChildSession: (key, matches) =>
+      getLatestSubagentRunByChildSessionKeyFromRuns(runs, key, matches) ?? null,
+    suppressAnnounceForSteerRestart: () => false,
+    shouldEmitEndedHookForRun: () => false,
+    emitSubagentEndedHookForRun: vi.fn(async () => {}),
+    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
+    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+    retireSupersededRun: vi.fn(async () => {}),
+    resumeSubagentRun: vi.fn(),
+    confirmProvisionalKill: vi.fn(),
+    callGateway: dependencies.callGateway,
+    captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+    cleanupBrowserSessionsForLifecycleEnd: dependencies.cleanupBrowserSessionsForLifecycleEnd,
+    runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
+    maybeWakeRequesterAfterAllChildrenSettled: vi.fn<
+      SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]
+    >(async ({ completeBatch, settledEntry }) => {
+      await completeBatch([settledEntry]);
+      return false;
+    }),
+    warn: vi.fn(),
+    ...overrides,
+  };
+  installPolicyWorkerStub();
+  const owner: FixtureOwner = { runs, beforeWrite, realWorker };
+  for (const row of [entry, ...initialRows]) {
+    fixtureOwners.set(row, owner);
+  }
+  const recordOwners = () => {
+    for (const run of params.runs.values()) {
+      dependencies.ownersByEntry.set(getSubagentRunRuntimeKey(run), params);
+      fixtureOwners.set(run, owner);
+    }
+  };
+  recordOwners();
+  const runOwned =
+    <Args extends unknown[], Result>(operation: (...args: Args) => Result) =>
+    (...args: Args): Result =>
+      fixtureScope.run(owner, () => {
+        recordOwners();
+        return operation(...args);
+      });
+  const wake = params.maybeWakeRequesterAfterAllChildrenSettled;
+  params.maybeWakeRequesterAfterAllChildrenSettled = (request) => {
+    recordOwners();
+    return fixtureScope.run(owner, () =>
+      wake({
+        ...request,
+        completeBatch: runOwned(request.completeBatch),
+        transitionBatch: runOwned(request.transitionBatch),
+      }),
+    );
+  };
+  const controller = new SubagentLifecycleController(params);
+  controller.completeSubagentRun = runOwned(controller.completeSubagentRun);
+  controller.startSubagentAnnounceCleanupFlow = runOwned(
+    controller.startSubagentAnnounceCleanupFlow,
+  );
+  controller.completeCleanupBookkeeping = runOwned(controller.completeCleanupBookkeeping);
+  controller.refreshFrozenResultFromSession = runOwned(controller.refreshFrozenResultFromSession);
+  controller.finalizeResumedAnnounceGiveUp = runOwned(controller.finalizeResumedAnnounceGiveUp);
+  controller.markRequesterTurnYielded = runOwned(controller.markRequesterTurnYielded);
+  controller.settleRequesterTurnAfterSessionSpawns = runOwned(
+    controller.settleRequesterTurnAfterSessionSpawns,
+  );
+  controller.retireSubagentObligations = runOwned(controller.retireSubagentObligations);
+  controller.resumeAncestorCleanup = runOwned(controller.resumeAncestorCleanup);
+  controller.resumeRequesterSettleWake = runOwned(controller.resumeRequesterSettleWake);
+  controller.runRequesterSettleWake = runOwned(controller.runRequesterSettleWake);
+  controller.revokeTerminalSessionEffects = runOwned(
+    controller.revokeTerminalSessionEffects.bind(controller),
+  );
+  onTestFinished(() => controller.clearRuntimeState());
+  return controller;
+}

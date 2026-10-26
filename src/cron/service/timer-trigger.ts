@@ -1,16 +1,26 @@
-import type { CronConfig } from "../../config/types.cron.js";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "../store/delivery-codec.js";
 import type {
-  CronDeliveryStatus,
-  CronFailureNotificationDelivery,
   CronJob,
+  CronDeliveryTrace,
+  CronFailureNotificationDetail,
+  CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
+  CronTriggerEvalOutcome,
 } from "../types.js";
-import { DEFAULT_ERROR_BACKOFF_SCHEDULE_MS, errorBackoffMs, isJobEnabled } from "./jobs.js";
-import type { CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
+import {
+  DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  errorBackoffMs,
+  resolveNextRunAtMsOrDisable,
+} from "./jobs-scheduling.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -20,50 +30,116 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
 };
 
-type DisabledHeartbeatOneShotRetryDecision = {
-  retryable: boolean;
-  consecutiveSkipped: number;
-  backoffMs?: number;
-  reason: "disabled heartbeat retry" | "max retries exhausted";
-};
+/** Persists non-busy trigger evaluation state without touching payload-run history. */
+export function applyTriggerEvaluationState(
+  job: CronJob,
+  triggerEval: CronTriggerEvalOutcome,
+  evaluatedAtMs: number,
+): void {
+  if (triggerEval.busy) {
+    return;
+  }
+  job.state.lastTriggerEvalAtMs = evaluatedAtMs;
+  job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
+  if (triggerEval.stateChanged) {
+    job.state.triggerState = triggerEval.state;
+  }
+  if (triggerEval.fired) {
+    job.state.lastTriggerFireAtMs = evaluatedAtMs;
+  }
+}
 
-type QueuedSystemEventHandle = {
-  accepted: boolean;
-  remove?: () => boolean | void;
-};
+/** Persists fired/error trigger metadata and disarms successful once triggers. */
+export function applyTriggerRunResult(
+  job: CronJob,
+  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+  opts?: { scheduleOwnership?: "current" | "stale"; triggerOwnership?: "current" | "stale" },
+): void {
+  if (!result.triggerEval || opts?.triggerOwnership === "stale") {
+    return;
+  }
+  // Failed payloads keep the old state so the next evaluation re-detects the event.
+  const persistedEval =
+    result.status === "ok"
+      ? result.triggerEval
+      : { ...result.triggerEval, stateChanged: false, state: undefined };
+  applyTriggerEvaluationState(job, persistedEval, result.endedAt);
+  if (
+    opts?.scheduleOwnership !== "stale" &&
+    result.triggerEval.fired &&
+    job.trigger?.once === true &&
+    result.status === "ok"
+  ) {
+    if (job.schedule.kind === "stream") {
+      job.state.streamSourceIdentity = createCronSourceIdentity();
+    }
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+  }
+}
 
 export function resolveCronNextRunWithLowerBound(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  context: "completion" | "error_backoff";
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
       {
         jobId: params.job.id,
         jobName: params.job.name,
-        context: params.context,
       },
       "cron: next run unresolved; clearing schedule to avoid a refire loop",
     );
     return undefined;
   }
-  return Math.max(params.naturalNext, params.lowerBoundMs);
+  return resolveNextRunAtMsOrDisable({
+    state: params.state,
+    job: params.job,
+    candidate: Math.max(params.naturalNext, params.lowerBoundMs),
+    deferredNotifications: params.deferredNotifications,
+  });
+}
+
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
 }
 
 export function resolveTransientCronRetryDecision(params: {
-  cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
-  lastErrorReason?: string;
+  lastErrorReason?: CronJob["state"]["lastErrorReason"];
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
+  if (params.errorClassification?.kind === "aborted") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "aborted",
+    };
+  }
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,
@@ -109,188 +185,63 @@ export function resolveTransientCronRetryDecision(params: {
   };
 }
 
-export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  cronConfig?: CronConfig;
-  consecutiveSkipped: number | undefined;
-}): DisabledHeartbeatOneShotRetryDecision {
-  const consecutiveSkipped = params.consecutiveSkipped ?? 0;
-  if (consecutiveSkipped > DEFAULT_MAX_TRANSIENT_RETRIES) {
-    return {
-      retryable: false,
-      consecutiveSkipped,
-      reason: "max retries exhausted",
-    };
-  }
-  return {
-    retryable: true,
-    consecutiveSkipped,
-    backoffMs: errorBackoffMs(
-      consecutiveSkipped,
-      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
-    ),
-    reason: "disabled heartbeat retry",
-  };
-}
-
-export function normalizeQueuedSystemEventHandle(
-  result: CronSystemEventEnqueueResult,
-): QueuedSystemEventHandle {
-  if (typeof result === "boolean") {
-    return { accepted: result };
-  }
-  if (result && typeof result === "object") {
-    return {
-      accepted: result.accepted !== false,
-      ...(result.remove ? { remove: result.remove } : {}),
-    };
-  }
-  return { accepted: true };
-}
-
-export function removeQueuedSystemEventHandle(
-  state: CronServiceState,
-  job: CronJob,
-  queued: QueuedSystemEventHandle,
-) {
-  if (!queued.accepted || !queued.remove) {
-    return;
-  }
-  try {
-    queued.remove();
-  } catch (err) {
-    state.deps.log.warn(
-      { jobId: job.id, jobName: job.name, err },
-      "cron: failed to remove undelivered main-session system event",
-    );
-  }
-}
-
-export function shouldRetryDisabledHeartbeatOneShot(
-  job: CronJob,
-  result: { status: CronRunStatus; error?: string },
-): boolean {
-  return (
-    job.schedule.kind === "at" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    result.status === "skipped" &&
-    result.error === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
-export function isScheduledTerminalOneShotRetry(
-  job: CronJob,
-  lastRunStatus: CronRunStatus,
-  lastRun: unknown,
-  nextRun: unknown,
-): boolean {
-  if (
-    !isJobEnabled(job) ||
-    typeof nextRun !== "number" ||
-    typeof lastRun !== "number" ||
-    nextRun <= lastRun
-  ) {
-    return false;
-  }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
+  delivery?: CronDeliveryTrace;
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
-  globalFailureDestination?: CronConfig["failureAlert"];
-}): {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-  failureNotification: CronFailureNotificationDelivery;
-} {
+  deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
+}): CronResolvedDeliveryState {
+  const noFailureNotification = { status: "not-requested" as const };
+  const verifiedDelivery =
+    params.delivered === true &&
+    (params.runStatus !== "error" || params.delivery?.delivered === true);
+  if (verifiedDelivery) {
+    return {
+      delivered: true,
+      status: "delivered",
+      failureNotification: noFailureNotification,
+    };
+  }
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      status: "unknown",
+      error: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+      failureNotification: noFailureNotification,
+    };
+  }
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
-  // Failure destinations can receive alerts even when the primary delivery
-  // path was disabled or failed before direct delivery produced an ack.
-  const alternateFailureNotificationRequested =
-    params.runStatus === "error" &&
-    params.job.delivery?.bestEffort !== true &&
-    resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
   if (!primaryDeliveryRequested) {
-    if (primaryDeliveryPlan.mode === "webhook") {
-      if (params.delivered === true) {
-        return {
-          delivered: true,
-          status: "delivered",
-          failureNotification: {
-            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-          },
-        };
-      }
-      if (params.deliveryAttempted === true) {
-        return {
-          delivered: false,
-          status: "not-delivered",
-          error: params.error,
-          failureNotification: {
-            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-          },
-        };
-      }
+    if (primaryDeliveryPlan.mode === "webhook" && params.deliveryAttempted === true) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: noFailureNotification,
+      };
     }
     return {
       status: "not-requested",
-      failureNotification: {
-        status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-      },
+      failureNotification: noFailureNotification,
     };
   }
   if (params.runStatus === "error") {
-    const failureNotification: CronFailureNotificationDelivery =
-      alternateFailureNotificationRequested ? { status: "unknown" } : { status: "delivered" };
-    if (params.delivered === true) {
+    if (params.delivered !== undefined) {
       return {
         delivered: false,
         status: "not-delivered",
         error: params.error,
-        failureNotification: alternateFailureNotificationRequested
-          ? failureNotification
-          : { delivered: true, status: "delivered" },
-      };
-    }
-    if (params.delivered === false) {
-      return {
-        delivered: false,
-        status: "not-delivered",
-        error: params.error,
-        failureNotification: alternateFailureNotificationRequested
-          ? failureNotification
-          : {
-              delivered: false,
-              status: "not-delivered",
-              ...(params.error ? { error: params.error } : {}),
-            },
+        deliverySuppressionReason: params.deliverySuppressionReason,
+        failureNotification: noFailureNotification,
       };
     }
     return {
       status: "unknown",
       error: params.error,
-      failureNotification: { status: "unknown" },
-    };
-  }
-  if (params.delivered === true) {
-    return {
-      delivered: true,
-      status: "delivered",
-      failureNotification: { status: "not-requested" },
+      failureNotification: noFailureNotification,
     };
   }
   if (params.delivered === false) {
@@ -298,6 +249,7 @@ export function resolveDeliveryState(params: {
       delivered: false,
       status: "not-delivered",
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     };
   }

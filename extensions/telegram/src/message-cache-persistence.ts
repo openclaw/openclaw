@@ -1,7 +1,8 @@
-// Lightweight Telegram message-cache persistence contract shared with doctor migrations.
 import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
+import type { StickerMetadata } from "./bot/types.js";
 import type {
   TelegramPromptContextProjection,
   TelegramPromptContextSource,
@@ -9,13 +10,23 @@ import type {
 
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
-// Versioned writes preserve projection provenance. Shipped unversioned rows
-// hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 
 export type TelegramMessageThreadBinding = {
   kind: "provider-observed-v1";
-  threadId: string;
+  threadSpec:
+    | { scope: "direct-messages" | "dm" | "forum"; id: number }
+    | { scope: "none"; id?: never };
+};
+
+export type TelegramResolvedMedia = {
+  id: string;
+  fileUniqueId: string;
+  size: number;
+  savedAt: number;
+  kind: TelegramMediaKind;
+  contentType?: string;
+  stickerMetadata?: StickerMetadata;
 };
 
 export type PersistedTelegramMessageCacheValue = {
@@ -23,16 +34,65 @@ export type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   botUserId?: number;
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
+  resolvedMedia?: TelegramResolvedMedia;
   threadBinding?: TelegramMessageThreadBinding;
+  historyEligible?: true;
   threadId?: string;
 };
 
-export function resolveTelegramMessageCachePath(storePath: string): string {
-  return `${storePath}.telegram-messages.json`;
+const TELEGRAM_MEDIA_KINDS = new Set<string>(["audio", "document", "image", "sticker", "video"]);
+
+export function isTelegramMediaKind(value: unknown): value is TelegramMediaKind {
+  return typeof value === "string" && TELEGRAM_MEDIA_KINDS.has(value);
+}
+
+function parseStickerMetadata(value: unknown): StickerMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const metadata: StickerMetadata = {};
+  for (const key of ["emoji", "setName", "fileId", "fileUniqueId", "cachedDescription"] as const) {
+    const field = value[key];
+    if (typeof field === "string") {
+      metadata[key] = field;
+    }
+  }
+  return metadata;
+}
+
+export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedia | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    value.id.includes("/") ||
+    value.id.includes("\\") ||
+    value.id.includes("\0") ||
+    typeof value.fileUniqueId !== "string" ||
+    !value.fileUniqueId ||
+    typeof value.size !== "number" ||
+    !Number.isFinite(value.size) ||
+    value.size < 0 ||
+    typeof value.savedAt !== "number" ||
+    !Number.isFinite(value.savedAt) ||
+    !isTelegramMediaKind(value.kind)
+  ) {
+    return undefined;
+  }
+  const stickerMetadata = parseStickerMetadata(value.stickerMetadata);
+  return {
+    id: value.id,
+    fileUniqueId: value.fileUniqueId,
+    size: value.size,
+    savedAt: value.savedAt,
+    kind: value.kind,
+    ...(typeof value.contentType === "string" ? { contentType: value.contentType } : {}),
+    ...(stickerMetadata ? { stickerMetadata } : {}),
+  };
 }
 
 export function resolveTelegramMessageCacheScope(storePath: string): string {
-  return resolveTelegramMessageCachePath(storePath);
+  return `${storePath}.telegram-messages.json`;
 }
 
 export function resolveTelegramMessageCachePersistentScopeKey(scope: string): string {

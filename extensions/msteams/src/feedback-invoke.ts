@@ -1,30 +1,22 @@
-// Msteams plugin module implements feedback invoke behavior.
-import { recordChannelFeedbackEvent } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
+  recordChannelFeedbackEvent,
+  runChannelFeedbackReflection,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { formatUnknownError } from "./errors.js";
-import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
-import { isFeedbackInvokeAuthorized } from "./monitor-handler.js";
+import { buildConversationReference } from "./messenger.js";
+import { isMSTeamsInvokeAuthorized } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { resolveMSTeamsRouteSessionKey } from "./monitor-handler/thread-session.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/**
- * Run the message-submit (feedback) invoke handler.
- *
- * Teams delivers feedback (`actionName === "feedback"`) on AI-generated
- * messages as a `message/submitAction` invoke. The SDK wraps a void return
- * into the HTTP 200 InvokeResponse, so this function intentionally does
- * not ack itself — the legacy `ctx.sendActivity({ type: "invokeResponse",
- * … })` shape is gone (it became an outbound BF activity on the new SDK
- * instead of the HTTP response).
- *
- * Returns `true` if the invoke matched the feedback shape and was
- * consumed (whether or not it was authorized / written / reflected on),
- * `false` if the invoke didn't look like feedback at all and the caller
- * should fall through to other handlers.
- */
+/** Return whether feedback consumed the invoke; the SDK owns its HTTP acknowledgement. */
 export async function runMSTeamsFeedbackInvokeHandler(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
@@ -42,7 +34,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     return false;
   }
 
-  // Teams feedback invoke format: actionName="feedback", actionValue.reaction="like"|"dislike"
   if (value.actionName !== "feedback") {
     return false;
   }
@@ -53,17 +44,17 @@ export async function runMSTeamsFeedbackInvokeHandler(
     return false;
   }
 
-  const msteamsCfg = deps.cfg.channels?.msteams;
+  const cfg = deps.readConfig?.() ?? deps.cfg;
+  const msteamsCfg = resolveMSTeamsAccountConfig(cfg, deps.accountId);
   if (msteamsCfg?.feedbackEnabled === false) {
     deps.log.debug?.("feedback handling disabled");
-    return true; // Still consume the invoke
-  }
-
-  if (!(await isFeedbackInvokeAuthorized(context, deps))) {
     return true;
   }
 
-  // Extract user comment from the nested JSON string
+  if (!(await isMSTeamsInvokeAuthorized({ context, deps, invokeKind: "feedback" }))) {
+    return true;
+  }
+
   let userComment: string | undefined;
   if (value.actionValue?.feedback) {
     try {
@@ -74,54 +65,46 @@ export async function runMSTeamsFeedbackInvokeHandler(
     }
   }
 
-  // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
   const rawConversationId = activity.conversation?.id ?? "unknown";
   const conversationId = normalizeMSTeamsConversationId(rawConversationId);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
 
-  // Route feedback using the same chat-type logic as normal messages
-  // so session keys, agent IDs, and transcript paths match.
+  // Match normal-message routing so feedback reaches the same session.
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const isChannel = convType === "channel";
 
   const core = getMSTeamsRuntime();
   const route = core.channel.routing.resolveAgentRoute({
-    cfg: deps.cfg,
+    cfg,
     channel: "msteams",
+    accountId: deps.accountId,
     peer: {
       kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       id: isDirectMessage ? senderId : conversationId,
     },
   });
 
-  // Match the thread-aware session key used by the message handler so feedback
-  // events land in the correct per-thread transcript. For channel threads, the
-  // thread root ID comes from the ;messageid= suffix on the conversation ID or
-  // from activity.replyToId.
-  const feedbackThreadId = isChannel
-    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
-    : undefined;
-  if (feedbackThreadId) {
-    const threadKeys = resolveThreadSessionKeys({
-      baseSessionKey: route.sessionKey,
-      threadId: feedbackThreadId,
-      parentSessionKey: route.sessionKey,
-    });
-    route.sessionKey = threadKeys.sessionKey;
-  }
+  route.sessionKey = resolveMSTeamsRouteSessionKey({
+    baseSessionKey: route.sessionKey,
+    isChannel,
+    conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
+    replyToId: activity.replyToId,
+  });
 
-  // Log feedback event to session JSONL
-  const feedbackEvent = buildFeedbackEvent({
+  const feedbackEvent = {
+    type: "custom",
+    event: "feedback",
+    ts: Date.now(),
     messageId,
     value: isNegative ? "negative" : "positive",
     comment: userComment,
     sessionKey: route.sessionKey,
     agentId: route.agentId,
     conversationId,
-  });
+  };
 
   deps.log.info("received feedback", {
     value: feedbackEvent.value,
@@ -132,7 +115,7 @@ export async function runMSTeamsFeedbackInvokeHandler(
 
   try {
     await recordChannelFeedbackEvent({
-      cfg: deps.cfg,
+      cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
       event: feedbackEvent,
@@ -141,7 +124,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     // Best effort
   }
 
-  // Build conversation reference for proactive messages (ack + reflection follow-up)
   const conversationRef = {
     activityId: activity.id,
     user: {
@@ -162,25 +144,69 @@ export async function runMSTeamsFeedbackInvokeHandler(
     locale: activity.locale,
   };
 
-  // For negative feedback, trigger background reflection (fire-and-forget).
-  // No ack message — the reflection follow-up serves as the acknowledgement.
-  // Sending anything during the invoke handler causes "unable to reach app" errors.
+  // Sending during the invoke causes "unable to reach app" errors; reflection responds later.
   if (isNegative && msteamsCfg?.feedbackReflection !== false) {
-    // Note: thumbedDownResponse is not populated here because we don't cache
-    // sent message text. The agent still has full session context for reflection
-    // since the reflection runs in the same session. The user comment (if any)
-    // provides additional signal.
-    runFeedbackReflection({
-      cfg: deps.cfg,
-      app: deps.app,
-      conversationRef,
-      sessionKey: route.sessionKey,
-      agentId: route.agentId,
-      conversationId,
-      conversationKind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
-      userComment,
-      log: deps.log,
-    }).catch((err: unknown) => {
+    // Sent text is not cached; reflection uses the session history and optional user comment.
+    const { app, accountId, log } = deps;
+    const { sessionKey, agentId } = route;
+    const conversationKind = isDirectMessage ? "direct" : isChannel ? "channel" : "group";
+    (async () => {
+      const cooldownMs =
+        msteamsCfg.feedbackReflectionCooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
+      let reflection;
+      try {
+        reflection = await runChannelFeedbackReflection({
+          cfg,
+          channel: "msteams",
+          channelLabel: "Teams",
+          agentId,
+          sessionKey,
+          conversationId,
+          conversationKind,
+          userComment,
+          cooldownMs,
+          onRecordError: (err) =>
+            log.debug?.("reflection session record failed", { error: formatUnknownError(err) }),
+          onDispatchError: (err) =>
+            log.debug?.("reflection reply error", { error: formatUnknownError(err) }),
+        });
+      } catch (err) {
+        log.error("reflection dispatch failed", { error: formatUnknownError(err) });
+        return;
+      }
+      if (reflection.status === "cooldown") {
+        log.debug?.("skipping reflection (cooldown active)", { sessionKey });
+        return;
+      }
+      if (reflection.status === "empty") {
+        log.debug?.("reflection produced no output");
+        return;
+      }
+      const shouldNotify =
+        convType === "personal" && reflection.followUp && Boolean(reflection.userMessage);
+      if (!shouldNotify) {
+        if (reflection.followUp && convType !== "personal") {
+          log.debug?.("skipping reflection follow-up outside direct message", {
+            sessionKey,
+            conversationType: convType,
+          });
+        }
+        return;
+      }
+      try {
+        await sendMSTeamsActivityWithReference(
+          app,
+          buildConversationReference(conversationRef),
+          { type: "message", text: reflection.userMessage! },
+          {
+            accountId,
+            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
+          },
+        );
+      } catch (err) {
+        log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
+      }
+    })().catch((err: unknown) => {
       deps.log.error("feedback reflection failed", { error: formatUnknownError(err) });
     });
   }

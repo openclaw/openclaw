@@ -1,74 +1,200 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { isInternalSessionEffectsKey } from "./internal-session-key.js";
-import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
-import type { SessionEntry } from "./types.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
+import type {
+  TranscriptArchivePageBinding,
+  TranscriptArchivePageOptions,
+  TranscriptArchivePageResult,
+} from "./session-accessor.sqlite-archive-types.js";
+import {
+  runSqliteTranscriptArchivePageWorker,
+  runSqliteTranscriptArchiveReadWorker,
+} from "./session-accessor.sqlite-archive.js";
+import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import {
+  prepareSqliteScope,
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import {
+  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+  MAX_VISIBLE_MESSAGE_MAX_BYTES,
+  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+  normalizeVisibleMessageLimit,
+} from "./session-accessor.sqlite-visible-cursor.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export function listSqliteTranscriptInstancesFromDatabase(params: {
-  agentId: string;
-  currentEntries: ReadonlyMap<string, SessionEntry>;
-  database: OpenClawAgentDatabase;
-  databasePath: string;
-}): SessionTranscriptInstance[] {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select([
-        "session_id",
-        "session_key",
-        "transcript_updated_at",
-        "session_entry_provenance",
-        "acp_owned",
-        "plugin_owner_id",
-        "hook_external_content_source",
-        "parent_session_key",
-        "spawned_by",
-        "chat_type",
-      ])
-      .where("transcript_updated_at", "is not", null)
-      .orderBy("transcript_updated_at", "desc")
-      .orderBy("session_id", "asc"),
-  ).rows;
-  return rows
-    .map((row): SessionTranscriptInstance | undefined => {
-      if (isInternalSessionEffectsKey(row.session_key) || row.transcript_updated_at === null) {
-        return undefined;
-      }
-      const updatedAtMs = row.transcript_updated_at;
-      const current = params.currentEntries.get(row.session_key);
-      // Matching identities cannot classify transcript content written before provenance existed.
-      const currentIsExact = current?.sessionId === row.session_id;
-      const provenanceKnown = row.session_entry_provenance === 1;
-      const hookExternalContentSource =
-        row.hook_external_content_source === "gmail" ||
-        row.hook_external_content_source === "webhook"
-          ? row.hook_external_content_source
-          : undefined;
-      const chatType =
-        row.chat_type === "direct" || row.chat_type === "group" || row.chat_type === "channel"
-          ? row.chat_type
-          : undefined;
-      const entry: SessionEntry = {
-        ...(currentIsExact && current ? structuredClone(current) : {}),
-        sessionId: row.session_id,
-        updatedAt: updatedAtMs,
-        ...(row.parent_session_key ? { parentSessionKey: row.parent_session_key } : {}),
-        ...(row.spawned_by ? { spawnedBy: row.spawned_by, spawnDepth: 1 } : {}),
-        ...(chatType ? { chatType } : {}),
-        ...(provenanceKnown && row.plugin_owner_id ? { pluginOwnerId: row.plugin_owner_id } : {}),
-        ...(provenanceKnown && hookExternalContentSource ? { hookExternalContentSource } : {}),
+/** Revalidate retained bytes and unique run membership before disclosing a prepared page. */
+export async function verifySessionTranscriptArchivePageBindingReadOnly(
+  scope: SessionAccessScope,
+  runId: string,
+  binding: TranscriptArchivePageBinding,
+): Promise<void> {
+  const result = await readSessionTaskArchivePageReadOnly(scope, { runId }, binding);
+  if (!result) {
+    throw new Error("Archived transcript is no longer available.");
+  }
+}
+
+export async function readSessionTaskArchivePageReadOnly(
+  scope: SessionAccessScope,
+  options: TranscriptArchivePageOptions,
+  verifyBinding?: TranscriptArchivePageBinding,
+): Promise<TranscriptArchivePageResult | undefined> {
+  const resolved = resolveSqliteReadScope(scope);
+  const databaseOptions = toDatabaseOptions(resolved);
+  const limit = normalizeVisibleMessageLimit(
+    options.limit,
+    DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
+    MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+    "limit",
+  );
+  const maxBytes = normalizeVisibleMessageLimit(
+    options.maxBytes,
+    DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
+    MAX_VISIBLE_MESSAGE_MAX_BYTES,
+    "maxBytes",
+  );
+  const contextMaxMessages =
+    options.contextMaxMessages === undefined
+      ? 0
+      : normalizeVisibleMessageLimit(
+          options.contextMaxMessages,
+          0,
+          MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+          "contextMaxMessages",
+        );
+  return withSqliteTranscriptArchiveSession(databaseOptions, async () => {
+    const [result] = await runSqliteTranscriptArchivePageWorker([
+      {
+        agentId: databaseOptions.agentId,
+        databasePath: resolveOpenClawAgentSqlitePath(databaseOptions),
+        logicalAgentId: resolved.agentId,
+        sessionKey: scope.sessionKey,
+        runId: options.runId,
+        cursor: options.cursor,
+        limit,
+        maxBytes,
+        contextMaxMessages,
+        verifyBinding,
+        projectionSources: options.projectionSources,
+      },
+    ]);
+    return result;
+  });
+}
+
+/** Reads committed archive content before its optional filesystem export is published. */
+export async function findSessionTranscriptArchiveEventReadOnly(
+  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
+    sessionId?: string;
+    sessionKey: string;
+  },
+  runId: string,
+): Promise<{ event: TranscriptEvent } | undefined> {
+  const captured = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  if (
+    isIncognitoSessionKey(captured.sessionKey) ||
+    Boolean(
+      captured.storePath &&
+      isIncognitoOpenClawAgentSqlitePath(captured.storePath, {
+        agentId: captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey),
+        env: captured.env,
+      }),
+    )
+  ) {
+    return undefined;
+  }
+  const context = captureOpenClawStateWorkerContext({ env: captured.env });
+  const assertStateCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  const candidates = captureSessionStoreReadCandidates(
+    captured.storePath ??
+      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteReadScope(captured))),
+  );
+  const identities = new Map(
+    candidates.map(
+      (candidate) =>
+        [candidate.physicalPath, readDatabasePathIdentitySync(candidate.path)] as const,
+    ),
+  );
+  const read = async (assertCurrent: () => void) => {
+    const resolved = await prepareSqliteScope(captured);
+    assertCurrent();
+    const options = toDatabaseOptions(resolved);
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    const expectedIdentity = identities.get(
+      assertSessionStoreReadCandidate(databasePath, candidates),
+    );
+    if (!expectedIdentity) {
+      throw new Error("SQLite archive database identity changed during discovery");
+    }
+    const current = readDatabasePathIdentitySync(databasePath);
+    if (current.key !== expectedIdentity.key || current.birthtime !== expectedIdentity.birthtime) {
+      throw new Error("SQLite archive database identity changed during discovery");
+    }
+    if (!expectedIdentity.key.startsWith("file:")) {
+      return undefined;
+    }
+    const target = {
+      logicalAgentId: resolved.agentId,
+      sessionId: captured.sessionId,
+      sessionKey: captured.sessionKey,
+    };
+    return withSqliteTranscriptArchiveSession(options, async () => {
+      const readArchive = async () => {
+        const [result] = await runSqliteTranscriptArchiveReadWorker([
+          { agentId: options.agentId, databasePath, ...target, runId, expectedIdentity },
+        ]);
+        assertCurrent();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
+        return result?.event === undefined ? undefined : { event: result.event };
       };
-      return {
-        acpOwned: row.acp_owned === 1 || Boolean(currentIsExact && current?.acp),
-        entry,
-        provenanceKnown,
-        sessionId: row.session_id,
-        sessionKey: row.session_key,
-        updatedAtMs,
-      };
-    })
-    .filter((entry): entry is SessionTranscriptInstance => entry !== undefined);
+      assertCurrent();
+      return withSessionHistoryWorkerDatabase(options, async (reader) => {
+        // Empty lookups never start the archive reader or retain its completion roots.
+        const registered = await reader.readArchivePresence({
+          ...target,
+          env: captured.env,
+          expectedIdentity,
+        });
+        assertCurrent();
+        reader.assertCurrent();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
+        return registered ? readArchive() : undefined;
+      });
+    });
+  };
+  return withSessionHistoryWorkerReadCandidates(candidates, (owner) =>
+    read(() => {
+      assertStateCurrent();
+      owner.assertCurrent();
+    }),
+  );
 }

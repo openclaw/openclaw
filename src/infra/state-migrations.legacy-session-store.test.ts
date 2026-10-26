@@ -1,130 +1,124 @@
-import type { MakeDirectoryOptions, Mode, PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readLegacySessionStoreEntries } from "../config/sessions/legacy-store-inspection.js";
 import {
   loadLegacySessionStore,
   saveLegacySessionStore,
 } from "./state-migrations.legacy-session-store.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+const MAIN_KEY = "agent:main:main";
+type Store = ReturnType<typeof loadLegacySessionStore>;
+let storePath: string;
+beforeEach(() => {
+  storePath = path.join(tempDirs.make("openclaw-legacy-session-"), "sessions.json");
+});
+const writeStore = (value: unknown) => fs.writeFile(storePath, JSON.stringify(value));
+function mainStore<T extends object>(entry: T) {
+  return { [MAIN_KEY]: { sessionId: "session-1", updatedAt: 1, ...entry } };
+}
+const saveStore = (store: Store) =>
+  saveLegacySessionStore(storePath, store, { skipMaintenance: true });
+function expectNormalized(store: Record<string, unknown>, channel: string) {
+  expect(store.malformed).toBeUndefined();
+  expect(store[MAIN_KEY]).toMatchObject({
+    sessionId: "session-1",
+    delivery: { kind: "external", context: { channel }, origin: { provider: channel } },
+  });
+  for (const key of ["channel", "lastChannel", "pendingFinalDeliveryAttemptCount"]) {
+    expect(store[MAIN_KEY]).not.toHaveProperty(key);
+  }
+}
+
 it("stages prompt blobs after a recreated session directory", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-store-" }, async (root) => {
-    const storeDir = path.join(root, "sessions");
-    const storePath = path.join(storeDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const prompt = `<available_skills>\n${"recreated dir prompt\n".repeat(200)}</available_skills>`;
-    const realMkdir = fs.mkdir.bind(fs);
-    let storeDirMkdirs = 0;
-    const mkdirSpy = vi
-      .spyOn(fs, "mkdir")
-      .mockImplementation(
-        async (dirPath: PathLike, options?: MakeDirectoryOptions | Mode | null) => {
-          if (typeof dirPath === "string" && path.resolve(dirPath) === path.resolve(storeDir)) {
-            storeDirMkdirs += 1;
-            if (storeDirMkdirs === 2) {
-              await fs.rm(storeDir, { force: true, recursive: true });
-            }
-          }
-          return await realMkdir(dirPath, options ?? undefined);
-        },
-      );
-
-    try {
-      await saveLegacySessionStore(
-        storePath,
-        {
-          [sessionKey]: {
-            sessionId: "session-1",
-            updatedAt: 1,
-            skillsSnapshot: {
-              prompt,
-              skills: [{ name: "demo" }],
-              version: 1,
-            },
-          },
-        },
-        { skipMaintenance: true },
-      );
-    } finally {
-      mkdirSpy.mockRestore();
+  const storeDir = path.join(path.dirname(storePath), "sessions");
+  storePath = path.join(storeDir, "sessions.json");
+  const prompt = `<available_skills>\n${"recreated dir prompt\n".repeat(200)}</available_skills>`;
+  const realMkdir = fs.mkdir.bind(fs);
+  let mkdirs = 0;
+  vi.spyOn(fs, "mkdir").mockImplementation(async (dir, options) => {
+    if (typeof dir === "string" && path.resolve(dir) === path.resolve(storeDir) && ++mkdirs === 2) {
+      await fs.rm(storeDir, { force: true, recursive: true });
     }
-
-    expect(storeDirMkdirs).toBeGreaterThanOrEqual(2);
-    expect(loadLegacySessionStore(storePath)[sessionKey]?.skillsSnapshot?.prompt).toBe(prompt);
+    return await realMkdir(dir, options ?? undefined);
   });
+  await saveStore(
+    mainStore({ skillsSnapshot: { prompt, skills: [{ name: "demo" }], version: 1 } }),
+  );
+  expect(mkdirs).toBeGreaterThanOrEqual(2);
+  expect(loadLegacySessionStore(storePath)[MAIN_KEY]?.skillsSnapshot?.prompt).toBe(prompt);
 });
 
-it("normalizes file-era rows and drops malformed entries", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-normalize-" }, async (root) => {
-    const storePath = path.join(root, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        malformed: null,
-        "agent:main:main": {
-          sessionId: " session-1 ",
-          updatedAt: 1,
-          provider: "slack",
-          lastProvider: "telegram",
-          pendingFinalDeliveryAttemptCount: -1,
-          pluginExtensions: {
-            " demo ": {
-              " valid ": { ok: true },
-              invalid: undefined,
-            },
-          },
-        },
-      }),
-    );
-
-    const store = loadLegacySessionStore(storePath);
-
-    expect(store.malformed).toBeUndefined();
-    expect(store["agent:main:main"]).toMatchObject({
-      sessionId: "session-1",
-      delivery: {
-        kind: "external",
-        context: { channel: "telegram" },
-        origin: { provider: "telegram" },
+it.each(["read", "write"] as const)("normalizes legacy rows during %s", async (mode) => {
+  const channel = mode === "read" ? "telegram" : "slack";
+  const provider = mode === "read" ? false : "obsolete-provider";
+  const skillsSnapshot = {
+    prompt: "compact skill prompt",
+    skills: [{ name: "demo" }],
+    skillFilter: ["demo"],
+    version: 7,
+  };
+  const store = {
+    malformed: null,
+    ...mainStore({
+      sessionId: " session-1 ",
+      channel: "slack",
+      pendingFinalDeliveryAttemptCount: -1,
+      provider,
+      lastProvider: provider,
+      lastChannel: channel,
+      pluginExtensions: { " demo ": { " valid ": { ok: true }, invalid: undefined } },
+      skillsSnapshot: {
+        ...skillsSnapshot,
+        resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
       },
-      pluginExtensions: { demo: { valid: { ok: true } } },
-    });
-    expect(store["agent:main:main"]).not.toHaveProperty("channel");
-    expect(store["agent:main:main"]).not.toHaveProperty("lastChannel");
-    expect(store["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
-  });
+    }),
+  } as unknown as Store;
+  await (mode === "read" ? writeStore(store) : saveStore(store));
+  const raw = await fs.readFile(storePath, "utf8");
+  const normalized: Store = mode === "read" ? loadLegacySessionStore(storePath) : JSON.parse(raw);
+  expectNormalized(normalized, channel);
+  expect(normalized[MAIN_KEY]?.pluginExtensions).toEqual({ demo: { valid: { ok: true } } });
+  expect(normalized[MAIN_KEY]?.skillsSnapshot).toMatchObject(skillsSnapshot);
+  expect(normalized[MAIN_KEY]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
+  expectNormalized(loadLegacySessionStore(storePath), channel);
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
 });
 
-it("normalizes compatibility writes before persistence", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-write-" }, async (root) => {
-    const storePath = path.join(root, "sessions.json");
-    const store = {
-      malformed: null,
-      "agent:main:main": {
-        sessionId: " session-1 ",
-        updatedAt: 1,
-        provider: "slack",
-        pendingFinalDeliveryAttemptCount: -1,
-      },
-    } as unknown as Parameters<typeof saveLegacySessionStore>[1];
+it("preserves retired room-only source bytes across inspection, loading, and refused writes", async () => {
+  const store = mainStore({ sessionId: "session-room", room: "#legacy" });
+  const raw = `${JSON.stringify(store, null, 2)}\n`;
+  await fs.writeFile(storePath, raw);
+  expect(() => readLegacySessionStoreEntries({ storePath }, [])).toThrow(/2026\.9\.5/);
+  expect(() => loadLegacySessionStore(storePath)).toThrow(/2026\.9\.5/);
+  await expect(saveStore(store)).rejects.toThrow(/2026\.9\.5/);
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+});
 
-    await saveLegacySessionStore(storePath, store, { skipMaintenance: true });
+it("imports provider-only fields still preserved by the July Doctor writer", async () => {
+  await writeStore(mainStore({ provider: "slack", lastProvider: "telegram" }));
+  const raw = await fs.readFile(storePath, "utf8");
+  expectNormalized(loadLegacySessionStore(storePath), "telegram");
+  expect(await fs.readFile(storePath, "utf8")).toBe(raw);
+});
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-      string,
-      Record<string, unknown>
-    >;
-    expect(persisted.malformed).toBeUndefined();
-    expect(persisted["agent:main:main"]).toMatchObject({
-      sessionId: "session-1",
-      delivery: {
-        kind: "external",
-        context: { channel: "slack" },
-        origin: { provider: "slack" },
-      },
-    });
-    expect(persisted["agent:main:main"]).not.toHaveProperty("channel");
-    expect(persisted["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
-  });
+it("refuses a malformed UTF-8 legacy index without changing its bytes", async () => {
+  const raw = Buffer.concat([
+    Buffer.from('{"agent:main:main":{"sessionId":"session-'),
+    Buffer.from([0xff]),
+    Buffer.from('","updatedAt":1}}'),
+  ]);
+  await fs.writeFile(storePath, raw);
+  const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+  expect(readLegacySessionStoreEntries({ storePath }, issues)).toEqual({ entries: [] });
+  expect(issues).toEqual([
+    expect.objectContaining({
+      code: "store_unreadable",
+      message: expect.stringContaining("UTF-8"),
+    }),
+  ]);
+  expect(await fs.readFile(storePath)).toEqual(raw);
 });

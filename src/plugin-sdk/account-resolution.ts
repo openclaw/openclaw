@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for account id normalization and account matching helpers.
- */
 export {
   createAccountListHelpers,
   hasConfiguredAccountValue,
@@ -16,4 +13,5 @@ export {
 } from "./account-core.js";
 
 export type { OpenClawConfig } from "../config/types.openclaw.js";
-export { resolveAccountEntry } from "../routing/account-lookup.js";
+export { resolveAccountEntry, resolveAccountKey } from "../routing/account-lookup.js";
+export type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";

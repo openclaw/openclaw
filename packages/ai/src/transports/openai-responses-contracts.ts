@@ -1,7 +1,14 @@
-import type { Api } from "@openclaw/llm-core";
+import {
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type Api,
+  type ProviderReplayState,
+} from "@openclaw/llm-core/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
+  Response as OpenAIResponse,
   ResponseCreateParamsStreaming,
+  ResponseCompactionItem,
   ResponseInput,
   ResponseOutputMessage,
   ResponseReasoningItem,
@@ -11,6 +18,9 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
+import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
+import { isResponsesServiceTierRejection } from "./openai-responses-service-tier.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -20,8 +30,125 @@ export const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error detai
 export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+// Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
+export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
+export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
+export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
+  "openai-responses-retained-compaction";
+export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+export const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
+
+export function isResponsesTerminalEventType(value: unknown): boolean {
+  return (
+    value === "response.completed" || value === "response.incomplete" || value === "response.failed"
+  );
+}
+
+export class OpenAIResponsesWebSocketPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed before request dispatch", { cause });
+    this.name = "OpenAIResponsesWebSocketPreDispatchError";
+  }
+}
+
+export class OpenAIResponsesWebSocketPostDispatchError extends Error {
+  readonly code = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+
+  constructor(cause: unknown) {
+    super("OpenAI Responses WebSocket failed after request dispatch; outcome is unknown", {
+      cause,
+    });
+    this.name = "OpenAIResponsesWebSocketPostDispatchError";
+  }
+}
+
+class OpenAIResponsesWebSocketServerError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number | undefined,
+    readonly param: string | null,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "OpenAIResponsesWebSocketServerError";
+  }
+}
+
+export class OpenAIResponsesWebSocketSafeRetryError extends OpenAIResponsesWebSocketServerError {}
+
+function readWebSocketServerError(value: unknown) {
+  if (!isRecord(value) || value.type !== "error") {
+    return undefined;
+  }
+  const details = isRecord(value.error) ? value.error : value;
+  const code =
+    typeof details.code === "string"
+      ? details.code
+      : isResponsesServiceTierRejection(details)
+        ? "invalid_request_error"
+        : undefined;
+  if (!code || typeof details.message !== "string") {
+    return undefined;
+  }
+  const rawStatus = value.status ?? value.status_code;
+  return {
+    code,
+    message: details.message,
+    param: typeof details.param === "string" ? details.param : null,
+    status: typeof rawStatus === "number" ? rawStatus : undefined,
+  };
+}
+
+// A continuation reference the server refuses to honor: the response expired or never
+// existed (`previous_response_not_found`), or the organization cannot reference stored
+// responses at all (Zero Data Retention rejects the `previous_response_id` parameter).
+// Both reject before any output is accepted, so the turn resends full history instead.
+export function isPreviousResponseRejection(error: { code?: unknown; param?: unknown }): boolean {
+  return (
+    error.code === "previous_response_not_found" ||
+    (error.code === "unsupported_parameter" && error.param === "previous_response_id")
+  );
+}
+
+export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
+  if (!isRecord(cause)) {
+    return undefined;
+  }
+  let details = readWebSocketServerError(cause.error) ?? readWebSocketServerError(cause);
+  if (!details && typeof cause.message === "string") {
+    try {
+      details = readWebSocketServerError(JSON.parse(cause.message));
+    } catch {}
+  }
+  if (!details) {
+    return undefined;
+  }
+  const ErrorClass =
+    isPreviousResponseRejection(details) ||
+    isResponsesServiceTierRejection(details) ||
+    details.code === "websocket_connection_limit_reached" ||
+    details.code === "invalid_encrypted_content" ||
+    details.code === "thinking_signature_invalid"
+      ? OpenAIResponsesWebSocketSafeRetryError
+      : OpenAIResponsesWebSocketServerError;
+  return new ErrorClass(details.code, details.status, details.param, details.message, cause);
+}
 
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
 export type OpenAIResponsesReasoningReplayMetadata = {
   v: 1;
   source: "openai-responses";
@@ -36,9 +163,19 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   id?: string;
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
+export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
+  compactedWindow?: OpenAIResponsesCompactedWindow;
+} & (
+    | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
+    | {
+        type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
+        baseUrlHash: string;
+        replayIndex?: never;
+      }
+  );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
-  reasoning?: OpenAIReasoningEffort;
+  reasoning?: OpenAIRequestReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
@@ -48,8 +185,12 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
-  egress: "responses-sdk" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "encrypted-content-retry";
+  egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
+  payloadVariant:
+    | "initial"
+    | "reasoning-stripped"
+    | "compaction-stripped"
+    | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -72,13 +213,64 @@ export const responsesPromptObserver = {
   },
 };
 
-export type OpenAIResponsesReplayContext = {
-  provider: string;
-  api: Api;
-  model: string;
-  baseUrlHash?: string;
-  sessionHash?: string;
-  authProfileHash?: string;
+const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
+export type ResponsesServiceTierObservation =
+  | {
+      requestedTier: string;
+      responseTier: string;
+      rejected?: false;
+      responseId?: string;
+      responseModel?: string;
+      inputTokens?: number;
+      cachedTokens?: number;
+    }
+  | { requestedTier: string; rejected: true };
+type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
+
+export const responsesServiceTierObserver = {
+  set(options: object, observer: ResponsesServiceTierObserver): void {
+    Reflect.set(options, SERVICE_TIER_OBSERVER, observer);
+  },
+  get(options: object) {
+    // SAFETY: Only set() writes this private symbol, with a typed service-tier observer.
+    return Reflect.get(options, SERVICE_TIER_OBSERVER) as ResponsesServiceTierObserver | undefined;
+  },
+  copy(source: object | undefined, target: object): void {
+    const observer = source && responsesServiceTierObserver.get(source);
+    if (observer) {
+      responsesServiceTierObserver.set(target, observer);
+    }
+  },
+  reject(options: object | undefined, requestedTier: string): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    observer?.({ requestedTier, rejected: true });
+  },
+  observe(
+    options: object | undefined,
+    requestedTier: unknown,
+    responseTier: unknown,
+    response?: Pick<OpenAIResponse, "id" | "model" | "usage">,
+  ): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    if (
+      observer &&
+      typeof requestedTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(requestedTier) &&
+      typeof responseTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(responseTier)
+    ) {
+      observer({
+        requestedTier,
+        responseTier,
+        ...(response && {
+          responseId: response.id,
+          responseModel: response.model,
+          inputTokens: response.usage?.input_tokens,
+          cachedTokens: response.usage?.input_tokens_details?.cached_tokens,
+        }),
+      });
+    }
+  },
 };
 
 export type OpenAIResponsesRequestParams = {
@@ -88,14 +280,17 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl?: "30m" | "12h" };
   metadata?: Record<string, string>;
+  previous_response_id?: string;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

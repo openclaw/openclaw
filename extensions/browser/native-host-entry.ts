@@ -1,0 +1,56 @@
+import { fileURLToPath } from "node:url";
+import {
+  parseBrowserNativeHostOrigins,
+  runBrowserNativeHost,
+} from "./src/browser/extension-native-host.js";
+import { encodeBrowserNativeResponse } from "./src/browser/extension-native-protocol.js";
+
+function requiredArgument(name: string): string {
+  const index = process.argv.indexOf(name);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  if (!value) {
+    throw new Error(`Missing ${name}`);
+  }
+  return value;
+}
+
+async function main(): Promise<void> {
+  const { callerOrigin, expectedOrigins } = parseBrowserNativeHostOrigins(process.argv.slice(2));
+  const response = await runBrowserNativeHost({
+    manifestPath: requiredArgument("--manifest"),
+    launcherPath: requiredArgument("--launcher"),
+    callerOrigin,
+    expectedOrigins,
+    input: process.stdin,
+    buildPairing: async (boundProfile) => {
+      // Config and relay-key work must remain behind the host's validation boundary.
+      const { buildBrowserNativeHostPairing } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      const profileIndex = process.argv.indexOf("--browser-profile");
+      const profile = profileIndex >= 0 ? requiredArgument("--browser-profile") : undefined;
+      return await buildBrowserNativeHostPairing(boundProfile ?? profile);
+    },
+    ensureRelay: async (port) => {
+      const { createPluginRuntimeProcessEntrypoint, resolveRuntimeWorkerUrl } =
+        await import("openclaw/plugin-sdk/process-runtime");
+      const { ensureBrowserNativeRelay } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      // Resolve the sibling entry here, not relative to a shared runtime chunk.
+      return await ensureBrowserNativeRelay(
+        port,
+        fileURLToPath(
+          resolveRuntimeWorkerUrl(
+            createPluginRuntimeProcessEntrypoint("browserRelayDaemon", import.meta.url),
+          ),
+        ),
+      );
+    },
+  });
+  await new Promise<void>((resolve) => {
+    process.stdout.write(encodeBrowserNativeResponse(response), () => resolve());
+  });
+}
+
+void main().catch(() => {
+  process.exitCode = 1;
+});

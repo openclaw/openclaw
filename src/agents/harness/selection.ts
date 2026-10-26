@@ -1,7 +1,7 @@
-/**
- * Selects and invokes native agent harnesses for embedded run attempts.
- */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
+import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -11,214 +11,84 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderRefOwnership } from "../../plugins/providers.js";
-import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import {
+  assertOperatorModelAllowed,
+  bindOperatorModelExecution,
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../admitted-run-context.js";
 import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
-import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { MissingAgentHarnessError } from "./errors.js";
+import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
+import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
+import {
+  resolveContextEngineCompletionRuntimeContext,
+  runWithContextEngineAssemblyAttempt,
+  type ContextEngineAssemblySnapshot,
+} from "./context-engine-assembly-attempt.js";
+import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
+import { AgentHarnessPreflightError } from "./errors.js";
+import {
+  assertAgentHarnessExecutionEnvironment,
+  isSystemAgentOnlyAllowlist,
+  resolvePluginHarnessDenyAllToolPolicyPrompt,
+  resolvePluginHarnessToolPolicies,
+} from "./execution-environment.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { bindHarnessSettledTurnCallback } from "./host-source-authority.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
+import { preparePluginHarnessParams } from "./plugin-attempt-params.js";
+import { resolveAgentHarnessQueueInputAdapter } from "./registry.js";
 import {
-  resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
-  type AgentHarnessPolicy,
-} from "./policy.js";
-import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
+  buildAgentHarnessSelectionDecision,
+  resolveAgentHarnessSelectionDecision,
+  type AgentHarnessSelectionParams,
+  type AgentHarnessSelectionDecisionParams,
+  type AgentHarnessSelectionDecision as AgentHarnessSelectionFact,
+  type AgentHarnessPreparedModelProvider,
+} from "./selection-decision.js";
 import {
-  buildAgentHarnessSupportContext,
-  compareHarnessSupport,
+  assertPluginHarnessConversationToolPolicySupport,
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
 } from "./support.js";
-import type {
-  AgentHarness,
-  AgentHarnessSettledTurnFinalizationResult,
-  AgentHarnessSupport,
-  AgentHarnessSupportContext,
-} from "./types.js";
+import type { AgentHarness } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
-export { resolveAgentHarnessPolicy } from "./policy.js";
+const WORKSPACE_EFFECT_HOOKS = [
+  "agent_turn_prepare",
+  "before_prompt_build",
+  "before_agent_run",
+  "llm_input",
+  "llm_output",
+  "before_agent_finalize",
+  "agent_end",
+  "before_message_write",
+  "tool_result_persist",
+  "before_compaction",
+  "after_compaction",
+] as const;
+export { resolveAvailableAgentHarnessPolicy } from "./availability.js";
 
-type AgentHarnessAvailabilityParams = {
-  provider?: string;
-  modelId?: string;
-  modelProvider?: AgentHarnessSupportContext["modelProvider"];
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-  preparedModelProvider?: boolean;
-};
-
-type AgentHarnessSelectionParams = {
-  provider: string;
-  modelId?: string;
-  modelProvider?: AgentHarnessSupportContext["modelProvider"];
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  agentHarnessId?: string;
-  agentHarnessRuntimeOverride?: string;
-};
-
-type AgentHarnessSelectionDecisionParams = AgentHarnessSelectionParams & {
-  /** Finalized route/auth facts must always pass harness support, including persisted pins. */
-  preparedModelProvider?: boolean;
-};
-
-export type AgentHarnessPreparedModelProvider = NonNullable<
-  AgentHarnessSupportContext["modelProvider"]
->;
-
-type AgentHarnessAvailabilityDecision =
-  | { kind: "available"; policy: AgentHarnessPolicy }
-  | { kind: "implicit-unavailable"; policy: AgentHarnessPolicy }
-  | { kind: "implicit-unsupported"; policy: AgentHarnessPolicy };
-
-const PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT =
-  "Tool and file actions are disabled for this sender by chat policy. If asked to edit files or use tools, say this sender is not allowed by policy; do not imply retrying will help.";
-const PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT =
-  "Tool and file actions are disabled for this chat by policy. If asked to edit files or use tools, say this chat is not allowed by policy.";
-const PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT =
-  "Tool and file actions are disabled by runtime policy. If asked to edit files or use tools, say tools are disabled by policy.";
-
-type AgentHarnessSelectionCandidate = {
-  id: string;
-  label: string;
-  pluginId?: string;
-  supported?: boolean;
-  priority?: number;
-  reason?: string;
-};
-
-type AgentHarnessSelectionDecision = {
+type AgentHarnessSelectionDecision = Omit<AgentHarnessSelectionFact, "harness"> & {
   harness: AgentHarness;
-  policy: AgentHarnessPolicy;
-  selectedHarnessId: string;
-  selectedReason:
-    | "forced_openclaw"
-    | "forced_plugin"
-    // Implicit Codex preference found no registered Codex harness, so OpenClaw handled the run.
-    | "implicit_plugin_unavailable_openclaw"
-    // Implicit Codex preference cannot reproduce the prepared transport, so OpenClaw handled it.
-    | "implicit_plugin_unsupported_openclaw"
-    // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
-    | "cli_runtime_passthrough_openclaw"
-    // Auto mode chose a registered plugin harness that supports the provider/model.
-    | "auto_plugin"
-    // Auto mode found no supporting plugin harness, so OpenClaw handled the run.
-    | "auto_openclaw";
-  candidates: AgentHarnessSelectionCandidate[];
 };
-
-type PluginHarnessToolPolicyContext = Pick<
-  EmbeddedRunAttemptParams,
-  | "config"
-  | "sessionId"
-  | "sessionKey"
-  | "sandboxSessionKey"
-  | "agentId"
-  | "provider"
-  | "modelId"
-  | "messageProvider"
-  | "messageChannel"
-  | "spawnedBy"
-  | "groupId"
-  | "groupChannel"
-  | "groupSpace"
-  | "agentAccountId"
-  | "senderId"
-  | "senderName"
-  | "senderUsername"
-  | "senderE164"
-  | "senderIsOwner"
-  | "inputProvenance"
-  | "trustedInternalHandoff"
-  | "scheduledToolPolicy"
->;
-
-type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
-
-type ResolvedPluginHarnessToolPolicies = {
-  senderPolicy?: PluginHarnessToolPolicy;
-  senderScopedGroupPolicy?: PluginHarnessToolPolicy;
-  groupPolicy?: PluginHarnessToolPolicy;
-  runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
-};
-
-function listPluginAgentHarnesses(): AgentHarness[] {
-  return listRegisteredAgentHarnesses().map((entry) => entry.harness);
-}
-
-export function resolveAvailableAgentHarnessPolicy(
-  params: AgentHarnessAvailabilityParams,
-): AgentHarnessPolicy {
-  return resolveAgentHarnessAvailabilityDecision(params).policy;
-}
-
-function resolveAgentHarnessAvailabilityDecision(
-  params: AgentHarnessAvailabilityParams,
-): AgentHarnessAvailabilityDecision {
-  const policy = resolveConfiguredAgentHarnessPolicy({
-    ...params,
-    modelApi: params.modelProvider?.api,
-    modelBaseUrl: params.modelProvider?.baseUrl,
-    requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
-  });
-  if (policy.runtime !== "codex" || policy.runtimeSource !== "implicit") {
-    return { kind: "available", policy };
-  }
-  const codexHarness = getRegisteredAgentHarness("codex");
-  if (!codexHarness) {
-    return {
-      kind: "implicit-unavailable",
-      policy: { ...policy, runtime: "openclaw" },
-    };
-  }
-  const provider = params.provider?.trim();
-  if (!provider) {
-    return { kind: "available", policy };
-  }
-  const support = codexHarness.harness.supports(
-    buildAgentHarnessSupportContext({
-      provider,
-      modelId: params.modelId,
-      modelProvider: params.modelProvider,
-      requestedRuntime: policy.runtime,
-      config: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      preparedModelProvider: params.preparedModelProvider,
-    }),
-  );
-  if (support.supported) {
-    return { kind: "available", policy };
-  }
-  return {
-    kind: "implicit-unsupported",
-    policy: { ...policy, runtime: "openclaw" },
-  };
-}
 
 export function selectAgentHarness(params: AgentHarnessSelectionParams): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
@@ -248,228 +118,30 @@ export function selectAgentHarnessForPreparedModelProviders(
   ) {
     return first?.harness ?? selectAgentHarness(selectionParams);
   }
-  // Only implicit/auto selection can produce different supported harnesses. One embedded
-  // runtime owns the complete retry set; explicit and pinned plugins fail during probing above.
+  // One embedded runtime owns the complete retry set. Auto selection and plugin-declared
+  // fallbacks may resolve individual prepared routes to different harnesses.
   return (
     decisions.find((decision) => decision.selectedHarnessId === "openclaw")?.harness ??
     createOpenClawAgentHarness()
   );
 }
 
-/** Returns whether a plugin harness constructs OpenClaw tools inside its runtime. */
-export function agentHarnessBuildsOpenClawTools(harnessId: string): boolean {
-  return harnessId === "codex" || harnessId === "copilot";
-}
-
-/** Returns whether the selected harness exposes OpenClaw's agent-tool surface. */
-export function agentHarnessExposesOpenClawTools(harnessId: string): boolean {
-  return harnessId === "openclaw" || agentHarnessBuildsOpenClawTools(harnessId);
-}
-
 function selectAgentHarnessDecision(
   params: AgentHarnessSelectionDecisionParams,
 ): AgentHarnessSelectionDecision {
-  const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
-  const requestedRuntimeOverride = pinnedHarnessId ?? runtimeOverride;
-  const selectedRuntimeOverride =
-    requestedRuntimeOverride && !isDefaultAgentRuntimeId(requestedRuntimeOverride)
-      ? requestedRuntimeOverride
-      : undefined;
-  // Persisted ownership and explicit model policy are already authoritative.
-  // Avoid probing implicit harness support before those overrides are applied.
-  const availability: AgentHarnessAvailabilityDecision = selectedRuntimeOverride
-    ? {
-        kind: "available",
-        policy: resolveConfiguredAgentHarnessPolicy({
-          ...params,
-          modelApi: params.modelProvider?.api,
-          modelBaseUrl: params.modelProvider?.baseUrl,
-          requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
-        }),
-      }
-    : resolveAgentHarnessAvailabilityDecision(params);
-  const resolvedPolicy = availability.policy;
-  const policy = selectedRuntimeOverride
-    ? ({
-        ...resolvedPolicy,
-        runtime: selectedRuntimeOverride,
-        runtimeSource: "model",
-      } as AgentHarnessPolicy)
-    : resolvedPolicy;
-  // OpenClaw's built-in harness is intentionally not part of the plugin candidate list. Explicit plugin
-  // runtimes fail closed; only `auto` may route an unmatched turn to OpenClaw.
-  const pluginHarnesses = listPluginAgentHarnesses();
-  const openClawHarness = createOpenClawAgentHarness();
-  const runtime = policy.runtime;
-  if (runtime === "openclaw") {
-    const selectedReason = selectedRuntimeOverride
-      ? "forced_openclaw"
-      : availability.kind === "implicit-unavailable"
-        ? "implicit_plugin_unavailable_openclaw"
-        : availability.kind === "implicit-unsupported"
-          ? "implicit_plugin_unsupported_openclaw"
-          : "forced_openclaw";
-    return buildSelectionDecision({
-      harness: openClawHarness,
-      policy,
-      selectedReason,
-      candidates: listHarnessCandidates(pluginHarnesses),
-    });
-  }
-  if (runtime !== "auto") {
-    const forced = pluginHarnesses.find((entry) => entry.id === runtime);
-    if (forced) {
-      // A persisted harness owns the native transcript before route/auth preparation. The
-      // finalized entrypoint sets preparedModelProvider and must always revalidate that owner.
-      if (pinnedHarnessId === runtime && !params.preparedModelProvider) {
-        return buildSelectionDecision({
-          harness: forced,
-          policy,
-          selectedReason: "forced_plugin",
-          candidates: listHarnessCandidates(pluginHarnesses),
-        });
-      }
-      const supportContext = buildAgentHarnessSupportContext({
-        provider: params.provider,
-        modelId: params.modelId,
-        modelProvider: params.modelProvider,
-        requestedRuntime: runtime,
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        preparedModelProvider: params.preparedModelProvider,
-        providerOwnership: resolveProviderRefOwnership({
-          provider: params.provider,
-          config: params.config,
-        }),
-      });
-      const support = forced.supports(supportContext);
-      if (support.supported) {
-        return buildSelectionDecision({
-          harness: forced,
-          policy,
-          selectedReason: "forced_plugin",
-          candidates: listHarnessCandidates(pluginHarnesses),
-        });
-      }
-      if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
-        return buildSelectionDecision({
-          harness: openClawHarness,
-          policy: {
-            ...policy,
-            runtime: "openclaw",
-          },
-          selectedReason: "cli_runtime_passthrough_openclaw",
-          candidates: listHarnessCandidates(pluginHarnesses),
-        });
-      }
-      throw new Error(
-        `Requested agent harness "${runtime}" does not support ${formatProviderModel(params)}${
-          support.reason ? ` (${support.reason})` : ""
-        }.`,
-      );
-    }
-    if (runtime === "codex" && policy.runtimeSource === "implicit") {
-      return buildSelectionDecision({
-        harness: openClawHarness,
-        policy: {
-          ...policy,
-          runtime: "openclaw",
-        },
-        selectedReason: "implicit_plugin_unavailable_openclaw",
-        candidates: listHarnessCandidates(pluginHarnesses),
-      });
-    }
-    if (
-      isCliRuntimeAliasForProvider({
-        runtime,
-        provider: params.provider,
-        cfg: params.config,
-      })
-    ) {
-      return buildSelectionDecision({
-        harness: openClawHarness,
-        policy: {
-          ...policy,
-          runtime: "openclaw",
-        },
-        selectedReason: "cli_runtime_passthrough_openclaw",
-        candidates: listHarnessCandidates(pluginHarnesses),
-      });
-    }
-    throw new MissingAgentHarnessError(runtime);
-  }
-
-  const hintedCandidates = pluginHarnesses.map((harness) => ({
-    harness,
-    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
-  }));
-  const candidates = hintedCandidates.some((entry) => entry.support === undefined)
-    ? (() => {
-        const supportContext = buildAgentHarnessSupportContext({
-          provider: params.provider,
-          modelId: params.modelId,
-          modelProvider: params.modelProvider,
-          requestedRuntime: runtime,
-          config: params.config,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          preparedModelProvider: params.preparedModelProvider,
-          providerOwnership: resolveProviderRefOwnership({
-            provider: params.provider,
-            config: params.config,
-          }),
-        });
-        return hintedCandidates.map(({ harness, support }) => ({
-          harness,
-          support: support ?? harness.supports(supportContext),
-        }));
-      })()
-    : hintedCandidates.map(({ harness, support }) => ({
-        harness,
-        support: support as AgentHarnessSupport,
-      }));
-  const supported = candidates
-    .filter(
-      (
-        entry,
-      ): entry is {
-        harness: AgentHarness;
-        support: AgentHarnessSupport & { supported: true };
-      } => entry.support.supported,
-    )
-    .toSorted(compareHarnessSupport);
-
-  const selected = supported[0]?.harness;
-  if (selected) {
-    return buildSelectionDecision({
-      harness: selected,
-      policy,
-      selectedReason: "auto_plugin",
-      candidates: candidates.map(toSelectionCandidate),
-    });
-  }
-  return buildSelectionDecision({
-    harness: openClawHarness,
-    policy,
-    selectedReason: "auto_openclaw",
-    candidates: candidates.map(toSelectionCandidate),
-  });
-}
-
-export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
-): Promise<EmbeddedRunAttemptResult> {
-  return runSelectedAgentHarnessAttempt(params);
+  const selection = resolveAgentHarnessSelectionDecision(params);
+  return {
+    ...selection,
+    harness: selection.builtIn ? createOpenClawAgentHarness() : selection.harness,
+  };
 }
 
 /** Runs the selected harness's fail-closed settled-turn finalization operation. */
 export async function runAgentHarnessSettledTurnFinalization(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   settledAttempt: EmbeddedRunAttemptResult,
   harness: AgentHarness,
-): Promise<AgentHarnessSettledTurnFinalizationResult> {
+) {
   const internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
@@ -480,29 +152,190 @@ export async function runAgentHarnessSettledTurnFinalization(
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const pluginParams = withoutInternalHarnessAuthority({
-    ...internalParams,
-    operation: "settled-tool-finalization",
-  });
-  const attemptParams =
-    harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
-  return runAgentHarnessOperation(harness, params, () =>
-    runWithAgentRingZeroTools([], () =>
-      runAgentHarnessLifecycleFinalization(harness, attemptParams, () =>
-        finalizeSettledTurn({ attempt: attemptParams, settledAttempt }),
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
+  const operatorAuthority = assertHarnessModelPolicySupport(harness, params);
+  const modelExecution = builtIn
+    ? undefined
+    : bindOperatorModelExecution(
+        operatorAuthority,
+        harness.nativeModelPolicySupport === "exact"
+          ? (settledAttempt.runtimeModelSelection ?? {
+              provider: params.provider,
+              model: params.modelId,
+            })
+          : undefined,
+      );
+  try {
+    modelExecution?.assertCurrent();
+    const attemptParams = prepareHarnessFinalizationParams(
+      {
+        ...internalParams,
+        operation: "settled-tool-finalization",
+        // This tool-free projection must not replace the conversation's cache or history baseline.
+        promptCacheKey: `finalization:${sha256HexPrefixCore(params.runId, 32)}`,
+        abortSignal: modelExecution
+          ? params.abortSignal
+            ? AbortSignal.any([params.abortSignal, modelExecution.signal])
+            : modelExecution.signal
+          : params.abortSignal,
+      },
+      builtIn,
+    );
+    const result = await runAgentHarnessOperation(harness, params, () =>
+      runWithAgentRingZeroTools([], () =>
+        runAgentHarnessLifecycleFinalization(harness, attemptParams, () => {
+          assertHarnessModelPolicySupport(harness, params);
+          modelExecution?.assertCurrent();
+          return finalizeSettledTurn({ attempt: attemptParams, settledAttempt });
+        }),
       ),
-    ),
-  );
+    );
+    modelExecution?.assertCurrent();
+    return result;
+  } finally {
+    modelExecution?.release();
+  }
 }
 
-async function runSelectedAgentHarnessAttempt(
+export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
-  const internalParams = params as EmbeddedRunAttemptParams & {
+  let internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
-  const selection = selectPreparedAgentHarness(params);
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  } else {
+    assertOperatorModelAllowed(readRunOperatorAuthority(params), {
+      provider: params.provider,
+      model: params.modelId,
+    });
+  }
+  // A bound native connection owns the real route. Outer model config cannot
+  // redirect its transcript or credentials through a second support decision.
+  const selection =
+    nativeSessionRuntime?.auth === "native"
+      ? {
+          ...buildAgentHarnessSelectionDecision({
+            harness: isBuiltInOpenClawAgentHarness(nativeSessionRuntime.harness)
+              ? undefined
+              : nativeSessionRuntime.harness,
+            policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+            selectedReason: "forced_plugin",
+            candidates: [],
+          }),
+          harness: nativeSessionRuntime.harness,
+        }
+      : selectAgentHarnessDecision({
+          provider: params.provider,
+          modelId: params.modelId,
+          modelProvider: {
+            api: params.model.api,
+            baseUrl: params.model.baseUrl,
+            ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
+            preparedAuth: resolveAgentHarnessPreparedAuthSupport({
+              plan: params.runtimePlan?.auth,
+            }),
+          },
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentHarnessId: params.agentHarnessId,
+          agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+          preparedModelProvider: params.runtimePlan?.auth !== undefined,
+        });
   const harness = selection.harness;
+  // Capture this registration before any awaited preparation; IDs and dispatch methods
+  // do not establish that an external sink understands separate question permission.
+  const queueInputAdapter = selection.builtIn
+    ? "human-and-question-permission"
+    : resolveAgentHarnessQueueInputAdapter(harness);
+  const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
+  const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
+  assertHarnessModelPolicySupport(harness, params);
+  let nativePermissionsConsented = false;
+  const runPreparedAttempt = async (
+    prepared: Parameters<typeof runAgentHarnessLifecycleAttempt>[1],
+  ) => {
+    if (nativeSessionRuntime) {
+      await nativeSessionRuntime.assertCurrent();
+    } else {
+      assertOperatorModelAllowed(readRunOperatorAuthority(params), {
+        provider: params.provider,
+        model: params.modelId,
+      });
+    }
+    const operatorAuthority = assertHarnessModelPolicySupport(harness, params);
+    const modelExecution =
+      selection.builtIn || (nativeOwnsModel && nativeModelPolicySupported)
+        ? undefined
+        : bindOperatorModelExecution(
+            operatorAuthority,
+            !nativeModelPolicySupported
+              ? undefined
+              : nativeSessionRuntime
+                ? nativeSessionRuntime.modelRef
+                : { provider: params.provider, model: params.modelId },
+          );
+    try {
+      modelExecution?.assertCurrent();
+      const result = await runAgentHarnessLifecycleAttempt(
+        harness,
+        modelExecution
+          ? {
+              ...prepared,
+              abortSignal: prepared.abortSignal
+                ? AbortSignal.any([prepared.abortSignal, modelExecution.signal])
+                : modelExecution.signal,
+            }
+          : prepared,
+        async (attempt) => {
+          if (harness.executionEnvironment === "host-only") {
+            // Prepared turns can outlive agent consent; the live config owner
+            // must still authorize native work after all asynchronous setup.
+            const currentConsent = await assertAgentHarnessExecutionEnvironment(harness, {
+              ...params,
+              config: readRuntimeConfig(),
+            });
+            if (nativePermissionsConsented && !currentConsent) {
+              throw new AgentHarnessPreflightError(
+                "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.",
+              );
+            }
+          }
+          attempt.hostCapabilities?.assertActive();
+          return harness.runAttempt(attempt);
+        },
+      );
+      await nativeSessionRuntime?.assertCurrent();
+      modelExecution?.assertCurrent();
+      return result;
+    } finally {
+      modelExecution?.release();
+    }
+  };
+  if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
+    throw new AgentHarnessPreflightError(
+      "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
+    );
+  }
+  if (internalParams.contextEngineLogicalTurnLease) {
+    const effective = await beginContextEngineLogicalTurn({
+      lease: internalParams.contextEngineLogicalTurnLease,
+      host: {
+        id: `agent-harness:${harness.id}`,
+        label: `agent harness "${harness.id}"`,
+        capabilities: harness.contextEngineHostCapabilities ?? [],
+      },
+      recorder: internalParams.userTurnTranscriptRecorder,
+      sessionTarget: internalParams.sessionTarget,
+    });
+    internalParams = {
+      ...internalParams,
+      contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
+    };
+  }
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
@@ -513,43 +346,169 @@ async function runSelectedAgentHarnessAttempt(
         ),
       ]
     : [];
-  const pluginParams = withoutInternalHarnessAuthority(internalParams);
-  logAgentHarnessSelection(selection, {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  return runAgentHarnessOperation(harness, params, () =>
-    runWithAgentRingZeroTools(ringZeroTools, () => {
-      // Resolve plugin policy after entering the host scope. Ring-zero tools are
-      // trusted setup authority and must survive ordinary deny-all policy.
-      const attemptParams =
-        harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
-      return runAgentHarnessLifecycleAttempt(harness, attemptParams);
-    }),
+  const recorder =
+    !selection.builtIn && !internalParams.suppressNextUserMessagePersistence
+      ? internalParams.userTurnTranscriptRecorder
+      : undefined;
+  const awaitBaseline = internalParams.awaitSessionDiffBaseline;
+  if (
+    recorder ||
+    (awaitBaseline &&
+      (!selection.builtIn ||
+        WORKSPACE_EFFECT_HOOKS.some((hook) => hasGlobalHooks(hook)) ||
+        hasInternalHookListeners("agent", "bootstrap")))
+  ) {
+    const assertCurrent = resolveAdmittedRunActiveAssertion(
+      internalParams.admittedRunContext,
+      internalParams.abortSignal,
+    );
+    if (!assertCurrent) {
+      throw new Error("agent harness requires active admitted run authority");
+    }
+    assertCurrent();
+    // Agent callbacks can write workspace files even when the turn never runs a tool.
+    await awaitBaseline?.();
+    internalParams.abortSignal?.throwIfAborted();
+    assertCurrent();
+    if (recorder) {
+      // Promote approved input before the host binds annotation to its exact stored row.
+      await recorder.persistApproved({ cwd: internalParams.cwd ?? internalParams.workspaceDir });
+      assertCurrent();
+    }
+  }
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  }
+  const {
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    systemAgentTool: _systemAgentTool,
+    ...attemptParams
+  } = internalParams;
+  const pluginAttempt = withoutInternalHarnessAuthority(
+    attemptParams,
+    harness,
+    selection.builtIn,
+    selection.ownerPluginId,
   );
+  let result: EmbeddedRunAttemptResult;
+  let assembly: ContextEngineAssemblySnapshot | undefined;
+  try {
+    const run = () =>
+      runAgentHarnessOperation(harness, params, () =>
+        runWithAgentRingZeroTools(ringZeroTools, async () => {
+          // Resolve plugin policy after entering the host scope. Ring-zero tools are
+          // trusted setup authority and must survive ordinary deny-all policy.
+          const hostOpenClawAuthority =
+            isHostScopedAgentToolActive("openclaw") &&
+            isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
+          nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
+            harness,
+            params,
+          );
+          const preparedParams = selection.builtIn
+            ? pluginAttempt.params
+            : await preparePluginHarnessParams(
+                pluginAttempt.params,
+                harness,
+                nativePermissionsConsented,
+                pluginAttempt.setInputAttachmentReadAllowed,
+                attemptParams.runtimePluginToolGrant !== undefined,
+                // Pending native supervision has no model identity to prepare against yet.
+                nativeSessionRuntime?.auth === "native"
+                  ? (nativeSessionRuntime.modelRef ?? null)
+                  : undefined,
+              );
+          const effectiveAttemptParams =
+            hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
+              ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
+              : preparedParams;
+          assertPluginHarnessConversationToolPolicySupport(
+            harness,
+            effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&
+              !nativePermissionsConsented,
+          );
+          // Load the calculator only after admission and final host policy preparation.
+          return import("./tool-authority.runtime.js").then(
+            ({ withPreparedEmbeddedRunToolAuthority }) =>
+              withPreparedEmbeddedRunToolAuthority(
+                { ...internalParams, queueInputAdapter },
+                effectiveAttemptParams,
+                selection.builtIn
+                  ? undefined
+                  : (input, sandbox) => {
+                      const policies = resolvePluginHarnessToolPolicies(
+                        {
+                          ...input.run,
+                          modelId: input.run.model,
+                          sandboxSessionKey: input.run.runtimePolicySessionKey,
+                          messageChannel: input.originatingChannel,
+                          toolsAllow: input.toolsAllow,
+                          disableTools: input.disableTools,
+                        },
+                        undefined,
+                        undefined,
+                        sandbox,
+                      );
+                      return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
+                        ? { ...input, toolsAllow: [] }
+                        : input;
+                    },
+                (prepared) => pluginAttempt.runWithHostScope(() => runPreparedAttempt(prepared)),
+              ),
+          );
+        }),
+      );
+    ({ result, assembly } = await runWithContextEngineAssemblyAttempt(run));
+  } finally {
+    pluginAttempt.closeHostCapabilities();
+  }
+  const admission = internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (
+    internalParams.onContextEngineTurnCandidate &&
+    admission &&
+    result.contextEngineTerminalAnchor
+  ) {
+    internalParams.onContextEngineTurnCandidate({
+      boundary: {
+        admission,
+        terminal: result.contextEngineTerminalAnchor,
+      },
+      sessionIdUsed: result.sessionIdUsed,
+      sessionKey: internalParams.sessionKey,
+      sessionTarget: internalParams.sessionTarget,
+      promptError: result.terminal.kind === "failed",
+      aborted:
+        result.terminal.kind === "aborted" ||
+        (result.terminal.kind === "timeout" &&
+          "aborted" in result.terminal &&
+          result.terminal.aborted === true),
+      yieldAborted:
+        result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
+      runtimeContext: resolveContextEngineCompletionRuntimeContext(
+        internalParams,
+        result,
+        nativeSessionRuntime !== undefined,
+        assembly,
+      ),
+    });
+  }
+  const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
+  return copyCoreTtsAttemptResultProvenance(result, publicResult);
 }
 
-function selectPreparedAgentHarness(
-  params: EmbeddedRunAttemptParams,
-): AgentHarnessSelectionDecision {
-  return selectAgentHarnessDecision({
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: {
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-      ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
-      preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: params.runtimePlan?.auth }),
-    },
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    agentHarnessId: params.agentHarnessId,
-    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
-    preparedModelProvider: params.runtimePlan?.auth !== undefined,
-  });
+function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
+  const authority = readRunOperatorAuthority(params);
+  authority?.assertCurrent();
+  if (
+    !isBuiltInOpenClawAgentHarness(harness) &&
+    authority?.modelPolicy &&
+    harness.nativeModelPolicySupport !== "exact"
+  ) {
+    throw new AgentHarnessPreflightError(
+      `Agent harness ${harness.id} cannot enforce your operator role's model policy. Choose a compatible runtime or ask a gateway administrator to update the harness.`,
+    );
+  }
+  return authority;
 }
 
 async function runAgentHarnessOperation<T>(
@@ -557,293 +516,130 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
+  await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
+  resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
     activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
   );
-  if (harness.id === "openclaw") {
-    return await runWithDiagnosticTraceContext(harnessTrace, execute);
-  }
-
+  const builtIn = isBuiltInOpenClawAgentHarness(harness);
   try {
     return await runWithDiagnosticTraceContext(harnessTrace, execute);
   } catch (error) {
-    log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
-      harnessId: harness.id,
-      provider: params.provider,
-      modelId: params.modelId,
-      error: formatErrorMessage(error),
-    });
+    if (!builtIn) {
+      log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
+        harnessId: harness.id,
+        provider: params.provider,
+        modelId: params.modelId,
+        error: formatErrorMessage(error),
+      });
+    }
     throw error;
   }
 }
 
-function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "openclaw";
-}
-
-function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "systemAgentTool")) {
-    return params;
-  }
-  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
+function withoutPluginHarnessPrivateState(
+  params: EmbeddedRunAttemptInternalParams & { __openclawSourceReplyDeliveryRuntime?: unknown },
+): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
+  // Keep host admission and preparation state behind one projection for every handoff.
+  // The released replyOperation reference delegates to the same controller owner.
+  const {
+    admittedRunContext: _admittedRunContext,
+    thinkingExplicit: _thinkingExplicit,
+    runtimePluginToolGrant: _runtimePluginToolGrant,
+    assistantErrorTranscript: _assistantErrorTranscript,
+    compactionCountOwner: _compactionCountOwner,
+    completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
+    bindWatchdogAttempt: _bindWatchdogAttempt,
+    onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    hostCapabilities: _hostCapabilities,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
+    prepareContinuationRetryCount: _prepareContinuationRetryCount,
+    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    ...pluginParams
+  } = params;
   return pluginParams;
 }
 
-function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
-  const boundary = "plugin harness handoff";
-  const resolvedApiKey = params.resolvedApiKey
-    ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
-    : params.resolvedApiKey;
-  const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
-  if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
-    return applyPluginHarnessDenyAllToolPolicy(params);
+function prepareHarnessFinalizationParams(
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  builtIn: boolean,
+): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
+  import("./types.js").AgentHarnessAttemptParamsV2
+> {
+  const {
+    hostCapabilities: _hostCapabilities,
+    systemAgentTool: _systemAgentTool,
+    ...withoutCapabilities
+  } = params;
+  const { onSettledTurn: _onSettledTurn, ...finalizationParams } = builtIn
+    ? withoutCapabilities
+    : withoutPluginHarnessPrivateState(withoutCapabilities);
+  if (builtIn) {
+    return finalizationParams;
   }
-  return applyPluginHarnessDenyAllToolPolicy({
-    ...params,
-    model,
-    resolvedApiKey,
-  });
+  const boundary = "plugin harness finalization handoff";
+  return {
+    ...finalizationParams,
+    model: unwrapModelHeaderSentinelsForProviderEgress(finalizationParams.model, boundary),
+    resolvedApiKey: finalizationParams.resolvedApiKey
+      ? unwrapSecretSentinelsForProviderEgress(finalizationParams.resolvedApiKey, boundary)
+      : finalizationParams.resolvedApiKey,
+  };
 }
 
-function applyPluginHarnessDenyAllToolPolicy(
+function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams {
-  if (
-    isHostScopedAgentToolActive("openclaw") &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolName(params.toolsAllow[0] ?? "") === "openclaw"
-  ) {
-    return params;
+  harness: AgentHarness,
+  builtIn: boolean,
+  ownerPluginId: string | undefined,
+): {
+  params: import("./types.js").AgentHarnessAttemptParamsV2;
+  closeHostCapabilities: () => void;
+  setInputAttachmentReadAllowed: (allowed: boolean) => void;
+  runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
+} {
+  if (builtIn) {
+    return {
+      // The caller hands us its fresh rest object; extend it without copying again.
+      // Only plugin handoffs need the private-state projection below.
+      params: Object.assign(params, {
+        operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+      }) as import("./types.js").AgentHarnessAttemptParamsV2,
+      closeHostCapabilities: () => {},
+      setInputAttachmentReadAllowed: () => {},
+      runWithHostScope: (run) => run(),
+    };
   }
-  const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(params);
-  if (!prompt) {
-    return params;
-  }
-  return {
-    ...params,
-    toolsAllow: [],
-    extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
-  };
-}
-
-export function resolvePluginHarnessPolicyToolsAllow(
-  params: PluginHarnessToolPolicyContext,
-): [] | undefined {
-  const policies = resolvePluginHarnessToolPolicies(params);
-  return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
-    policyRestrictsNativeTools,
-  )
-    ? []
-    : undefined;
-}
-
-function resolvePluginHarnessDenyAllToolPolicyPrompt(
-  params: PluginHarnessToolPolicyContext,
-): string | undefined {
-  const policies = resolvePluginHarnessToolPolicies(params);
-  if (
-    policyDeniesAllTools(policies.senderPolicy) ||
-    policyDeniesAllTools(policies.senderScopedGroupPolicy)
-  ) {
-    return PLUGIN_HARNESS_SENDER_DENY_ALL_PROMPT;
-  }
-  if (policyDeniesAllTools(policies.groupPolicy)) {
-    return PLUGIN_HARNESS_GROUP_DENY_ALL_PROMPT;
-  }
-  return policies.runtimePolicies.some(policyDeniesAllTools)
-    ? PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT
-    : undefined;
-}
-
-function resolvePluginHarnessToolPolicies(
-  params: PluginHarnessToolPolicyContext,
-): ResolvedPluginHarnessToolPolicies {
-  const messageProvider = params.messageProvider ?? params.messageChannel;
-  const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.config,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sandboxSessionKey,
-    agentId: params.agentId,
-    modelProvider: params.provider,
-    modelId: params.modelId,
-    messageProvider,
-    messageChannel: params.messageChannel,
-    agentAccountId: params.agentAccountId,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    scheduledToolPolicy: params.scheduledToolPolicy,
+  const pluginParams = withoutPluginHarnessPrivateState(params);
+  const host = createAgentHarnessHostCapabilities({
+    attempt: params,
+    requiredNodeCommands: harness.cloudPlacement?.devicePlacement?.requiredNodeCommands,
+    nativeModelPolicySupport: harness.nativeModelPolicySupport,
+    pluginId:
+      ownerPluginId ??
+      (() => {
+        throw new Error(`Agent harness ${harness.id} has no authoritative registry owner.`);
+      })(),
   });
-  const groupPolicyParams = {
-    config: params.config,
-    sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
-  };
-  const { policy } = capabilityProfile;
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey: sandboxSessionKey,
-  });
-  const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   return {
-    senderPolicy: policy.senderPolicy,
-    senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
-      params,
-      groupPolicyParams,
-      policy.groupPolicy,
-    ),
-    groupPolicy: policy.groupPolicy,
-    runtimePolicies: [
-      mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
-      mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
-      policy.globalPolicy,
-      policy.globalProviderPolicy,
-      policy.agentPolicy,
-      policy.agentProviderPolicy,
-      sandboxPolicy,
-      policy.subagentPolicy,
-      policy.inheritedToolPolicy,
-    ],
+    params: {
+      ...pluginParams,
+      hostCapabilities: host.capabilities,
+      onSettledTurn: bindHarnessSettledTurnCallback(
+        params.onSettledTurn,
+        host.capabilities.assertActive,
+        params.abortSignal,
+      ),
+    },
+    closeHostCapabilities: host.close,
+    setInputAttachmentReadAllowed: host.setInputAttachmentReadAllowed,
+    runWithHostScope: host.runWithScope,
   };
 }
-
-function resolveSenderScopedGroupToolPolicy(
-  params: PluginHarnessToolPolicyContext,
-  groupPolicyParams: Parameters<typeof resolveGroupToolPolicy>[0],
-  groupPolicy: { deny?: string[] } | undefined,
-): { deny?: string[] } | undefined {
-  if (!policyDeniesAllTools(groupPolicy) || !hasSenderIdentity(params)) {
-    return undefined;
-  }
-  const groupPolicyWithoutSender = resolveGroupToolPolicy({
-    ...groupPolicyParams,
-    senderId: undefined,
-    senderName: undefined,
-    senderUsername: undefined,
-    senderE164: undefined,
-  });
-  return policyDeniesAllTools(groupPolicyWithoutSender) ? undefined : groupPolicy;
-}
-
-function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
-  return Boolean(
-    params.senderId?.trim() ||
-    params.senderName?.trim() ||
-    params.senderUsername?.trim() ||
-    params.senderE164?.trim(),
-  );
-}
-
-function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, prompt: string): string {
-  const trimmed = existing?.trim();
-  if (!trimmed) {
-    return prompt;
-  }
-  return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function policyDeniesAllTools(policy?: { deny?: string[] }): boolean {
-  return expandToolGroups(policy?.deny ?? []).some((entry) => normalizeToolName(entry) === "*");
-}
-
-function policyRestrictsNativeTools(policy?: PluginHarnessToolPolicy): boolean {
-  if (!policy) {
-    return false;
-  }
-  const deniesAnyTool = expandToolGroups(policy.deny ?? []).some((entry) =>
-    Boolean(normalizeToolName(entry)),
-  );
-  if (deniesAnyTool) {
-    return true;
-  }
-  return (
-    Array.isArray(policy.allow) &&
-    policy.allow.length > 0 &&
-    !expandToolGroups(policy.allow).some((entry) => normalizeToolName(entry) === "*")
-  );
-}
-
-function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelectionCandidate[] {
-  return harnesses.map((harness) => ({
-    id: harness.id,
-    label: harness.label,
-    pluginId: harness.pluginId,
-  }));
-}
-
-function toSelectionCandidate(entry: {
-  harness: AgentHarness;
-  support: AgentHarnessSupport;
-}): AgentHarnessSelectionCandidate {
-  return {
-    id: entry.harness.id,
-    label: entry.harness.label,
-    pluginId: entry.harness.pluginId,
-    supported: entry.support.supported,
-    priority: entry.support.supported ? entry.support.priority : undefined,
-    reason: entry.support.reason,
-  };
-}
-
-function buildSelectionDecision(params: {
-  harness: AgentHarness;
-  policy: AgentHarnessPolicy;
-  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
-  candidates: AgentHarnessSelectionCandidate[];
-}): AgentHarnessSelectionDecision {
-  return {
-    harness: params.harness,
-    policy: params.policy,
-    selectedHarnessId: params.harness.id,
-    selectedReason: params.selectedReason,
-    candidates: params.candidates,
-  };
-}
-
-function logAgentHarnessSelection(
-  selection: AgentHarnessSelectionDecision,
-  params: { provider: string; modelId?: string; sessionKey?: string; agentId?: string },
-) {
-  if (!log.isEnabled("debug")) {
-    return;
-  }
-  log.debug("agent harness selected", {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    selectedHarnessId: selection.selectedHarnessId,
-    selectedReason: selection.selectedReason,
-    runtime: selection.policy.runtime,
-    candidates: selection.candidates,
-  });
-}
-
-function formatProviderModel(params: { provider: string; modelId?: string }): string {
-  return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,7 @@
 {
   "id": "mistral",
-  "icon": "https://cdn.simpleicons.org/mistralai",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -20,11 +21,15 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "mistral": "mistral"
+    },
     "providers": {
       "mistral": {
         "baseUrl": "https://api.mistral.ai/v1",
         "api": "openai-completions",
         "defaultModel": "mistral-large-latest",
+        "family": "mistral",
         "models": [
           {
             "id": "codestral-latest",
@@ -156,7 +161,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["mistral"],
+    "embeddingProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"],
     "realtimeTranscriptionProviders": ["mistral"]
   },

@@ -16,7 +16,11 @@ import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { readPublicationArtifactArchive, sha256Digest } from "./lib/actions-artifact-archive.mjs";
-import { fetchNpmRegistryPackumentWithRetry } from "./lib/npm-publish-plan.mjs";
+import { compareAscii } from "./lib/canonical-json.mjs";
+import {
+  fetchNpmRegistryPackumentWithRetry,
+  parsePublicationCliValues,
+} from "./lib/npm-publish-plan.mjs";
 
 const MANIFEST_FILENAME = "npm-placeholder-manifest.json";
 const MANIFEST_SCHEMA = "openclaw.npm-placeholder-publication/v1";
@@ -29,9 +33,28 @@ const SHA256_RE = /^[0-9a-f]{64}$/u;
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
-function compareCodeUnits(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
+/** @typedef {typeof fetch} PlaceholderFetch */
+/**
+ * @typedef {object} CreatePlaceholderPublicationParams
+ * @property {PlaceholderFetch} [fetchImpl]
+ * @property {string} outputDir
+ * @property {string} packages
+ * @property {string} repoRoot
+ * @property {string} targetSha
+ * @property {string} workflowSha
+ */
+/**
+ * @typedef {object} PublishPlaceholdersParams
+ * @property {string} artifactDir
+ * @property {PlaceholderFetch} [fetchImpl]
+ * @property {string} npmToken
+ * @property {(args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => void} [npmRunner]
+ * @property {number} [registryAttempts]
+ * @property {(delayMs: number) => Promise<void>} [sleep]
+ * @property {string} targetSha
+ * @property {string} [tempRoot]
+ * @property {string} workflowSha
+ */
 
 function assertTrimmedString(value, label) {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
@@ -248,17 +271,12 @@ function normalizeDistTags(value, packageName) {
   }
   const entries = [];
   for (const [tag, version] of Object.entries(value)) {
-    if (
-      typeof tag !== "string" ||
-      tag.length === 0 ||
-      typeof version !== "string" ||
-      version.length === 0
-    ) {
+    if (tag.length === 0 || typeof version !== "string" || version.length === 0) {
       throw new Error(`${packageName}: npm dist-tags contain an invalid entry.`);
     }
     entries.push([tag, version]);
   }
-  return Object.fromEntries(entries.toSorted(([left], [right]) => compareCodeUnits(left, right)));
+  return Object.fromEntries(entries.toSorted(([left], [right]) => compareAscii(left, right)));
 }
 
 export function classifyRegistryState(params) {
@@ -328,6 +346,7 @@ function assertFreshDirectory(path) {
   mkdirSync(path, { recursive: true, mode: 0o700 });
 }
 
+/** @param {CreatePlaceholderPublicationParams} params */
 export async function createPlaceholderPublication(params) {
   const repoRoot = resolve(params.repoRoot);
   const outputDir = resolve(params.outputDir);
@@ -499,7 +518,7 @@ export async function verifyPlaceholderArtifact(params) {
       allowPath: (name) =>
         basename(name) === name &&
         (name === MANIFEST_FILENAME || /^[A-Za-z0-9._-]+\.tgz$/u.test(name)),
-      maxEntryBytes: (name) => (name === MANIFEST_FILENAME ? MAX_FILE_BYTES : MAX_FILE_BYTES),
+      maxEntryBytes: () => MAX_FILE_BYTES,
     },
     expected,
     maxArchiveBytes: MAX_ARTIFACT_BYTES,
@@ -613,6 +632,7 @@ async function readFinalRegistry(entry, params) {
   throw lastError;
 }
 
+/** @param {PublishPlaceholdersParams} params */
 export async function publishPlaceholders(params) {
   const artifactDir = resolve(params.artifactDir);
   const manifest = validateManifest(
@@ -713,20 +733,7 @@ function parseCliArgs(argv) {
   if (!["create", "verify-artifact", "publish"].includes(command)) {
     throw new Error("Usage: npm-placeholder-publication.mjs <create|verify-artifact|publish> ...");
   }
-  const values = {};
-  for (let index = 0; index < rest.length; index += 2) {
-    const key = rest[index];
-    const value = rest[index + 1];
-    if (!key?.startsWith("--") || value === undefined || value.startsWith("--")) {
-      throw new Error(`Invalid ${command} argument near ${key ?? "<missing>"}.`);
-    }
-    const name = key.slice(2).replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase());
-    if (values[name] !== undefined) {
-      throw new Error(`Duplicate ${command} option: ${key}`);
-    }
-    values[name] = value;
-  }
-  return { command, values };
+  return { command, values: parsePublicationCliValues(command, rest) };
 }
 
 function appendGithubOutput(path, values) {

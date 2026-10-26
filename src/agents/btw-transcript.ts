@@ -2,16 +2,16 @@
  * Reads prior session transcript context for `/btw` side-question handoffs.
  */
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
-  listSessionEntries,
-  loadSessionEntry,
-  loadTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+  readSessionEntryInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -24,6 +24,16 @@ import {
   type FileEntry,
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
+
+export function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
+  if (Array.isArray(content)) {
+    return content;
+  }
+  if (content && typeof content === "object") {
+    return [content];
+  }
+  return undefined;
+}
 
 /** Resolves the persisted transcript file for a BTW session handoff. */
 export function resolveBtwSessionTranscriptPath(params: {
@@ -38,7 +48,7 @@ export function resolveBtwSessionTranscriptPath(params: {
       agentId,
       storePath: params.storePath,
     });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return resolveSessionFilePathCore(params.sessionId, params.sessionEntry, pathOpts);
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
@@ -125,14 +135,16 @@ export async function readBtwTranscriptMessages(params: {
     const storePath = completeTarget ? params.storePath : (params.storePath ?? marker?.storePath);
     const markerMatches =
       marker && !completeTarget
-        ? listSessionEntries({
-            agentId: marker.agentId,
-            storePath: marker.storePath,
-          }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+        ? (
+            await readSessionEntrySummariesInWorker({
+              agentId: marker.agentId,
+              storePath: marker.storePath,
+            })
+          ).filter(({ entry }) => entry.sessionId === marker.sessionId)
         : [];
     const suppliedEntry =
       marker && params.sessionKey && !completeTarget
-        ? loadSessionEntry({
+        ? await readSessionEntryInWorker({
             agentId: marker.agentId,
             sessionKey: params.sessionKey,
             storePath: marker.storePath,
@@ -192,9 +204,9 @@ export async function readBtwTranscriptMessages(params: {
       const parentId = trailingId ? tree.byId.get(trailingId)?.parentId : null;
       branchEntries = parentId ? (buildSessionBranchEntries(tree, parentId) ?? []) : [];
     }
-    const sessionContext = buildSessionContext(branchEntries ?? sessionEntries);
-    return Array.isArray(sessionContext.messages) ? sessionContext.messages : [];
+    return buildSessionContext(branchEntries ?? sessionEntries).messages;
   } catch {
+    // Transcript context is optional; the caller uses the live prompt or reports no active context.
     return [];
   }
 }

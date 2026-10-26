@@ -1,44 +1,26 @@
-import type { PresenceEntry } from "../../api/types.ts";
-// Builds the unified nodes/devices inventory shown on the Nodes page.
+import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/number-coercion";
+// Builds the unified node/device inventory shown on the Devices page.
 // The gateway exposes two overlapping views of the same machines: paired device
 // records (roles + tokens) and the node catalog (caps + live links). This module
 // joins them by id and groups duplicate pairings of the same client so the page
 // renders one row per machine instead of one row per historical keypair.
-import { normalizeOptionalString } from "../string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
+import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
-type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
-
-/** Typed projection of one raw `node.list` row. */
-type NodeListEntry = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  modelIdentifier?: string;
-  clientId?: string;
-  clientMode?: string;
-  remoteIp?: string;
-  caps: string[];
-  commands: string[];
-  approvalState?: NodeApprovalState;
-  pendingRequestId?: string;
-  connected: boolean;
-  paired: boolean;
-  connectedAtMs?: number;
-  lastSeenAtMs?: number;
-  approvedAtMs?: number;
-};
-
-export type NodesInventoryEntry = {
+export type DeviceInventoryEntry = {
   id: string;
   name: string;
   displayName?: string;
   clientId?: string;
   clientMode?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   modelIdentifier?: string;
   remoteIp?: string;
@@ -50,79 +32,16 @@ export type NodesInventoryEntry = {
   approvedAtMs?: number;
   presence?: PresenceEntry;
   device?: PairedDevice;
-  node?: NodeListEntry;
+  node?: NodeListNode;
 };
 
 /** One machine cluster: the freshest pairing plus superseded duplicates. */
-export type NodesInventoryGroup = {
+export type DeviceInventoryGroup = {
   key: string;
   name: string;
-  primary: NodesInventoryEntry;
-  duplicates: NodesInventoryEntry[];
+  primary: DeviceInventoryEntry;
+  duplicates: DeviceInventoryEntry[];
 };
-
-const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
-  "approved",
-  "pending-approval",
-  "pending-reapproval",
-  "unapproved",
-]);
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
-
-function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
-  const nodeId = normalizeOptionalString(raw.nodeId);
-  if (!nodeId) {
-    return null;
-  }
-  const approvalState = normalizeOptionalString(raw.approvalState);
-  return {
-    nodeId,
-    displayName: normalizeOptionalString(raw.displayName),
-    platform: normalizeOptionalString(raw.platform),
-    version: normalizeOptionalString(raw.version),
-    coreVersion: normalizeOptionalString(raw.coreVersion),
-    uiVersion: normalizeOptionalString(raw.uiVersion),
-    modelIdentifier: normalizeOptionalString(raw.modelIdentifier),
-    clientId: normalizeOptionalString(raw.clientId),
-    clientMode: normalizeOptionalString(raw.clientMode),
-    remoteIp: normalizeOptionalString(raw.remoteIp),
-    caps: stringList(raw.caps),
-    commands: stringList(raw.commands),
-    approvalState:
-      approvalState && NODE_APPROVAL_STATES.has(approvalState)
-        ? (approvalState as NodeApprovalState)
-        : undefined,
-    pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    connected: raw.connected === true,
-    paired: raw.paired === true,
-    connectedAtMs: optionalNumber(raw.connectedAtMs),
-    lastSeenAtMs: optionalNumber(raw.lastSeenAtMs),
-    approvedAtMs: optionalNumber(raw.approvedAtMs),
-  };
-}
-
-function deviceRoles(device: PairedDevice): string[] {
-  const roles = new Set<string>();
-  for (const role of [...(device.roles ?? []), device.role]) {
-    const normalized = normalizeOptionalString(role);
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles];
-}
 
 function maxDefined(...values: Array<number | undefined>): number | undefined {
   let max: number | undefined;
@@ -137,21 +56,21 @@ function maxDefined(...values: Array<number | undefined>): number | undefined {
 function buildEntry(
   id: string,
   device?: PairedDevice,
-  node?: NodeListEntry,
+  node?: NodeListNode,
   presence?: PresenceEntry,
-): NodesInventoryEntry {
-  const roles = device ? deviceRoles(device) : [];
+): DeviceInventoryEntry {
+  const roles = device
+    ? normalizeUniqueTrimmedStringList([...(device.roles ?? []), device.role])
+    : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
     roles.push("node");
   }
   const operatorLabel = normalizeOptionalString(device?.operatorLabel);
-  const displayName =
-    normalizeOptionalString(device?.displayName) ?? normalizeOptionalString(node?.displayName);
+  const displayName = normalizeOptionalString(device?.displayName) ?? node?.displayName;
   const clientId = normalizeOptionalString(device?.clientId) ?? node?.clientId;
   return {
     id,
-    // Display precedence: operator label, then client display name, then client id, then device id.
     name: operatorLabel ?? displayName ?? clientId ?? id,
     displayName,
     clientId,
@@ -160,11 +79,15 @@ function buildEntry(
       normalizeOptionalString(presence?.platform) ??
       normalizeOptionalString(device?.platform) ??
       node?.platform,
+    deviceFamily:
+      normalizeOptionalString(presence?.deviceFamily) ??
+      normalizeOptionalString(device?.deviceFamily) ??
+      node?.deviceFamily,
     version: normalizeOptionalString(presence?.version) ?? node?.version,
     modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,
     roles,
-    scopes: stringList(device?.scopes),
+    scopes: normalizeTrimmedStringList(device?.scopes),
     // Server-computed device/node connectivity accounts for multiple live
     // connections sharing one device id; one disconnect beacon cannot.
     connected: node?.connected === true || device?.connected === true,
@@ -185,13 +108,13 @@ function buildEntry(
   };
 }
 
-function groupKey(entry: NodesInventoryEntry): string {
-  const name = entry.displayName?.trim().toLowerCase();
+function groupKey(entry: DeviceInventoryEntry): string {
+  const name = entry.displayName?.toLowerCase();
   if (name) {
     return `name:${name}`;
   }
-  const clientId = entry.clientId?.trim().toLowerCase();
-  const clientMode = entry.clientMode?.trim().toLowerCase();
+  const clientId = entry.clientId?.toLowerCase();
+  const clientMode = entry.clientMode?.toLowerCase();
   if (clientId || clientMode) {
     return `client:${clientId ?? ""}:${clientMode ?? ""}`;
   }
@@ -199,42 +122,22 @@ function groupKey(entry: NodesInventoryEntry): string {
   return `id:${entry.id}`;
 }
 
-function entryRecency(entry: NodesInventoryEntry): number {
+function entryRecency(entry: DeviceInventoryEntry): number {
   return entry.lastSeenAtMs ?? entry.approvedAtMs ?? 0;
 }
 
-function compareEntries(left: NodesInventoryEntry, right: NodesInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
+function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
-function compareGroups(left: NodesInventoryGroup, right: NodesInventoryGroup): number {
-  const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
-}
-
-/** Joins paired devices with node catalog rows and groups duplicate pairings. */
-export function buildNodesInventory(params: {
+export function buildDeviceInventory(params: {
   paired: PairedDevice[];
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   presence?: PresenceEntry[];
-}): NodesInventoryGroup[] {
-  const nodesById = new Map<string, NodeListEntry>();
-  for (const raw of params.nodes) {
-    const node = parseNodeListEntry(raw);
-    if (node) {
-      nodesById.set(node.nodeId, node);
-    }
-  }
+}): DeviceInventoryGroup[] {
+  const nodesById = new Map(params.nodes.map((node) => [node.nodeId, node]));
   const presenceById = new Map<string, PresenceEntry>();
   for (const presence of params.presence ?? []) {
     for (const rawId of [presence.deviceId, presence.instanceId]) {
@@ -244,24 +147,22 @@ export function buildNodesInventory(params: {
       }
     }
   }
-  const entries: NodesInventoryEntry[] = [];
-  const seen = new Set<string>();
+  const entries = new Map<string, DeviceInventoryEntry>();
   for (const device of params.paired) {
     const id = normalizeOptionalString(device.deviceId);
-    if (!id || seen.has(id)) {
+    if (!id || entries.has(id)) {
       continue;
     }
-    seen.add(id);
-    entries.push(buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
+    entries.set(id, buildEntry(id, device, nodesById.get(id), presenceById.get(id.toLowerCase())));
   }
   for (const [id, node] of nodesById) {
-    if (!seen.has(id)) {
-      entries.push(buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
+    if (!entries.has(id)) {
+      entries.set(id, buildEntry(id, undefined, node, presenceById.get(id.toLowerCase())));
     }
   }
 
-  const groupsByKey = new Map<string, NodesInventoryEntry[]>();
-  for (const entry of entries) {
+  const groupsByKey = new Map<string, [DeviceInventoryEntry, ...DeviceInventoryEntry[]]>();
+  for (const entry of entries.values()) {
     const key = groupKey(entry);
     const bucket = groupsByKey.get(key);
     if (bucket) {
@@ -271,21 +172,14 @@ export function buildNodesInventory(params: {
     }
   }
 
-  const groups: NodesInventoryGroup[] = [];
-  for (const [key, bucket] of groupsByKey) {
-    const sorted = bucket.toSorted(compareEntries);
-    const primary = sorted[0];
-    if (!primary) {
-      continue;
-    }
-    groups.push({
-      key,
-      name: primary.name,
-      primary,
-      duplicates: sorted.slice(1),
-    });
-  }
-  return groups.toSorted(compareGroups);
+  const groups = [...groupsByKey].flatMap(([key, bucket]) => {
+    const [primary, ...duplicates] = bucket.toSorted(compareEntries);
+    return primary ? [{ key, name: primary.name, primary, duplicates }] : [];
+  });
+  return groups.toSorted((left, right) => {
+    const order = compareEntries(left.primary, right.primary);
+    return order !== 0 ? order : left.name.localeCompare(right.name);
+  });
 }
 
 /**
@@ -303,7 +197,7 @@ export function buildNodesInventory(params: {
  * reconnect. Pre-provenance duplicates cannot be auto-pruned server-side, so
  * the same explicit admin confirmation is their cleanup boundary.
  */
-export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesInventoryEntry[] {
+export function listStaleInventoryEntries(groups: DeviceInventoryGroup[]): DeviceInventoryEntry[] {
   return groups.flatMap((group) =>
     group.duplicates.filter(
       (entry) =>
@@ -314,7 +208,6 @@ export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesI
   );
 }
 
-/** Returns the Gateway self beacon, when present in the current snapshot. */
 export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | undefined {
   return presence.find((entry) => normalizeOptionalString(entry.mode)?.toLowerCase() === "gateway");
 }
@@ -327,7 +220,7 @@ export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | 
  */
 export function listUnpairedPresence(
   presence: PresenceEntry[],
-  groups: NodesInventoryGroup[],
+  groups: DeviceInventoryGroup[],
 ): PresenceEntry[] {
   const knownIds = new Set<string>();
   for (const group of groups) {
@@ -360,8 +253,7 @@ export function listUnpairedPresence(
   });
 }
 
-/** Which pairing stores a removal must touch for this entry. */
-export function resolveInventoryRemoval(entry: NodesInventoryEntry): {
+export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
   removeNode: boolean;
   removeDevice: boolean;
 } {
@@ -373,4 +265,17 @@ export function resolveInventoryRemoval(entry: NodesInventoryEntry): {
     // other roles (or tokenless records) need the device-level removal too.
     removeDevice: Boolean(entry.device) && (nonNodeRoles.length > 0 || entry.roles.length === 0),
   };
+}
+
+export function presenceConnectivitySignature(entries: PresenceEntry[]): string {
+  const states = new Map<string, "connected" | "offline">();
+  for (const entry of entries) {
+    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
+    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+      continue;
+    }
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+  }
+  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }

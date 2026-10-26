@@ -1,0 +1,165 @@
+import { once } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  listUpdateRuns,
+} from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { VERSION } from "../../version.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
+import { updateFinalizeCommand } from "./update-command-finalize.js";
+import * as finalizationDoctor from "./update-command-fresh-doctor.js";
+import * as pluginUpdate from "./update-command-plugins.js";
+import { admitUpdateCommandRun, completeUpdateCommandRun } from "./update-command-run.js";
+import * as sourceRuntime from "./update-command-runtime.js";
+import { updateCommand } from "./update-command.js";
+import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
+import { updateRepairCommand } from "./update-repair-command.js";
+
+const fixture = vi.hoisted(() => ({ root: "", serviceMutation: vi.fn() }));
+vi.mock("../../daemon/service.js", () => ({
+  resolveGatewayService: () => ({
+    readCommand: async () => null,
+    stop: fixture.serviceMutation,
+    start: fixture.serviceMutation,
+    restart: fixture.serviceMutation,
+    install: fixture.serviceMutation,
+  }),
+}));
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
+  resolveUpdateRoot: async () => fixture.root,
+  resolveGlobalManager: async () => "npm",
+}));
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(cleanupUpdateCommandTest);
+
+function state() {
+  fixture.serviceMutation.mockClear();
+  fixture.root = dirs.make("update-contention-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.root);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(fixture.root, "openclaw.json"));
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+  vi.stubEnv("OPENCLAW_POST_CORE_UPDATE", undefined);
+  fs.writeFileSync(
+    path.join(fixture.root, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION }),
+  );
+  const previous = createUpdateRun({ trigger: "cli" });
+  finishUpdateRun(previous.runId, { status: "succeeded" });
+  const before = getUpdateRun(previous.runId);
+  closeOpenClawStateDatabaseForTest();
+  return { filename: resolveOpenClawStateSqlitePath(), before };
+}
+
+it.each(["update", "repair", "completion", "repair completion"] as const)(
+  "admits %s after a writer exceeds the general SQLite wait",
+  async (mode) => {
+    const { filename, before } = state();
+    const admitted =
+      mode === "completion"
+        ? await admitUpdateCommandRun({ opts: { timeout: "10" }, root: fixture.root })
+        : undefined;
+    const lifecycle =
+      mode === "repair completion"
+        ? new UpdateFinalizationLifecycle(true, 10_000, () => {})
+        : undefined;
+    const repairRunId = lifecycle?.attachLedger(true);
+    const writer = new Worker(
+      `
+    const { parentPort, workerData } = require('node:worker_threads');
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(workerData);
+    db.exec('BEGIN IMMEDIATE');
+    parentPort.postMessage('locked');
+    setTimeout(() => { db.exec('ROLLBACK'); db.close(); }, 6_000);
+  `,
+      { eval: true, workerData: filename, execArgv: [] },
+    );
+    try {
+      await once(writer, "message");
+      lifecycle?.complete(0);
+      const runId =
+        repairRunId ??
+        (admitted
+          ? completeUpdateCommandRun(
+              { status: "ok", mode: "npm", durationMs: 1, steps: [] },
+              admitted,
+            ).runId
+          : mode === "repair"
+            ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
+            : (
+                await admitUpdateCommandRun({
+                  opts: {},
+                  root: fixture.root,
+                })
+              ).runId);
+      expect(getUpdateRun(runId!)).toMatchObject({
+        status: admitted || lifecycle ? "succeeded" : "running",
+      });
+      expect(getUpdateRun(before!.runId)).toEqual(before);
+    } finally {
+      await writer.terminate();
+    }
+  },
+  20_000,
+);
+
+it.each(["dry-run", "update", "repair", "finalize"] as const)(
+  "reports exhausted %s admission as recoverable and preserves history",
+  async (mode) => {
+    const { filename, before } = state();
+    const writer = new DatabaseSync(filename);
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const publication = vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime");
+    const doctor = vi.spyOn(finalizationDoctor, "runUpdateFinalizationDoctorInFreshProcess");
+    const plugins = vi.spyOn(pluginUpdate, "updatePluginsAfterCoreUpdate");
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const opts = { yes: true, json: true, timeout: "1" };
+      await expect(
+        mode === "finalize"
+          ? updateFinalizeCommand(opts)
+          : mode === "repair"
+            ? updateRepairCommand(opts)
+            : updateCommand({ ...opts, dryRun: mode === "dry-run" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: mode === "finalize" ? 1 : 0 });
+      expect(json).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          status: "skipped",
+          reason: "update-ledger-busy",
+          notes: [expect.stringContaining("busy")],
+          ...(mode === "finalize" ? { mode: "finalize" } : {}),
+          ...(mode === "dry-run" ? { dryRun: true } : {}),
+        }),
+      );
+      const result = json.mock.calls.at(-1)?.[0];
+      expect(result).not.toHaveProperty("runId");
+      expect(result).not.toHaveProperty("postUpdate");
+      expect(publication).not.toHaveBeenCalled();
+      expect(doctor).not.toHaveBeenCalled();
+      expect(plugins).not.toHaveBeenCalled();
+      expect(fixture.serviceMutation).not.toHaveBeenCalled();
+      expect(classifyUpdateOutcome({ status: "skipped", reason: "update-ledger-busy" })).toBe(
+        "noop",
+      );
+      expect(listUpdateRuns()).toEqual([before]);
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+  },
+);

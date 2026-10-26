@@ -1,11 +1,23 @@
-import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
-import { isRuntimeToolAllowed } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  isCompletionReportInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
+import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
+import { hasVerifiedRequesterCompletionHandoff } from "./requester-tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import { createRuntimeToolMatcher } from "./tool-policy-match.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
 
-export type DelegationCapability = "full" | "report_only";
+const log = createSubsystemLogger("agents/delegation-capability");
+
+// Host-only continuations retain tools fenced by OpenClaw at their final effect;
+// native collaboration cannot inherit that settlement authority.
+export type DelegationCapability = "full" | "host_only" | "report_only";
 
 const NEW_DELEGATION_TOOL_NAMES = new Set([
   "codex_session_send",
@@ -25,28 +37,91 @@ const REPORT_ONLY_TOOL_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new M
 const REPORT_ONLY_ERROR =
   "New delegation is unavailable while reporting a completion through a fallback model.";
 
+/** Retries and a sticky rate-limit fallback tried first both run a fallback model. */
+export function isFallbackAttempt(params: {
+  isFallbackRetry: boolean;
+  modelRoutingProvenance: Pick<ModelFallbackAttemptProvenance, "stage">;
+}): boolean {
+  return params.isFallbackRetry || params.modelRoutingProvenance.stage === "fallback";
+}
+
 export function resolveDelegationCapability(params: {
   fallbackActive: boolean;
   inputProvenance: unknown;
   disableTools?: boolean;
   toolsAllow?: string[];
+  requesterContinuation?: Omit<
+    Parameters<typeof hasVerifiedRequesterCompletionHandoff>[0],
+    "inputProvenance"
+  >;
 }): DelegationCapability {
   if (!isCompletionReportInputProvenance(params.inputProvenance)) {
     return "full";
   }
-  if (params.fallbackActive || params.disableTools === true) {
+  if (params.disableTools === true) {
     return "report_only";
   }
+  const permitted = params.fallbackActive ? "host_only" : "full";
+  if (params.fallbackActive) {
+    const continuation = params.requesterContinuation;
+    // A private live settle batch resumes the requester's unfinished work, not
+    // a frozen result relay. Keep its existing lineage/policy and effect-time
+    // revocation fences; provenance or an active Goal alone grants nothing.
+    if (
+      !continuation?.trustedInternalHandoff?.settleBatch ||
+      !hasVerifiedRequesterCompletionHandoff({
+        ...continuation,
+        inputProvenance: normalizeInputProvenance(params.inputProvenance),
+      })
+    ) {
+      return "report_only";
+    }
+  }
   if (params.toolsAllow === undefined) {
-    return "full";
+    return permitted;
   }
 
   // Native harness delegation is outside the dynamic-tool allowlist, so carry
   // its actual launch authority through the shared attempt capability.
-  const delegationAllowed = [...NEW_DELEGATION_TOOL_NAMES].some((toolName) =>
-    isRuntimeToolAllowed(toolName, params.toolsAllow),
+  const delegationAllowed = [...NEW_DELEGATION_TOOL_NAMES].some(
+    createRuntimeToolMatcher(params.toolsAllow),
   );
-  return delegationAllowed ? "full" : "report_only";
+  return delegationAllowed ? permitted : "report_only";
+}
+
+/** Prepare lineage through its worker owner only for supported requester continuations. */
+export function prepareDelegationCapability(params: {
+  fallbackActive: boolean;
+  run: Pick<
+    Parameters<typeof hasVerifiedRequesterCompletionHandoff>[0],
+    "config" | "inputProvenance" | "trustedInternalHandoff"
+  > & {
+    disableTools?: boolean;
+    toolsAllow?: string[];
+  };
+  sessionKey: string;
+  sessionId: string;
+  modelProvider: string;
+  modelId: string;
+}): DelegationCapability | Promise<DelegationCapability> {
+  const { run } = params;
+  const input = {
+    fallbackActive: params.fallbackActive,
+    inputProvenance: run.inputProvenance,
+    disableTools: run.disableTools,
+    toolsAllow: run.toolsAllow,
+    requesterContinuation: {
+      config: run.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      trustedInternalHandoff: run.trustedInternalHandoff,
+    },
+  };
+  return params.fallbackActive && run.trustedInternalHandoff?.settleBatch
+    ? withPreparedSessionCapabilityRead(() => resolveDelegationCapability(input))
+    : resolveDelegationCapability(input);
 }
 
 function readToolAction(params: unknown): string {
@@ -58,7 +133,7 @@ function readToolAction(params: unknown): string {
 }
 
 function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<string>): AnyAgentTool {
-  return new Proxy(tool, {
+  const wrapped = new Proxy(tool, {
     get(target, property, receiver) {
       if (property !== "execute") {
         return Reflect.get(target, property, receiver);
@@ -72,15 +147,15 @@ function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<stri
         if (!allowedActions.has(readToolAction(params))) {
           throw new ToolAuthorizationError(REPORT_ONLY_ERROR);
         }
-        return await Reflect.apply(target.execute, undefined, [
-          toolCallId,
-          params,
-          signal,
-          onUpdate,
-        ]);
+        return await target.execute(toolCallId, params, signal, onUpdate);
       };
     },
   });
+  // Plugin ownership lives in a WeakMap keyed by tool identity, so the proxy
+  // needs its own entry; otherwise plugin-owned report-only tools drop out of
+  // the effective cron-creator allowlist for the rest of the run.
+  copyPluginToolMeta(tool, wrapped);
+  return wrapped;
 }
 
 /**
@@ -95,12 +170,29 @@ export function applyDelegationCapability(
   if (capability !== "report_only") {
     return tools;
   }
-  return tools.flatMap((tool) => {
-    const name = normalizeToolName(tool.name);
+  const removed: string[] = [];
+  const narrowed: string[] = [];
+  const gated = tools.flatMap((tool) => {
+    const name = normalizeToolPolicyName(tool.name);
     if (NEW_DELEGATION_TOOL_NAMES.has(name)) {
+      removed.push(name);
       return [];
     }
     const allowedActions = REPORT_ONLY_TOOL_ACTIONS.get(name);
-    return allowedActions ? [wrapReportOnlyTool(tool, allowedActions)] : [tool];
+    if (!allowedActions) {
+      return [tool];
+    }
+    narrowed.push(name);
+    return [wrapReportOnlyTool(tool, allowedActions)];
   });
+  if (removed.length > 0 || narrowed.length > 0) {
+    // Removal is otherwise invisible: the model simply never sees the tool and
+    // no error is raised. Record it so a fallback completion turn stays
+    // auditable after the fact.
+    log.debug("delegation capability restricted run tools", {
+      removed,
+      narrowed,
+    });
+  }
+  return gated;
 }

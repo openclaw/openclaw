@@ -1,118 +1,121 @@
-// Model Catalog Core tests cover configured model refs behavior.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
+  type ConfiguredModelRef,
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
-  listModelRefsFromConfigValue,
+  listModelRefsFromConfigValue as listRefs,
 } from "./configured-model-refs.js";
 
-describe("configured model refs", () => {
-  it("lists raw refs from one model selector without normalizing them", () => {
-    expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
-    expect(
-      listModelRefsFromConfigValue({
-        primary: " primary/model ",
-        fallbacks: ["", "fallback/model", 42, "fallback/model"],
-      }),
-    ).toEqual([" primary/model ", "", "fallback/model", "fallback/model"]);
-    expect(listModelRefsFromConfigValue(["openai/gpt-5.5"])).toEqual([]);
-    expect(listModelRefsFromConfigValue({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
-  });
+function ref(path: string, value: string, kind: ConfiguredModelRef["kind"] = "selector") {
+  return { path, value, kind };
+}
 
-  it("collects agent, hook, message, and channel model refs with config paths", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
-            utilityModel: "google/gemini-3.1-flash-lite-preview",
-            mediaModels: { image: "openai/gpt-image-2" },
-            compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
-          },
-          entries: {
-            custom: {
-              model: "xai/grok-4-fast",
-              utilityModel: "openai/gpt-5.5-nano",
-            },
-          },
+function nested(path: string, value: unknown) {
+  return path.split(".").reduceRight<unknown>((child, key) => ({ [key]: child }), value);
+}
+
+it("collects string Decision roles without changing profile suffixes", () => {
+  expect(
+    collectConfiguredModelRefs({
+      agents: {
+        defaults: { decisionModel: "p/decision@p:key" },
+        entries: {
+          worker: { decisionModel: "fixture/other" },
+          disabled: { decisionModel: "" },
+          invalid: { decisionModel: { primary: "fixture/not-a-selector" } },
         },
-        hooks: {
-          mappings: [{ model: "openai/gpt-5.5-nano" }],
-        },
-        tts: { summaryModel: "openai/gpt-5.5-mini" },
-        channels: {
-          modelByChannel: {
-            discord: {
-              guild: "anthropic/claude-opus-4-8",
-            },
-          },
-        },
-      }),
-    ).toEqual([
-      { path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
-      { path: "agents.defaults.model.fallbacks.0", value: "anthropic/claude-sonnet-4-6" },
-      {
-        path: "agents.defaults.utilityModel",
-        value: "google/gemini-3.1-flash-lite-preview",
       },
-      { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2" },
-      { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
-      { path: "agents.entries.custom.model", value: "xai/grok-4-fast" },
-      { path: "agents.entries.custom.utilityModel", value: "openai/gpt-5.5-nano" },
-      { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
-      { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano" },
-      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini" },
-    ]);
-  });
+      channels: { modelByChannel: { fixture: { decisionModel: "fixture/chat@profile" } } },
+    }),
+  ).toEqual([
+    { ...ref("agents.defaults.decisionModel", "p/decision@p:key"), capability: "decision" },
+    { ...ref("agents.entries.worker.decisionModel", "fixture/other"), capability: "decision" },
+    ref("channels.modelByChannel.fixture.decisionModel", "fixture/chat@profile"),
+  ]);
+});
 
-  it("can exclude channel model overrides from configured refs", () => {
-    expect(
-      collectConfiguredModelRefValues(
-        {
-          agents: { defaults: { model: "openai/gpt-5.5" } },
-          channels: { modelByChannel: { discord: { guild: "anthropic/claude-sonnet-4-6" } } },
-        },
-        { includeChannelModelOverrides: false },
-      ),
-    ).toEqual(["openai/gpt-5.5"]);
+it("lists raw refs from one model selector without normalizing them", () => {
+  expect(listRefs("  p/model  ")).toEqual(["  p/model  "]);
+  const selector = Object.freeze({
+    primary: " p/main ",
+    fallbacks: Object.freeze(["", "p/fallback", 42, "p/fallback"]),
   });
+  expect(listRefs(selector)).toEqual([" p/main ", "", "p/fallback", "p/fallback"]);
+  expect(collectConfiguredModelRefs({ agents: { defaults: { model: selector } } })).toEqual([
+    ref("agents.defaults.model.primary", "p/main"),
+    ref("agents.defaults.model.fallbacks.1", "p/fallback"),
+    ref("agents.defaults.model.fallbacks.3", "p/fallback"),
+  ]);
+  expect(listRefs(["openai/gpt-5.5"])).toEqual([]);
+  expect(listRefs({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
+});
 
-  it("preserves legacy list indices when collecting agent model refs", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          list: [
-            { id: "10", model: "openai/gpt-5.6" },
-            { id: "2", utilityModel: "anthropic/claude-sonnet-4-6" },
-          ],
+it("collects agent, hook, message, and channel model refs with config paths", () => {
+  expect(
+    collectConfiguredModelRefs({
+      agents: {
+        defaults: {
+          utilityModel: "p/utility",
+          mediaModels: { image: "p/image" },
+          compaction: { model: "p/compaction" },
         },
-      }),
-    ).toEqual([
-      { path: "agents.list.0.model", value: "openai/gpt-5.6" },
-      { path: "agents.list.1.utilityModel", value: "anthropic/claude-sonnet-4-6" },
-    ]);
-  });
+        entries: { custom: { model: "p/custom", utilityModel: "p/custom-utility" } },
+      },
+      hooks: { mappings: [{ model: "p/hook" }] },
+      tts: { summaryModel: "p/summary" },
+      channels: { modelByChannel: { discord: { guild: "p/channel" } } },
+    }),
+  ).toEqual([
+    ref("agents.defaults.utilityModel", "p/utility"),
+    ref("agents.defaults.mediaModels.image", "p/image", "literal"),
+    ref("agents.defaults.compaction.model", "p/compaction"),
+    ref("agents.entries.custom.model", "p/custom"),
+    ref("agents.entries.custom.utilityModel", "p/custom-utility"),
+    ref("channels.modelByChannel.discord.guild", "p/channel"),
+    ref("hooks.mappings.0.model", "p/hook"),
+    ref("tts.summaryModel", "p/summary"),
+  ]);
+});
 
-  it("ignores a shadowed legacy list when keyed entries are authoritative", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          entries: { ops: { model: "openai/gpt-5.6" } },
-          list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
+it("can exclude channel model overrides from configured refs", () => {
+  expect(
+    collectConfiguredModelRefValues(
+      {
+        agents: { defaults: { model: "p/chat" } },
+        channels: {
+          modelByChannel: { discord: { guild: "p/channel" } },
+          discord: { voice: { tts: { summaryModel: "discord-tts/model" } } },
         },
-      }),
-    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
-  });
+      },
+      { includeChannelModelOverrides: false },
+    ),
+  ).toEqual(["p/chat", "discord-tts/model"]);
+});
 
-  it("ignores array-shaped malformed records", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          defaults: {
-            models: ["openai/gpt-5.5"],
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
+it.each<[unknown, ConfiguredModelRef[]]>([
+  [
+    nested("tools.media", {
+      image: { preferredModel: "p/image" },
+      audio: { preferredModel: "p/audio" },
+      video: { preferredModel: "p/video" },
+    }),
+    [
+      ref("tools.media.image.preferredModel", "p/image", "literal"),
+      ref("tools.media.audio.preferredModel", "p/audio", "literal"),
+      ref("tools.media.video.preferredModel", "p/video", "literal"),
+    ],
+  ],
+  [
+    nested("agents.list", [{ id: "worker", tools: { exec: { reviewer: { model: "p/review" } } } }]),
+    [ref("agents.list.0.tools.exec.reviewer.model", "p/review")],
+  ],
+])("collects media and reviewer refs from %j", (config, expected) => {
+  expect(collectConfiguredModelRefs(config)).toEqual(expected);
+});
+
+it.each([
+  "agents.entries.worker.tts.summaryModel",
+  "channels.discord.accounts.work.voice.tts.summaryModel",
+])("collects %s", (path) => {
+  expect(collectConfiguredModelRefs(nested(path, "p/tts"))).toEqual([ref(path, "p/tts")]);
 });

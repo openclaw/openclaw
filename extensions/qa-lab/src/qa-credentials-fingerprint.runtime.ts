@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa credentials fingerprint behavior.
 import { createHash } from "node:crypto";
 
 export function fingerprintQaCredentialId(credentialId: string | undefined) {

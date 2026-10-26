@@ -12,6 +12,7 @@ enum ShellExecutor {
         var timedOut: Bool
         var success: Bool
         var errorMessage: String?
+        var preflightError: String?
     }
 
     /// A background descendant may inherit stdout after its parent exits.
@@ -58,163 +59,31 @@ enum ShellExecutor {
         }
     }
 
-    private enum RunOutcome: Sendable {
-        case completed(TerminationStatus)
-        case timedOut
-    }
-
-    private enum DeadlineOutcome: Sendable, Equatable {
-        case exited
-        case timedOut
-    }
-
-    private final class ProcessExitSignal: @unchecked Sendable {
+    private final class StreamingOutputCapture: @unchecked Sendable {
         private let lock = NSLock()
-        private let source: DispatchSourceProcess
-        private var continuation: CheckedContinuation<Void, Never>?
-        private var finished = false
+        private var stdout = ""
+        private var stderr = ""
 
-        init(processIdentifier: pid_t) {
-            self.source = DispatchSource.makeProcessSource(
-                identifier: processIdentifier,
-                eventMask: .exit,
-                queue: .global(qos: .userInitiated))
-            self.source.setEventHandler { [weak self] in
-                self?.finish()
-            }
-            self.source.resume()
-        }
-
-        func wait() async {
-            await withTaskCancellationHandler {
-                await withCheckedContinuation { continuation in
-                    self.lock.lock()
-                    guard !self.finished else {
-                        self.lock.unlock()
-                        continuation.resume()
-                        return
-                    }
-                    self.continuation = continuation
-                    self.lock.unlock()
-                }
-            } onCancel: {
-                self.finish()
+        func appendStdout(line: String) {
+            self.lock.withLock {
+                self.stdout += line + "\n"
             }
         }
 
-        private func finish() {
-            self.lock.lock()
-            guard !self.finished else {
-                self.lock.unlock()
-                return
-            }
-            self.finished = true
-            let continuation = self.continuation
-            self.continuation = nil
-            self.lock.unlock()
-            self.source.cancel()
-            continuation?.resume()
-        }
-    }
-
-    private static func environment(from values: [String: String]?) -> Environment {
-        guard let values else { return .inherit }
-        var converted: [Environment.Key: String] = [:]
-        converted.reserveCapacity(values.count)
-        for (key, value) in values {
-            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
-            converted[environmentKey] = value
-        }
-        return .custom(converted)
-    }
-
-    private static func runSubprocess(
-        configuration: Configuration,
-        output: OutputFiles) async throws -> TerminationStatus
-    {
-        let result = try await Subprocess.run(
-            configuration,
-            input: .standardInput,
-            output: output.subprocessStandardOutput,
-            error: output.subprocessStandardError)
-        return result.terminationStatus
-    }
-
-    private static func runTimedSubprocess(
-        configuration: Configuration,
-        output: OutputFiles,
-        timeout: Double) async throws -> RunOutcome
-    {
-        let result = try await Subprocess.run(
-            configuration,
-            input: .standardInput,
-            output: output.subprocessStandardOutput,
-            error: output.subprocessStandardError)
-        { execution in
-            let processIdentifier = pid_t(execution.processIdentifier.value)
-            return await withTaskCancellationHandler {
-                let deadline = await withTaskGroup(of: DeadlineOutcome.self) { group in
-                    let exitSignal = ProcessExitSignal(processIdentifier: processIdentifier)
-                    group.addTask {
-                        await exitSignal.wait()
-                        return .exited
-                    }
-                    group.addTask {
-                        do {
-                            try await Task.sleep(for: .seconds(timeout))
-                            return .timedOut
-                        } catch {
-                            return .exited
-                        }
-                    }
-                    defer { group.cancelAll() }
-                    return await group.next() ?? .exited
-                }
-
-                guard deadline == .timedOut else { return false }
-                try? execution.send(signal: .terminate, toProcessGroup: true)
-                try? await Task.sleep(for: .milliseconds(100))
-                // The group leader may have exited on TERM. Keep the body alive until
-                // the final group kill so TERM-ignoring descendants cannot escape.
-                try? execution.send(signal: .kill, toProcessGroup: true)
-                return true
-            } onCancel: {
-                // Cancellation can arrive before the timeout race finishes.
-                _ = Darwin.kill(-processIdentifier, SIGKILL)
+        func appendStderr(line: String) {
+            self.lock.withLock {
+                self.stderr += line + "\n"
             }
         }
-        return result.closureOutput ? .timedOut : .completed(result.terminationStatus)
+
+        func snapshot() -> (stdout: String, stderr: String) {
+            self.lock.withLock {
+                (self.stdout, self.stderr)
+            }
+        }
     }
 
-    static func runDetailed(
-        command: [String],
-        cwd: String?,
-        env: [String: String]?,
-        timeout: Double?) async -> ShellResult
-    {
-        guard !command.isEmpty else {
-            return ShellResult(
-                stdout: "",
-                stderr: "",
-                exitCode: nil,
-                timedOut: false,
-                success: false,
-                errorMessage: "empty command")
-        }
-
-        let output: OutputFiles
-        do {
-            output = try OutputFiles()
-        } catch {
-            return ShellResult(
-                stdout: "",
-                stderr: "",
-                exitCode: nil,
-                timedOut: false,
-                success: false,
-                errorMessage: "failed to capture output: \(error.localizedDescription)")
-        }
-
+    private static func configuration(command: [String], cwd: String?, env: [String: String]?) -> Configuration {
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
         platformOptions.createSession = true
@@ -224,55 +93,208 @@ enum ShellExecutor {
                 toProcessGroup: true,
                 allowedDurationToNextStep: .zero),
         ]
-        let configuration = Configuration(
-            .path(.init("/usr/bin/env")),
+        return Configuration(
+            executable: .path(.init("/usr/bin/env")),
             arguments: Arguments(command),
-            environment: self.environment(from: env),
+            environment: env.map(ManagedProcess.environment) ?? .inherit,
             workingDirectory: cwd.map { .init($0) },
             platformOptions: platformOptions)
+    }
+
+    private static func completedResult(
+        _ terminationStatus: TerminationStatus,
+        captured: (stdout: String, stderr: String)) -> ShellResult
+    {
+        let status = switch terminationStatus {
+        case let .exited(code), let .signaled(code):
+            Int(code)
+        }
+        return ShellResult(
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            exitCode: status,
+            timedOut: false,
+            success: terminationStatus.isSuccess,
+            errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)",
+            preflightError: nil)
+    }
+
+    private static func timedOutResult(captured: (stdout: String, stderr: String)) -> ShellResult {
+        ShellResult(
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            exitCode: nil,
+            timedOut: true,
+            success: false,
+            errorMessage: "timeout",
+            preflightError: nil)
+    }
+
+    private static func failedResult(
+        captured: (stdout: String, stderr: String) = ("", ""),
+        message: String,
+        preflightError: String? = nil) -> ShellResult
+    {
+        ShellResult(
+            stdout: captured.stdout,
+            stderr: captured.stderr,
+            exitCode: nil,
+            timedOut: false,
+            success: false,
+            errorMessage: message,
+            preflightError: preflightError)
+    }
+
+    private static func waitForExitOrTimeout(
+        execution: Execution<some InputProtocol, some OutputProtocol, some OutputProtocol>,
+        timeout: Double) async -> Bool
+    {
+        let processIdentifier = pid_t(execution.processIdentifier.value)
+        return await withTaskCancellationHandler {
+            let exitSignal = ChildProcessExit(
+                processIdentifier: processIdentifier,
+                queue: .global(qos: .userInitiated))
+            let deadline = await exitSignal.wait(timeout: timeout)
+
+            guard deadline == .timedOut, !exitSignal.hasExited() else { return false }
+            try? execution.send(signal: .terminate, toProcessGroup: true)
+            try? await Task.sleep(for: .milliseconds(100))
+            // The group leader may have exited on TERM. Keep the body alive until
+            // the final group kill so TERM-ignoring descendants cannot escape.
+            try? execution.send(signal: .kill, toProcessGroup: true)
+            return true
+        } onCancel: {
+            // Cancellation can arrive before the timeout race finishes.
+            _ = Darwin.kill(-processIdentifier, SIGKILL)
+        }
+    }
+
+    static func runDetailed(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?,
+        timeout: Double?,
+        beforeSpawn: (@Sendable () -> String?)? = nil) async -> ShellResult
+    {
+        guard !command.isEmpty else {
+            return self.failedResult(message: "empty command")
+        }
+
+        let output: OutputFiles
+        do {
+            output = try OutputFiles()
+        } catch {
+            return self.failedResult(message: "failed to capture output: \(error.localizedDescription)")
+        }
+
+        let configuration = self.configuration(command: command, cwd: cwd, env: env)
+
+        if let message = beforeSpawn?() {
+            _ = output.readAndRemove()
+            return self.failedResult(message: message, preflightError: message)
+        }
 
         do {
-            let outcome = if let timeout, timeout > 0 {
-                try await self.runTimedSubprocess(
-                    configuration: configuration,
-                    output: output,
-                    timeout: timeout)
+            try Task.checkCancellation()
+            let terminationStatus: TerminationStatus
+            let timedOut: Bool
+            if let timeout, timeout > 0 {
+                let result = try await Subprocess.run(
+                    configuration,
+                    input: .currentStandardInput,
+                    output: output.subprocessStandardOutput,
+                    error: output.subprocessStandardError)
+                { execution in
+                    await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
+                }
+                terminationStatus = result.terminationStatus
+                timedOut = result.closureResult
             } else {
-                try await RunOutcome.completed(
-                    self.runSubprocess(configuration: configuration, output: output))
+                let result = try await Subprocess.run(
+                    configuration,
+                    input: .currentStandardInput,
+                    output: output.subprocessStandardOutput,
+                    error: output.subprocessStandardError)
+                terminationStatus = result.terminationStatus
+                timedOut = false
             }
             let captured = output.readAndRemove()
-            switch outcome {
-            case .timedOut:
-                return ShellResult(
-                    stdout: captured.stdout,
-                    stderr: captured.stderr,
-                    exitCode: nil,
-                    timedOut: true,
-                    success: false,
-                    errorMessage: "timeout")
-            case let .completed(terminationStatus):
-                let status = switch terminationStatus {
-                case let .exited(code), let .signaled(code):
-                    Int(code)
-                }
-                return ShellResult(
-                    stdout: captured.stdout,
-                    stderr: captured.stderr,
-                    exitCode: status,
-                    timedOut: false,
-                    success: terminationStatus.isSuccess,
-                    errorMessage: terminationStatus.isSuccess ? nil : "exit \(status)")
-            }
+            return timedOut ? self.timedOutResult(captured: captured) :
+                self.completedResult(terminationStatus, captured: captured)
         } catch {
             let captured = output.readAndRemove()
-            return ShellResult(
-                stdout: captured.stdout,
-                stderr: captured.stderr,
-                exitCode: nil,
-                timedOut: false,
-                success: false,
-                errorMessage: "failed to start: \(error.localizedDescription)")
+            return self.failedResult(
+                captured: captured,
+                message: "failed to start: \(error.localizedDescription)")
+        }
+    }
+
+    /// The installer owns its process tree and does not daemonize descendants, so
+    /// it can safely use pipe-backed streaming. Broad callers keep the file-backed
+    /// path above because an unrelated descendant may inherit their stdout.
+    static func runStreamingDetailed(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?,
+        timeout: Double?,
+        onStandardOutputLine: @escaping @Sendable (String) async -> Void) async -> ShellResult
+    {
+        guard !command.isEmpty else {
+            return self.failedResult(message: "empty command")
+        }
+
+        let configuration = self.configuration(command: command, cwd: cwd, env: env)
+        let capture = StreamingOutputCapture()
+
+        do {
+            let result = try await Subprocess.run(
+                configuration,
+                input: .currentStandardInput,
+                output: .sequence,
+                error: .sequence)
+            { execution in
+                let processIdentifier = pid_t(execution.processIdentifier.value)
+                return try await withTaskCancellationHandler {
+                    try await withThrowingTaskGroup(of: Bool.self) { group in
+                        group.addTask {
+                            for try await line in execution.standardOutput.strings(bufferingPolicy: .unbounded) {
+                                capture.appendStdout(line: line)
+                                await onStandardOutputLine(line)
+                            }
+                            return false
+                        }
+                        group.addTask {
+                            for try await line in execution.standardError.strings(bufferingPolicy: .unbounded) {
+                                capture.appendStderr(line: line)
+                            }
+                            return false
+                        }
+                        if let timeout, timeout > 0 {
+                            group.addTask {
+                                await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
+                            }
+                        }
+                        // Drain every task so stream errors still propagate after the deadline fires.
+                        var timedOut = false
+                        for try await didTimeOut in group {
+                            timedOut = timedOut || didTimeOut
+                        }
+                        return timedOut
+                    }
+                } onCancel: {
+                    _ = Darwin.kill(-processIdentifier, SIGKILL)
+                }
+            }
+            let captured = capture.snapshot()
+            if result.closureResult {
+                return self.timedOutResult(captured: captured)
+            }
+            return self.completedResult(result.terminationStatus, captured: captured)
+        } catch {
+            let captured = capture.snapshot()
+            return self.failedResult(
+                captured: captured,
+                message: "failed to start: \(error.localizedDescription)")
         }
     }
 

@@ -1,744 +1,397 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
+  newChatPage,
   createChatFlowE2eSuite,
-  expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   requireRecord,
-  waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
-suite.define(() => {
-  it("routes runtime-aware model commands through the server directive path", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+const sessionA = "agent:main:session-a";
+const bedrockModel = "bedrock/claude-opus-4.5";
+const generatedModels = (count: number, idPrefix = "model", namePrefix = "Model") =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${idPrefix}-${index + 1}`,
+    name: `${namePrefix} ${index + 1}`,
+    provider: "openai",
+  }));
+
+const basicModels = [
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+  { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
+];
+async function openChat(
+  options: Parameters<typeof installMockGateway>[1],
+  sessionKey?: string,
+  contextOptions?: Parameters<typeof newChatPage>[1],
+) {
+  const page = await newChatPage(suite, contextOptions);
+  const gateway = await installMockGateway(page, options);
+  await page.goto(
+    sessionKey
+      ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
+      : `${suite.server.baseUrl}chat`,
+  );
+  return { page, gateway, main: page.getByRole("main") };
+}
+
+const visible = { state: "visible", timeout: 10_000 } as const;
+const control = (root: Page | Locator, name: string) => root.locator(`[data-chat-${name}="true"]`);
+const option = (root: Page | Locator, model: string) =>
+  root.locator(`[data-chat-model-option="${model}"]`);
+const attribute = (locator: Locator, name: string) => expect.poll(() => locator.getAttribute(name));
+
+const positionControls = (controls: Locator) =>
+  controls.evaluate((element) => {
+    Object.assign((element as HTMLElement).style, {
+      position: "fixed",
+      right: "80px",
+      top: "640px",
     });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
+  });
+
+async function switchSession(page: Page, pane: Locator, key: string, label: string) {
+  await page
+    .locator(`.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`)
+    .click();
+  await page
+    .locator(".sidebar-recent-session--active")
+    .getByText(label)
+    .waitFor({ timeout: 10_000 });
+  await expect.poll(() => pane.evaluate((node) => (node as ChatPaneElement).sessionKey)).toBe(key);
+}
+async function expectMenuPlacement(
+  menu: Locator,
+  trigger: Locator,
+  above: boolean,
+  height: number,
+) {
+  await expect
+    .poll(async () => {
+      const [box, anchor] = await Promise.all([menu.boundingBox(), trigger.boundingBox()]);
+      return {
+        placed:
+          box !== null &&
+          anchor !== null &&
+          (above ? box.y + box.height <= anchor.y - 5 : box.y >= anchor.y + anchor.height + 5),
+        withinViewport: box !== null && box.y >= 8 && box.y + box.height <= height - 8,
+      };
+    })
+    .toEqual({ placed: true, withinViewport: true });
+}
+
+suite.define(() => {
+  it("patches a selectable Claude CLI context window", async () => {
+    const sessionKey = sessionA;
+    const contextWindows = [
+      { id: "200k", label: "200K", contextWindow: 200_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ];
+    const session = sessionRow(sessionKey, "Session A", 2, {
+      sessionId: "session-a-context-window",
+      model: "claude-fable-5",
+      modelProvider: "claude-cli",
+      contextWindow: "1m",
+      contextWindowDefault: "1m",
+      contextWindows,
+    });
+    const { page, gateway } = await openChat(
+      {
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+        models: [
+          {
+            id: "claude-fable-5",
+            name: "Claude Fable 5",
+            provider: "claude-cli",
+            contextWindow: 1_000_000,
+            contextWindowDefault: "1m",
+            contextWindows,
+          },
+        ],
+        sessionKey,
+      },
+      sessionKey,
+    );
+
+    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const picker = pane.locator(".chat-controls__model-picker");
+    await control(picker, "model-select").click();
+    const toggle = picker.locator("[data-chat-context-window-toggle]");
+    await attribute(toggle, "aria-checked").toBe("true");
+    await gateway.deferNext("sessions.patch");
+    const patchCount = (await gateway.getRequests("sessions.patch")).length;
+    await toggle.click();
+    const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
+    expect(requireRecord(patch.params)).toMatchObject({
+      key: sessionKey,
+      contextWindow: "200k",
+    });
+    // Patch acknowledgements and history must see the same committed context window.
+    await gateway.setSessionsListResponse(
+      chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
+    );
+    await gateway.resolveDeferred("sessions.patch");
+    await attribute(toggle, "aria-checked").toBe("false");
+    await expect
+      .poll(async () =>
+        (await picker.locator("[data-chat-model-context-badge]").textContent())?.trim(),
+      )
+      .toBe("200K");
+    await attribute(picker, "open").not.toBeNull();
+  });
+
+  it("keeps picker menus in the viewport while preferring the space above", async () => {
+    const { page, gateway } = await openChat({
+      models: generatedModels(12),
+    });
+
+    await gateway.waitForRequest("sessions.messages.subscribe");
+
+    const controls = page.locator(".chat-composer-model-control");
+    for (const picker of [
+      {
+        menu: ".chat-controls__model-menu",
+        trigger: '[data-chat-model-select="true"]',
+      },
+      {
+        menu: ".chat-controls__effort-menu",
+        trigger: '[data-chat-thinking-select="true"]',
+      },
+    ]) {
+      await page.setViewportSize({ height: 900, width: 1280 });
+      await positionControls(controls);
+      const trigger = controls.locator(picker.trigger);
+      const menu = controls.locator(picker.menu);
+      await trigger.click();
+      await expectMenuPlacement(menu, trigger, true, 900);
+
+      await page.setViewportSize({ height: 320, width: 1280 });
+      await controls.evaluate((element) => {
+        (element as HTMLElement).style.top = "24px";
+      });
+      await expectMenuPlacement(menu, trigger, false, 320);
+      await trigger.click();
+      await expect.poll(() => menu.isVisible()).toBe(false);
+    }
+  });
+
+  it("routes runtime-aware model commands through the server directive path", async () => {
+    const { page, gateway } = await openChat({
       sessionKey: "agent:main:main",
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+    const command = "/model openai/gpt-5.6-luna --runtime codex continue with the selected model";
+    await page.locator(".agent-chat__composer-combobox textarea").fill(command);
+    await page.getByRole("button", { name: "Send message" }).click();
 
-      const command = "/model openai/gpt-5.6-luna --runtime codex continue with the selected model";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(command);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      expect(requireRecord(sendRequest.params)).toMatchObject({
-        message: command,
-        sessionKey: "agent:main:main",
-      });
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    const sendRequest = await gateway.waitForRequest("chat.send");
+    expect(requireRecord(sendRequest.params)).toMatchObject({
+      message: command,
+      sessionKey: "agent:main:main",
+    });
+    expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
   });
 
   it("keeps high-velocity model scrolling inside the picker", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
     const models = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-      ...Array.from({ length: 32 }, (_value, index) => ({
-        id: `scroll-model-${index + 1}`,
-        name: `Scroll Model ${index + 1}`,
-        provider: "openai",
-      })),
+      ...generatedModels(32, "scroll-model", "Scroll Model"),
     ];
-    await installMockGateway(page, {
+    const { page, main } = await openChat({
       models,
       sessionKey: "agent:main:main",
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      const modelScroller = main.locator(".chat-controls__provider-models");
-      await page.evaluate(() => {
-        document.documentElement.style.overflowY = "auto";
-        document.body.style.height = "1800px";
-        window.scrollTo(0, 300);
-      });
-      expect(await page.evaluate(() => window.scrollY)).toBe(300);
-      await modelScroller.hover();
-      const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
-      expect(outerScrollBeforeFling).toBeGreaterThan(0);
-      await page.mouse.wheel(0, -5_000);
-      await page.waitForTimeout(100);
+    await positionControls(main.locator(".chat-composer-model-control"));
+    await page.evaluate(() => {
+      document.documentElement.style.overflowY = "auto";
+      document.body.style.height = "1800px";
+      window.scrollTo(0, 300);
+    });
+    expect(await page.evaluate(() => window.scrollY)).toBe(300);
 
-      expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollBeforeFling);
-    } finally {
-      await suite.closeBrowserContext(context);
+    await control(main, "model-select").click();
+    const modelScroller = main.locator(".chat-controls__model-options");
+    await expect.poll(() => modelScroller.isVisible()).toBe(true);
+    await modelScroller.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    // The wheel owns this scroll assertion; Playwright must not scroll ancestors first.
+    await modelScroller.hover({ scroll: "none" });
+    expect(await page.evaluate(() => window.scrollY)).toBe(300);
+    await page.mouse.wheel(0, -5_000);
+    await page.waitForTimeout(100);
+
+    expect(await page.evaluate(() => window.scrollY)).toBe(300);
+  });
+
+  it("keeps long model names and metadata inside the picker grid", async () => {
+    const { main } = await openChat(
+      {
+        models: [
+          {
+            contextWindow: 1_000_000,
+            id: "long-model",
+            name: "Long model",
+            provider: "openai",
+          },
+        ],
+        sessionKey: "agent:main:main",
+      },
+      undefined,
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 844, width: 390 },
+      },
+    );
+
+    await main.locator(".agent-chat__composer-combobox textarea").click();
+    await control(main, "model-select").click();
+    const menu = main.locator(".chat-controls__model-menu");
+    await expect.poll(() => menu.isVisible()).toBe(true);
+    await revealChatModelOption(main, "openai/long-model");
+    for (const [part, text] of [
+      ["name", "A deliberately very long model name that must ellipsize inside the provider grid"],
+      ["meta", "deliberately-long-context-metadata-that-must-never-create-horizontal-scroll"],
+    ] as const) {
+      await menu
+        .locator(`.chat-controls__model-option-${part}`)
+        .first()
+        .evaluate((node, value) => {
+          node.textContent = value;
+        }, text);
     }
+
+    const overflow = await menu.evaluate((root) => {
+      const leafStyles = [
+        ".chat-controls__model-option-name",
+        ".chat-controls__model-option-meta",
+      ].map((selector) => {
+        const element = root.querySelector<HTMLElement>(selector)!;
+        const style = getComputedStyle(element);
+        return [style.overflowX, style.textOverflow];
+      });
+      return { excessWidth: root.scrollWidth - root.clientWidth, leafStyles };
+    });
+    expect(overflow.excessWidth).toBeLessThanOrEqual(1);
+    expect(overflow.leafStyles).toEqual([
+      ["hidden", "ellipsis"],
+      ["hidden", "ellipsis"],
+    ]);
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+    const sessions = chatSessionListResponse();
+    Object.assign(sessions.defaults, {
+      thinkingDefault: "medium",
+      thinkingLevels: ["off", "medium", "high"].map((id) => ({ id, label: id })),
     });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
-      },
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
-      ],
-      sessionKey: "agent:main:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const main = page.getByRole("main");
-      const openModelSelect = async () => {
-        const trigger = main.locator('[data-chat-model-select="true"]').first();
-        await trigger.waitFor({ state: "visible", timeout: 10_000 });
-        return trigger;
-      };
-      const selectModel = async (value: string) => {
-        await main.locator('[data-chat-model-select="true"]').click();
-        const provider = value.split("/", 1)[0];
-        await main.locator(`[data-chat-model-provider="${provider}"]`).click();
-        const option = main.locator(`[data-chat-model-option="${value}"]`);
-        await option.waitFor({ state: "visible", timeout: 10_000 });
-        await option.click();
-        await page.keyboard.press("Escape");
-      };
-
-      let modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
-
-      await selectModel("bedrock/claude-opus-4.5");
-      const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
-        key: "agent:main:session-a",
-        model: "bedrock/claude-opus-4.5",
-      });
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-        "bedrock/claude-opus-4.5",
-      );
-
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
-        )
-        .click();
-      await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
-        timeout: 10_000,
-      });
-      modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
-
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
-        )
-        .click();
-      await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
-        timeout: 10_000,
-      });
-
-      modelSelect = await openModelSelect();
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
-        "bedrock/claude-opus-4.5",
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("restores the selected agent model after clearing a session override", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const agentsList = {
-      agents: [
-        {
-          id: "ops",
-          model: { primary: "anthropic/claude-opus-4-5" },
-          name: "Operations",
+    Object.assign(sessions.sessions[1]!, { model: "gpt-5.5", modelProvider: "openai" });
+    const { page, gateway, main } = await openChat(
+      {
+        methodResponses: {
+          "sessions.list": sessions,
         },
-      ],
-      defaultId: "ops",
-      mainKey: "main",
-      scope: "agent",
-    };
-    const sessionsList = {
-      count: 1,
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.5",
-        modelProvider: "openai",
+        models: basicModels,
+        sessionKey: sessionA,
       },
-      path: "",
-      sessions: [
-        {
-          key: "agent:ops:session-a",
-          kind: "direct",
-          label: "Operations",
-          updatedAt: Date.now(),
-        },
-      ],
-      ts: Date.now(),
-    };
-    const gateway = await installMockGateway(page, {
-      assistantAgentId: "ops",
-      defaultAgentId: "ops",
-      methodResponses: {
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: {
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-              {
-                id: "claude-opus-4-5",
-                name: "Claude Opus 4.5",
-                provider: "anthropic",
-              },
-            ],
-          },
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
-        },
-        "sessions.list": sessionsList,
-      },
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-opus-4-5", name: "Claude Opus 4.5", provider: "anthropic" },
-      ],
-      sessionKey: "agent:ops:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
-      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
-
-      await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
-      const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params)).toMatchObject({
-        key: "agent:ops:session-a",
-        model: "openai/gpt-5.5",
-      });
-      expect(await modelSelect.textContent()).toContain("GPT-5.5");
-
-      // The picker stays open after an immediate apply. Return to the default
-      // model's provider and select its real catalog row to clear the override.
-      await main.locator('[data-chat-model-provider="anthropic"]').click();
-      const defaultModel = main.locator(
-        '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
-      );
-      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await defaultModel.textContent()).toContain("Default");
-      expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
-      await defaultModel.click();
-      const patches = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patches[1]?.params)).toMatchObject({
-        key: "agent:ops:session-a",
-        model: null,
-      });
-      expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("shows one canonical default model with matching inherited reasoning", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
-    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
-      (id) => ({ id, label: id }),
+      sessionA,
     );
-    const agentsList = {
-      agents: [
-        {
-          id: "main",
-          model: { primary: "openai/gpt-5.6-sol" },
-          name: "Main",
-          thinkingDefault: "medium",
-          thinkingLevels,
-          thinkingOptions: thinkingLevels.map((level) => level.label),
-        },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
-    const sessionsList = {
-      count: 2,
-      defaults: {
-        contextTokens: null,
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-        thinkingDefault: "medium",
-        thinkingLevels,
-        thinkingOptions: thinkingLevels.map((level) => level.label),
-      },
-      path: "",
-      sessions: [
-        {
-          key: "agent:main:session-default",
-          kind: "direct",
-          label: "Default Sol",
-          updatedAt: 2,
-        },
-        {
-          key: "agent:main:session-explicit",
-          kind: "direct",
-          label: "Explicit Sol",
-          model: "gpt-5.6-sol",
-          modelProvider: "openai",
-          updatedAt: 1,
-        },
-      ],
-      ts: Date.now(),
-    };
-    const models = [
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
-    ];
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models },
-          sessionId: "control-ui-profile-default-proof",
-          thinkingLevel: null,
-        },
-        "sessions.list": sessionsList,
-      },
-      models,
-      sessionKey: "agent:main:session-default",
-    });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const main = page.getByRole("main");
-      const modelSelect = main.locator('[data-chat-model-select="true"]').first();
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
-      const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
-
-      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
-      expect(await modelSelect.textContent()).not.toContain("@openai:");
-      await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
-      await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
-      expect(
-        (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
-      ).not.toContain("@openai:");
-      await expect
-        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
-        .toBe(expectedThinkingValues);
-      const defaultThinkingValue = await modelSelect.getAttribute("data-chat-thinking-value");
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/default-sol.png`, fullPage: true });
-      }
-
+    const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+    const expectInheritedReasoning = async () => {
+      const effort = control(activePane, "thinking-select");
+      const slider = control(activePane, "thinking-slider");
+      await effort.click();
+      await attribute(slider, "data-chat-thinking-values").toBe("off,medium,high");
+      await attribute(effort, "data-chat-thinking-value").toBe("");
+      await expect.poll(() => slider.inputValue()).toBe("1");
       await page.keyboard.press("Escape");
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-explicit"] a.sidebar-recent-session__link',
-        )
-        .click();
-      await page.locator(".sidebar-recent-session--active").getByText("Explicit Sol").waitFor({
-        timeout: 10_000,
-      });
-      await modelSelect.click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
-      await expect
-        .poll(() => main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
-      await expect
-        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
-        .toBe(expectedThinkingValues);
-      expect(await modelSelect.getAttribute("data-chat-thinking-value")).toBe(defaultThinkingValue);
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/explicit-sol.png`, fullPage: true });
-      }
-
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("shows a pending send while a model override update is still pending", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
-      },
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        { id: "claude-opus-4.5", name: "Claude Opus 4.5", provider: "bedrock" },
-      ],
-      sessionKey: "agent:main:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-provider="bedrock"]').click();
-      await main.locator('[data-chat-model-option="bedrock/claude-opus-4.5"]').click();
-      await page.keyboard.press("Escape");
-      await gateway.waitForRequest("sessions.patch");
-
-      const prompt = "send while the model save is pending";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
-        timeout: 10_000,
-      });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-      await gateway.resolveDeferred("sessions.patch", {});
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params);
-      expect(params.message).toBe(prompt);
-      expect(params.sessionKey).toBe("agent:main:session-a");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("previews reasoning and provider choices before committing them", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:session-a";
-    const session = {
-      key: sessionKey,
-      kind: "direct",
-      label: "Session A",
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-      thinkingDefault: "high",
-      thinkingLevel: "high",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "ultra", label: "ultra" },
-      ],
-      updatedAt: 2,
     };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      models: [
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-      ],
-      sessionKey,
+    const modelSelect = control(activePane, "model-select");
+
+    await modelSelect.waitFor(visible);
+    const defaultOption = control(activePane, "model-default");
+    await modelSelect.click();
+    await attribute(defaultOption, "aria-selected").toBe("true");
+    expect(await defaultOption.getAttribute("data-chat-model-option")).toBe("openai/gpt-5.5");
+    await modelSelect.click();
+
+    await expectInheritedReasoning();
+    await modelSelect.click();
+    await revealChatModelOption(activePane, bedrockModel, { timeout: 10_000 });
+    await option(activePane, bedrockModel).click();
+    const patchRequest = await gateway.waitForRequest("sessions.patch");
+    expect(requireRecord(patchRequest.params)).toEqual({
+      expectedSessionId: "session:agent:main:session-a",
+      key: sessionA,
+      model: bedrockModel,
     });
+    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(bedrockModel);
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+    await switchSession(page, activePane, "agent:main:session-b", "Session B");
+    await modelSelect.waitFor(visible);
+    await modelSelect.click();
+    await attribute(defaultOption, "aria-selected").toBe("true");
+    await modelSelect.click();
 
-      const main = page.getByRole("main");
-      const picker = main.locator('[data-chat-model-select="true"]').first();
-      await picker.click();
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
-      const visibleReasoning = main.locator(
-        "[data-chat-thinking-preview-committed]:not([hidden]), " +
-          "[data-chat-thinking-preview-index]:not([hidden])",
-      );
+    await expectInheritedReasoning();
+    await switchSession(page, activePane, sessionA, "Session A");
 
-      for (const value of ["low", "medium", "ultra"]) {
-        await thinkingSlider.evaluate((input, nextValue) => {
-          const slider = input as HTMLInputElement;
-          const values = (slider.dataset.chatThinkingValues ?? "").split(",");
-          slider.value = String(values.indexOf(nextValue));
-          slider.dispatchEvent(new Event("input", { bubbles: true }));
-        }, value);
-        await expect
-          .poll(() => visibleReasoning.evaluate((element) => element.textContent?.trim()))
-          .toBe(value.charAt(0).toUpperCase() + value.slice(1));
-      }
-      await expectRequestCountStable(gateway, "sessions.patch", 0);
-
-      await gateway.setMethodResponse(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, thinkingLevel: "ultra" }]),
-      );
-      await thinkingSlider.evaluate((input) => {
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      const thinkingPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(thinkingPatch.params)).toMatchObject({
-        key: sessionKey,
-        thinkingLevel: "ultra",
-      });
-      await expect.poll(() => picker.getAttribute("data-chat-thinking-value")).toBe("ultra");
-      await picker.click();
-      await expect.poll(() => picker.textContent()).toContain("Ultra");
-      await picker.click();
-
-      const anthropicProvider = main.locator('[data-chat-model-provider="anthropic"]');
-      const openaiProvider = main.locator('[data-chat-model-provider="openai"]');
-      const anthropicModels = main.locator('[data-chat-model-provider-group="anthropic"]');
-      await anthropicProvider.hover();
-      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
-      await expectRequestCountStable(gateway, "sessions.patch", 1);
-
-      await openaiProvider.focus();
-      await expect.poll(() => anthropicModels.isHidden()).toBe(true);
-      await anthropicProvider.focus();
-      await expect.poll(() => anthropicModels.isVisible()).toBe(true);
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() => page.locator(":focus").getAttribute("data-chat-model-option"))
-        .toBe("anthropic/claude-fable-5");
-
-      await main.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
-      const patches = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patches[1]?.params)).toMatchObject({
-        key: sessionKey,
-        model: "anthropic/claude-fable-5",
-      });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await modelSelect.waitFor(visible);
+    expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(bedrockModel);
   });
 
-  it("applies provider-specific reasoning after the selected model is saved", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:session-a";
-    const fableSession = {
-      key: sessionKey,
-      kind: "direct",
-      label: "Session A",
-      model: "claude-fable-5",
-      modelProvider: "anthropic",
-      thinkingDefault: "high",
-      thinkingLevel: "high",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "adaptive", label: "adaptive" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-      ],
-      updatedAt: 2,
-    };
-    const solSession = {
-      ...fableSession,
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "ultra", label: "ultra" },
-      ],
-    };
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.patch"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([fableSession]),
-      },
-      models: [
-        { id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" },
-        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
-      ],
-      sessionKey,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await main.locator('[data-chat-model-provider="openai"]').click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
-
-      const modelPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(modelPatch.params)).toMatchObject({
-        key: sessionKey,
-        model: "openai/gpt-5.6-sol",
-      });
-      const thinkingSlider = main.locator('[data-chat-thinking-slider="true"]');
-      await expect.poll(() => thinkingSlider.isDisabled()).toBe(true);
-      await thinkingSlider.evaluate((input) => {
-        const slider = input as HTMLInputElement;
-        slider.value = slider.max;
-        slider.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      await expectRequestCountStable(gateway, "sessions.patch", 1);
-
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([solSession]));
-      await gateway.resolveDeferred("sessions.patch");
-      await expect
-        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
-        .toContain("ultra");
-      await expect.poll(() => thinkingSlider.isEnabled()).toBe(true);
-
-      await thinkingSlider.evaluate((input) => {
-        const slider = input as HTMLInputElement;
-        const values = (slider.dataset.chatThinkingValues ?? "").split(",");
-        slider.value = String(values.indexOf("ultra"));
-        slider.dispatchEvent(new Event("input", { bubbles: true }));
-        slider.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      const patches = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patches[1]?.params)).toMatchObject({
-        key: sessionKey,
-        thinkingLevel: "ultra",
-      });
-      await expect.poll(() => page.getByText(/not supported for/u).count()).toBe(0);
-
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/model-thinking-sync.png`,
-          fullPage: true,
-        });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps send pending until reasoning and speed patches finish", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          ...chatSessionListResponse([
-            {
-              effectiveFastMode: false,
-              fastMode: false,
-              key: "agent:main:session-a",
-              kind: "direct",
-              label: "Session A",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              thinkingLevel: "high",
-              updatedAt: 2,
-            },
+  it("shows a pending send while a Full Access permission update is still pending", async () => {
+    const { page, gateway, main } = await openChat(
+      {
+        deferredMethods: ["sessions.patch"],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
+            sessionRow(sessionA, "Session A", 2, {
+              permissionMode: "workspace",
+              sessionId: "session-a-send-barrier",
+            }),
           ]),
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-            thinkingDefault: "high",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "low", label: "low" },
-              { id: "medium", label: "medium" },
-              { id: "high", label: "high" },
-            ],
-          },
         },
+        models: basicModels,
+        sessionKey: sessionA,
       },
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
-      sessionKey: "agent:main:session-a",
+      sessionA,
+    );
+
+    await main.locator('[data-chat-permission-select="true"]').click();
+    await main.locator('[data-chat-permission-option="full"]').click();
+    const patchRequest = await gateway.waitForRequest("sessions.patch");
+    expect(requireRecord(patchRequest.params)).toMatchObject({
+      key: sessionA,
+      expectedSessionId: "session-a-send-barrier",
+      permissionMode: "full",
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+    const prompt = "send while the Full Access permission save is pending";
+    await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
 
-      const main = page.getByRole("main");
-      await main.locator('[data-chat-model-select="true"]').click();
-      await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-thinking-slider="true"]').press("ArrowLeft");
-      const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params).thinkingLevel).toBe("medium");
+    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
+      timeout: 10_000,
+    });
+    await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await gateway.deferNext("sessions.patch");
-      await main.locator('[data-chat-speed-toggle="on"]').click();
-      await expectRequestCountStable(gateway, "sessions.patch", 1);
-      await page.keyboard.press("Escape");
-
-      const prompt = "send with the new reasoning and speed";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
-        timeout: 10_000,
-      });
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-      const sessionListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.resolveDeferred("sessions.patch", {});
-      const patches = await waitForRequests(gateway, "sessions.patch", 2);
-      expect(requireRecord(patches[1]?.params).fastMode).toBe(true);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThan(sessionListCount);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-      await gateway.resolveDeferred("sessions.patch", {});
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      expect(requireRecord(sendRequest.params)).toMatchObject({
-        message: prompt,
-        sessionKey: "agent:main:session-a",
-      });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await gateway.resolveDeferred("sessions.patch", {});
+    const sendRequest = await gateway.waitForRequest("chat.send");
+    const params = requireRecord(sendRequest.params);
+    expect(params).toMatchObject({ message: prompt, sessionKey: sessionA });
   });
 });

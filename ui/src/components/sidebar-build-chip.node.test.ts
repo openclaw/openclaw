@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { formatBuildChipText, formatSettingsBuildLabel } from "./sidebar-build-chip-format.ts";
+import {
+  formatSettingsBuildLabel,
+  formatSidebarBuildSubtitle,
+} from "./sidebar-build-chip-format.ts";
 
 const COMMIT = "e8cbc62f0123456789abcdef0123456789abcdef";
 const BUILT_AT = "2026-07-10T12:00:00.000Z";
+const NOW = new Date("2026-07-10T16:00:00.000Z");
 
 function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildInfo {
   return {
@@ -19,37 +23,12 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
   };
 }
 
-describe("formatBuildChipText", () => {
+describe("formatSidebarBuildSubtitle branch truncation", () => {
   const cases: Array<{
     name: string;
     info: ControlUiBuildInfo;
     expected: string | null;
   }> = [
-    {
-      name: "main clean build",
-      info: buildInfo(),
-      expected: "e8cbc62",
-    },
-    {
-      name: "non-main branch",
-      info: buildInfo({ branch: "feat/x" }),
-      expected: "feat/x@e8cbc62",
-    },
-    {
-      name: "dirty worktree",
-      info: buildInfo({ dirty: true }),
-      expected: "e8cbc62*",
-    },
-    {
-      name: "missing commit",
-      info: buildInfo({ commit: null }),
-      expected: null,
-    },
-    {
-      name: "long branch",
-      info: buildInfo({ branch: "abcdefghijklmnop" }),
-      expected: "abcdefghijklmn…@e8cbc62",
-    },
     {
       name: "long branch keeps an emoji that fits exactly at the boundary",
       info: buildInfo({ branch: `${"a".repeat(12)}😀suffix` }),
@@ -64,7 +43,7 @@ describe("formatBuildChipText", () => {
 
   for (const testCase of cases) {
     it(testCase.name, () => {
-      expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
+      expect(formatSidebarBuildSubtitle(testCase.info)).toBe(testCase.expected);
     });
   }
 });
@@ -72,10 +51,6 @@ describe("formatBuildChipText", () => {
 describe("formatSettingsBuildLabel", () => {
   it("keeps official release artifacts version-only", () => {
     expect(formatSettingsBuildLabel(buildInfo({ release: true }), "2026.7.9")).toBe("2026.7.10");
-  });
-
-  it("adds a Git identity for clean main builds", () => {
-    expect(formatSettingsBuildLabel(buildInfo(), "2026.7.9")).toBe("2026.7.10 · git@e8cbc62");
   });
 
   it("adds branch and dirty provenance for development builds", () => {
@@ -97,5 +72,36 @@ describe("formatSettingsBuildLabel", () => {
     expect(formatSettingsBuildLabel(buildInfo({ branch: null, dirty: false }), "2026.7.9")).toBe(
       "2026.7.10 · git@e8cbc62",
     );
+  });
+});
+
+describe("formatSidebarBuildSubtitle", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("formats a detached source build with commit age", () => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ branch: null, commitAt: BUILT_AT }))).toBe(
+      "git@e8cbc62 · 4h ago",
+    );
+  });
+
+  it("includes branch and dirty state with commit age", () => {
+    expect(
+      formatSidebarBuildSubtitle(buildInfo({ branch: "feat/x", dirty: true, commitAt: BUILT_AT })),
+    ).toBe("feat/x@e8cbc62* · 4h ago");
+  });
+
+  it.each([null, "not-a-timestamp"])("keeps the Git identity when commitAt is %s", (commitAt) => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ commitAt }))).toBe("git@e8cbc62");
+  });
+
+  it("suppresses build identity when the commit is missing", () => {
+    expect(formatSidebarBuildSubtitle(buildInfo({ commit: null, commitAt: BUILT_AT }))).toBeNull();
   });
 });

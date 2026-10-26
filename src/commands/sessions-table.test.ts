@@ -1,14 +1,32 @@
-// Sessions table tests cover shared fixed-width cell formatting.
+// Sessions table tests cover shared display-label formatting.
 import { describe, expect, it } from "vitest";
-import { formatSessionKeyCell, SESSION_KEY_PAD } from "./sessions-table.js";
+import { formatSessionKeyCell, toSessionDisplayRow } from "./sessions-table.js";
+
+it("displays the causal creator without exposing the retained isolation actor", () => {
+  const row = toSessionDisplayRow("agent:main:delegated", {
+    sessionId: "delegated",
+    updatedAt: 1,
+    createdActor: {
+      type: "human",
+      source: "profile",
+      id: "isolation-owner",
+      delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+    },
+    owner: { actor: { type: "human", id: "assigned-owner" } },
+  });
+  expect(row.createdActor).toEqual({ type: "human", source: "profile", id: "causal-human" });
+  expect(row.owner?.actor.id).toBe("assigned-owner");
+});
 
 describe("formatSessionKeyCell", () => {
-  it("keeps both truncation boundaries UTF-16 safe", () => {
-    const key = `${"a".repeat(15)}😀middle😀${"z".repeat(5)}`;
+  it.each(["😀", "👩‍💻", "e\u0301"])(
+    "keeps complete %s clusters at both summary boundaries",
+    (cluster) => {
+      const key = `${"a".repeat(15)}${cluster}middle${cluster}${"z".repeat(5)}`;
 
-    const rendered = formatSessionKeyCell(key, false);
+      const rendered = formatSessionKeyCell(key, false);
 
-    expect(rendered).toBe(`${"a".repeat(15)}...${"z".repeat(5)}`.padEnd(SESSION_KEY_PAD));
-    expect(rendered).toHaveLength(SESSION_KEY_PAD);
-  });
+      expect(rendered).toBe(`${"a".repeat(15)}${cluster}...${cluster}${"z".repeat(5)}`);
+    },
+  );
 });

@@ -1,7 +1,22 @@
-// Reusable recovery strings for config/startup failures surfaced by CLI commands.
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import { formatCliCommand } from "./command-format.js";
 
-/** Hint shown when doctor can migrate or repair an invalid config file. */
+export function formatInvalidConfigRepairHint(
+  snapshot: Pick<
+    ConfigFileSnapshot,
+    "valid" | "issues" | "warnings" | "legacyIssues" | "readError"
+  >,
+  doctorMessage: string,
+): string {
+  return isConfigReadFailure(snapshot)
+    ? "Resolve the read error shown above, then retry."
+    : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+      ? formatPluginPackagingRuntimeOutputRecoveryHint()
+      : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
+}
+
 export function formatInvalidConfigRecoveryHint(): string {
   return [
     `Run "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`,
@@ -9,7 +24,6 @@ export function formatInvalidConfigRecoveryHint(): string {
   ].join("\n");
 }
 
-/** Hint shown when a plugin package is missing its compiled runtime output. */
 export function formatPluginPackagingRuntimeOutputRecoveryHint(): string {
   return [
     "This is a plugin packaging issue, not a local config problem.",

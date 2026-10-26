@@ -1,17 +1,19 @@
-// Zalo plugin owns raw webhook durable admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { ZaloApiError, type ZaloUpdate } from "./api.js";
+import {
+  webhookAdmissionSchema,
+  webhookEnvelopeSchema,
+  webhookUpdateSchema,
+} from "./message-schema.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import { getZaloRuntime } from "./runtime.js";
 
@@ -31,12 +33,6 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
 export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
 export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
-type ZaloWebhookIngress = {
-  accept: (rawEvent: string) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
-
 function parseRawRecord(rawEvent: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -44,88 +40,73 @@ function parseRawRecord(rawEvent: string): Record<string, unknown> {
   } catch (error) {
     throw new ZaloWebhookPayloadError("Zalo webhook body contains invalid JSON.", { cause: error });
   }
-  if (!isRecord(parsed)) {
+  const envelope = webhookEnvelopeSchema.safeParse(parsed);
+  if (!envelope.success) {
     throw new ZaloWebhookPayloadError("Zalo webhook body must be a JSON object.");
   }
-  return parsed;
+  return envelope.data;
 }
 
-function resolveUpdateRecord(envelope: Record<string, unknown>): Record<string, unknown> {
-  // Preserve the accepted direct and legacy { ok, result } envelope shapes.
-  if (envelope.ok === true && isRecord(envelope.result)) {
-    return envelope.result;
-  }
-  return envelope;
-}
-
-function inspectZaloWebhookEvent(rawEvent: string): {
-  eventId: string;
-  laneKey: string;
-  update: Record<string, unknown>;
-} {
-  const update = resolveUpdateRecord(parseRawRecord(rawEvent));
-  const message = isRecord(update.message) ? update.message : null;
-  const eventId = nonEmptyString(message?.message_id);
-  if (!eventId) {
+function inspectZaloWebhookEvent(rawEvent: string) {
+  const update = parseRawRecord(rawEvent);
+  const admission = webhookAdmissionSchema.safeParse(update);
+  if (!admission.success) {
+    const missingEventId = admission.error.issues.some(
+      (issue) =>
+        issue.path[0] === "message" && (issue.path.length === 1 || issue.path[1] === "message_id"),
+    );
+    if (missingEventId) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.message_id.");
+    }
+    const missingChatId = admission.error.issues.some(
+      (issue) => issue.path[0] === "message" && issue.path[1] === "chat",
+    );
+    if (missingChatId) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.chat.id.");
+    }
     throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.message_id.");
   }
-  const chat = isRecord(message?.chat) ? message.chat : null;
-  const chatId = nonEmptyString(chat?.id);
-  if (!chatId) {
-    throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.chat.id.");
-  }
+  const eventId = admission.data.message.message_id;
+  const chatId = admission.data.message.chat.id;
   return { eventId, laneKey: `chat:${chatId}`, update };
 }
 
-function parseClaimedUpdate(payload: ZaloWebhookSpoolPayload, claimedId: string): ZaloUpdate {
-  if (payload.version !== ZALO_WEBHOOK_SPOOL_VERSION || typeof payload.rawEvent !== "string") {
-    throw new ZaloWebhookPayloadError("Zalo webhook spool payload is invalid.");
-  }
-  const facts = inspectZaloWebhookEvent(payload.rawEvent);
-  if (facts.eventId !== claimedId) {
-    throw new ZaloWebhookPayloadError("Zalo webhook message id changed after durable admission.");
-  }
-  const eventName = nonEmptyString(facts.update.event_name);
-  if (
-    eventName !== "message.text.received" &&
-    eventName !== "message.image.received" &&
-    eventName !== "message.sticker.received" &&
-    eventName !== "message.unsupported.received"
-  ) {
+function parseClaimedUpdate(rawEvent: string): ZaloUpdate {
+  const parsed = webhookUpdateSchema.safeParse(parseRawRecord(rawEvent));
+  if (!parsed.success) {
+    const paths = parsed.error.issues.map((issue) => issue.path.join("."));
+    if (paths.some((path) => path === "event_name")) {
+      throw new ZaloWebhookPayloadError("Zalo webhook event_name is unsupported.");
+    }
+    if (paths.some((path) => path === "message.from" || path.startsWith("message.from.id"))) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.from.id.");
+    }
+    if (paths.some((path) => path === "message.chat" || path.startsWith("message.chat.id"))) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.chat.id.");
+    }
+    if (paths.some((path) => path.startsWith("message.chat.chat_type"))) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message has an invalid chat type.");
+    }
+    if (paths.some((path) => path.startsWith("message.date"))) {
+      throw new ZaloWebhookPayloadError("Zalo webhook message has an invalid date.");
+    }
+    if (paths.some((path) => path.startsWith("message.text"))) {
+      throw new ZaloWebhookPayloadError("Zalo text event is missing message.text.");
+    }
     throw new ZaloWebhookPayloadError("Zalo webhook event_name is unsupported.");
   }
-  const message = facts.update.message as Record<string, unknown>;
-  const from = isRecord(message.from) ? message.from : null;
-  const chat = isRecord(message.chat) ? message.chat : null;
-  if (!nonEmptyString(from?.id)) {
-    throw new ZaloWebhookPayloadError("Zalo webhook message is missing message.from.id.");
-  }
-  if (chat?.chat_type !== "PRIVATE" && chat?.chat_type !== "GROUP") {
-    throw new ZaloWebhookPayloadError("Zalo webhook message has an invalid chat type.");
-  }
-  if (typeof message.date !== "number" || !Number.isFinite(message.date)) {
-    throw new ZaloWebhookPayloadError("Zalo webhook message has an invalid date.");
-  }
-  if (eventName === "message.text.received" && typeof message.text !== "string") {
-    throw new ZaloWebhookPayloadError("Zalo text event is missing message.text.");
-  }
-  return facts.update as unknown as ZaloUpdate;
+  return parsed.data;
 }
 
 function isZaloAuthenticationFailure(error: unknown): boolean {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const candidate = current as {
-      cause?: unknown;
-      errorCode?: unknown;
-      status?: unknown;
-      statusCode?: unknown;
-    };
+  for (const current of collectErrorGraphCandidates(error, (candidate) => [candidate.cause])) {
+    const candidate = asOptionalObjectRecord(current);
+    if (!candidate) {
+      continue;
+    }
     if (
-      (current instanceof ZaloApiError &&
-        (current.errorCode === 401 || current.errorCode === 403)) ||
+      (candidate instanceof ZaloApiError &&
+        (candidate.errorCode === 401 || candidate.errorCode === 403)) ||
       candidate.status === 401 ||
       candidate.status === 403 ||
       candidate.statusCode === 401 ||
@@ -133,7 +114,6 @@ function isZaloAuthenticationFailure(error: unknown): boolean {
     ) {
       return true;
     }
-    current = candidate.cause;
   }
   return false;
 }
@@ -142,13 +122,10 @@ function createZaloWebhookIngress(options: {
   accountId: string;
   runtime: Pick<ZaloRuntimeEnv, "error" | "log">;
   deliver: (update: ZaloUpdate, lifecycle: ZaloWebhookIngressLifecycle) => Promise<void>;
-  queue?: ChannelIngressQueue<ZaloWebhookSpoolPayload>;
-}): ZaloWebhookIngress {
-  const queue =
-    options.queue ??
-    getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
-      accountId: options.accountId,
-    });
+}) {
+  const queue = getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
+    accountId: options.accountId,
+  });
   const monitor = createChannelIngressMonitor<string, string, ZaloWebhookSpoolPayload>({
     queue,
     inspect: (rawEvent) => inspectZaloWebhookEvent(rawEvent),
@@ -164,8 +141,8 @@ function createZaloWebhookIngress(options: {
             : "Zalo webhook identity changed after durable admission.",
         ),
     },
-    deliver: async (_rawEvent, lifecycle, claim) => {
-      const update = parseClaimedUpdate(claim.payload, claim.id);
+    deliver: async (rawEvent, lifecycle) => {
+      const update = parseClaimedUpdate(rawEvent);
       await options.deliver(
         update,
         bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
@@ -203,7 +180,7 @@ function createZaloWebhookIngress(options: {
   });
 
   return {
-    accept: async (rawEvent) => {
+    accept: async (rawEvent: string) => {
       await monitor.admit(rawEvent);
     },
     start: monitor.start,

@@ -176,6 +176,105 @@ enum ChatWorkingClawMotion {
         ChatWorkingClawKeyframe(progress: 0.86, value: -10),
         ChatWorkingClawKeyframe(progress: 1, value: -10),
     ]
+    private static let nodOffBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 10),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 14),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 15),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffY = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 1.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -0.5),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.35, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.60, value: -21),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.84, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.90, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let curiousBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.76, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let curiousJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.76, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let omNomX = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.40, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.50, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let omNomJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.26, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.42, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.52, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let fakeOutBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.06, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.80, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let fakeOutJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.06, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
 
     static func pose(stance: ChatWorkingClawStance, elapsed: TimeInterval) -> ChatWorkingClawPose {
         let duration: TimeInterval = switch stance {
@@ -183,6 +282,7 @@ enum ChatWorkingClawMotion {
         case .spin: 3.6
         case .zen: 6
         case .drummer: 1.2
+        case .nodOff: 3.6
         default: 2.4
         }
         let progress = max(0, elapsed).truncatingRemainder(dividingBy: duration) / duration
@@ -228,6 +328,19 @@ enum ChatWorkingClawMotion {
             pose.yOffset = self.sample(self.peekabooY, at: progress)
             pose.bodyScale = self.sample(self.peekabooScale, at: progress)
             pose.jawRotation = self.sample(self.peekabooJaw, at: progress)
+        case .nodOff:
+            pose.bodyRotation = self.sample(self.nodOffBodyRotation, at: progress)
+            pose.yOffset = self.sample(self.nodOffY, at: progress)
+            pose.jawRotation = self.sample(self.nodOffJaw, at: progress)
+        case .curious:
+            pose.bodyRotation = self.sample(self.curiousBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.curiousJaw, at: progress)
+        case .omNom:
+            pose.xOffset = self.sample(self.omNomX, at: progress)
+            pose.jawRotation = self.sample(self.omNomJaw, at: progress)
+        case .fakeOut:
+            pose.bodyRotation = self.sample(self.fakeOutBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.fakeOutJaw, at: progress)
         }
         return pose
     }
@@ -256,10 +369,12 @@ struct ChatWorkingClawView: View {
 
     let stance: ChatWorkingClawStance
     var parked = false
+    var tint: Color?
 
-    init(seed: String, parked: Bool = false) {
+    init(seed: String, parked: Bool = false, tint: Color? = nil) {
         self.stance = ChatWorkingClawStance.seeded(seed, salt: ChatWorkingClawSeed.salt)
         self.parked = parked
+        self.tint = tint
     }
 
     var body: some View {
@@ -298,9 +413,9 @@ struct ChatWorkingClawView: View {
         ZStack {
             ZStack {
                 ChatWorkingClawBodyShape()
-                    .fill(OpenClawChatTheme.accent)
+                    .fill(self.tint ?? OpenClawChatTheme.accent)
                 ChatWorkingClawJawShape()
-                    .fill(OpenClawChatTheme.accent)
+                    .fill(self.tint ?? OpenClawChatTheme.accent)
                     .rotationEffect(
                         .degrees(pose.jawRotation),
                         anchor: UnitPoint(x: 8.6 / 24, y: 11 / 24))
@@ -318,7 +433,7 @@ struct ChatWorkingClawView: View {
             if pose.powOpacity > 0 {
                 Text("✦")
                     .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(OpenClawChatTheme.accent)
+                    .foregroundStyle(self.tint ?? OpenClawChatTheme.accent)
                     .scaleEffect(pose.powScale)
                     .opacity(pose.powOpacity)
                     .offset(x: 14, y: -7)
@@ -347,18 +462,7 @@ private struct ChatWorkingClawBodyShape: Shape {
         path.addLine(to: CGPoint(x: 13.5, y: 13))
         path.addLine(to: CGPoint(x: 11.5, y: 14.2))
         path.closeSubpath()
-        return path.applying(self.transform(for: rect))
-    }
-
-    private func transform(for rect: CGRect) -> CGAffineTransform {
-        let scale = min(rect.width, rect.height) / 24
-        return CGAffineTransform(
-            a: scale,
-            b: 0,
-            c: 0,
-            d: scale,
-            tx: rect.midX - 12 * scale,
-            ty: rect.midY - 12 * scale)
+        return path.applying(chatWorkingClawTransform(for: rect))
     }
 }
 
@@ -386,15 +490,19 @@ private struct ChatWorkingClawJawShape: Shape {
             control2: CGPoint(x: 12.2, y: 10.9))
         path.addLine(to: CGPoint(x: 6.8, y: 13))
         path.closeSubpath()
-        let scale = min(rect.width, rect.height) / 24
-        return path.applying(CGAffineTransform(
-            a: scale,
-            b: 0,
-            c: 0,
-            d: scale,
-            tx: rect.midX - 12 * scale,
-            ty: rect.midY - 12 * scale))
+        return path.applying(chatWorkingClawTransform(for: rect))
     }
+}
+
+private func chatWorkingClawTransform(for rect: CGRect) -> CGAffineTransform {
+    let scale = min(rect.width, rect.height) / 24
+    return CGAffineTransform(
+        a: scale,
+        b: 0,
+        c: 0,
+        d: scale,
+        tx: rect.midX - 12 * scale,
+        ty: rect.midY - 12 * scale)
 }
 
 struct ChatWorkingStatusText: View {
@@ -403,6 +511,8 @@ struct ChatWorkingStatusText: View {
     let startedAt: Date
     let seed: String
     let outputTokens: Int?
+    /// The startup phase replaces the rotating phrase, but keeps the elapsed clock.
+    var status: String?
 
     var body: some View {
         Group {
@@ -421,6 +531,10 @@ struct ChatWorkingStatusText: View {
         let elapsedMilliseconds = max(1000, Int(date.timeIntervalSince(self.startedAt) * 1000))
         let duration = ChatWorkingDurationFormatter.compact(milliseconds: Double(elapsedMilliseconds))
         return HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if let status {
+                Text(verbatim: status)
+                    .font(OpenClawChatTypography.caption)
+            }
             Text(duration)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .monospacedDigit()
@@ -432,7 +546,7 @@ struct ChatWorkingStatusText: View {
                     .font(OpenClawChatTypography.caption)
                     .monospacedDigit()
             }
-            if let index = ChatWorkingPhrase.index(
+            if self.status == nil, let index = ChatWorkingPhrase.index(
                 seed: self.seed,
                 elapsedMilliseconds: elapsedMilliseconds)
             {

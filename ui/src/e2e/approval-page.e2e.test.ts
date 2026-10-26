@@ -1,29 +1,29 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page, type Video } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page, Video } from "playwright";
+import { afterEach, expect, it } from "vitest";
 import type {
   AllowedApprovalSnapshot,
   PendingApprovalSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI standalone approval page",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const APPROVAL_ID = "Approval:Mobile/東京 100% 🦞";
 const APPROVAL_NOW_MS = Date.UTC(2026, 6, 10, 18, 0, 0);
-const ARTIFACT_DIR = path.resolve(".artifacts/control-ui-e2e/approval-page");
-const MOBILE_RAW_VIDEO_DIR = path.join(ARTIFACT_DIR, "mobile-raw");
+const CAPTURE_UI_PROOF = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const MOBILE_VIEWPORT = { height: 844, width: 390 } as const;
 const DESKTOP_VIEWPORT = { height: 800, width: 1200 } as const;
 
@@ -35,20 +35,17 @@ type ApprovalSurface = {
   rawVideoDir?: string;
 };
 
-let browser: Browser | undefined;
-let server: ControlUiE2eServer | undefined;
 const openContexts = new Set<BrowserContext>();
-const rawVideoDirs = new Set<string>();
 
 function approvalPath(basePath: string): string {
   return `${basePath}/approve/${encodeURIComponent(APPROVAL_ID)}`;
 }
 
 function approvalUrl(basePath: string): string {
-  return new URL(approvalPath(basePath), server?.baseUrl ?? "http://127.0.0.1/").href;
+  return new URL(approvalPath(basePath), suite.server?.baseUrl ?? "http://127.0.0.1/").href;
 }
 
-function pendingApproval(basePath: string): PendingApprovalSnapshot {
+function pendingApproval(basePath: string) {
   const commandLines = Array.from(
     { length: 14 },
     (_value, index) =>
@@ -66,65 +63,65 @@ function pendingApproval(basePath: string): PendingApprovalSnapshot {
       commandPreview: 'curl --header "Authorization: <redacted>" …',
       warningText: "This command requests external network access.",
       host: "gateway",
-      nodeId: null,
+      nodeId: "runner-1",
+      agentId: "main",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+  } satisfies PendingApprovalSnapshot;
+}
+
+function pendingPluginApproval(basePath: string): PendingApprovalSnapshot {
+  return {
+    ...pendingApproval(basePath),
+    presentation: {
+      kind: "plugin",
+      title: "Codex workspace command",
+      description: "Run the requested workspace command after operator review.",
+      detail: "pnpm test ui/src/pages/approval",
+      severity: "critical",
+      pluginId: "codex",
+      toolName: "workspace.exec",
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
   };
 }
 
-function allowedApproval(pending: PendingApprovalSnapshot): AllowedApprovalSnapshot {
-  return {
-    ...pending,
-    status: "allowed",
-    decision: "allow-once",
-    reason: "user",
-    resolvedAtMs: APPROVAL_NOW_MS,
-  };
-}
-
-function requireBrowser(): Browser {
-  if (!browser) {
-    throw new Error("Control UI E2E browser is not running");
-  }
-  return browser;
-}
-
-async function createSurface(params: {
-  basePath: string;
-  deferredMethods?: string[];
-  pending: PendingApprovalSnapshot;
-  recordVideo?: boolean;
-  viewport: { height: number; width: number };
-}): Promise<ApprovalSurface> {
-  const rawVideoDir = params.recordVideo ? MOBILE_RAW_VIDEO_DIR : undefined;
-  if (rawVideoDir) {
-    await mkdir(ARTIFACT_DIR, { recursive: true });
-    await rm(rawVideoDir, { force: true, recursive: true });
-    await mkdir(rawVideoDir, { recursive: true });
-    rawVideoDirs.add(rawVideoDir);
-  }
-  const context = await requireBrowser().newContext({
+async function createSurface(
+  params: {
+    basePath?: string;
+    deferredMethods?: string[];
+    pending?: PendingApprovalSnapshot;
+    recordVideo?: boolean;
+    viewport?: { height: number; width: number };
+  } = {},
+): Promise<ApprovalSurface> {
+  const { basePath = "", viewport = MOBILE_VIEWPORT, pending = pendingApproval(basePath) } = params;
+  const rawVideoDir =
+    params.recordVideo && CAPTURE_UI_PROOF
+      ? createControlUiE2eArtifactDir("mobile-raw", suite.artifactDir)
+      : undefined;
+  const context = await suite.browser.newContext({
     colorScheme: "dark",
-    hasTouch: params.viewport.width <= MOBILE_VIEWPORT.width,
-    isMobile: params.viewport.width <= MOBILE_VIEWPORT.width,
+    hasTouch: viewport.width <= MOBILE_VIEWPORT.width,
+    isMobile: viewport.width <= MOBILE_VIEWPORT.width,
     locale: "en-US",
     reducedMotion: "reduce",
     serviceWorkers: "block",
-    viewport: params.viewport,
-    ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: params.viewport } } : {}),
+    viewport,
+    ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: viewport } } : {}),
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   await page.clock.setFixedTime(new Date(APPROVAL_NOW_MS));
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   const gateway = await installMockGateway(page, {
-    basePath: params.basePath,
+    basePath,
     deferredMethods: params.deferredMethods,
     methodResponses: {
-      "approval.get": { approval: params.pending },
+      "approval.get": { approval: pending },
     },
   });
   return { context, gateway, page, pageErrors, rawVideoDir };
@@ -137,15 +134,41 @@ async function closeRecordedSurface(surface: ApprovalSurface, targetName: string
   if (!video || !surface.rawVideoDir) {
     return;
   }
-  const rawVideoPath = await video.path();
-  await copyFile(rawVideoPath, path.join(ARTIFACT_DIR, targetName));
-  rawVideoDirs.delete(surface.rawVideoDir);
+  await video.saveAs(path.join(suite.artifactDir, targetName));
+  // Remove raw footage only after the retained named copy succeeds.
+  await video.delete();
   await rm(surface.rawVideoDir, { force: true, recursive: true });
 }
 
 async function waitForApprovalPage(page: Page): Promise<void> {
   await page.locator("openclaw-approval-page").waitFor();
   await page.getByText("Waiting for your decision", { exact: true }).waitFor();
+}
+
+async function visitApproval({ page }: ApprovalSurface, url = approvalUrl("")) {
+  const response = await page.goto(url);
+  await waitForApprovalPage(page);
+  return response;
+}
+
+async function expectLoadedApproval({ page, gateway }: ApprovalSurface): Promise<void> {
+  expect((await gateway.waitForRequest("approval.get")).params).toEqual({ id: APPROVAL_ID });
+  await expectStandaloneApprovalPage(page);
+}
+
+async function expectIdentity(
+  page: Page,
+  severity: string,
+  chips: Record<string, string[]>,
+  meta: string[],
+): Promise<void> {
+  expect(await page.locator(".approval-page__card").getAttribute("class")).toContain(
+    `approval-page__card--severity-${severity}`,
+  );
+  for (const [kind, values] of Object.entries(chips)) {
+    expect(await page.locator(`[data-approval-chip="${kind}"]`).allTextContents()).toEqual(values);
+  }
+  expect(await page.locator(".approval-page__meta-row dt").allTextContents()).toEqual(meta);
 }
 
 async function expectStandaloneApprovalPage(page: Page): Promise<void> {
@@ -157,158 +180,114 @@ async function expectStandaloneApprovalPage(page: Page): Promise<void> {
 }
 
 async function expectNoDecisionButtons(page: Page): Promise<void> {
-  await expect
-    .poll(async () => {
-      const allowCount = await page.getByRole("button", { name: "Allow once" }).count();
-      const denyCount = await page.getByRole("button", { name: "Deny" }).count();
-      return allowCount + denyCount;
-    })
-    .toBe(0);
+  const decisions = page
+    .getByRole("button", { name: "Allow once" })
+    .or(page.getByRole("button", { name: "Deny" }));
+  await expect.poll(() => decisions.count()).toBe(0);
 }
 
-async function waitForStableApprovalPaint(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
-  });
-  if (page.viewportSize()?.width !== MOBILE_VIEWPORT.width) {
+async function captureProof(page: Page, name: string, documentOnly = false): Promise<void> {
+  if (!CAPTURE_UI_PROOF) {
     return;
   }
-  await expect
-    .poll(async () => {
-      const bounds = await page.locator(".approval-page__card").boundingBox();
-      return Boolean(
-        bounds && bounds.x >= 10 && bounds.width >= 350 && bounds.x + bounds.width <= 380,
-      );
-    })
-    .toBe(true);
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await twoFrames(page);
+  if (!documentOnly && page.viewportSize()?.width === MOBILE_VIEWPORT.width) {
+    await expect
+      .poll(async () => {
+        const bounds = await page.locator(".approval-page__card").boundingBox();
+        return Boolean(
+          bounds && bounds.x >= 10 && bounds.width >= 350 && bounds.x + bounds.width <= 380,
+        );
+      })
+      .toBe(true);
+  }
+  await page.screenshot({ path: path.join(suite.artifactDir, name) });
+}
+
+async function pauseRecordedProof(page: Page): Promise<void> {
+  if (CAPTURE_UI_PROOF) {
+    await page.waitForTimeout(900);
+  }
 }
 
 async function expectMobilePendingLayout(page: Page): Promise<void> {
-  const allowButton = page.getByRole("button", { name: "Allow once" });
-  const denyButton = page.getByRole("button", { name: "Deny" });
-  const [allowBounds, denyBounds] = await Promise.all([
-    allowButton.boundingBox(),
-    denyButton.boundingBox(),
-  ]);
-  if (!allowBounds || !denyBounds) {
-    throw new Error("Approval decision buttons are missing layout bounds");
+  for (const name of ["Allow once", "Deny"]) {
+    const bounds = await layoutBox(page.getByRole("button", { name }));
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
   }
-  expect(allowBounds.height).toBeGreaterThanOrEqual(44);
-  expect(denyBounds.height).toBeGreaterThanOrEqual(44);
 
   const metrics = await page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>(".approval-page");
-    const card = document.querySelector<HTMLElement>(".approval-page__card");
-    const preview = document.querySelector<HTMLElement>(".approval-page__preview");
-    if (!root || !card || !preview) {
-      throw new Error("Approval page layout elements are missing");
-    }
-    const rootBounds = root.getBoundingClientRect();
-    const cardBounds = card.getBoundingClientRect();
+    const element = (selector: string) => {
+      const found = document.querySelector<HTMLElement>(selector);
+      if (!found) {
+        throw new Error(`Missing approval layout element: ${selector}`);
+      }
+      return found;
+    };
+    const root = element(".approval-page").getBoundingClientRect();
+    const card = element(".approval-page__card").getBoundingClientRect();
+    const preview = element(".approval-page__preview");
     const previewBounds = preview.getBoundingClientRect();
-    const backLink = document.querySelector<HTMLElement>(".approval-page__back-link");
-    if (!backLink) {
-      throw new Error("Approval page back link is missing");
-    }
-    const backLinkBounds = backLink.getBoundingClientRect();
     return {
-      backLinkTop: backLinkBounds.top,
-      cardBottom: cardBounds.bottom,
-      cardLeft: cardBounds.left,
-      cardRight: cardBounds.right,
+      backLinkGap: element(".approval-page__back-link").getBoundingClientRect().top - card.bottom,
       documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
-      previewClientHeight: preview.clientHeight,
-      previewRight: previewBounds.right,
-      previewScrollHeight: preview.scrollHeight,
-      rootLeft: rootBounds.left,
-      rootRight: rootBounds.right,
-      viewportWidth: window.innerWidth,
+      previewOverflow: preview.scrollHeight - preview.clientHeight,
+      left: Math.min(root.left, card.left),
+      rightOverflow: Math.max(root.right, card.right, previewBounds.right) - window.innerWidth,
     };
   });
   expect(metrics.documentOverflow).toBeLessThanOrEqual(0);
-  expect(metrics.rootLeft).toBeGreaterThanOrEqual(0);
-  expect(metrics.cardLeft).toBeGreaterThanOrEqual(0);
-  expect(metrics.rootRight).toBeLessThanOrEqual(metrics.viewportWidth);
-  expect(metrics.cardRight).toBeLessThanOrEqual(metrics.viewportWidth);
-  expect(metrics.previewRight).toBeLessThanOrEqual(metrics.viewportWidth);
-  expect(metrics.previewScrollHeight).toBeGreaterThanOrEqual(metrics.previewClientHeight);
-  expect(metrics.backLinkTop).toBeGreaterThanOrEqual(metrics.cardBottom + 10);
+  expect(metrics.left).toBeGreaterThanOrEqual(0);
+  expect(metrics.rightOverflow).toBeLessThanOrEqual(0);
+  expect(metrics.previewOverflow).toBeGreaterThanOrEqual(0);
+  expect(metrics.backLinkGap).toBeGreaterThanOrEqual(10);
 }
 
-describeControlUiE2e("Control UI standalone approval page", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
-    await Promise.all(
-      [...rawVideoDirs].map((rawVideoDir) => rm(rawVideoDir, { force: true, recursive: true })),
-    );
-    rawVideoDirs.clear();
-  });
-
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
   });
 
   it("keeps one canonical winner across conflicting surfaces and terminal reload", async () => {
     const pending = pendingApproval("");
-    const terminal = allowedApproval(pending);
+    const terminal: AllowedApprovalSnapshot = {
+      ...pending,
+      status: "allowed",
+      decision: "allow-once",
+      reason: "user",
+      resolvedAtMs: APPROVAL_NOW_MS,
+    };
     const mobile = await createSurface({
-      basePath: "",
       deferredMethods: ["approval.resolve"],
       pending,
       recordVideo: true,
-      viewport: MOBILE_VIEWPORT,
     });
     const desktop = await createSurface({
-      basePath: "",
       deferredMethods: ["approval.resolve"],
       pending,
       viewport: DESKTOP_VIEWPORT,
     });
+    const surfaces = [mobile, desktop];
 
     try {
-      const [mobileResponse, desktopResponse] = await Promise.all([
-        mobile.page.goto(approvalUrl("")),
-        desktop.page.goto(approvalUrl("")),
-      ]);
-      expect(mobileResponse?.status()).toBe(200);
-      expect(desktopResponse?.status()).toBe(200);
-      await Promise.all([waitForApprovalPage(mobile.page), waitForApprovalPage(desktop.page)]);
-
-      const [mobileGet, desktopGet] = await Promise.all([
-        mobile.gateway.waitForRequest("approval.get"),
-        desktop.gateway.waitForRequest("approval.get"),
-      ]);
-      expect(mobileGet.params).toEqual({ id: APPROVAL_ID });
-      expect(desktopGet.params).toEqual({ id: APPROVAL_ID });
+      await Promise.all(
+        surfaces.map(async (surface) => {
+          expect((await visitApproval(surface))?.status()).toBe(200);
+          await expectLoadedApproval(surface);
+        }),
+      );
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
-      await Promise.all([
-        expectStandaloneApprovalPage(mobile.page),
-        expectStandaloneApprovalPage(desktop.page),
-      ]);
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "01-pending-mobile.png"),
-      });
+      await expectIdentity(mobile.page, "warning", { agent: ["main"], plugin: [], tool: [] }, [
+        "Host",
+        "Node",
+      ]);
+      await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "01b-pending-actions-mobile.png"),
-      });
+      await captureProof(mobile.page, "after-pending-exec-actions.png");
 
       await Promise.all([
         mobile.page.getByRole("button", { name: "Allow once" }).click(),
@@ -323,57 +302,39 @@ describeControlUiE2e("Control UI standalone approval page", () => {
         kind: "exec",
         decision: "allow-once",
       });
-      expect(desktopResolve.params).toEqual({
-        id: APPROVAL_ID,
-        kind: "exec",
-        decision: "deny",
-      });
+      expect(desktopResolve.params).toEqual({ id: APPROVAL_ID, kind: "exec", decision: "deny" });
 
-      await Promise.all([
-        mobile.gateway.setMethodResponse("approval.get", { approval: terminal }),
-        desktop.gateway.setMethodResponse("approval.get", { approval: terminal }),
-      ]);
-      await Promise.all([
-        mobile.gateway.resolveDeferred("approval.resolve", {
-          applied: true,
-          approval: terminal,
-        }),
-        desktop.gateway.resolveDeferred("approval.resolve", {
-          applied: false,
-          approval: terminal,
-        }),
-      ]);
+      await Promise.all(
+        surfaces.map(({ gateway }) =>
+          gateway.setMethodResponse("approval.get", { approval: terminal }),
+        ),
+      );
+      await Promise.all(
+        surfaces.map(({ gateway }, index) =>
+          gateway.resolveDeferred("approval.resolve", {
+            applied: index === 0,
+            approval: terminal,
+          }),
+        ),
+      );
 
       await Promise.all([
         mobile.page.getByRole("heading", { name: "Approved here", exact: true }).waitFor(),
         desktop.page.getByRole("heading", { name: "Resolved elsewhere", exact: true }).waitFor(),
       ]);
-      await Promise.all([
-        expectNoDecisionButtons(mobile.page),
-        expectNoDecisionButtons(desktop.page),
-      ]);
+      await Promise.all(surfaces.map(({ page }) => expectNoDecisionButtons(page)));
       const terminalFocus = await mobile.page.evaluate(() => {
-        const active = document.activeElement as HTMLElement | null;
+        const active = document.activeElement;
         const bounds = active?.getBoundingClientRect();
         return {
-          bottom: bounds?.bottom ?? Number.POSITIVE_INFINITY,
           id: active?.id ?? null,
-          top: bounds?.top ?? Number.NEGATIVE_INFINITY,
-          viewportHeight: window.innerHeight,
+          inViewport: Boolean(bounds && bounds.top >= 0 && bounds.bottom <= window.innerHeight),
         };
       });
-      expect(terminalFocus.id).toBe("approval-page-title");
-      expect(terminalFocus.top).toBeGreaterThanOrEqual(0);
-      expect(terminalFocus.bottom).toBeLessThanOrEqual(terminalFocus.viewportHeight);
+      expect(terminalFocus).toEqual({ id: "approval-page-title", inViewport: true });
       expect(await mobile.page.title()).toBe("Approved here — OpenClaw");
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "02-competing-answer-terminal.png"),
-      });
-      await waitForStableApprovalPaint(desktop.page);
-      await desktop.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "02b-competing-answer-loser-desktop.png"),
-      });
+      await captureProof(mobile.page, "after-competing-answer-terminal.png");
+      await captureProof(desktop.page, "after-competing-answer-loser-desktop.png");
 
       const terminalReload = await mobile.page.reload();
       expect(terminalReload?.status()).toBe(200);
@@ -383,10 +344,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectStandaloneApprovalPage(mobile.page);
       await expectNoDecisionButtons(mobile.page);
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "03-terminal-reload-mobile.png"),
-      });
+      await captureProof(mobile.page, "after-terminal-reload-mobile.png");
 
       expect(mobile.pageErrors).toEqual([]);
       expect(desktop.pageErrors).toEqual([]);
@@ -395,15 +353,28 @@ describeControlUiE2e("Control UI standalone approval page", () => {
     }
   });
 
+  it("renders plugin identity as chips with a severity accent", async () => {
+    const pending = pendingPluginApproval("");
+    const surface = await createSurface({ pending, viewport: DESKTOP_VIEWPORT });
+
+    expect((await visitApproval(surface))?.status()).toBe(200);
+    await expectLoadedApproval(surface);
+    expect(
+      await surface.page.locator(".approval-page__heading > .approval-page__chips").count(),
+    ).toBe(1);
+    await expectIdentity(
+      surface.page,
+      "danger",
+      { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
+      [],
+    );
+    await captureProof(surface.page, "after-pending-plugin.png");
+    expect(surface.pageErrors).toEqual([]);
+  });
+
   it("preserves a mounted deep link across the authentication gate", async () => {
     const basePath = "/openclaw";
-    const pending = pendingApproval(basePath);
-    const surface = await createSurface({
-      basePath,
-      deferredMethods: ["connect"],
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
+    const surface = await createSurface({ basePath, deferredMethods: ["connect"] });
 
     const response = await surface.page.goto(approvalUrl(basePath));
     expect(response?.status()).toBe(200);
@@ -414,21 +385,46 @@ describeControlUiE2e("Control UI standalone approval page", () => {
 
     await surface.gateway.resolveDeferred("connect");
     await waitForApprovalPage(surface.page);
-    const request = await surface.gateway.waitForRequest("approval.get");
-    expect(request.params).toEqual({ id: APPROVAL_ID });
+    await expectLoadedApproval(surface);
     expect(new URL(surface.page.url()).pathname).toBe(approvalPath(basePath));
-    await expectStandaloneApprovalPage(surface.page);
     expect(surface.pageErrors).toEqual([]);
   });
 
+  it("confirms the owning Gateway before opening a remote approval notification", async () => {
+    const basePath = "";
+    const surface = await createSurface({ basePath, recordVideo: true });
+    const remoteGatewayUrl = "wss://remote-gateway.example/mobile";
+    const url = new URL(approvalUrl(basePath));
+    url.hash = new URLSearchParams({ gatewayUrl: remoteGatewayUrl }).toString();
+
+    try {
+      const response = await surface.page.goto(url.href);
+      expect(response?.status()).toBe(200);
+      const confirmation = surface.page.locator("openclaw-gateway-url-confirmation");
+      await confirmation.getByText(remoteGatewayUrl, { exact: true }).waitFor();
+      expect(await confirmation.getByText(remoteGatewayUrl, { exact: true }).count()).toBe(1);
+      expect(await surface.gateway.getRequests("approval.get")).toHaveLength(0);
+      await captureProof(surface.page, "after-remote-gateway-confirmation.png", true);
+      await pauseRecordedProof(surface.page);
+
+      await confirmation
+        .getByRole("button", { name: "Switch to remote-gateway.example", exact: true })
+        .click();
+      await waitForApprovalPage(surface.page);
+      await expectLoadedApproval(surface);
+      expect((await surface.gateway.getSocketUrls()).at(-1)).toBe(remoteGatewayUrl);
+      expect(new URL(surface.page.url()).hash).toBe("");
+      await captureProof(surface.page, "after-remote-gateway-approval.png");
+      await pauseRecordedProof(surface.page);
+      expect(surface.pageErrors).toEqual([]);
+    } finally {
+      await closeRecordedSurface(surface, "approval-page-remote-gateway-mobile.webm");
+    }
+  });
+
   it("uses the page Gateway without replacing a saved remote selection", async () => {
-    const pending = pendingApproval("");
-    const surface = await createSurface({
-      basePath: "",
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
-    const appUrl = new URL(server?.baseUrl ?? "http://127.0.0.1/");
+    const surface = await createSurface();
+    const appUrl = new URL(suite.server?.baseUrl ?? "http://127.0.0.1/");
     const pageGatewayScope = `ws://${appUrl.host}`;
     const selectionKey = `openclaw.control.currentGateway.v1:${pageGatewayScope}`;
     const pageGateway = pageGatewayScope;
@@ -441,33 +437,22 @@ describeControlUiE2e("Control UI standalone approval page", () => {
     const remoteGateway = "wss://saved-remote.example.test";
     const remoteSettingsKey = `openclaw.control.settings.v1:${remoteGateway}`;
     await surface.page.addInitScript(
-      ({
-        nextPageSettings,
-        nextPageSettingsKey,
-        nextRemoteGateway,
-        nextRemoteSettingsKey,
-        nextSelectionKey,
-      }) => {
-        localStorage.setItem(nextPageSettingsKey, nextPageSettings);
-        localStorage.setItem(
-          nextRemoteSettingsKey,
-          JSON.stringify({ gatewayUrl: nextRemoteGateway }),
-        );
-        localStorage.setItem(nextSelectionKey, nextRemoteGateway);
+      (entries: Array<[string, string]>) => {
+        for (const [key, value] of entries) {
+          localStorage.setItem(key, value);
+        }
       },
-      {
-        nextPageSettings: pageSettings,
-        nextPageSettingsKey: pageSettingsKey,
-        nextRemoteGateway: remoteGateway,
-        nextRemoteSettingsKey: remoteSettingsKey,
-        nextSelectionKey: selectionKey,
-      },
+      [
+        [pageSettingsKey, pageSettings],
+        [remoteSettingsKey, JSON.stringify({ gatewayUrl: remoteGateway })],
+        [selectionKey, remoteGateway],
+      ] satisfies Array<[string, string]>,
     );
 
-    await surface.page.goto(
+    await visitApproval(
+      surface,
       `${approvalUrl("")}#token=approval-document-token&session=agent%3Aapproval%3Atemporary`,
     );
-    await waitForApprovalPage(surface.page);
     const startupHash = new URLSearchParams(new URL(surface.page.url()).hash.slice(1));
     expect(startupHash.has("token")).toBe(false);
     expect(startupHash.get("session")).toBe("agent:approval:temporary");
@@ -485,17 +470,8 @@ describeControlUiE2e("Control UI standalone approval page", () => {
 
   it("renders changed Gateway content after reload instead of a hard-coded fixture", async () => {
     const pending = pendingApproval("");
-    if (pending.presentation.kind !== "exec") {
-      throw new Error("Expected an exec approval fixture");
-    }
-    const surface = await createSurface({
-      basePath: "",
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
-
-    await surface.page.goto(approvalUrl(""));
-    await waitForApprovalPage(surface.page);
+    const surface = await createSurface({ pending });
+    await visitApproval(surface);
     const changed = {
       ...pending,
       presentation: {
@@ -516,13 +492,8 @@ describeControlUiE2e("Control UI standalone approval page", () => {
   });
 
   it("fails closed on malformed Gateway data", async () => {
-    const surface = await createSurface({
-      basePath: "",
-      pending: pendingApproval(""),
-      viewport: MOBILE_VIEWPORT,
-    });
-    await surface.page.goto(approvalUrl(""));
-    await waitForApprovalPage(surface.page);
+    const surface = await createSurface();
+    await visitApproval(surface);
     await surface.gateway.setMethodResponse("approval.get", {
       approval: { id: APPROVAL_ID, status: "pending" },
     });
@@ -535,14 +506,8 @@ describeControlUiE2e("Control UI standalone approval page", () => {
   });
 
   it("retains context but disables decisions through a reconnect", async () => {
-    const pending = pendingApproval("");
-    const surface = await createSurface({
-      basePath: "",
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
-    await surface.page.goto(approvalUrl(""));
-    await waitForApprovalPage(surface.page);
+    const surface = await createSurface();
+    await visitApproval(surface);
     const initialConnectCount = (await surface.gateway.getRequests("connect")).length;
     await surface.gateway.deferNext("connect");
 
@@ -570,5 +535,33 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       .poll(() => surface.page.getByRole("button", { name: "Allow once" }).isEnabled())
       .toBe(true);
     expect(surface.pageErrors).toEqual([]);
+  });
+  it("keeps the approval document and final actions inside app-owned safe areas", async () => {
+    const surface = await createSurface({ viewport: { width: 375, height: 500 } });
+    try {
+      await visitApproval(surface);
+      const bounds = await surface.page.evaluate(() => {
+        const root = document.documentElement;
+        root.style.setProperty("--safe-area-top", "34px");
+        root.style.setProperty("--safe-area-right", "20px");
+        root.style.setProperty("--safe-area-bottom", "21px");
+        root.style.setProperty("--safe-area-left", "18px");
+        const page = document.querySelector(".approval-page")!.getBoundingClientRect();
+        return { top: page.top, bottom: page.bottom, left: page.left, right: page.right };
+      });
+      expect(bounds).toEqual({ top: 34, bottom: 479, left: 18, right: 355 });
+      const allow = surface.page.getByRole("button", { name: "Allow once", exact: true });
+      await allow.scrollIntoViewIfNeeded();
+      const action = await allow.boundingBox();
+      expect(action!.y).toBeGreaterThanOrEqual(34);
+      expect(action!.y + action!.height).toBeLessThanOrEqual(479);
+      const back = surface.page.locator(".approval-page__back-link");
+      await back.scrollIntoViewIfNeeded();
+      const link = await back.boundingBox();
+      expect(link!.y + link!.height).toBeLessThanOrEqual(479);
+      expect(surface.pageErrors).toEqual([]);
+    } finally {
+      await closeRecordedSurface(surface, "approval-safe-area.webm");
+    }
   });
 });

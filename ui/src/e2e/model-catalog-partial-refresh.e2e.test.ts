@@ -1,0 +1,291 @@
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
+import type { ModelCatalogResult } from "../api/types.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({ name: "Partial provider refresh controls" });
+const levels = ["off", "low", "medium", "high", "xhigh", "max", "ultra"].map((id) => ({
+  id,
+  label: id,
+}));
+const catalog: ModelCatalogResult = {
+  models: [
+    {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      provider: "openai",
+      available: true,
+      reasoning: true,
+      supportsFastMode: true,
+      thinkingLevels: levels,
+      thinkingDefault: "high",
+    },
+    {
+      id: "unavailable-model",
+      name: "Unavailable Copilot model",
+      provider: "github-copilot",
+      available: false,
+      unavailableReason: "missing-auth",
+      thinkingLevels: [],
+    },
+  ],
+  refreshFailed: true,
+  providerOutcomes: [
+    { provider: "openai", status: "ready" },
+    { provider: "github-copilot", status: "unavailable" },
+  ],
+};
+
+function modelIdentity(model = catalog.models[0]!) {
+  return { model: model.id, modelProvider: model.provider, thinkingLevels: model.thinkingLevels };
+}
+function modelFields(model = catalog.models[0]!, thinkingDefault = "high") {
+  return { ...modelIdentity(model), thinkingDefault };
+}
+
+function sessionList(defaults: Record<string, unknown>, row: Record<string, unknown> = {}) {
+  return {
+    ts: 1,
+    path: "",
+    count: 1,
+    defaults,
+    sessions: [{ key: "agent:main:main", kind: "direct", ...defaults, ...row }],
+  };
+}
+
+async function expectUnreserved(picker: Locator) {
+  expect(await picker.getAttribute("aria-hidden")).toBe("false");
+  expect(await picker.getAttribute("class")).not.toContain(
+    "chat-controls__effort-picker--reserved",
+  );
+}
+
+function readEffort(page: Page) {
+  return page
+    .locator(".agent-chat__input")
+    .first()
+    .evaluate((composer) => {
+      const effort = composer.querySelector<HTMLElement>("[data-chat-thinking-select]");
+      return effort
+        ? {
+            disabled: effort.getAttribute("aria-disabled"),
+            reserved: effort.closest("details")?.getAttribute("aria-hidden"),
+          }
+        : null;
+    });
+}
+
+suite.define(() => {
+  it("keeps configured effort selectable from a usable snapshot when model refresh fails", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const thinkingLevels = [
+        { id: "low", label: "Low" },
+        { id: "xhigh", label: "Extra high" },
+      ];
+      const model = {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+        available: true,
+        reasoning: true,
+        thinkingLevels,
+      };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.6-sol",
+        models: [model],
+        methodResponses: {
+          "models.list": {
+            sequence: [
+              { models: [model] },
+              {
+                __mockError: {
+                  code: "UNAVAILABLE",
+                  message: "Model catalog refresh unavailable",
+                },
+              },
+            ],
+          },
+          "sessions.list": sessionList(modelFields(model, "low"), {
+            thinkingLevel: "xhigh",
+            updatedAt: 1,
+          }),
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      const effortPicker = composer.locator(".chat-controls__effort-picker");
+      const effort = composer.locator('[data-chat-thinking-select="true"]');
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+      await expectUnreserved(effortPicker);
+
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("Some models could not be refreshed");
+      await page.keyboard.press("Escape");
+      const retryAfter = await gateway.deferNext("models.list");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      await gateway.waitForRequest("models.list", { after: retryAfter });
+      await composer.locator("[data-chat-model-refresh]").waitFor({ state: "visible" });
+      expect(await effort.isVisible()).toBe(true);
+      await expectUnreserved(effortPicker);
+      await effort.click();
+      const slider = composer.locator("[data-chat-thinking-slider]");
+      await slider.waitFor({ state: "visible" });
+      expect(await slider.isEnabled()).toBe(true);
+      await page.keyboard.press("Escape");
+      await gateway.resolveDeferred("models.list");
+      await expect
+        .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
+        .toContain("Some models could not be refreshed");
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("xhigh");
+      await expectUnreserved(effortPicker);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    });
+  });
+
+  it.each(["new", "chat"])(
+    "keeps effort, speed and the model picker usable in %s",
+    async (route) => {
+      await suite.withPage(
+        { locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const sessionId = "partial-catalog-session";
+          const gateway = await installMockGateway(page, {
+            agentModel: partialConfig.agents.defaults.model,
+            models: catalog.models,
+            sessionInfo: { sessionId, ...modelFields() },
+            methodResponses: {
+              "models.list": catalog,
+              "sessions.list": sessionList(modelFields(), { sessionId }),
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}${route}`);
+          const composer = page.locator(".agent-chat__input").first();
+          const model = composer.locator("[data-chat-model-select]");
+          await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+          await model.click();
+          const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
+          await revealChatModelOption(composer, "openai/gpt-5.4");
+          await expect.poll(() => available.isVisible()).toBe(true);
+          expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+          await model.click();
+          const effort = composer.locator("[data-chat-thinking-select]");
+          await expect.poll(() => effort.isVisible()).toBe(true);
+          await effort.click();
+          const slider = composer.locator("[data-chat-thinking-slider]");
+          await slider.waitFor({ state: "visible" });
+          await expect.poll(() => slider.isVisible()).toBe(true);
+          const sliderBounds = await slider.boundingBox();
+          expect(sliderBounds).not.toBeNull();
+          await slider.click({
+            position: { x: sliderBounds!.width - 2, y: sliderBounds!.height / 2 },
+          });
+          await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
+          if (route === "chat") {
+            expect((await gateway.waitForRequest("sessions.patch")).params).toEqual({
+              key: "agent:main:main",
+              expectedSessionId: sessionId,
+              thinkingLevel: "ultra",
+            });
+          }
+          const speed = composer.getByRole("radio", { name: "Fast", exact: true });
+          await expect.poll(() => speed.isEnabled()).toBe(true);
+          await speed.click();
+          if (route === "chat") {
+            await expect
+              .poll(async () =>
+                (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
+              )
+              .toContainEqual({
+                key: "agent:main:main",
+                expectedSessionId: sessionId,
+                fastMode: true,
+              });
+          }
+          await page.keyboard.press("Escape");
+          await model.click();
+          expect(await composer.locator('[data-chat-model-catalog-state="error"]').count()).toBe(0);
+          for (const refreshFailed of [false, true, false]) {
+            await gateway.setMethodResponse("models.list", {
+              ...catalog,
+              refreshFailed,
+              providerOutcomes: [
+                { provider: "openai", status: "ready" },
+                { provider: "github-copilot", status: refreshFailed ? "unavailable" : "ready" },
+              ],
+            });
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+            const notice = composer.locator("[data-chat-model-catalog-state]");
+            await expect.poll(() => notice.count()).toBe(0);
+            await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
+            expect(await effort.getAttribute("data-chat-fast-mode")).toBe("true");
+            expect(await model.textContent()).toContain("GPT-5.4");
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["empty", "rejected", "selected unavailable", "non-reasoning"])(
+    "does not expose usable effort for %s",
+    async (condition) => {
+      await suite.withPage({ locale: "en-US" }, async ({ page }) => {
+        const selected = {
+          ...catalog.models[0]!,
+          available: condition !== "selected unavailable",
+          supportsFastMode: condition !== "non-reasoning",
+          reasoning: condition !== "non-reasoning",
+          thinkingLevels: condition === "non-reasoning" ? [] : levels,
+        };
+        const models =
+          condition === "empty"
+            ? []
+            : [selected, { id: "other", name: "Other", provider: "example", available: true }];
+        const failure = { __mockError: { code: "UNAVAILABLE", message: "Catalog request failed" } };
+        const gateway = await installMockGateway(page, {
+          agentModel: partialConfig.agents.defaults.model,
+          models,
+          sessionInfo: modelIdentity(selected),
+          methodResponses: {
+            "models.list": condition === "rejected" ? failure : { ...catalog, models },
+            "sessions.list": sessionList(
+              modelFields(selected, condition === "non-reasoning" ? "off" : "high"),
+            ),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const model = page.locator("[data-chat-model-select]");
+        await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await model.click();
+        const notice = page.locator("[data-chat-model-catalog-state]");
+        if (["empty", "rejected"].includes(condition)) {
+          await expect.poll(() => notice.isVisible()).toBe(true);
+        } else {
+          expect(await notice.count()).toBe(0);
+        }
+        await expect
+          .poll(async () => {
+            const effort = await readEffort(page);
+            return !effort || effort.reserved === "true" || effort.disabled === "true";
+          })
+          .toBe(true);
+        await model.click();
+        await expect
+          .poll(async () => {
+            const effort = await readEffort(page);
+            return !effort || effort.disabled === "true";
+          })
+          .toBe(true);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      });
+    },
+  );
+});

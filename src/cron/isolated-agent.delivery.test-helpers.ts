@@ -1,21 +1,18 @@
 // Isolated agent delivery test helpers build delivery targets and mocks.
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob } from "./isolated-agent.test-harness.js";
 
 /** Creates mocked CLI delivery deps for isolated-agent delivery tests. */
 export function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
-    sendMessageSlack: vi.fn().mockResolvedValue({ messageTs: "slack-1", channel: "C1" }),
-    sendMessageWhatsApp: vi
-      .fn()
-      .mockResolvedValue({ messageId: "wa-1", toJid: "123@s.whatsapp.net" }),
-    sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "123" }),
-    sendMessageDiscord: vi.fn().mockResolvedValue({ messageId: "discord-1", channelId: "123" }),
-    sendMessageSignal: vi.fn().mockResolvedValue({ messageId: "signal-1", conversationId: "123" }),
-    sendMessageIMessage: vi.fn().mockResolvedValue({ messageId: "imessage-1", chatId: "123" }),
+    slack: vi.fn().mockResolvedValue({ messageTs: "slack-1", channel: "C1" }),
+    whatsapp: vi.fn().mockResolvedValue({ messageId: "wa-1", toJid: "123@s.whatsapp.net" }),
+    telegram: vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "123" }),
+    discord: vi.fn().mockResolvedValue({ messageId: "discord-1", channelId: "123" }),
+    signal: vi.fn().mockResolvedValue({ messageId: "signal-1", conversationId: "123" }),
+    imessage: vi.fn().mockResolvedValue({ messageId: "imessage-1", chatId: "123" }),
     ...overrides,
   };
 }
@@ -24,52 +21,20 @@ export function mockAgentPayloads(
   payloads: Array<Record<string, unknown>>,
   extra: Partial<Awaited<ReturnType<typeof runEmbeddedAgent>>> = {},
 ): void {
+  const last = payloads.at(-1);
+  const prepared = prepareAgentRunTerminalReply({
+    rawText: typeof last?.text === "string" ? last.text : undefined,
+  });
   vi.mocked(runEmbeddedAgent).mockResolvedValue({
-    payloads,
+    payloads: payloads.map((payload) =>
+      payload === last ? { ...payload, text: prepared.text || undefined } : payload,
+    ),
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      terminalReply: prepared.terminalReply,
+      finalAssistantVisibleText: prepared.text || undefined,
     },
     ...extra,
-  });
-}
-
-export function expectDirectTelegramDelivery(
-  deps: CliDeps,
-  params: { chatId: string; text: string; messageThreadId?: number },
-) {
-  expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-  expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-    params.chatId,
-    params.text,
-    expect.objectContaining(
-      params.messageThreadId === undefined ? {} : { messageThreadId: params.messageThreadId },
-    ),
-  );
-}
-
-export async function runTelegramAnnounceTurn(params: {
-  home: string;
-  storePath: string;
-  deps: CliDeps;
-  delivery: {
-    mode: "announce";
-    channel: string;
-    to?: string;
-    bestEffort?: boolean;
-  };
-}): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
-  return runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home, params.storePath, {
-      channels: { telegram: { botToken: "t-1" } },
-    }),
-    deps: params.deps,
-    job: {
-      ...makeJob({ kind: "agentTurn", message: "do it" }),
-      delivery: params.delivery,
-    },
-    message: "do it",
-    sessionKey: "cron:job-1",
-    lane: "cron",
   });
 }

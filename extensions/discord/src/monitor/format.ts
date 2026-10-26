@@ -1,21 +1,4 @@
-// Discord helper module supports format behavior.
-import type { Guild, User } from "../internal/discord.js";
-
-export function resolveDiscordSystemLocation(params: {
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  guild?: Guild;
-  channelName: string;
-}) {
-  const { isDirectMessage, isGroupDm, guild, channelName } = params;
-  if (isDirectMessage) {
-    return "DM";
-  }
-  if (isGroupDm) {
-    return `Group DM #${channelName}`;
-  }
-  return guild?.name ? `${guild.name} #${channelName}` : `#${channelName}`;
-}
+import type { User } from "../internal/discord.js";
 
 export function formatDiscordReactionEmoji(emoji: { id?: string | null; name?: string | null }) {
   if (emoji.id && emoji.name) {
@@ -35,12 +18,4 @@ export function formatDiscordUserTag(user: User) {
     return `${user.username}#${discriminator}`;
   }
   return user.username ?? user.id;
-}
-
-export function resolveTimestampMs(timestamp?: string | null) {
-  if (!timestamp) {
-    return undefined;
-  }
-  const parsed = Date.parse(timestamp);
-  return Number.isNaN(parsed) ? undefined : parsed;
 }

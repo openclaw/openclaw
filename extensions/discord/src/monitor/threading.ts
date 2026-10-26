@@ -1,10 +1,8 @@
-// Discord plugin module implements threading behavior.
 export {
   maybeCreateDiscordAutoThread,
   resolveDiscordAutoThreadContext,
   resolveDiscordAutoThreadReplyPlan,
 } from "./threading.auto-thread.js";
-export { resetDiscordThreadStarterCacheForTest } from "./threading.cache.js";
 export {
   resolveDiscordReplyDeliveryPlan,
   resolveDiscordReplyTarget,

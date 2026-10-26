@@ -1,402 +1,574 @@
-// Dockable operator terminal panel for the Control UI shell.
-//
-// Renders a VS Code-style shell dock (bottom by default, or right) with session
-// tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
-// session. The browser runtime is dynamically imported on first open so it
-// never weighs down the initial Control UI bundle.
-import { initialState, Task, TaskStatus } from "@lit/task";
-import { html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
-import { t } from "../../i18n/index.ts";
-import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
-import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
-import { panelTabStripStyles } from "../panel-tab-strip.ts";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
+import type { ApplicationContext } from "../../app/context.ts";
+import { terminalFontFamily } from "../../app/terminal-font.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { renderSolidSnapshot } from "../../lib/reactive/detached-root.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { showConfirmDialog } from "../confirm-dialog.ts";
+import { createDockLayout } from "../dock-layout.ts";
+import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
+import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
+import { createPanelPresentationLifecycle } from "../panel-presentation-lifecycle.ts";
 import {
-  isTerminalPanelShortcut,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
+import { updateTerminalFont } from "./terminal-fonts.ts";
+import { createTerminalPanelSessions } from "./terminal-panel-session-controller.ts";
 import {
-  renderTerminalPanelHeader,
-  renderTerminalPanelToolbar,
-  renderTerminalPanelViewport,
-} from "./terminal-panel-chrome.ts";
-import { TerminalPanelSessionController } from "./terminal-panel-session-controller.ts";
-import {
-  fitActiveTerminalSession,
-  fitAllTerminalSessions,
-  prepareTerminalSessionHostVisibility,
   reattachTerminalSessionHosts,
   updateTerminalSessionTheme,
 } from "./terminal-panel-session-rendering.ts";
-import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
-import { terminalPanelStyles } from "./terminal-panel-styles.ts";
-import { terminalPanelUploadStyles } from "./terminal-panel-upload-styles.ts";
-import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
-import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
-import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
+import type { TerminalInputs, TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
+import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
+import { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 
-type TerminalDock = Exclude<DockPanelSide, "left">;
+registerTerminalEnglish();
 
-const panelLayout = createDockPanelLayout({
-  storageKey: "openclaw.terminal.panel.v1",
-  minHeight: 140,
-  minWidth: 320,
-  defaultDock: "bottom",
-  supportedDocks: ["bottom", "right"],
-  defaultHeight: 320,
-  defaultWidth: 520,
-});
-const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
+// Clone the SVG itself: insertion consumes a fragment and loses its replacement boundary.
+const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon).firstElementChild!;
 
-/** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
-export class OpenClawTerminalPanel extends OpenClawLitElement {
-  /** Gateway client used for terminal.* RPCs; null until connected. */
-  @property({ attribute: false }) client: TerminalGatewayClient | null = null;
-  /** Agent whose workspace and sandbox policy own newly opened sessions. */
-  @property({ attribute: false }) agentId: string | null = null;
-  /** Whether the connected gateway advertises the terminal surface. */
-  @property({ type: Boolean }) available = false;
-  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
-  @property({ type: Boolean }) suppressed = false;
-  /** Active Control UI color mode, mirrored into the terminal theme. */
-  @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
-  /**
-   * Terminal-only document mode (`?view=terminal`), used by the mobile apps'
-   * WebViews: fills the viewport, always open while available, no dock chrome.
-   */
-  @property({ type: Boolean }) fullscreen = false;
+type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
-  @state() terminalPanelErrorText: string | null = null;
-  @state() private sessionPickerOpen = false;
-  @state() private pickerSessions: TerminalSessionInfo[] = [];
+export type TerminalPanelOwner = ReturnType<typeof createTerminalPanel>;
+export type TerminalPanelMethods = Pick<
+  TerminalPanelOwner,
+  | "activateTerminalHost"
+  | "toggle"
+  | "closeTerminalPanel"
+  | "hideTerminalPanelForUnavailableSurface"
+  | "restoreTerminalPanelOpenState"
+  | "resetTerminalSessionPicker"
+  | "findTerminalPanelViewport"
+  | "selectHostedTab"
+  | "closeHostedTab"
+  | "handleToggleRequest"
+>;
+export type OpenClawTerminalPanel = HTMLElement &
+  TerminalInputs &
+  TerminalPanelMethods &
+  Pick<
+    TerminalPanelOwner,
+    "hostedTabs" | "activeHostedTabId" | "hostedActions" | "terminalPanelOpen" | "updateComplete"
+  >;
 
-  private readonly sessionPickerTask = new Task(this, {
-    autoRun: false,
-    // The controller reads the host client; carrying its identity retires stale picker loads.
-    args: () => [this.available ? this.client : null] as const,
-    task: ([client]) => (client ? this.terminalSessions.listSessions() : initialState),
-    onComplete: (sessions) => {
-      if (sessions !== null) {
-        this.pickerSessions = sessions;
-      }
-    },
+/** Owns synchronous PTY/dock authority; Solid reads its publication projection. */
+export function createTerminalPanel(
+  element: HTMLElement & TerminalInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
+  let context: ApplicationContext | undefined;
+  let changes = new Set<keyof TerminalInputs>();
+  let fileInput: HTMLInputElement | undefined;
+  let viewport: HTMLDivElement | undefined;
+  let sessionPicker: ReturnType<typeof createTerminalSessionPicker> | undefined;
+  let terminalPanelUploadController: TerminalPanelUpload;
+  function draftFor(tab: TerminalPanelSessionTab) {
+    return (tab.stagedInput ??= { text: "", attachments: [] });
+  }
+  const lifecycle = createPanelPresentationLifecycle(scheduleAfterRender, () => {
+    const changed = changes;
+    changes = new Set();
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of terminalSessions.state.tabs) {
+      tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
+    }
+    updated(changed);
   });
-  readonly terminalPanelUploadController = new TerminalPanelUploadController({
-    activeTab: () =>
-      this.terminalSessions.tabs.find(
-        (tab) =>
-          tab.id === this.terminalSessions.activeId &&
-          tab.status === "live" &&
-          tab.gatewaySessionId,
-      ),
-    client: () => this.client,
-    isCurrent: (tab) =>
-      this.terminalSessions.tabs.includes(tab as TerminalPanelSessionTab) && tab.status === "live",
-    fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
-    setError: (message) => (this.terminalPanelErrorText = message),
-    requestUpdate: () => this.requestUpdate(),
-  });
-  createTerminalController = createIsolatedGhosttyTerminal;
-  catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
-  private readonly terminalSessions = new TerminalPanelSessionController(this);
-  private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
-    reservationPrefix: "terminal",
-    isAvailable: () => this.available,
-    isFullscreen: () => this.fullscreen,
-    onResize: () =>
-      fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId),
-  });
-  private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  private readonly onDocumentPointerDown = (event: PointerEvent) =>
-    this.handleDocumentPointerDown(event);
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.terminalSessions.connectHost();
-    // A settings takeover can already own the viewport when the panel mounts.
-    // Suppress before the restored open state boots a session nobody can see.
-    this.dockLayout.setSuppressed(this.suppressed);
-    if (!this.fullscreen) {
-      window.addEventListener("keydown", this.onGlobalKeyDown);
-      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    }
-    document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
-    if (this.dockLayout.open) {
-      void this.terminalSessions.restoreSessions();
-    }
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    window.removeEventListener("keydown", this.onGlobalKeyDown);
-    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
-    this.terminalSessions.disconnectHost();
-  }
-
-  override updated(changed: Map<string, unknown>): void {
-    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
-      // Restoring after a takeover: a reconnect during settings disposed the tabs
-      // without restoring them, so re-run the normal open path.
-      void this.terminalSessions.restoreSessions();
-    }
-    if (changed.has("client") || changed.has("available")) {
-      this.terminalSessions.scheduleLifecycleSync();
-    }
-    if (changed.has("themeMode")) {
-      updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode);
-    }
-    if (this.dockLayout.open) {
-      reattachTerminalSessionHosts(
-        this.terminalSessions.tabs,
-        this.terminalSessions.activeId,
-        this.findTerminalPanelViewport(),
-      );
-    }
-    this.dockLayout.syncReservation();
-  }
-
-  /** Opens the panel if closed, closes it if open. */
-  toggle(): void {
-    if (!this.available) {
-      return;
-    }
-    if (this.dockLayout.open) {
-      this.closeTerminalPanel();
-    } else {
-      this.dockLayout.setOpen(true);
-      void this.terminalSessions.restoreSessions();
-    }
-  }
-
-  handleToggleRequest(event: Event): void {
+  const publish = lifecycle.publish;
+  let hostedActionsContent: HTMLElement | undefined;
+  const handleToggleRequest = (event: Event): void => {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as TerminalPanelToggleDetail)
+        ? (event.detail as TerminalPanelToggleDetail) // SAFETY: shared panel event; consumed fields are validated below.
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (detail?.agentId !== undefined) {
+      element.agentId = detail.agentId;
+    }
     if (dock) {
-      this.dockLayout.setDock(dock, false);
+      dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
-      this.closeTerminalPanel();
+      owner.closeTerminalPanel();
       return;
     }
-    if (detail?.terminalSessionId || detail?.catalog || detail?.open === true) {
-      if (!this.available) {
+    if (detail?.terminalSessionId || detail?.open === true || detail?.newSession === true) {
+      if (!element.available) {
         return;
       }
-      this.dockLayout.setOpen(true);
-      void (detail.terminalSessionId
-        ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
-        : detail.catalog
-          ? this.terminalSessions.openCatalogSession(detail.catalog)
-          : this.terminalSessions.restoreSessions());
+      dockLayout.setOpen(true);
+      if (detail.terminalSessionId || detail.newSession) {
+        sessionPicker?.onDismiss(false);
+      }
+      owner.activateTerminalHost();
+      void (detail.newSession === true
+        ? terminalSessions.openSession()
+        : detail.terminalSessionId
+          ? terminalSessions.attachSessionById(detail.terminalSessionId, true)
+          : terminalSessions.restoreSessions());
       return;
     }
-    this.toggle();
+    owner.toggle();
+  };
+
+  function readSessionBottomOnly(): boolean {
+    return !element.embedded && element.sessionKey !== null;
   }
 
-  closeTerminalPanel(): void {
-    this.closeSessionPicker(false);
-    this.dockLayout.setOpen(false);
-  }
-
-  get terminalPanelOpen(): boolean {
-    return this.dockLayout.open;
-  }
-
-  hideTerminalPanelForUnavailableSurface(): void {
-    // The surface disappeared (gateway disconnect/disable). Hide the panel
-    // WITHOUT persisting: a disconnect must not overwrite the user's open
-    // preference, or the reconnect path would never auto-reopen. Server
-    // sessions survive for the detach grace period and reattach afterwards.
-    this.dockLayout.hideWithoutPersisting();
-  }
-
-  restoreTerminalPanelOpenState(): boolean {
-    return this.dockLayout.restoreOpenState();
-  }
-
-  clearTerminalPanelResizeListeners(): void {
-    this.dockLayout.clearResizeListeners();
-  }
-
-  private handleGlobalKey(event: KeyboardEvent): void {
-    // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (isTerminalPanelShortcut(event)) {
-      event.preventDefault();
-      this.toggle();
+  function updated(changed: ReadonlySet<keyof TerminalInputs>): void {
+    if (changed.has("mobile") && element.mobile) {
+      sessionPicker?.onDismiss(false);
     }
+    if (changed.has("suppressed") && dockLayout.setSuppressed(element.suppressed)) {
+      // Restoring after a takeover: a reconnect during settings disposed the tabs
+      // without restoring them, so re-run the normal open path.
+      void terminalSessions.restoreSessions();
+    }
+    terminalSessions.scheduleLifecycleSync();
+    sessionPicker?.syncPresentation();
+    if (changed.has("gatewayConnected") && element.gatewayConnected && sessionPicker?.open()) {
+      sessionPicker.onRefresh();
+    }
+    for (const tab of terminalSessions.state.tabs) {
+      updateTerminalFont(tab.controller, owner.terminalFontFamily);
+    }
+    if (changed.has("themeMode")) {
+      updateTerminalSessionTheme(terminalSessions.state.tabs, element.themeMode);
+    }
+    if (changed.has("embedded") && element.embedded) {
+      void terminalSessions.restoreSessions();
+    }
+    if (element.embedded || dockLayout.open) {
+      reattachTerminalSessionHosts(
+        terminalSessions.state.tabs,
+        terminalSessions.state.activeId,
+        owner.findTerminalPanelViewport(),
+      );
+    }
+    dockLayout.syncReservation();
+    notifyPanelHostedTabsChanged(element, [
+      element.embedded && element.tabsInHeader,
+      terminalSessions.state.activeId,
+      owner.hostedTabs.map(({ id, label, statusLabel, badge, className, closeDisabled }) => [
+        id,
+        label,
+        statusLabel,
+        badge,
+        className,
+        closeDisabled,
+      ]),
+      terminalSessions.state.booting,
+      terminalSessions.canHandoffSessions,
+    ]);
   }
 
-  private toggleSessionPicker(): void {
-    if (this.sessionPickerOpen) {
-      this.closeSessionPicker(true);
+  function isDockLayoutAvailable(): boolean {
+    return element.available && (!readSessionBottomOnly() || dockLayout.dock === "bottom");
+  }
+
+  function setDock(dock: TerminalDock): void {
+    // Moving between the global bottom dock and a chat's side panel changes
+    // presentation owners, not just geometry. The active pane owns the return.
+    const returnToSession = readSessionBottomOnly() && dock === "right";
+    if ((element.embedded && dock === "bottom") || returnToSession) {
+      if (!terminalSessions.handoffSessions()) {
+        return;
+      }
+      if (returnToSession) {
+        dockLayout.setOpen(false);
+      }
+      window.dispatchEvent(
+        new CustomEvent<TerminalPanelToggleDetail>(
+          returnToSession ? TERMINAL_PANEL_TOGGLE_EVENT : TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
+          { detail: { agentId: element.agentId, dock, open: true } },
+        ),
+      );
       return;
     }
-    this.sessionPickerOpen = true;
-    void this.refreshSessionPicker();
-    void this.updateComplete.then(() => {
-      if (this.sessionPickerOpen) {
-        this.renderRoot.querySelector<HTMLButtonElement>(".tp-session-refresh")?.focus();
+    dockLayout.setDock(dock);
+    void lifecycle.updateComplete.then(() => {
+      for (const tab of terminalSessions.state.tabs) {
+        tab.controller.fit();
       }
     });
   }
 
-  private closeSessionPicker(restoreFocus: boolean): void {
-    if (!this.sessionPickerOpen) {
-      return;
+  function openFullscreen(): void {
+    const focusPath = buildControlUiFocusPath({ kind: "terminal" }, element.basePath);
+    if (focusPath) {
+      openExternalUrlSafe(focusPath);
     }
-    this.sessionPickerOpen = false;
-    if (restoreFocus) {
-      void this.updateComplete.then(() => {
-        this.renderRoot
-          .querySelector<HTMLButtonElement>('[aria-controls="terminal-session-picker-dialog"]')
-          ?.focus();
+  }
+
+  function bindPresentation() {
+    terminalPanelUploadController = createTerminalPanelUpload({
+      activeTab: () =>
+        terminalSessions.state.tabs.find(
+          (tab) =>
+            tab.id === terminalSessions.state.activeId &&
+            tab.status === "live" &&
+            tab.gatewaySessionId,
+        ),
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
+      config: () => context?.config,
+      isCurrent: (tab) =>
+        terminalSessions.state.tabs.some((entry) => entry === tab) && tab.status === "live",
+      fileInput: () => (fileInput && element.contains(fileInput) ? fileInput : null),
+      setError: (message) => terminalSessions.setError(message),
+      stagePaths: (uploadedTab, paths, files) => {
+        if (!element.embedded) {
+          return false;
+        }
+        const tab = terminalSessions.state.tabs.find(
+          (entry) => entry.controller === uploadedTab.controller,
+        );
+        if (!tab) {
+          return false;
+        }
+        const draft = draftFor(tab);
+        if (element.mobile) {
+          draft.text = [draft.text, ...paths].filter(Boolean).join(" ");
+        } else {
+          draft.attachments = [
+            ...draft.attachments,
+            ...paths.map((path, index) => ({ path, name: files[index]!.name })),
+          ];
+        }
+        publish();
+        return true;
+      },
+    });
+    sessionPicker = createTerminalSessionPicker({
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
+      available: () => element.available,
+      hosted: () => element.embedded,
+      initialOpen: () =>
+        element.embedded && !element.mobile && !(element.page && element.routeTarget),
+      connected: () => element.gatewayConnected,
+      standalone: () => !element.embedded && !element.mobile && !element.fullscreen,
+      presented: () => owner.terminalPanelOpen,
+      tabCount: () => terminalSessions.state.tabs.length,
+      currentSessionIds: () =>
+        new Set(terminalSessions.state.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean)),
+      list: (options) => terminalSessions.listSessions(options),
+      showError: (error) => terminalSessions.setError(formatUiError(error)),
+      attach: (id, agentOwned) => terminalSessions.attachSessionById(id, agentOwned),
+    });
+  }
+  const dockLayout = createDockLayout({
+    notify: publish,
+    layout: terminalPanelLayout,
+    reservationPrefix: "terminal",
+    isAvailable: isDockLayoutAvailable,
+    isFullscreen: () => element.fullscreen,
+    isEmbedded: () => element.embedded,
+    onResize: () =>
+      terminalSessions.state.tabs
+        .find((tab) => tab.id === terminalSessions.state.activeId)
+        ?.controller.fit(),
+  });
+
+  const owner = {
+    inputs: element,
+    get isConnected() {
+      return lifecycle.active() && element.isConnected;
+    },
+    get updateComplete() {
+      return lifecycle.updateComplete;
+    },
+    publish,
+    bindPresentation,
+    subscribe: lifecycle.subscribe,
+    inputsChanged(name: keyof TerminalInputs) {
+      changes.add(name);
+      publish();
+    },
+    attach(application: ApplicationContext | undefined) {
+      context = application;
+      lifecycle.connect();
+      terminalPanelUploadController.syncPolicy();
+      dockLayout.connect();
+      terminalSessions.connectHost();
+      dockLayout.setSuppressed(element.suppressed);
+      const observer = new MutationObserver(() =>
+        updateTerminalSessionTheme(terminalSessions.state.tabs, element.themeMode),
+      );
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "data-theme-mode", "style"],
       });
-    }
-  }
-
-  private handleDocumentPointerDown(event: PointerEvent): void {
-    if (!this.sessionPickerOpen) {
-      return;
-    }
-    const picker = this.renderRoot.querySelector(".tp-session-picker");
-    // Document capture sees retargeted shadow-DOM events. The composed path
-    // preserves the picker wrapper so its trigger and actions stay clickable.
-    const path = event.composedPath();
-    if (picker && !path.includes(picker)) {
-      this.closeSessionPicker(false);
-    }
-  }
-
-  private handleSessionPickerFocusOut(event: FocusEvent): void {
-    const picker = event.currentTarget;
-    const next = event.relatedTarget;
-    if (picker instanceof HTMLElement && next instanceof Node && picker.contains(next)) {
-      return;
-    }
-    queueMicrotask(() => {
-      if (
-        picker instanceof HTMLElement &&
-        !picker.contains(this.shadowRoot?.activeElement ?? null) &&
-        this.sessionPickerOpen
-      ) {
-        this.closeSessionPicker(false);
+      const discoverDockSessions = () => {
+        if (
+          owner.terminalPanelOpen &&
+          !element.embedded &&
+          !element.fullscreen &&
+          !element.mobile &&
+          !element.suppressed &&
+          element.ownerDocument.visibilityState !== "hidden"
+        ) {
+          sessionPicker?.onDiscover();
+        }
+      };
+      const stops = [
+        // The transport has no catalog-change event. Re-entering the dock or
+        // returning to the page discovers sessions created by other clients
+        // without polling or keeping the one-session picker visible.
+        listen(element, "pointerenter", discoverDockSessions),
+        listen(element, "focusin", (event) => {
+          if (!(event.relatedTarget instanceof Node) || !element.contains(event.relatedTarget)) {
+            discoverDockSessions();
+          }
+        }),
+        listen(window, "focus", discoverDockSessions),
+        listen(element.ownerDocument, "visibilitychange", discoverDockSessions),
+        listen(window, TERMINAL_PANEL_TOGGLE_EVENT, (event) => {
+          if (!element.fullscreen && !element.embedded && !readSessionBottomOnly()) {
+            handleToggleRequest(event);
+          }
+        }),
+        listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, (event) => {
+          if (!element.fullscreen && !element.embedded) {
+            handleToggleRequest(event);
+          }
+        }),
+        // Hosted tab labels are published to the external header after the panel commits.
+        i18n.subscribe(publish),
+        // Configuration receipts retire disallowed uploads before their next operation.
+        context?.config.subscribe(() => {
+          terminalPanelUploadController.syncPolicy();
+          publish();
+        }),
+        // The commit applies font changes to imperative Ghostty controllers.
+        context?.theme.subscribe(publish),
+      ];
+      if (element.embedded || dockLayout.open) {
+        void terminalSessions.restoreSessions().then(() => {
+          if (owner.isConnected && sessionPicker?.open()) {
+            sessionPicker.onRefresh({ preserveError: true });
+          }
+        });
       }
-    });
-  }
-
-  private refreshSessionPicker(): Promise<void> {
-    return this.sessionPickerTask.run();
-  }
-
-  private async attachPickedSession(
-    sessionId: string,
-    owner?: TerminalSessionInfo["owner"],
-  ): Promise<void> {
-    this.sessionPickerOpen = false;
-    await this.terminalSessions.attachSessionById(sessionId, owner?.startsWith("agent:") === true);
-  }
-
-  private setDock(dock: TerminalDock): void {
-    this.dockLayout.setDock(dock);
-    void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
-  }
-
-  resetTerminalSessionPicker(): void {
-    this.closeSessionPicker(false);
-    void this.sessionPickerTask.run([null]);
-    this.pickerSessions = [];
-  }
-
-  findTerminalPanelViewport(): Element | null {
-    return this.renderRoot.querySelector(".tp-viewport");
-  }
-
-  override render() {
-    if (!this.available || !this.dockLayout.open) {
-      return nothing;
-    }
-    const mode = this.fullscreen ? "fullscreen" : this.dockLayout.dock;
-    const style = this.fullscreen
-      ? nothing
-      : this.dockLayout.dock === "bottom"
-        ? `height:${this.dockLayout.height}px;--tp-panel-height:${this.dockLayout.height}px`
-        : `width:${this.dockLayout.width}px`;
-    const activeTab = this.terminalSessions.tabs.find(
-      (tab) => tab.id === this.terminalSessions.activeId,
-    );
-    const connecting =
-      (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
-      activeTab?.status === "connecting";
-    const sessionPicker = renderTerminalSessionPicker({
-      open: this.sessionPickerOpen,
-      loading: this.sessionPickerTask.status === TaskStatus.PENDING,
-      sessions: this.pickerSessions,
-      currentSessionIds: new Set(
-        this.terminalSessions.tabs
-          .map((tab) => tab.gatewaySessionId)
-          .filter(
-            (sessionId): sessionId is string =>
-              typeof sessionId === "string" && sessionId.length > 0,
-          ),
-      ),
-      onToggle: () => this.toggleSessionPicker(),
-      onDismiss: (restoreFocus) => this.closeSessionPicker(restoreFocus),
-      onFocusOut: (event) => this.handleSessionPickerFocusOut(event),
-      onRefresh: () => void this.refreshSessionPicker(),
-      onAttach: (sessionId, owner) => void this.attachPickedSession(sessionId, owner),
-    });
-    const toolbar = renderTerminalPanelToolbar(
-      this.fullscreen,
-      this.dockLayout.dock,
-      this.terminalPanelUploadController,
-      sessionPicker,
-      (dock) => this.setDock(dock),
-      () => this.closeTerminalPanel(),
-    );
-    return html`
-      <section class="tp tp--${mode}" style=${style} aria-label=${t("terminal.title")}>
-        ${this.dockLayout.renderResizer("tp", t("terminal.resize"))}
-        ${renderTerminalPanelHeader(
-          this.terminalSessions.tabs,
-          this.terminalSessions.activeId,
-          this.terminalSessions.booting,
-          toolbar,
-          (id) => this.terminalSessions.switchTo(id),
-          (id) => this.terminalSessions.closeTab(id),
-          () => void this.terminalSessions.openSession(),
-        )}
-        ${renderTerminalPanelViewport(
-          this.terminalSessions.activeId,
-          connecting,
-          this.terminalPanelErrorText,
-          this.terminalPanelUploadController,
-        )}
-      </section>
-    `;
-  }
-
-  override willUpdate(): void {
-    prepareTerminalSessionHostVisibility(
-      this.terminalSessions.tabs,
-      this.terminalSessions.activeId,
-    );
-  }
-
-  static override styles = [
-    panelTabStripStyles,
-    dockPanelStyles,
-    terminalPanelStyles,
-    terminalPanelUploadStyles,
-  ];
+      publish();
+      return () =>
+        lifecycle.dispose(() => {
+          observer.disconnect();
+          stops.forEach((stop) => stop?.());
+          terminalSessions.disconnectHost();
+          dockLayout.dispose();
+        });
+    },
+    get terminalPanelUploadController() {
+      return terminalPanelUploadController;
+    },
+    get terminalFontFamily() {
+      return terminalFontFamily(context?.theme.settings.terminalFontFamily);
+    },
+    get hostedTabs() {
+      return terminalPanelHostedTabs(terminalSessions.state.tabs, element.gatewayConnected).map(
+        (tab) => Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+      );
+    },
+    get activeHostedTabId() {
+      return terminalSessions.state.activeId;
+    },
+    selectHostedTab(id: string): void {
+      sessionPicker?.onDismiss(false);
+      terminalSessions.switchTo(id);
+    },
+    async closeHostedTab(id: string): Promise<void> {
+      const tab = terminalSessions.state.tabs.find((entry) => entry.id === id);
+      const client = element.client;
+      if (element.mobile && tab?.status === "live" && !tab.agentOwned) {
+        let confirmed: boolean;
+        try {
+          confirmed = await showConfirmDialog({
+            title: i18n.t("terminal.closeSession"),
+            message: i18n.t("terminal.closeSessionMessage"),
+            confirmLabel: i18n.t("common.close"),
+            danger: true,
+          });
+        } catch (error) {
+          if (
+            owner.isConnected &&
+            element.client === client &&
+            terminalSessions.state.tabs.includes(tab)
+          ) {
+            terminalSessions.setError(formatUiError(error));
+          }
+          return;
+        }
+        if (
+          !confirmed ||
+          !owner.isConnected ||
+          !element.available ||
+          element.client !== client ||
+          !terminalSessions.state.tabs.includes(tab)
+        ) {
+          return;
+        }
+      }
+      terminalSessions.closeTab(id);
+      await lifecycle.updateComplete;
+    },
+    set hostedActionsContent(value: HTMLElement | undefined) {
+      hostedActionsContent = value;
+    },
+    get hostedActions() {
+      return element.embedded && element.tabsInHeader ? hostedActionsContent : undefined;
+    },
+    activateTerminalHost(): void {
+      terminalSessions.activateHost();
+      // Another dock may have settled the shared queue while this view was inactive.
+      publish();
+    },
+    toggle(): void {
+      if (!element.available) {
+        return;
+      }
+      if (dockLayout.open) {
+        owner.closeTerminalPanel();
+      } else {
+        dockLayout.setOpen(true);
+        owner.activateTerminalHost();
+        void terminalSessions.restoreSessions();
+      }
+    },
+    handleToggleRequest,
+    closeTerminalPanel(): void {
+      sessionPicker?.onDismiss(false);
+      terminalSessions.cancelPendingActions();
+      if (element.embedded) {
+        element.onClose?.();
+      } else {
+        dockLayout.setOpen(false);
+      }
+    },
+    get terminalPanelOpen(): boolean {
+      return element.embedded ? element.available : dockLayout.open && isDockLayoutAvailable();
+    },
+    hideTerminalPanelForUnavailableSurface(): void {
+      // The surface disappeared (gateway disconnect/disable). Hide the panel
+      // WITHOUT persisting: a disconnect must not overwrite the user's open
+      // preference, or the reconnect path would never auto-reopen. Server
+      // sessions survive for the detach grace period and reattach afterwards.
+      dockLayout.hideWithoutPersisting();
+    },
+    restoreTerminalPanelOpenState(): boolean {
+      return dockLayout.restoreOpenState();
+    },
+    resetTerminalSessionPicker(): void {
+      sessionPicker?.reset();
+    },
+    findTerminalPanelViewport(): Element | null {
+      return viewport && element.contains(viewport) ? viewport : null;
+    },
+    get viewState() {
+      const activeTab = terminalSessions.state.tabs.find(
+        (tab) => tab.id === terminalSessions.state.activeId,
+      );
+      return {
+        open: owner.terminalPanelOpen,
+        embedded: element.embedded,
+        fullscreen: element.fullscreen,
+        hosted: element.embedded && element.tabsInHeader,
+        mobile: element.mobile,
+        activeTab,
+        draft: activeTab ? draftFor(activeTab).text : "",
+        attachments: activeTab ? draftFor(activeTab).attachments : [],
+        onRemoveAttachment: (index: number): void => {
+          if (activeTab) {
+            const draft = draftFor(activeTab);
+            draft.attachments = draft.attachments.filter((_, position) => position !== index);
+            publish();
+          }
+        },
+        onDraft: (text: string): void => {
+          if (activeTab) {
+            draftFor(activeTab).text = text;
+            publish();
+          }
+        },
+        onSubmit: (): void => {
+          if (
+            !activeTab ||
+            activeTab.status !== "live" ||
+            activeTab.controller.readOnly ||
+            !element.available ||
+            !element.gatewayConnected ||
+            !owner.isConnected ||
+            terminalSessions.state.activeId !== activeTab.id
+          ) {
+            return;
+          }
+          const draft = draftFor(activeTab);
+          const input = [draft.text, ...draft.attachments.map((attachment) => attachment.path)]
+            .filter(Boolean)
+            .join(" ");
+          if (!input.trim()) {
+            return;
+          }
+          // Explicit Enter/arrow only. Paste preserves the terminal's bracketed-paste mode;
+          // its native onData path still owns transport and interactive programs.
+          activeTab.controller.terminal.paste(input);
+          activeTab.controller.terminal.input("\r", true);
+          draft.text = "";
+          draft.attachments = [];
+          publish();
+        },
+        mode: element.embedded ? "embedded" : element.fullscreen ? "fullscreen" : dockLayout.dock,
+        style:
+          element.embedded || element.fullscreen || dockLayout.dock === "main"
+            ? undefined
+            : dockLayout.dock === "bottom"
+              ? `height:${dockLayout.height}px;--tp-panel-height:${dockLayout.height}px`
+              : `width:${dockLayout.width}px`,
+        dockLayout,
+        tabs: terminalSessions.state.tabs,
+        activeId: terminalSessions.state.activeId,
+        booting: terminalSessions.state.booting,
+        connected: element.gatewayConnected,
+        connecting:
+          terminalSessions.waitingForRefresh ||
+          (terminalSessions.state.booting && terminalSessions.state.tabs.length === 0) ||
+          activeTab?.status === "connecting",
+        error: terminalSessions.state.error
+          ? {
+              text: terminalSessions.state.error.text,
+              retry: terminalSessions.state.error.retryAction
+                ? () => terminalSessions.retryOpen()
+                : undefined,
+            }
+          : null,
+        dockDisabled:
+          (element.embedded || readSessionBottomOnly()) && !terminalSessions.canHandoffSessions,
+        upload: terminalPanelUploadController,
+        picker: sessionPicker!,
+        fileInputRef: (input: HTMLInputElement) => {
+          fileInput = input;
+        },
+        viewportRef: (nextViewport: HTMLDivElement) => {
+          viewport = nextViewport;
+        },
+        onSelect: (id: string): void => owner.selectHostedTab(id),
+        onClose: (id: string): Promise<void> => owner.closeHostedTab(id),
+        onNew: (): void => {
+          sessionPicker?.onDismiss(false);
+          void terminalSessions.openSession();
+        },
+        onDock: (dock: TerminalDock): void => setDock(dock),
+        onOpenFullscreen: (): void => openFullscreen(),
+        onHide: (): void => owner.closeTerminalPanel(),
+      };
+    },
+  };
+  const terminalSessions = createTerminalPanelSessions(owner);
+  return owner;
 }
 
 declare global {

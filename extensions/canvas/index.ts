@@ -1,50 +1,20 @@
-/**
- * Canvas plugin entrypoint for node canvas control, hosted A2UI routes, and
- * node CLI registration.
- */
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
-import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
-import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
-import { CanvasToolSchema } from "./src/tool-schema.js";
+import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./src/node-eligibility.js";
+import { canvasToolDefinition } from "./src/tool-schema.js";
 
-const CANVAS_NODE_COMMANDS = [
-  "canvas.present",
-  "canvas.hide",
-  "canvas.navigate",
-  "canvas.eval",
-  "canvas.snapshot",
-  "canvas.a2ui.push",
-  "canvas.a2ui.pushJSONL",
-  "canvas.a2ui.reset",
-];
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_COMMANDS = ["canvas.present", "canvas.hide", "canvas.navigate"];
 
-function createLazyCanvasTool(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  agentSessionKey?: string;
-}): AnyAgentTool {
+function createLazyCanvasTool(agentSessionKey?: string): AnyAgentTool {
   const loadTool = createLazyRuntimeModule(() =>
-    import("./src/tool.js").then(({ createCanvasTool }) =>
-      createCanvasTool({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        agentSessionKey: params.agentSessionKey,
-      }),
-    ),
+    import("./src/tool.js").then(({ createCanvasTool }) => createCanvasTool({ agentSessionKey })),
   );
   return {
-    label: "Canvas",
-    name: "canvas",
-    resultContentSource: "network",
-    description:
-      "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
-    parameters: CanvasToolSchema,
+    ...canvasToolDefinition,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       await (await loadTool()).execute(...args),
   };
@@ -53,114 +23,119 @@ function createLazyCanvasTool(params: {
 export default definePluginEntry({
   id: "canvas",
   name: "Canvas",
-  description: "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
+  description: "Presents hosted widget documents on paired macOS panels.",
   configSchema: canvasConfigSchema,
-  reload: {
-    restartPrefixes: ["plugins.enabled", "plugins.allow", "plugins.deny", "plugins.entries.canvas"],
-  },
   register(api) {
     if (isCanvasHostEnabled(api.config)) {
-      const httpRouteHandlerLoader = createLazyRuntimeModule(() =>
-        import("./src/http-route.js").then(({ createCanvasHttpRouteHandler }) =>
-          createCanvasHttpRouteHandler({
-            config: api.config,
-            pluginConfig: api.pluginConfig,
-            runtime: {
-              log: (...args) => api.logger.info(args.map(String).join(" ")),
-              error: (...args) => api.logger.error(args.map(String).join(" ")),
-              exit: (code) => {
-                throw new Error(`canvas host requested process exit ${code}`);
+      const nodesRuntime = api.runtime.nodes;
+      type CanvasRuntimeNode = Awaited<ReturnType<typeof nodesRuntime.list>>["nodes"][number];
+      async function selectCanvasNode(): Promise<CanvasRuntimeNode | null> {
+        const { selectDefaultNodeFromList } =
+          await import("openclaw/plugin-sdk/agent-harness-runtime");
+        const { nodes } = await nodesRuntime.list({ connected: true });
+        return selectDefaultNodeFromList(nodes.filter(isEligibleCanvasNode), {
+          capability: "canvas",
+          fallback: "first",
+          preferLocalMac: true,
+        });
+      }
+
+      api.registerWidgetPresenter({
+        target: "node_panel",
+        description: "Show on a connected device panel",
+        async availability() {
+          try {
+            const node = await selectCanvasNode();
+            return node
+              ? { ok: true, value: { available: true } }
+              : {
+                  ok: false,
+                  error: {
+                    code: "no_eligible_node",
+                    message: "No connected canvas-capable device is available.",
+                  },
+                };
+          } catch (error) {
+            return {
+              ok: false,
+              error: { code: "node_error", message: formatErrorMessage(error) },
+            };
+          }
+        },
+        async present({ document, context }) {
+          if (!document.hostedUrl) {
+            return {
+              ok: false,
+              error: {
+                code: "node_error",
+                message: "The widget document is not hosted for device presentation.",
               },
-            },
-          }),
-        ),
-      );
-      const loadHttpRouteHandler = httpRouteHandlerLoader;
-      const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) =>
-        await (await loadHttpRouteHandler()).handleHttpRequest(req, res);
-      const handleUpgrade = async (req: IncomingMessage, socket: Duplex, head: Buffer) =>
-        await (await loadHttpRouteHandler()).handleUpgrade(req, socket, head);
-      const nodeCapability = { surface: "canvas" };
-      api.registerHttpRoute({
-        path: A2UI_PATH,
-        auth: "plugin",
-        match: "prefix",
-        nodeCapability,
-        handler: handleHttpRequest,
-      });
-      api.registerHttpRoute({
-        path: CANVAS_HOST_PATH,
-        auth: "plugin",
-        match: "prefix",
-        nodeCapability,
-        handler: handleHttpRequest,
-      });
-      api.registerHttpRoute({
-        path: CANVAS_WS_PATH,
-        auth: "plugin",
-        match: "exact",
-        nodeCapability,
-        handler: handleHttpRequest,
-        handleUpgrade,
-      });
-      api.registerService({
-        id: "canvas-host",
-        start: () => {},
-        stop: async () => {
-          const httpRouteHandler = await httpRouteHandlerLoader.peek();
-          await httpRouteHandler?.close();
+            };
+          }
+          let node: CanvasRuntimeNode | null;
+          try {
+            node = await selectCanvasNode();
+          } catch (error) {
+            return {
+              ok: false,
+              error: { code: "node_error", message: formatErrorMessage(error) },
+            };
+          }
+          if (!node) {
+            return {
+              ok: false,
+              error: {
+                code: "no_eligible_node",
+                message: "No connected canvas-capable device is available.",
+              },
+            };
+          }
+          try {
+            await nodesRuntime.invoke({
+              nodeId: node.nodeId,
+              command: CANVAS_PRESENT_COMMAND,
+              params: { url: document.hostedUrl },
+              timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+              idempotencyKey: randomUUID(),
+              ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
+            });
+            return {
+              ok: true,
+              value: {
+                kind: "node",
+                nodeId: node.nodeId,
+                ...(node.displayName ? { nodeName: node.displayName } : {}),
+              },
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              error: {
+                code: "node_error",
+                message: formatErrorMessage(error),
+                nodeId: node.nodeId,
+              },
+            };
+          }
         },
       });
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
-      defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
-      foregroundRestrictedOnIos: true,
-      handle: async (ctx) => {
-        const params =
-          ctx.params && typeof ctx.params === "object" && !Array.isArray(ctx.params)
-            ? (ctx.params as Record<string, unknown>)
-            : {};
-        // Native nodes also accept JSONL under `push` when messages[] is absent.
-        // Validate that fallback here so callers cannot bypass the JSONL policy.
-        const usesJsonl =
-          ctx.command === "canvas.a2ui.pushJSONL" ||
-          (ctx.command === "canvas.a2ui.push" &&
-            !Array.isArray(params.messages) &&
-            Object.hasOwn(params, "jsonl"));
-        if (usesJsonl) {
-          const jsonl = typeof params.jsonl === "string" ? params.jsonl : "";
-          try {
-            validateSupportedA2UIJsonl(jsonl);
-          } catch (error) {
-            return {
-              ok: false,
-              code: "INVALID_A2UI_JSONL",
-              message: formatErrorMessage(error),
-            };
-          }
-        }
-        return await ctx.invokeNode();
-      },
+      defaultPlatforms: ["macos"],
+      handle: async (ctx) => await ctx.invokeNode(),
     });
-    api.registerTool((ctx) =>
-      createLazyCanvasTool({
-        config: ctx.runtimeConfig ?? ctx.config,
-        workspaceDir: ctx.workspaceDir,
-        agentSessionKey: ctx.sessionKey,
-      }),
-    );
+    api.registerTool((ctx) => createLazyCanvasTool(ctx.sessionKey));
     api.registerNodeCliFeature(
       async ({ program }) => {
-        const { createDefaultCanvasCliDependencies, registerNodesCanvasCommands } =
-          await import("./src/cli.js");
-        registerNodesCanvasCommands(program, createDefaultCanvasCliDependencies());
+        const { registerNodesCanvasCommands } = await import("./src/cli.js");
+        registerNodesCanvasCommands(program);
       },
       {
         descriptors: [
           {
             name: "canvas",
-            description: "Capture or render canvas content from a paired node",
+            description: "Present widget documents on a paired macOS panel",
             hasSubcommands: true,
           },
         ],

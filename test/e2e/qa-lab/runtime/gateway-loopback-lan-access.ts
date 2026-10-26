@@ -6,16 +6,17 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { WebSocket, type RawData } from "ws";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import { pickPrimaryLanIPv4 } from "../../../../src/gateway/net.js";
 import { startGatewayServer, type GatewayServer } from "../../../../src/gateway/server.js";
-import { getFreeGatewayPort } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import { rawDataToString } from "../../../../src/infra/ws.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { getFreePort } from "../../../../src/test-utils/ports.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -27,6 +28,7 @@ const SCENARIO_ID = "gateway-loopback-lan-access";
 const PROBE_TIMEOUT_MS = 10_000;
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
@@ -267,25 +269,32 @@ async function probeHttpHealth(params: {
   localAddress?: string;
   port: number;
 }): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const request = http.request(
-      {
-        host: params.host,
-        localAddress: params.localAddress,
-        path: "/healthz",
-        port: params.port,
-      },
-      (response) => {
-        response.resume();
-        response.once("end", () => resolve(response.statusCode ?? 0));
-      },
-    );
-    request.once("error", reject);
-    request.setTimeout(PROBE_TIMEOUT_MS, () => {
-      request.destroy(new Error("timed out waiting for Gateway HTTP health"));
+  // Measure the owned listener, not an ambient proxy's response for its address.
+  const agent = new http.Agent();
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = http.request(
+        {
+          agent,
+          host: params.host,
+          localAddress: params.localAddress,
+          path: "/healthz",
+          port: params.port,
+        },
+        (response) => {
+          response.resume();
+          response.once("end", () => resolve(response.statusCode ?? 0));
+        },
+      );
+      request.once("error", reject);
+      request.setTimeout(PROBE_TIMEOUT_MS, () => {
+        request.destroy(new Error("timed out waiting for Gateway HTTP health"));
+      });
+      request.end();
     });
-    request.end();
-  });
+  } finally {
+    agent.destroy();
+  }
 }
 
 async function probeTcpUnreachable(params: {
@@ -301,18 +310,28 @@ async function probeTcpUnreachable(params: {
       socket.destroy();
       resolve(unreachable);
     };
-    socket.once("connect", () => finish(false));
+    socket.once("connect", () => {
+      // Linux can connect an ephemeral socket to itself on the probed address.
+      // Identical endpoints do not mean a listener accepted LAN traffic.
+      const selfConnected =
+        socket.localAddress === socket.remoteAddress && socket.localPort === socket.remotePort;
+      finish(selfConnected);
+    });
     socket.once("error", () => finish(true));
   });
 }
 
 async function startGateway(port: number, bind: "lan" | "loopback", token: string) {
-  return await startGatewayServer(port, {
+  const server = await startGatewayServer(port, {
     auth: { mode: "token", token },
     bind,
     controlUiEnabled: false,
     sidecarStartup: "defer",
   });
+  // HTTP attachment precedes mandatory sidecar settlement. Network probes own
+  // a fully admitted generation, not the intentional startup-unavailable phase.
+  await server.startupSettled;
+  return server;
 }
 
 async function stopGateway(server: GatewayServer | undefined): Promise<void> {
@@ -363,7 +382,7 @@ export async function runGatewayLoopbackLanProof(): Promise<GatewayLoopbackLanPr
     );
     resetGatewayTestState();
 
-    const loopbackPort = await getFreeGatewayPort();
+    const loopbackPort = await getFreePort("0.0.0.0");
     server = await startGateway(loopbackPort, "loopback", token);
     const loopbackHealthStatus = await probeHttpHealth({
       host: "127.0.0.1",
@@ -382,7 +401,7 @@ export async function runGatewayLoopbackLanProof(): Promise<GatewayLoopbackLanPr
     await stopGateway(server);
     server = undefined;
 
-    const lanPort = await getFreeGatewayPort();
+    const lanPort = await getFreePort("0.0.0.0");
     server = await startGateway(lanPort, "lan", token);
     const lanHealthStatus = await probeHttpHealth({
       host: lanIp,

@@ -28,19 +28,14 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  if (value.length + 2 > remainingBytes) {
+  // Pre-scan raw UTF-8 only when the code-unit bounds are inconclusive.
+  if (
+    value.length + 2 > remainingBytes ||
+    (value.length * 3 + 2 > remainingBytes && Buffer.byteLength(value, "utf8") + 2 > remainingBytes)
+  ) {
     return remainingBytes + 1;
   }
   return jsonUtf8BytesOrInfinity(value);
-}
-
-function* enumerableOwnEntries(value: object): Generator<[string, unknown]> {
-  const record = value as Record<string, unknown>;
-  for (const key in record) {
-    if (Object.prototype.propertyIsEnumerable.call(record, key)) {
-      yield [key, record[key]];
-    }
-  }
 }
 
 /** Returns the first enumerable own keys in JavaScript enumeration order. */
@@ -61,7 +56,7 @@ export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[]
 /** Counts JSON UTF-8 bytes up to a hard limit without fully serializing large objects. */
 export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
   let bytes = 0;
-  const seen = new WeakSet<object>();
+  let seen: WeakSet<object> | undefined;
 
   const add = (amount: number): void => {
     bytes += amount;
@@ -99,7 +94,7 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
     }
 
     const objectEntry = entry as object;
-    if (seen.has(objectEntry)) {
+    if ((seen ??= new WeakSet<object>()).has(objectEntry)) {
       throw new Error("json_byte_length_circular");
     }
     // Custom toJSON can hide arbitrary work or reshape output, so bounded
@@ -116,31 +111,34 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
         visit(objectEntry.toJSON(), inArray);
         return;
       }
-      if (Array.isArray(objectEntry)) {
-        add(1);
+      const array = Array.isArray(objectEntry);
+      add(1);
+      if (array) {
         for (let index = 0; index < objectEntry.length; index += 1) {
           if (index > 0) {
             add(1);
           }
           visit(objectEntry[index], true);
         }
-        add(1);
-        return;
-      }
-
-      add(1);
-      let wroteField = false;
-      for (const [key, field] of enumerableOwnEntries(objectEntry)) {
-        if (field === undefined || typeof field === "function" || typeof field === "symbol") {
-          continue;
-        }
-        if (wroteField) {
+      } else {
+        let wroteField = false;
+        const record = objectEntry as Record<string, unknown>;
+        for (const key in record) {
+          if (!Object.prototype.propertyIsEnumerable.call(record, key)) {
+            continue;
+          }
+          const field = record[key];
+          if (field === undefined || typeof field === "function" || typeof field === "symbol") {
+            continue;
+          }
+          if (wroteField) {
+            add(1);
+          }
+          wroteField = true;
+          add(jsonStringByteLengthUpToLimit(key, maxBytes - bytes));
           add(1);
+          visit(field, false);
         }
-        wroteField = true;
-        add(jsonStringByteLengthUpToLimit(key, maxBytes - bytes));
-        add(1);
-        visit(field, false);
       }
       add(1);
     } finally {

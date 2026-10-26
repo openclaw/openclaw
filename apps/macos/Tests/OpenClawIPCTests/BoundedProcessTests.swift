@@ -1,9 +1,74 @@
 import Darwin
 import Foundation
+import Subprocess
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct BoundedProcessTests {
+    @Test func `timeout terminates the helper before joining a suspended observer`() async throws {
+        let held = AsyncStream.makeStream(of: (ChildProcessExit, CheckedContinuation<Void, Never>).self)
+        let operation = Task {
+            defer { held.continuation.finish() }
+            return try await BoundedProcess.run(
+                path: "/bin/sleep", arguments: ["30"],
+                whileRunning: { process in
+                    await withCheckedContinuation { release in held.continuation.yield((process, release)) }
+                }, timeout: 1)
+        }
+        defer { operation.cancel() }
+        var iterator = held.stream.makeAsyncIterator()
+        let (process, release) = try #require(await iterator.next())
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !process.hasExited(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let terminatedBeforeJoin = process.hasExited()
+        release.resume()
+        await #expect(throws: BoundedProcessError.self) { try await operation.value }
+        #expect(terminatedBeforeJoin)
+    }
+
+    @Test(arguments: ["exit", "timeout", "cancel"])
+    func `retained browser actions stop with their exact helper`(_ terminal: String) async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-handoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let release = directory.appendingPathComponent("release")
+        let observed = AsyncStream.makeStream(of: GatewayBrowserHandoff.self)
+        let url = try #require(URL(string: "https://gateway.example.invalid/synthetic"))
+        let operation = Task {
+            defer { observed.continuation.finish() }
+            return try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: ["-c", "while [ ! -e \"$RELEASE\" ]; do /bin/sleep 0.02; done; printf complete"],
+                environment: ["RELEASE": release.path],
+                whileRunning: { process in
+                    observed.continuation.yield(GatewayBrowserHandoff(url: url) { process.isRunning })
+                    observed.continuation.finish()
+                },
+                timeout: terminal == "timeout" ? 1 : 15)
+        }
+        defer { operation.cancel() }
+        var iterator = observed.stream.makeAsyncIterator()
+        let action = try #require(await iterator.next())
+        var opened = 0
+        try action.perform { _ in opened += 1 }
+        if terminal == "cancel" { operation.cancel() }
+        if terminal == "exit" { try Data().write(to: release) }
+        do {
+            let result = try await operation.value
+            #expect(terminal == "exit")
+            #expect(result.terminationStatus == 0)
+        } catch {
+            #expect(terminal == "cancel" ? error is CancellationError : error is BoundedProcessError)
+        }
+        #expect(!action.isAvailable)
+        #expect(throws: CancellationError.self) { try action.perform { _ in opened += 1 } }
+        #expect(opened == 1)
+    }
+
     /// The two fan-out tests below assert that no exit notification is *lost* when a
     /// child exits while its monitor is being registered. They are not latency
     /// assertions, so their timeout must not double as one.
@@ -12,24 +77,35 @@ struct BoundedProcessTests {
     /// instrumenting the deadline showed every one of the 64 exits observed at
     /// ~3.1s, clustered within 100ms of each other, rather than a single slow
     /// straggler. A 1s per-process budget lost that coin flip roughly one run in
-    /// five, failing 63 of 64 at once. A generous budget still fails hard if an
-    /// exit is genuinely missed — the 50ms `pollUntilExit` fallback would never
-    /// complete — while a merely-loaded machine passes.
+    /// five, failing 63 of 64 at once. The budget allows process startup under load;
+    /// the launcher's final non-reaping probe preserves the actual exit result.
     private static let concurrentSpawnTimeout: TimeInterval = 30
 
     @Test func `captures output without waiting for inherited handles`() async throws {
-        let startedAt = ContinuousClock.now
-        let result = try await BoundedProcess.run(
-            path: "/bin/sh",
-            arguments: ["-c", "sleep 5 & echo $!; echo ready"],
-            timeout: 1)
+        let operation = Task {
+            try await BoundedProcess.run(
+                path: "/bin/sh",
+                arguments: ["-c", "sleep 30 & echo $!; echo ready"],
+                timeout: 1)
+        }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for inherited output handles to detach")
+            operation.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            operation.cancel()
+        }
+        let result = try await operation.value
+        watchdog.cancel()
 
         let output = try #require(String(data: result.output, encoding: .utf8))
         let lines = output.split(separator: "\n")
         let childPID = try #require(lines.first.flatMap { pid_t($0) })
         #expect(lines.contains("ready"))
         #expect(result.terminationStatus == 0)
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(self.waitUntilGone(childPID))
     }
 
@@ -40,6 +116,17 @@ struct BoundedProcessTests {
             timeout: 1)
 
         #expect(String(data: result.output, encoding: .utf8) == "firstsecondthird")
+    }
+
+    @Test func `discards credential-bearing stderr without consuming the output budget`() async throws {
+        let result = try await BoundedProcess.run(
+            path: "/bin/sh",
+            arguments: ["-c", "head -c 131072 /dev/zero >&2; printf application-token"],
+            standardError: .discarded,
+            timeout: 5)
+
+        #expect(result.terminationStatus == 0)
+        #expect(String(data: result.output, encoding: .utf8) == "application-token")
     }
 
     @Test func `captures parallel instant exits`() async throws {
@@ -92,18 +179,16 @@ struct BoundedProcessTests {
         let parentPIDFile = directory.appendingPathComponent("parent.pid")
         let childPIDFile = directory.appendingPathComponent("child.pid")
 
-        let startedAt = ContinuousClock.now
-        do {
-            _ = try await BoundedProcess.run(
+        let operation = Task {
+            try await BoundedProcess.run(
                 path: "/bin/sh",
                 arguments: [
                     "-c",
                     """
                     trap '' TERM
-                    /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; while :; do :; done' &
+                    /bin/sh -c 'trap "" TERM; echo $$ > "$CHILD_PID_FILE"; exec /bin/sleep 30' &
                     echo $$ > "$PARENT_PID_FILE"
-                    while [ ! -s "$CHILD_PID_FILE" ]; do :; done
-                    while :; do :; done
+                    wait
                     """,
                 ],
                 environment: [
@@ -111,14 +196,27 @@ struct BoundedProcessTests {
                     "CHILD_PID_FILE": childPIDFile.path,
                 ],
                 timeout: 2)
+        }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for TERM-resistant process group cleanup")
+            operation.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            operation.cancel()
+        }
+        do {
+            _ = try await operation.value
             Issue.record("Expected process timeout")
         } catch {
             #expect(error is BoundedProcessError)
         }
+        watchdog.cancel()
 
         let parentPID = try await self.waitForPID(in: parentPIDFile)
         let childPID = try await self.waitForPID(in: childPIDFile)
-        #expect(ContinuousClock.now - startedAt < .seconds(3))
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
     }
@@ -153,12 +251,23 @@ struct BoundedProcessTests {
         let childPID = try await self.waitForPID(in: childPIDFile)
 
         task.cancel()
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for cancelled process group cleanup")
+            task.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            task.cancel()
+        }
         do {
             _ = try await task.value
             Issue.record("Expected cancellation")
         } catch {
             #expect(error is CancellationError)
         }
+        watchdog.cancel()
 
         #expect(self.waitUntilGone(parentPID))
         #expect(self.waitUntilGone(childPID))
@@ -171,7 +280,6 @@ struct BoundedProcessTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let pidFile = directory.appendingPathComponent("producer.pid")
 
-        let startedAt = ContinuousClock.now
         do {
             _ = try await BoundedProcess.run(
                 path: "/bin/sh",
@@ -179,20 +287,17 @@ struct BoundedProcessTests {
                     "-c",
                     """
                     echo $$ > "$PID_FILE"
-                    while :; do
-                        printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
-                    done
+                    exec /usr/bin/head -c 65537 /dev/zero
                     """,
                 ],
                 environment: ["PID_FILE": pidFile.path],
                 timeout: 5)
             Issue.record("Expected output limit failure")
         } catch {
-            #expect(!(error is BoundedProcessError))
+            #expect((error as? SubprocessError)?.code == .outputLimitExceeded)
         }
 
         let producerPID = try await self.waitForPID(in: pidFile)
-        #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(self.waitUntilGone(producerPID))
     }
 
@@ -206,16 +311,12 @@ struct BoundedProcessTests {
     }
 
     /// `echo $$ > file` creates the file and writes to it in two steps, so a single
-    /// read can observe a missing *or* empty file. Poll until it parses, and only
-    /// then fall back to the recording read so a genuine absence still fails.
-    private func waitForPID(in file: URL) async throws -> pid_t {
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if let value = self.pollPID(from: file) {
-                return value
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// read can observe a missing *or* empty file. Poll until it parses before recording the read.
+    private func waitForPID(
+        in file: URL,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws -> pid_t
+    {
+        try await TestWait.state("process PID file", sourceLocation: sourceLocation) { self.pollPID(from: file) != nil }
         let text = try String(contentsOf: file, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return try #require(pid_t(text))

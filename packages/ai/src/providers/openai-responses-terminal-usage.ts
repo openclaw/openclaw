@@ -1,13 +1,36 @@
 /**
  * Canonical mapping for terminal OpenAI Responses events.
  *
- * `response.completed` and `response.incomplete` are both terminal and both carry usage, so every
- * Responses path — the package-side stream processor and the agent-side transport — finalizes
- * through the helpers here. Keeping one owner prevents the two from drifting on token buckets,
- * service-tier pricing, or future terminal-event semantics.
+ * `response.completed`, `response.incomplete`, and `response.failed` are terminal and can carry
+ * usage, so every Responses path finalizes through the helpers here. Keeping one owner prevents
+ * package and managed transports from drifting on token buckets, service-tier pricing, or future
+ * terminal-event semantics.
  */
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber as readReportedCount,
+} from "@openclaw/normalization-core/number-coercion";
 import type OpenAI from "openai";
-import type { StopReason, Usage } from "../types.js";
+import type { AssistantMessage, StopReason, StreamOptions, Usage } from "../types.js";
+
+/** A known output ceiling can resume sampling after admitted tools have settled. */
+export function isResponsesOutputLimitToolCallError(
+  message: Pick<AssistantMessage, "stopReason" | "errorCode" | "diagnostics">,
+): boolean {
+  return (
+    message.stopReason === "error" &&
+    message.errorCode === "incomplete_tool_call" &&
+    !isProviderRefusalAssistantError(message) &&
+    message.diagnostics?.some(
+      ({ type, details }) =>
+        type === "openai_responses_terminal" &&
+        details?.eventType === "response.incomplete" &&
+        details.stopReason === "length" &&
+        details.incompleteReason === "max_output_tokens",
+    ) === true
+  );
+}
 
 /** Terminal usage payload, modeled structurally so untyped callers can pass raw records. */
 export type ResponsesTerminalUsagePayload = {
@@ -17,12 +40,16 @@ export type ResponsesTerminalUsagePayload = {
   input_tokens_details?: {
     cached_tokens?: number | null;
     cache_write_tokens?: number | null;
+    cache_write_tokens_details?: {
+      ttl_30m_tokens?: number | null;
+      ttl_12h_tokens?: number | null;
+    } | null;
   } | null;
   output_tokens_details?: { reasoning_tokens?: number | null } | null;
 };
 
 function readCount(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return readReportedCount(value) ?? 0;
 }
 
 /**
@@ -36,7 +63,9 @@ function readCount(value: number | null | undefined): number {
  */
 export function mapResponsesTerminalUsage(
   usage: ResponsesTerminalUsagePayload | undefined | null,
-): Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens"> | undefined {
+):
+  | Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens">
+  | undefined {
   if (!usage) {
     return undefined;
   }
@@ -46,17 +75,63 @@ export function mapResponsesTerminalUsage(
   const output = readCount(usage.output_tokens);
   const bucketTotal = input + output + cacheRead + cacheWrite;
   const totalTokens = Math.max(bucketTotal, readCount(usage.total_tokens));
-  return { input, output, cacheRead, cacheWrite, totalTokens };
+  const reportedInput = readReportedCount(usage.input_tokens);
+  const reportedOutput = readReportedCount(usage.output_tokens);
+  const reportedTotal = readReportedCount(usage.total_tokens);
+  const hasCoherentContext =
+    reportedInput !== undefined &&
+    (reportedOutput !== undefined ||
+      (reportedTotal !== undefined && reportedTotal >= reportedInput)) &&
+    cacheRead + cacheWrite <= reportedInput;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: reportedInput,
+          totalTokens: Math.max(totalTokens, reportedInput + (reportedOutput ?? 0)),
+        }
+      : { state: "unavailable" },
+    totalTokens,
+  };
+}
+
+/** Apply lifetime pricing after base model pricing, before service-tier adjustments. */
+export function applyResponsesCacheWritePricing(
+  usage: Usage,
+  reported: ResponsesTerminalUsagePayload | undefined | null,
+  promptCacheTtl?: StreamOptions["promptCacheTtl"],
+): void {
+  if (usage.cacheWrite === 0) {
+    return;
+  }
+  const details = reported?.input_tokens_details?.cache_write_tokens_details;
+  const shortWrites = readReportedCount(details?.ttl_30m_tokens);
+  const longWrites = readReportedCount(details?.ttl_12h_tokens);
+  // Breakpoints may override the request default. Compatible endpoints without a
+  // coherent split retain the request-default estimate.
+  const extendedWrites =
+    shortWrites !== undefined &&
+    longWrites !== undefined &&
+    shortWrites + longWrites === usage.cacheWrite
+      ? longWrites
+      : promptCacheTtl === "12h"
+        ? usage.cacheWrite
+        : 0;
+  // Catalog prices cover 30m writes; each 12h write costs one additional unit.
+  const extendedCost = usage.cost.cacheWrite * (extendedWrites / usage.cacheWrite);
+  usage.cost.cacheWrite += extendedCost;
+  usage.cost.total += extendedCost;
 }
 
 /** Reasoning tokens are reported by the agent path only; the package path does not track them. */
 export function readResponsesReasoningTokens(
   usage: ResponsesTerminalUsagePayload | undefined | null,
 ): number | undefined {
-  const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens;
-  return typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-    ? reasoningTokens
-    : undefined;
+  return asFiniteNumber(usage?.output_tokens_details?.reasoning_tokens);
 }
 
 function mapResponsesTerminalStopReason(

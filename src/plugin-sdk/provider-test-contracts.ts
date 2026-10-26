@@ -12,8 +12,6 @@ export {
   expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
-  loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
   type ProviderPlugin,
 } from "./test-helpers/provider-catalog.js";
 export { describeProviderContracts } from "./test-helpers/provider-contract.js";
@@ -40,8 +38,6 @@ export {
   expectDashscopeVideoTaskPoll,
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
-  resetDashscopeVideoProviderMocks,
-  type DashscopeVideoProviderMocks,
 } from "./test-helpers/dashscope-video-provider.js";
 export {
   expectExplicitMusicGenerationCapabilities,
@@ -64,14 +60,12 @@ export {
   describeGoogleProviderRuntimeContract,
   describeOpenAIProviderRuntimeContract,
   describeOpenRouterProviderRuntimeContract,
-  describeVeniceProviderRuntimeContract,
   describeZAIProviderRuntimeContract,
   type ProviderRuntimeContractPluginLoader,
 } from "./test-helpers/provider-runtime-contract.js";
 export {
   describeProviderWizardChoiceResolutionContract,
   describeProviderWizardModelPickerContract,
-  describeProviderWizardSetupOptionsContract,
 } from "./test-helpers/provider-wizard-contract-suites.js";
 export { expectPassthroughReplayPolicy } from "./test-helpers/provider-replay-policy.js";
 export { createCapturedThinkingConfigStream } from "./test-helpers/stream-hooks.js";

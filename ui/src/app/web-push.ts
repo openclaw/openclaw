@@ -1,145 +1,104 @@
-// Application-owned browser push subscription lifecycle.
-import { formatErrorMessage } from "@openclaw/normalization-core";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { redactToolDetail } from "../lib/browser-redact.ts";
+import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
+import type {
+  WebPushCapabilityAction,
+  WebPushCapabilityPatch,
+  WebPushCapabilityRuntime,
+  WebPushPreferencesResult,
+  WebPushSubscriptionState,
+} from "./web-push.runtime.ts";
 
-type WebPushSnapshot = {
+export type WebPushSnapshot = WebPushAccess & {
   supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
+  permission: NotificationPermission | "install-required" | "unsupported";
+  subscription: WebPushSubscriptionState;
   loading: boolean;
-  error: string | null;
+  read?: Promise<unknown>;
+  command?: Promise<void>;
+  error?: string | null;
+  preferences?: WebPushPreferencesResult | null;
 };
 
-export type WebPushCapability = {
-  readonly snapshot: WebPushSnapshot;
-  subscribe: (listener: (snapshot: WebPushSnapshot) => void) => () => void;
-  enable: () => Promise<void>;
-  disable: () => Promise<void>;
-  sendTest: () => Promise<void>;
-  dispose: () => void;
-};
+export type WebPushCapability = ReturnType<typeof createWebPushCapability>;
 
-function isWebPushSupported(): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    "serviceWorker" in navigator &&
-    typeof window !== "undefined" &&
-    "PushManager" in window &&
-    "Notification" in window
-  );
-}
-
-export function createWebPushCapability(gateway: ApplicationGateway): WebPushCapability {
-  const supported = isWebPushSupported();
-  let snapshot: WebPushSnapshot = {
+export function createWebPushCapability(
+  gateway: ApplicationGateway,
+  options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
+) {
+  const nav = globalThis.navigator;
+  const ios = isIosBrowserPlatform();
+  // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
+  const installed = !ios || (nav as Navigator & { standalone?: boolean }).standalone === true;
+  const supported =
+    installed &&
+    "serviceWorker" in nav &&
+    "PushManager" in globalThis &&
+    "Notification" in globalThis;
+  let owner: WebPushCapabilityRuntime | undefined;
+  const snapshot: WebPushSnapshot = {
     supported,
-    permission: supported ? Notification.permission : "unsupported",
-    subscribed: false,
-    loading: false,
-    error: null,
+    ...readWebPushAccess(gateway.snapshot),
+    permission: installed
+      ? supported
+        ? Notification.permission
+        : "unsupported"
+      : "install-required",
+    subscription: "unknown",
+    get loading() {
+      return owner?.pending ?? false;
+    },
   };
-  let disposed = false;
-  let wasConnected = false;
-  let operation: Promise<void> | null = null;
-  const listeners = new Set<(snapshot: WebPushSnapshot) => void>();
+  let render: (() => void) | undefined;
 
-  const publish = (patch: Partial<WebPushSnapshot>) => {
-    if (disposed) {
-      return;
-    }
-    snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
+  const publish = (patch: WebPushCapabilityPatch) => {
+    Object.assign(snapshot, patch);
+    render?.();
   };
-
-  const readExistingSubscription = async () => {
-    if (!supported) {
-      return null;
+  const stopGateway = gateway.subscribe((next) => {
+    const access = readWebPushAccess(next);
+    if (
+      access.canManage !== snapshot.canManage ||
+      access.canReadPreferences !== snapshot.canReadPreferences
+    ) {
+      publish(access);
     }
-    const { getExistingSubscription } = await import("./web-push.runtime.ts");
-    const subscription = await getExistingSubscription();
-    publish({ subscribed: subscription !== null });
-    return subscription;
-  };
-
-  const reconcile = async (client: GatewayBrowserClient) => {
-    try {
-      const subscription = await readExistingSubscription();
-      const json = subscription?.toJSON();
-      if (!json?.endpoint || !json.keys?.p256dh || !json.keys.auth) {
-        return;
-      }
-      await client.request("push.web.subscribe", {
-        endpoint: json.endpoint,
-        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-      });
-    } catch {
-      // Existing subscriptions are reconciled best-effort after reconnect.
-    }
-  };
-
-  const run = (action: (client: GatewayBrowserClient) => Promise<void>) => {
-    const client = gateway.snapshot.client;
-    if (!supported || !client || operation) {
-      return operation ?? Promise.resolve();
-    }
-    publish({ loading: true, error: null });
-    operation = action(client)
-      .catch((error: unknown) => {
-        publish({ error: formatErrorMessage(error, { redact: redactToolDetail }) });
-      })
-      .finally(() => {
-        operation = null;
-        publish({
-          loading: false,
-          permission: "Notification" in window ? Notification.permission : "unsupported",
-        });
-      });
-    return operation;
-  };
-
-  void readExistingSubscription().catch(() => {});
-  const stopGateway = gateway.subscribe((gatewaySnapshot) => {
-    const client = gatewaySnapshot.client;
-    const connected = gatewaySnapshot.phase === "connected" && client !== null;
-    if (connected && !wasConnected && client) {
-      void reconcile(client);
-    }
-    wasConnected = connected;
   });
-
+  const initialization = supported
+    ? import("./web-push.runtime.ts").then(
+        ({ createWebPushCapabilityRuntime }) =>
+          (owner = createWebPushCapabilityRuntime({
+            gateway,
+            publish,
+            connectionBootstrap: options.connectionBootstrap,
+          })),
+      )
+    : undefined;
+  const runtime = initialization?.catch(() => {
+    publish({
+      supported: false,
+      permission: "unsupported",
+      subscription: "unknown",
+      preferences: null,
+      read: initialization,
+    });
+    return null;
+  });
   return {
-    get snapshot() {
-      return snapshot;
+    snapshot,
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    enable: () =>
-      run(async (client) => {
-        const { subscribeToWebPush } = await import("./web-push.runtime.ts");
-        await subscribeToWebPush(client);
-        publish({ subscribed: true });
-      }),
-    disable: () =>
-      run(async (client) => {
-        const { unsubscribeFromWebPush } = await import("./web-push.runtime.ts");
-        await unsubscribeFromWebPush(client);
-        publish({ subscribed: false });
-      }),
-    sendTest: () =>
-      run(async (client) => {
-        const { sendTestWebPush } = await import("./web-push.runtime.ts");
-        await sendTestWebPush(client);
-      }),
-    dispose() {
-      disposed = true;
+    run: (action: WebPushCapabilityAction) =>
+      runtime ? runtime.then((runtimeOwner) => runtimeOwner?.run(action)) : Promise.resolve(),
+    dispose(this: void) {
       stopGateway();
-      listeners.clear();
+      void runtime?.then((runtimeOwner) => runtimeOwner?.dispose());
+      render = undefined;
     },
   };
 }

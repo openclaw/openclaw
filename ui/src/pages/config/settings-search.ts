@@ -1,56 +1,93 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
-import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
+import {
+  isSettingsNavigationRouteVisible,
+  type SettingsSearchBlock,
+} from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "../../app/native-device-settings.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
-import { configPageForSection } from "./config-sections.ts";
-import {
-  memoryVisibleSchemaKeys,
-  resolveMemoryBackend,
-  MEMORY_BACKEND_ANCHOR_ID,
-  MEMORY_CURATED_SCHEMA_KEYS,
-} from "./memory-schema.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
+import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
+import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
+import { configPageForSection, omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
+import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
+import { setupVisibleSchema } from "./setup-schema.ts";
 
-type StaticSettingsBlock = SettingsSearchBlock & {
-  searchText: string;
-};
+registerSettingsEnglish();
+registerProfileEnglish();
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
 
-function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettingsBlock {
+function resolveStaticSettingsBlock(
+  block: SettingsSearchTarget,
+  snapshot: NativeDeviceSettingsSnapshot | null,
+): SettingsSearchBlock & { searchText: string } {
   const label = t(block.labelKey);
+  const nativeKeys = snapshot
+    ? Object.entries(block.nativeSearchKeys ?? {})
+        .filter(([, available]) => available(snapshot))
+        .map(([key]) => key)
+    : [];
   return {
     routeId: block.routeId,
     ...(block.search === undefined ? {} : { search: block.search }),
     hash: block.hash,
     label,
-    searchText: [label, ...block.searchKeys.map((key) => t(key)), block.aliases ?? ""].join(" "),
+    searchText: [
+      label,
+      ...[...block.searchKeys, ...nativeKeys]
+        .filter(
+          (key) =>
+            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
+        )
+        .map((key) => t(key)),
+      block.aliases ?? "",
+    ].join(" "),
   };
 }
 
-/**
- * The Memory page hides `memory.*` children the current engine/backend makes
- * inapplicable — `memory.qmd` only renders once qmd is the selected backend.
- * Matching the raw section would offer a destination whose editor omits the very
- * field that matched, so search sees only what the page can show.
- */
-function visibleMemorySchema(
-  sectionSchema: JsonSchema,
-  config: Record<string, unknown>,
-): JsonSchema {
+// Curated pages render only a subset of their section's schema; search must
+// promise exactly what the destination page can edit, or the result is a
+// dead-end.
+const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, readonly string[]>> = {
+  memory: MEMORY_SETTINGS_KEYS,
+  "plugin-settings": PLUGIN_SETTINGS_VISIBLE_KEYS,
+  updates: ["channel", "checkOnStart", "auto"],
+};
+
+const preparedSectionsBySchema = new WeakMap<
+  JsonSchema,
+  {
+    hints: ConfigUiHints;
+    sections: Map<
+      string,
+      { schema: JsonSchema; tiers: ReturnType<typeof splitConfigSchemaByTier> }
+    >;
+  }
+>();
+
+function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
+  const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
   const properties = sectionSchema.properties;
-  if (!properties) {
+  if (!visibleKeys || !properties) {
     return sectionSchema;
   }
-  const visible = new Set(memoryVisibleSchemaKeys(resolveMemoryBackend(config)));
+  const visible = new Set(visibleKeys);
   return {
     ...sectionSchema,
     properties: Object.fromEntries(
@@ -59,56 +96,16 @@ function visibleMemorySchema(
   };
 }
 
-/**
- * Every memory schema field lives on Settings. Backend remains a curated row,
- * so its unique matches use that row's anchor instead of the editor section.
- */
-function memoryDestination(params: {
-  key: string;
-  schema: JsonSchema;
-  value: unknown;
-  hints: ConfigUiHints;
-  query: string;
-  editorHash: string;
-}): { hash: string } {
-  const properties = params.schema.properties;
-  if (!properties) {
-    return { hash: params.editorHash };
-  }
-  const sliceMatches = (keys: readonly string[]) => {
-    const sliced = Object.fromEntries(
-      Object.entries(properties).filter(([child]) => keys.includes(child)),
-    );
-    return (
-      Object.keys(sliced).length > 0 &&
-      matchesConfigSectionSearch({
-        key: params.key,
-        schema: { ...params.schema, properties: sliced },
-        value: params.value,
-        hints: params.hints,
-        query: params.query,
-        textMatcher: settingsSearchTextMatches,
-      })
-    );
-  };
-  const onlySliceMatches = (keys: readonly string[]) =>
-    sliceMatches(keys) &&
-    !sliceMatches(Object.keys(properties).filter((child) => !keys.includes(child)));
-  // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
-  // row, so a match here always has the anchor on the page to scroll to.
-  if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
-    return { hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
-  }
-  return { hash: params.editorHash };
-}
-
 export function findSettingsSearchBlocks(params: {
   query: string;
   schema: unknown;
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
+  multipleProfiles?: boolean;
   basePath?: string;
+  canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -117,29 +114,64 @@ export function findSettingsSearchBlocks(params: {
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
       ? STATIC_SETTINGS_BLOCKS.filter(
-          (block) => params.identityAvailable || !block.requiresIdentity,
+          (block) =>
+            (params.identityAvailable || !block.requiresIdentity) &&
+            (params.multipleProfiles || !block.requiresMultipleProfiles) &&
+            (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
+            isSettingsNavigationRouteVisible(
+              block.routeId,
+              params.canAdmin !== false,
+              params.nativeDeviceSettings,
+            ),
         )
-          .map(resolveStaticSettingsBlock)
+          .map((block) =>
+            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
+          )
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
-  const schema =
-    params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
-      ? (params.schema as JsonSchema)
-      : null;
+  const schema = isRecord(params.schema) ? (params.schema as JsonSchema) : null;
   if (!schema || schemaType(schema) !== "object" || !schema.properties) {
     return matches;
+  }
+  let prepared = preparedSectionsBySchema.get(schema);
+  // Schema responses replace both objects. Keep only the current hint revision;
+  // draft values, query text, locale, and route visibility are evaluated below.
+  if (!prepared || prepared.hints !== params.uiHints) {
+    prepared = { hints: params.uiHints, sections: new Map() };
+    preparedSectionsBySchema.set(schema, prepared);
   }
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
-    const sectionSchema =
-      routeId === "memory" ? visibleMemorySchema(rawSectionSchema, value) : rawSectionSchema;
+    if (
+      !isSettingsNavigationRouteVisible(
+        routeId,
+        params.canAdmin !== false,
+        params.nativeDeviceSettings,
+      )
+    ) {
+      continue;
+    }
+    let section = prepared.sections.get(key);
+    if (!section) {
+      const sectionSchema = omitCuratedOwnedConfigLeaves(
+        key === "wizard"
+          ? setupVisibleSchema(rawSectionSchema)
+          : visibleSectionSchema(routeId, rawSectionSchema),
+        key,
+      );
+      section = {
+        schema: sectionSchema,
+        tiers: splitConfigSchemaByTier({
+          schema: sectionSchema,
+          path: [key],
+          hints: params.uiHints,
+        }),
+      };
+      prepared.sections.set(key, section);
+    }
+    const { schema: sectionSchema, tiers: tierSplit } = section;
     const meta = SECTION_META[key];
-    const tierSplit = splitConfigSchemaByTier({
-      schema: sectionSchema,
-      path: [key],
-      hints: params.uiHints,
-    });
     const matchesTier = (tierSchema: JsonSchema | null) =>
       Boolean(
         tierSchema &&
@@ -161,32 +193,25 @@ export function findSettingsSearchBlocks(params: {
     }
     const encodedKey = encodeURIComponent(key);
     const editorHash = `#config-section-${encodedKey}`;
-    const destination =
-      routeId === "memory"
-        ? memoryDestination({
-            key,
-            schema: sectionSchema,
-            value: value[key],
-            hints: params.uiHints,
-            query: params.query,
-            editorHash,
-          })
-        : { search: "", hash: editorHash };
-    matches.push(
-      routeId === "memory"
+    matches.push({
+      routeId,
+      label: meta?.label ?? sectionSchema.title ?? key,
+      ...(routeId === "memory"
         ? {
-            routeId,
-            label: meta?.label ?? sectionSchema.title ?? key,
             pathname: pathForMemoryTab("settings", params.basePath),
-            hash: destination.hash,
+            ...(matchesAdvanced ? { search: "?advanced=1" } : {}),
+            hash: editorHash,
           }
-        : {
-            routeId,
-            label: meta?.label ?? sectionSchema.title ?? key,
-            search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
-            hash: destination.hash,
-          },
-    );
+        : routeId === "plugin-settings"
+          ? {
+              search: "?tab=advanced",
+              hash: "#plugin-settings-advanced",
+            }
+          : {
+              search: `?section=${encodedKey}${matchesAdvanced || key === "wizard" ? "&advanced=1" : ""}`,
+              hash: editorHash,
+            }),
+    });
   }
   return matches;
 }

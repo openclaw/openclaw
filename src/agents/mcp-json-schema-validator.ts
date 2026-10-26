@@ -1,15 +1,31 @@
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
   JsonSchemaValidator,
   jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
-import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+} from "@modelcontextprotocol/client";
+import {
+  Ajv,
+  addFormats,
+  AjvJsonSchemaValidator,
+} from "@modelcontextprotocol/client/validators/ajv";
+import {
+  normalizeJsonSchemaForTypeBox,
+  type JsonSchemaRefinement,
+} from "@openclaw/normalization-core/json-schema";
+import type { JsonSchemaValidator as PreparedValidator } from "@openclaw/normalization-core/json-schema-validator";
+import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import {
+  createJsonSchemaValidatorProvider,
+  type JsonSchemaValidatorProvider,
+} from "../shared/json-schema-validator.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const annotationFormats = new Map<string, JsonSchemaRefinement>();
+type McpFormats = Readonly<InstanceType<typeof Ajv>["formats"]>;
 
 function isDraft202012Schema(schema: JsonSchemaType): boolean {
   return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
@@ -26,76 +42,21 @@ function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: st
   );
 }
 
-const schemaMapKeywords = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-const schemaValueKeywords = new Set([
-  "additionalItems",
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-
-function stripSchemaMapFormats(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, stripJsonSchemaFormats(entry)]),
-  );
-}
-
-function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
-  const { type, ...rest } = schema;
-  if (!Array.isArray(type)) {
-    return schema;
-  }
-  return {
-    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
-  };
-}
-
-function stripJsonSchemaFormats(schema: unknown): unknown {
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => stripJsonSchemaFormats(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  const normalizedSchema = expandJsonSchemaTypeArray(schema as Record<string, unknown>);
-  return Object.fromEntries(
-    Object.entries(normalizedSchema)
-      .filter(([key]) => key !== "format")
-      .map(([key, value]) => {
-        if (schemaMapKeywords.has(key)) {
-          return [key, stripSchemaMapFormats(value)];
-        }
-        if (key === "dependencies") {
-          return [key, stripSchemaMapFormats(value)];
-        }
-        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-          return [key, stripJsonSchemaFormats(value)];
-        }
-        return [key, value];
-      }),
-  );
-}
-
 /** MCP SDK validator with draft-2020-12 support for external tool schemas. */
 export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
-  const defaultValidator = new AjvJsonSchemaValidator();
+  // Preserve the legacy draft-07 default and the workspace URI resolver; the SDK bundles its own.
+  const ajv = new Ajv({
+    strict: false,
+    validateFormats: true,
+    validateSchema: false,
+    allErrors: true,
+    uriResolver: fastUri,
+  });
+  addFormats(ajv);
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    return createInterpretedMcpJsonSchemaValidator(ajv.formats);
+  }
+  const defaultValidator = new AjvJsonSchemaValidator(ajv);
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
@@ -109,7 +70,7 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
           throw new Error(schemaError);
         }
         validator = Compile(
-          normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+          normalizeJsonSchemaForTypeBox(schema, { format: "annotation" }) as never,
         );
       } catch (error) {
         const setupError = toErrorObject(error, "schema setup failed");
@@ -126,6 +87,100 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
           valid: false,
           data: undefined,
           errorMessage: formatTypeBoxErrors([...validator.Errors(input)]),
+        };
+      };
+    },
+  };
+}
+
+function createFormatRefinement(
+  name: string,
+  definition: Exclude<McpFormats[string], undefined>,
+): JsonSchemaRefinement | undefined {
+  const error = () => `must match format "${name}"`;
+  if (definition === true) {
+    return undefined;
+  }
+  if (typeof definition === "function") {
+    return { check: (value) => typeof value !== "string" || definition(value), error };
+  }
+  if (definition instanceof RegExp) {
+    return { check: (value) => typeof value !== "string" || definition.test(value), error };
+  }
+  if (definition.async) {
+    throw new Error(`Unsupported MCP JSON Schema format definition: ${name}`);
+  }
+  if (definition.type === "number") {
+    return {
+      check: (value) => typeof value !== "number" || definition.validate(value),
+      error,
+    };
+  }
+  const validate = definition.validate;
+  if (typeof validate === "string") {
+    throw new Error(`Unsupported MCP JSON Schema format definition: ${name}`);
+  }
+  return {
+    check: (value) => {
+      if (typeof value !== "string") {
+        return true;
+      }
+      if (validate instanceof RegExp) {
+        return validate.test(value);
+      }
+      // Ajv's optional format type does not discriminate its callback union.
+      const accepted: unknown = Reflect.apply(validate, undefined, [value]);
+      return accepted === true;
+    },
+    error,
+  };
+}
+
+function createFormatRefinements(formats: McpFormats): ReadonlyMap<string, JsonSchemaRefinement> {
+  const refinements = new Map<string, JsonSchemaRefinement>();
+  for (const [name, definition] of Object.entries(formats)) {
+    if (definition === undefined) {
+      continue;
+    }
+    const refinement = createFormatRefinement(name, definition);
+    if (refinement) {
+      refinements.set(name, refinement);
+    }
+  }
+  return refinements;
+}
+
+/** Code-generation-free MCP validation with the existing draft and format policies. */
+function createInterpretedMcpJsonSchemaValidator(formats: McpFormats): jsonSchemaValidator {
+  let draft7Provider: JsonSchemaValidatorProvider | undefined;
+  return {
+    getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      const modern = schema.$schema === DRAFT_2020_12_SCHEMA;
+      let validator: PreparedValidator;
+      try {
+        const provider = modern
+          ? createJsonSchemaValidatorProvider({ dialect: "2020-12", formats: annotationFormats })
+          : (draft7Provider ??= createJsonSchemaValidatorProvider({
+              dialect: "draft7",
+              formats: createFormatRefinements(formats),
+            }));
+        validator = provider.getValidator(schema);
+      } catch (error) {
+        const setupError = toErrorObject(error, "schema setup failed");
+        throw new Error(
+          `Invalid MCP ${modern ? "draft-2020-12 " : ""}JSON Schema: ${setupError.message}`,
+          { cause: error },
+        );
+      }
+      return (input: unknown) => {
+        if (validator.check(input)) {
+          // SAFETY: The SDK pairs T with this runtime schema; its successful check admits input.
+          return { valid: true, data: input as T, errorMessage: undefined };
+        }
+        return {
+          valid: false,
+          data: undefined,
+          errorMessage: formatTypeBoxErrors(validator.errors(input)),
         };
       };
     },

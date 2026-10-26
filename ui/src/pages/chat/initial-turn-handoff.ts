@@ -1,24 +1,9 @@
-import {
-  readSessionMessageIdentity,
-  readSessionMessageSequence,
-} from "@openclaw/gateway-client/browser";
-import type {
-  ApplicationInitialUserMessage,
-  ApplicationInitialUserMessageHandoff,
-} from "../../app/context.ts";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
+import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import {
-  getChatAttachmentDataUrl,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
-import {
-  keepVolatileQueuedMessage,
-  readChatQueueForScope,
-  type ChatQueueScopedSessionHost,
-} from "./chat-queue.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 
 const INITIAL_TURN_HANDOFF_TTL_MS = 60_000;
 
@@ -26,9 +11,15 @@ type InitialTurnHandoff = {
   item: ChatQueueItem;
   sessionKey: string;
   timer: ReturnType<typeof globalThis.setTimeout>;
+  retryAfter?: Promise<boolean>;
 };
 
 let pending: InitialTurnHandoff | null = null;
+const listeners = createChangeListeners();
+
+export function subscribeInitialTurnHandoff(listener: () => void): () => void {
+  return listeners.subscribe(listener);
+}
 
 function clearPending(releaseAttachments: boolean): void {
   if (!pending) {
@@ -41,206 +32,30 @@ function clearPending(releaseAttachments: boolean): void {
   pending = null;
 }
 
-/** Hands one storage-rejected initial turn to the chat route that owns its created session. */
-export function prepareInitialTurnHandoff(sessionKey: string, item: ChatQueueItem): void {
+/** Transfer the created session's rejected turn and optional consent-gated retry to its pane. */
+export function prepareInitialTurnHandoff(
+  sessionKey: string,
+  item: ChatQueueItem,
+  retryAfter?: Promise<boolean>,
+): void {
   clearPending(true);
   const timer = globalThis.setTimeout(() => clearPending(true), INITIAL_TURN_HANDOFF_TTL_MS);
-  pending = { item, sessionKey, timer };
+  pending = { item, sessionKey, timer, retryAfter };
+  listeners.publish();
 }
 
-/** Hands the accepted first prompt to chat before transcript persistence catches up. */
-export function prepareInitialUserMessageHandoff(
-  handoff: ApplicationInitialUserMessageHandoff,
+export function takeInitialTurnHandoff(
+  host: ChatHost,
   sessionKey: string,
-  item: Pick<ChatQueueItem, "attachments" | "createdAt" | "text">,
-  owner: object,
-  identity: { messageId?: string; messageSeq?: number } = {},
-): void {
-  const durableAttachments = item.attachments?.map((attachment) => {
-    const dataUrl = getChatAttachmentDataUrl(attachment);
-    return dataUrl ? { ...attachment, dataUrl, previewUrl: dataUrl } : attachment;
-  });
-  const messageId = identity.messageId?.trim();
-  const metadata = {
-    ...(messageId ? { idempotencyKey: `${messageId}:user` } : {}),
-    ...(identity.messageSeq !== undefined ? { seq: identity.messageSeq } : {}),
-  };
-  const hasMetadata = Boolean(messageId) || identity.messageSeq !== undefined;
-  const message: ApplicationInitialUserMessage = {
-    role: "user",
-    // This bounded process-local handoff owns the durable bytes until
-    // authoritative history adopts messageSeq, so the first row can render now.
-    content: buildUserChatMessageContentBlocks(item.text, durableAttachments, {
-      renderInlineImageDataUrls: true,
-    }),
-    timestamp: item.createdAt,
-    ...(hasMetadata ? { __openclaw: metadata } : {}),
-  };
-  // Keep the projection until terminal history owns it so active first turns
-  // survive later pane/history resets.
-  handoff.prepare({ message, owner, sessionKey });
-}
-
-function initialUserMessageDisplaySignature(message: unknown): string | null {
-  const identity = readSessionMessageIdentity(message);
-  if (!identity) {
+): InitialTurnHandoff | null {
+  if (
+    !pending ||
+    !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey) ||
+    !outboxPayloadMatchesOwner(host, pending.item)
+  ) {
     return null;
   }
-  const text = extractText(message)?.trim();
-  if (text) {
-    return `${identity.role}:text:${text}`;
-  }
-  try {
-    const content = (message as { content?: unknown }).content;
-    return `${identity.role}:content:${JSON.stringify(content ?? null)}`;
-  } catch {
-    return null;
-  }
-}
-
-function isSameInitialUserMessage(candidate: unknown, message: ApplicationInitialUserMessage) {
-  const sequence = readSessionMessageSequence(message);
-  if (sequence !== null && readSessionMessageSequence(candidate) === sequence) {
-    return true;
-  }
-  const signature = initialUserMessageDisplaySignature(message);
-  return Boolean(signature && initialUserMessageDisplaySignature(candidate) === signature);
-}
-
-function hasInlineDataImage(message: ApplicationInitialUserMessage): boolean {
-  return message.content.some((block) => {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      return false;
-    }
-    const image = block as Record<string, unknown>;
-    if (image.type !== "image") {
-      return false;
-    }
-    if (typeof image.url === "string" && image.url.startsWith("data:image/")) {
-      return true;
-    }
-    const source = image.source;
-    return (
-      source !== null &&
-      typeof source === "object" &&
-      !Array.isArray(source) &&
-      typeof (source as Record<string, unknown>).url === "string" &&
-      ((source as Record<string, unknown>).url as string).startsWith("data:image/")
-    );
-  });
-}
-
-function preserveInlineInitialImageProjection(
-  host: { chatMessages: unknown[] },
-  message: ApplicationInitialUserMessage,
-): boolean {
-  if (!hasInlineDataImage(message)) {
-    return false;
-  }
-  const matchingIndex = host.chatMessages.findIndex((candidate) =>
-    isSameInitialUserMessage(candidate, message),
-  );
-  if (matchingIndex < 0 || host.chatMessages[matchingIndex] === message) {
-    return false;
-  }
-  const authoritative = host.chatMessages[matchingIndex];
-  const authoritativeRecord =
-    authoritative && typeof authoritative === "object" && !Array.isArray(authoritative)
-      ? (authoritative as Record<string, unknown>)
-      : {};
-  const {
-    content: _content,
-    __openclaw: authoritativeMetadata,
-    ...authoritativeFields
-  } = authoritativeRecord;
-  const normalizedAuthoritativeMetadata =
-    authoritativeMetadata &&
-    typeof authoritativeMetadata === "object" &&
-    !Array.isArray(authoritativeMetadata)
-      ? (authoritativeMetadata as Record<string, unknown>)
-      : {};
-  const { media: _media, ...authoritativeMetadataFields } = normalizedAuthoritativeMetadata;
-  const nextMessages = [...host.chatMessages];
-  // History projects canonical local attachment facts. Keep the already
-  // decoded inline projection for this page lifecycle so adopting history does
-  // not add a second image source or visibly flash the accepted first prompt.
-  nextMessages[matchingIndex] = {
-    ...message,
-    ...authoritativeFields,
-    content: message.content,
-    __openclaw: {
-      ...authoritativeMetadataFields,
-      ...message["__openclaw"],
-    },
-  };
-  host.chatMessages = nextMessages;
-  return true;
-}
-
-function consumeInitialTurnHandoff(sessionKey: string): ChatQueueItem | null {
-  if (!pending || !areUiSessionKeysEquivalent(pending.sessionKey, sessionKey)) {
-    return null;
-  }
-  const item = pending.item;
+  const handoff = pending;
   clearPending(false);
-  return item;
-}
-
-export function admitInitialTurnHandoff(
-  host: ChatQueueScopedSessionHost,
-  sessionKey: string,
-): boolean {
-  const item = consumeInitialTurnHandoff(sessionKey);
-  if (!item) {
-    return false;
-  }
-  const queue = readChatQueueForScope(host, sessionKey, item.agentId);
-  if (!queue.some((entry) => entry.id === item.id)) {
-    keepVolatileQueuedMessage(host, sessionKey, item, item.agentId, { retryable: true });
-  }
-  return true;
-}
-
-export function admitInitialUserMessageHandoff(
-  handoff: ApplicationInitialUserMessageHandoff,
-  host: { chatMessages: unknown[]; client?: object | null },
-  sessionKey: string,
-): boolean {
-  const message = handoff.read(sessionKey, host.client ?? null);
-  if (!message) {
-    return false;
-  }
-  const matchingMessage = host.chatMessages.find((candidate) =>
-    isSameInitialUserMessage(candidate, message),
-  );
-  if (matchingMessage) {
-    return false;
-  }
-  host.chatMessages = [message, ...host.chatMessages];
-  return true;
-}
-
-/** Keeps the accepted prompt projected until authoritative history owns it. */
-export function reconcileInitialUserMessageHandoff(
-  handoff: ApplicationInitialUserMessageHandoff,
-  host: { chatMessages: unknown[]; client?: object | null },
-  sessionKey: string,
-  authoritativeMessages: unknown[],
-  runActive: boolean,
-): boolean {
-  const message = handoff.read(sessionKey, host.client ?? null);
-  if (!message) {
-    return false;
-  }
-  const historyOwnsMessage = authoritativeMessages.some((candidate) =>
-    isSameInitialUserMessage(candidate, message),
-  );
-  if (historyOwnsMessage) {
-    const projectionPreserved = preserveInlineInitialImageProjection(host, message);
-    if (!runActive) {
-      handoff.clear(sessionKey);
-    }
-    return projectionPreserved;
-  }
-  return admitInitialUserMessageHandoff(handoff, host, sessionKey);
+  return handoff;
 }

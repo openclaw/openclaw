@@ -14,7 +14,6 @@ export {
   type ResolvedMemorySearchSyncConfig,
 } from "./host/openclaw-runtime-agent.js";
 export { parseDurationMs } from "./host/openclaw-runtime-config.js";
-export { loadConfig } from "./host/openclaw-runtime-config.js";
 export { resolveStateDir } from "./host/openclaw-runtime-config.js";
 export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export {
@@ -36,13 +35,6 @@ export {
   truncateUtf16Safe,
 } from "./host/openclaw-runtime-io.js";
 export type { OpenClawConfig } from "./host/openclaw-runtime-config.js";
-export type { SessionSendPolicyConfig } from "./host/openclaw-runtime-config.js";
 export type { SecretInput } from "./host/openclaw-runtime-config.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "./host/openclaw-runtime-config.js";
+export type { MemoryCitationsMode } from "./host/openclaw-runtime-config.js";
 export type { MemorySearchConfig } from "./host/openclaw-runtime-config.js";

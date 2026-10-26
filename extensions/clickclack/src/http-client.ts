@@ -1,13 +1,11 @@
-/**
- * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
- * delivery code.
- */
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { WebSocket } from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type {
   ClickClackBotCommand,
   ClickClackChannel,
@@ -51,11 +49,25 @@ function provenanceFields(provenance?: ClickClackMessageProvenance): Record<stri
   return fields;
 }
 
-type ClientOptions = {
-  baseUrl: string;
-  token: string;
-  correlationId?: string;
-  fetch?: typeof fetch;
+type MessageCreateOptions = {
+  provenance?: ClickClackMessageProvenance;
+  quotedMessageId?: string;
+  nonce?: string;
+};
+
+type NonceObjects = {
+  message: ClickClackMessage & { attachments?: Array<{ id: string }> };
+  upload: ClickClackUpload;
+};
+
+type ResponseObjects = NonceObjects & {
+  user: ClickClackUser;
+  bot_commands: ClickClackBotCommand[];
+  workspaces: ClickClackWorkspace[];
+  channels: ClickClackChannel[];
+  channel: ClickClackChannel;
+  messages: ClickClackMessage[];
+  conversation: { id: string };
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
@@ -70,15 +82,10 @@ const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 // Without this, gateway.ts waits forever for close/error when TCP accepts but
 // never upgrades, pinning the monitor reconnect loop.
 const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
+const CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS = 15_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
-
-type ClickClackMessagePage = {
-  messages: ClickClackMessage[];
-  oldest_seq: number;
-  has_older: boolean;
-};
 
 function compareMessages(left: ClickClackMessage, right: ClickClackMessage): number {
   return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
@@ -127,10 +134,13 @@ export function normalizeClickClackCorrelationId(value: unknown): string | undef
   return normalized;
 }
 
-/**
- * Creates a typed client for the ClickClack API using bearer-token auth.
- */
-export function createClickClackClient(options: ClientOptions) {
+export function createClickClackClient(options: {
+  baseUrl: string;
+  token: string;
+  correlationId?: string;
+  fetch?: typeof fetch;
+  beforeRequest?: () => void;
+}) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const fetcher = options.fetch ?? fetch;
   const correlationId = normalizeClickClackCorrelationId(options.correlationId);
@@ -139,7 +149,11 @@ export function createClickClackClient(options: ClientOptions) {
     Accept: "application/json",
   };
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    init: RequestInit = {},
+    requestOptions: { timeoutMs?: number; responseMode?: "json" | "none" } = {},
+  ): Promise<T> {
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
@@ -150,7 +164,16 @@ export function createClickClackClient(options: ClientOptions) {
     if (init.body && !(init.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
+    const response = await captureEffectAuthority().initiate(() => {
+      options.beforeRequest?.();
+      return fetcher(`${baseUrl}${path}`, {
+        ...init,
+        ...(requestOptions.timeoutMs !== undefined && !init.signal
+          ? { signal: AbortSignal.timeout(requestOptions.timeoutMs) }
+          : {}),
+        headers: requestHeaders,
+      });
+    });
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       // Remote error bodies are untrusted output; redact them even when the
@@ -158,12 +181,29 @@ export function createClickClackClient(options: ClientOptions) {
       throw new ClickClackHttpError(
         response.status,
         redactToolPayloadText(detail),
-        new Headers(response.headers),
+        response.headers,
       );
+    }
+    if (requestOptions.responseMode === "none") {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // A successful write does not depend on an optional response body.
+      }
+      return undefined as T;
     }
     return await readProviderJsonResponse<T>(response, "ClickClack response", {
       maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
     });
+  }
+
+  async function requestObject<K extends keyof ResponseObjects>(
+    key: K,
+    path: string,
+    init?: RequestInit,
+  ): Promise<ResponseObjects[K]> {
+    const data = await request<Pick<ResponseObjects, K>>(path, init);
+    return data[key];
   }
 
   async function fetchEventPage(
@@ -193,33 +233,68 @@ export function createClickClackClient(options: ClientOptions) {
     };
   }
 
+  async function createMessage(
+    path: string,
+    body: string,
+    opts?: MessageCreateOptions,
+    activity?: { kind: "agent_commentary" | "agent_tool"; turnId?: string },
+  ): Promise<ClickClackMessage> {
+    return requestObject("message", path, {
+      method: "POST",
+      body: JSON.stringify({
+        body,
+        ...(activity ? { kind: activity.kind, turn_id: activity.turnId } : {}),
+        ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
+        ...(opts?.nonce ? { nonce: opts.nonce } : {}),
+        ...provenanceFields(opts?.provenance),
+      }),
+    });
+  }
+
+  async function findByNonce<K extends keyof NonceObjects>(
+    kind: K,
+    params: { workspaceId: string; nonce: string },
+  ): Promise<NonceObjects[K] | undefined> {
+    const query = new URLSearchParams({ workspace_id: params.workspaceId, nonce: params.nonce });
+    try {
+      const data = await request<Pick<NonceObjects, K>>(
+        `/api/${kind}s/by-nonce?${query.toString()}`,
+      );
+      return data[kind];
+    } catch (error) {
+      if (error instanceof ClickClackHttpError && error.status === 404) {
+        if (error.headers.get(`X-ClickClack-${kind}-Nonce`) === "supported") {
+          return undefined;
+        }
+        throw new Error(`ClickClack server does not support durable ${kind} nonce lookup`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+  }
+
+  function messageList(resource: "channels" | "dms") {
+    return async (id: string, afterSeq: number, limit = 20): Promise<ClickClackMessage[]> =>
+      requestObject(
+        "messages",
+        `/api/${resource}/${encodeURIComponent(id)}/messages?after_seq=${afterSeq}&limit=${limit}`,
+      );
+  }
+
   return {
-    me: async (): Promise<ClickClackUser> => {
-      const data = await request<{ user: ClickClackUser }>("/api/me");
-      return data.user;
-    },
+    me: (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
     setBotCommands: async (
       commands: { command: string; description: string; args_hint?: string }[],
-    ): Promise<ClickClackBotCommand[]> => {
-      const data = await request<{ bot_commands: ClickClackBotCommand[] }>(
-        "/api/bots/self/commands",
-        {
-          method: "PUT",
-          body: JSON.stringify({ commands }),
-        },
-      );
-      return data.bot_commands;
-    },
-    workspaces: async (): Promise<ClickClackWorkspace[]> => {
-      const data = await request<{ workspaces: ClickClackWorkspace[] }>("/api/workspaces");
-      return data.workspaces;
-    },
-    channels: async (workspaceId: string): Promise<ClickClackChannel[]> => {
-      const data = await request<{ channels: ClickClackChannel[] }>(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
-      );
-      return data.channels;
-    },
+    ): Promise<ClickClackBotCommand[]> =>
+      requestObject("bot_commands", "/api/bots/self/commands", {
+        method: "PUT",
+        body: JSON.stringify({ commands }),
+      }),
+    workspaces: (): Promise<ClickClackWorkspace[]> =>
+      requestObject("workspaces", "/api/workspaces"),
+    channels: async (workspaceId: string): Promise<ClickClackChannel[]> =>
+      requestObject("channels", `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`),
     createChannel: async (
       workspaceId: string,
       channel: {
@@ -231,13 +306,11 @@ export function createClickClackClient(options: ClientOptions) {
         sidebar_section: string;
         display_title?: string;
       },
-    ): Promise<ClickClackChannel> => {
-      const data = await request<{ channel: ClickClackChannel }>(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`,
-        { method: "POST", body: JSON.stringify(channel) },
-      );
-      return data.channel;
-    },
+    ): Promise<ClickClackChannel> =>
+      requestObject("channel", `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`, {
+        method: "POST",
+        body: JSON.stringify(channel),
+      }),
     updateChannel: async (
       channelId: string,
       patch: {
@@ -249,23 +322,12 @@ export function createClickClackClient(options: ClientOptions) {
         sidebar_section?: string;
         display_title?: string;
       },
-    ): Promise<ClickClackChannel> => {
-      const data = await request<{ channel: ClickClackChannel }>(
-        `/api/channels/${encodeURIComponent(channelId)}`,
-        { method: "PATCH", body: JSON.stringify(patch) },
-      );
-      return data.channel;
-    },
-    channelMessages: async (
-      channelId: string,
-      afterSeq: number,
-      limit = 20,
-    ): Promise<ClickClackMessage[]> => {
-      const data = await request<{ messages: ClickClackMessage[] }>(
-        `/api/channels/${encodeURIComponent(channelId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
-      );
-      return data.messages;
-    },
+    ): Promise<ClickClackChannel> =>
+      requestObject("channel", `/api/channels/${encodeURIComponent(channelId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+    channelMessages: messageList("channels"),
     latestChannelMessages: async (
       channelId: string,
       limit = 30,
@@ -287,9 +349,11 @@ export function createClickClackClient(options: ClientOptions) {
         if (beforeSeq !== undefined) {
           query.set("before_seq", String(beforeSeq));
         }
-        const page = await request<ClickClackMessagePage>(
-          `/api/channels/${encodeURIComponent(channelId)}/messages?${query.toString()}`,
-        );
+        const page = await request<{
+          messages: ClickClackMessage[];
+          oldest_seq: number;
+          has_older: boolean;
+        }>(`/api/channels/${encodeURIComponent(channelId)}/messages?${query.toString()}`);
 
         for (const root of page.messages) {
           latest = keepLatestMessages([...latest, root], boundedLimit);
@@ -338,106 +402,42 @@ export function createClickClackClient(options: ClientOptions) {
         beforeSeq = page.oldest_seq;
       }
     },
-    directMessages: async (
-      conversationId: string,
-      afterSeq: number,
-      limit = 20,
-    ): Promise<ClickClackMessage[]> => {
-      const data = await request<{ messages: ClickClackMessage[] }>(
-        `/api/dms/${encodeURIComponent(conversationId)}/messages?after_seq=${afterSeq}&limit=${limit}`,
-      );
-      return data.messages;
-    },
+    directMessages: messageList("dms"),
     thread: async (
       messageId: string,
     ): Promise<{ root: ClickClackMessage; replies: ClickClackMessage[] }> =>
       await request<{ root: ClickClackMessage; replies: ClickClackMessage[] }>(
         `/api/messages/${encodeURIComponent(messageId)}/thread`,
       ),
-    message: async (
-      messageId: string,
-    ): Promise<ClickClackMessage & { attachments?: Array<{ id: string }> }> => {
-      const data = await request<{
-        message: ClickClackMessage & { attachments?: Array<{ id: string }> };
-      }>(`/api/messages/${encodeURIComponent(messageId)}`);
-      return data.message;
-    },
-    findMessageByNonce: async (params: {
+    message: async (messageId: string): Promise<NonceObjects["message"]> =>
+      requestObject("message", `/api/messages/${encodeURIComponent(messageId)}`),
+    findMessageByNonce: (params: {
       workspaceId: string;
       nonce: string;
-    }): Promise<(ClickClackMessage & { attachments?: Array<{ id: string }> }) | undefined> => {
-      const query = new URLSearchParams({
-        workspace_id: params.workspaceId,
-        nonce: params.nonce,
-      });
-      try {
-        const data = await request<{
-          message: ClickClackMessage & { attachments?: Array<{ id: string }> };
-        }>(`/api/messages/by-nonce?${query.toString()}`);
-        return data.message;
-      } catch (error) {
-        if (error instanceof ClickClackHttpError && error.status === 404) {
-          if (error.headers.get("X-ClickClack-Message-Nonce") === "supported") {
-            return undefined;
-          }
-          throw new Error("ClickClack server does not support durable message nonce lookup", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    },
+    }): Promise<NonceObjects["message"] | undefined> => findByNonce("message", params),
     createChannelMessage: async (
       channelId: string,
       body: string,
-      opts?: {
-        provenance?: ClickClackMessageProvenance;
-        quotedMessageId?: string;
-        nonce?: string;
-      },
-    ): Promise<ClickClackMessage> => {
-      const data = await request<{ message: ClickClackMessage }>(
-        `/api/channels/${encodeURIComponent(channelId)}/messages`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            body,
-            ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
-            ...(opts?.nonce ? { nonce: opts.nonce } : {}),
-            ...provenanceFields(opts?.provenance),
-          }),
-        },
-      );
-      return data.message;
-    },
+      opts?: MessageCreateOptions,
+    ): Promise<ClickClackMessage> =>
+      createMessage(`/api/channels/${encodeURIComponent(channelId)}/messages`, body, opts),
     createThreadReply: async (
       messageId: string,
       body: string,
       opts?: { provenance?: ClickClackMessageProvenance; nonce?: string },
-    ): Promise<ClickClackMessage> => {
-      const data = await request<{ message: ClickClackMessage }>(
-        `/api/messages/${encodeURIComponent(messageId)}/thread/replies`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            body,
-            ...(opts?.nonce ? { nonce: opts.nonce } : {}),
-            ...provenanceFields(opts?.provenance),
-          }),
-        },
-      );
-      return data.message;
-    },
+    ): Promise<ClickClackMessage> =>
+      createMessage(`/api/messages/${encodeURIComponent(messageId)}/thread/replies`, body, {
+        nonce: opts?.nonce,
+        provenance: opts?.provenance,
+      }),
     createDirectConversation: async (
       workspaceId: string,
       memberIds: string[],
-    ): Promise<{ id: string }> => {
-      const data = await request<{ conversation: { id: string } }>("/api/dms", {
+    ): Promise<{ id: string }> =>
+      requestObject("conversation", "/api/dms", {
         method: "POST",
         body: JSON.stringify({ workspace_id: workspaceId, member_ids: memberIds }),
-      });
-      return data.conversation;
-    },
+      }),
     createUpload: async (params: {
       workspaceId: string;
       buffer: Buffer;
@@ -446,43 +446,21 @@ export function createClickClackClient(options: ClientOptions) {
       nonce?: string;
     }): Promise<ClickClackUpload> => {
       const form = new FormData();
-      const bytes = new Uint8Array(params.buffer);
+      const bytes = bufferToBlobPart(params.buffer);
       form.append("file", new Blob([bytes], { type: params.contentType }), params.filename);
       const query = new URLSearchParams({ workspace_id: params.workspaceId });
       if (params.nonce) {
         query.set("nonce", params.nonce);
       }
-      const data = await request<{ upload: ClickClackUpload }>(`/api/uploads?${query.toString()}`, {
+      return requestObject("upload", `/api/uploads?${query.toString()}`, {
         method: "POST",
         body: form,
       });
-      return data.upload;
     },
     findUploadByNonce: async (params: {
       workspaceId: string;
       nonce: string;
-    }): Promise<ClickClackUpload | undefined> => {
-      const query = new URLSearchParams({
-        workspace_id: params.workspaceId,
-        nonce: params.nonce,
-      });
-      try {
-        const data = await request<{ upload: ClickClackUpload }>(
-          `/api/uploads/by-nonce?${query.toString()}`,
-        );
-        return data.upload;
-      } catch (error) {
-        if (error instanceof ClickClackHttpError && error.status === 404) {
-          if (error.headers.get("X-ClickClack-Upload-Nonce") === "supported") {
-            return undefined;
-          }
-          throw new Error("ClickClack server does not support durable upload nonce lookup", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    },
+    }): Promise<ClickClackUpload | undefined> => findByNonce("upload", params),
     attachUpload: async (messageId: string, uploadId: string): Promise<void> => {
       await request<{ ok: true }>(`/api/messages/${encodeURIComponent(messageId)}/attachments`, {
         method: "POST",
@@ -508,43 +486,51 @@ export function createClickClackClient(options: ClientOptions) {
       const path = params.channelId
         ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
         : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;
-      const data = await request<{ message: ClickClackMessage }>(path, {
-        method: "POST",
-        body: JSON.stringify({
-          body: params.body,
-          kind: params.kind,
-          turn_id: params.turnId,
-          ...provenanceFields(params.provenance),
-        }),
-      });
-      return data.message;
+      return createMessage(path, params.body, { provenance: params.provenance }, params);
     },
-    /** PATCHes the body of an existing message (activity row coalescing). */
-    updateMessageBody: async (messageId: string, body: string): Promise<ClickClackMessage> => {
-      const data = await request<{ message: ClickClackMessage }>(
-        `/api/messages/${encodeURIComponent(messageId)}`,
-        { method: "PATCH", body: JSON.stringify({ body }) },
+    updateMessageBody: async (messageId: string, body: string): Promise<ClickClackMessage> =>
+      requestObject("message", `/api/messages/${encodeURIComponent(messageId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ body }),
+      }),
+    /**
+     * Publishes an ephemeral realtime signal such as native agent progress.
+     * These frames are intentionally not persisted as messages.
+     */
+    publishEphemeral: async (params: {
+      workspaceId: string;
+      channelId?: string;
+      conversationId?: string;
+      type: "typing.started" | "typing.stopped" | "presence.changed" | "agent.progress";
+      payload?: Record<string, unknown>;
+    }): Promise<void> => {
+      await request<void>(
+        "/api/realtime/ephemeral",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: params.workspaceId,
+            ...(params.channelId ? { channel_id: params.channelId } : {}),
+            ...(params.conversationId ? { direct_conversation_id: params.conversationId } : {}),
+            type: params.type,
+            payload: params.payload ?? {},
+          }),
+        },
+        {
+          timeoutMs: CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS,
+          responseMode: "none",
+        },
       );
-      return data.message;
     },
     createDirectMessage: async (
       conversationId: string,
       body: string,
       opts?: { quotedMessageId?: string; nonce?: string },
-    ): Promise<ClickClackMessage> => {
-      const data = await request<{ message: ClickClackMessage }>(
-        `/api/dms/${encodeURIComponent(conversationId)}/messages`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            body,
-            ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
-            ...(opts?.nonce ? { nonce: opts.nonce } : {}),
-          }),
-        },
-      );
-      return data.message;
-    },
+    ): Promise<ClickClackMessage> =>
+      createMessage(`/api/dms/${encodeURIComponent(conversationId)}/messages`, body, {
+        quotedMessageId: opts?.quotedMessageId,
+        nonce: opts?.nonce,
+      }),
     events: async (workspaceId: string, afterCursor?: string): Promise<ClickClackEvent[]> =>
       (await fetchEventPage(workspaceId, { afterCursor })).events,
     eventPage: fetchEventPage,
@@ -566,5 +552,4 @@ export function createClickClackClient(options: ClientOptions) {
   };
 }
 
-/** Client shape returned by `createClickClackClient`. */
 export type ClickClackClient = ReturnType<typeof createClickClackClient>;

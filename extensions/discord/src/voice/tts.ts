@@ -1,52 +1,17 @@
-// Discord plugin module implements tts behavior.
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getDiscordRuntime } from "../runtime.js";
-import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
-type VoiceReplyAudioResult =
-  | {
-      status: "ok";
-      mode: "file";
-      audioPath: string;
-      speakText: string;
-    }
-  | {
-      status: "ok";
-      mode: "stream";
-      audioStream: ReadableStream<Uint8Array>;
-      release?: () => Promise<void>;
-      speakText: string;
-    }
-  | {
-      status: "empty";
-    }
-  | {
-      status: "failed";
-      error?: string;
-    };
-
-export async function transcribeVoiceAudio(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  filePath: string;
-}): Promise<string | undefined> {
-  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
-    filePath: params.filePath,
-    cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
-    mime: "audio/wav",
-  });
-  return normalizeOptionalString(result.text);
-}
+const SPEECH_EMOJI_RE =
+  /(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*)+/gu;
 
 export async function synthesizeVoiceReplyAudio(params: {
   cfg: OpenClawConfig;
   override?: TtsConfig;
   replyText: string;
   speakerLabel: string;
-}): Promise<VoiceReplyAudioResult> {
+}) {
   const runtime = getDiscordRuntime();
   const prepared = await runtime.tts.prepareTtsRequest({
     cfg: params.cfg,
@@ -55,35 +20,60 @@ export async function synthesizeVoiceReplyAudio(params: {
   });
   const directive = prepared.directives;
   const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
-  const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
-  if (!speakText) {
-    return { status: "empty" };
-  }
-  const streamResult = await runtime.tts.textToSpeechStream?.({
-    text: speakText,
-    cfg: prepared.cfg,
-    channel: "discord",
-    overrides: directive.overrides,
-    disableFallback: true,
-  });
-  if (streamResult?.success && streamResult.audioStream) {
-    return {
-      status: "ok",
-      mode: "stream",
-      audioStream: streamResult.audioStream,
-      release: streamResult.release,
-      speakText,
-    };
+  let cleaned = stripInlineDirectiveTagsForDisplay(rawSpeakText).text.trim();
+  if (!cleaned) {
+    return { status: "empty" as const };
   }
 
-  const result = await runtime.tts.textToSpeech({
+  const label = params.speakerLabel?.trim();
+  if (label) {
+    const prefix = new RegExp(`^${escapeRegExp(label)}\\s*:\\s*`, "i");
+    cleaned = cleaned.replace(prefix, "").trim();
+  }
+
+  const speakText = cleaned
+    .replace(SPEECH_EMOJI_RE, " ")
+    .replace(/\s+([?!.,:;])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
+  if (!speakText) {
+    return { status: "empty" as const };
+  }
+  const request = {
     text: speakText,
     cfg: prepared.cfg,
     channel: "discord",
     overrides: directive.overrides,
+  };
+  const streamResult = await runtime.tts.textToSpeechStream({
+    ...request,
+    disableFallback: true,
   });
-  if (!result.success || !result.audioPath) {
-    return { status: "failed", error: result.error ?? "unknown error" };
+  if (streamResult.success && streamResult.audioStream) {
+    return {
+      status: "ok" as const,
+      mode: "stream" as const,
+      audioStream: streamResult.audioStream,
+      release: streamResult.release,
+    };
   }
-  return { status: "ok", mode: "file", audioPath: result.audioPath, speakText };
+  const streamFailure = !streamResult.success
+    ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
+    : undefined;
+
+  const result = await runtime.tts.textToSpeech(request);
+  if (!result.success || !result.audioPath) {
+    return { status: "failed" as const, error: result.error ?? "unknown error" };
+  }
+  return {
+    status: "ok" as const,
+    mode: "file" as const,
+    audioPath: result.audioPath,
+    ...(streamFailure
+      ? {
+          streamFailure: { provider: streamFailure.provider, reasonCode: streamFailure.reasonCode },
+        }
+      : {}),
+  };
 }

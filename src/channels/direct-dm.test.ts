@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expect, it, vi } from "vitest";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
+import { buildChannelInboundEventContext } from "./inbound-event/context.js";
+import { resolveStableChannelIngressPolicy } from "./message-access/runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  dispatchChannelInboundTurn: vi.fn(async () => undefined),
+  dispatchRoutedChannelTurn: vi.fn(async () => undefined),
   onModelSelected: vi.fn(),
 }));
 
@@ -11,14 +12,17 @@ vi.mock("./inbound-event/context.js", () => ({
   buildChannelInboundEventContext: vi.fn(() => ({ Body: "envelope:hello" })),
 }));
 
-vi.mock("./inbound-event/envelope.js", () => ({
-  resolveChannelInboundRouteEnvelope: vi.fn(() => ({
-    route: {
-      agentId: "agent-1",
-      accountId: "account-1",
-      sessionKey: "agent:agent-1:nostr:direct:peer-1",
-    },
-    buildEnvelope: vi.fn(() => "envelope:hello"),
+vi.mock("./inbound-event/envelope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-event/envelope.js")>()),
+  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => () => "envelope:hello"),
+}));
+
+vi.mock("../routing/resolve-route.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../routing/resolve-route.js")>()),
+  resolveAgentRoute: vi.fn(() => ({
+    agentId: "agent-1",
+    accountId: "account-1",
+    sessionKey: "agent:agent-1:nostr:direct:peer-1",
   })),
 }));
 
@@ -29,69 +33,115 @@ vi.mock("./message/reply-pipeline.js", () => ({
   })),
 }));
 
-vi.mock("./turn/kernel.js", () => ({
-  dispatchChannelInboundTurn: mocks.dispatchChannelInboundTurn,
-  runPreparedInboundReply: vi.fn(),
+vi.mock("./turn/lifecycle.js", () => ({
+  dispatchRoutedChannelTurn: mocks.dispatchRoutedChannelTurn,
 }));
 
-describe("dispatchInboundDirectDm", () => {
-  it("forwards the canonical model-selection reply pipeline", async () => {
-    await dispatchInboundDirectDm({
-      cfg: {} as OpenClawConfig,
-      channel: "nostr",
-      channelLabel: "Nostr",
-      accountId: "account-1",
-      peer: { kind: "direct", id: "peer-1" },
-      senderId: "peer-1",
-      senderAddress: "nostr:peer-1",
-      recipientAddress: "nostr:bot-1",
-      conversationLabel: "peer-1",
-      rawBody: "hello",
-      messageId: "event-1",
-      deliver: async () => undefined,
-      onRecordError: vi.fn(),
-      onDispatchError: vi.fn(),
-    });
+function dispatchDm(overrides: Partial<Parameters<typeof dispatchInboundDirectDm>[0]>) {
+  return dispatchInboundDirectDm({
+    cfg: {},
+    channel: "nostr",
+    channelLabel: "Nostr",
+    accountId: "account-1",
+    peer: { kind: "direct", id: "peer-1" },
+    senderId: "peer-1",
+    senderAddress: "nostr:peer-1",
+    recipientAddress: "nostr:bot-1",
+    conversationLabel: "peer-1",
+    rawBody: "hello",
+    messageId: "event-1",
+    deliver: async () => undefined,
+    onRecordError: vi.fn(),
+    onDispatchError: vi.fn(),
+    ...overrides,
+  });
+}
 
-    expect(mocks.dispatchChannelInboundTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
-        replyOptions: { onModelSelected: mocks.onModelSelected },
-      }),
-    );
+const contextParams = () => vi.mocked(buildChannelInboundEventContext).mock.calls.at(-1)?.[0];
+const ingressPolicy = (
+  contextBinding?: Parameters<typeof resolveStableChannelIngressPolicy>[0]["contextBinding"],
+) =>
+  resolveStableChannelIngressPolicy({
+    channelId: "nostr",
+    accountId: "account-1",
+    subject: { stableId: "peer-1" },
+    conversation: { kind: "direct", id: "peer-1" },
+    dmPolicy: "open",
+    contextBinding,
   });
 
-  it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
-    const turnAdoptionLifecycle = {
-      admission: "exclusive" as const,
-      onAdopted: vi.fn(async () => {}),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
-      abortSignal: new AbortController().signal,
-    };
+it("forwards the canonical model-selection reply pipeline", async () => {
+  const channelIngress = await ingressPolicy();
+  await dispatchDm({ channelIngress });
 
-    await dispatchInboundDirectDm({
-      cfg: {} as OpenClawConfig,
-      channel: "nostr",
-      channelLabel: "Nostr",
-      accountId: "account-1",
-      peer: { kind: "direct", id: "peer-1" },
-      senderId: "peer-1",
-      senderAddress: "nostr:peer-1",
-      recipientAddress: "nostr:bot-1",
-      conversationLabel: "peer-1",
-      rawBody: "hello",
-      messageId: "event-1",
-      turnAdoptionLifecycle,
-      deliver: async () => undefined,
-      onRecordError: vi.fn(),
-      onDispatchError: vi.fn(),
-    });
+  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
+      replyOptions: { onModelSelected: mocks.onModelSelected },
+    }),
+  );
+  expect(contextParams()?.channelIngress).toBe(channelIngress);
+});
 
-    expect(mocks.dispatchChannelInboundTurn).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
-      }),
-    );
+it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
+  const assertAuthority = vi.fn();
+  const turnAdoptionLifecycle = {
+    admission: "exclusive" as const,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(),
+    onAbandoned: vi.fn(),
+    abortSignal: new AbortController().signal,
+  };
+
+  await dispatchDm({
+    channelIngress: "unsupported",
+    turnAdoptionLifecycle,
+    assertAuthority,
   });
+
+  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      assertAuthority,
+      replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
+    }),
+  );
+  expect(assertAuthority).not.toHaveBeenCalled();
+  expect(contextParams()?.channelIngress).toBe("unsupported");
+});
+
+it("resolves exact ingress provenance once after the final route is known", async () => {
+  const resolveChannelIngress = vi.fn(ingressPolicy);
+
+  await dispatchDm({ resolveChannelIngress });
+
+  expect(resolveChannelIngress).toHaveBeenCalledOnce();
+  expect(resolveChannelIngress).toHaveBeenCalledWith({
+    agentId: "agent-1",
+    sessionKey: "agent:agent-1:nostr:direct:peer-1",
+    messageId: "event-1",
+    inboundEventKind: "user_request",
+  });
+  expect(contextParams()?.channelIngress).toBe(await resolveChannelIngress.mock.results[0]?.value);
+});
+
+it("preserves the shipped SDK contract for callers without ingress provenance", async () => {
+  await dispatchDm({ channel: "external", channelLabel: "External" });
+
+  expect(contextParams()?.channelIngress).toBeUndefined();
+});
+
+it("preserves Reef's explicit unsupported trust-path classification", async () => {
+  await dispatchDm({
+    channelIngress: "unsupported",
+    channel: "reef",
+    channelLabel: "Reef",
+    senderAddress: "reef:peer-1",
+    recipientAddress: "reef:bot-1",
+    inboundAccessAuthorized: true,
+  });
+
+  const context = contextParams();
+  expect(context?.channelIngress).toBe("unsupported");
+  expect(context?.reply).toEqual({ to: "reef:bot-1", originatingTo: "reef:peer-1" });
+  expect(context?.conversation.routePeer).toEqual({ kind: "direct", id: "peer-1" });
 });

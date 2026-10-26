@@ -2,6 +2,20 @@ import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } fro
 
 type CodexAppInventoryMethod = "app/installed" | "app/read";
 
+export function appMetadata(id: string): CodexAppServerRequestResult<"app/read">["apps"][number] {
+  return {
+    id,
+    name: id,
+    description: null,
+    iconUrl: null,
+    iconUrlDark: null,
+    distributionChannel: null,
+    installUrl: null,
+    pluginDisplayNames: [],
+    toolSummaries: null,
+  };
+}
+
 /** Builds app-server inventory fixtures from the existing app policy test shape. */
 export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod>(
   method: Method,
@@ -20,7 +34,8 @@ export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod
     } as CodexAppServerRequestResult<Method>;
   }
 
-  const requestedIds = (params as CodexAppServerRequestParams<"app/read"> | undefined)?.appIds;
+  const readParams = params as CodexAppServerRequestParams<"app/read"> | undefined;
+  const requestedIds = readParams?.appIds;
   const requestedIdSet = requestedIds ? new Set(requestedIds) : undefined;
   const matchingApps = apps.filter(
     (app) => app.isAccessible && (!requestedIdSet || requestedIdSet.has(app.id)),
@@ -37,6 +52,7 @@ export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod
       distributionChannel: app.distributionChannel,
       installUrl: app.installUrl,
       pluginDisplayNames: app.pluginDisplayNames,
+      toolSummaries: readParams?.includeTools ? (app.toolSummaries ?? null) : null,
     })),
     missingAppIds: requestedIds?.filter((id) => !returnedIds.has(id)) ?? [],
   } as CodexAppServerRequestResult<Method>;

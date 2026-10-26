@@ -1,40 +1,51 @@
-import type { Api, Context, Model } from "@openclaw/llm-core";
-import type {
-  ResponseFunctionCallOutputItemList,
-  ResponseInput,
-  ResponseInputItem,
-  ResponseInputMessageContentList,
-} from "openai/resources/responses/responses.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-  isImageWithMediaPayload,
-} from "../providers/tool-result-text.js";
-import { shortHash } from "../utils/hash.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { transformTransportMessages } from "./host-policy.js";
+import type { Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Stream } from "openai/core/streaming";
+import type { ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
+import { registerSessionResourceCleanup } from "../session-resources.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
-  OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
-  OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
-  OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
-  type OpenAIResponsesReasoningReplayMetadata,
-  type OpenAIResponsesReplayContext,
+  isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
-  type ReplayableResponseOutputMessage,
-  type ReplayableResponseReasoningItem,
+  type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
-import { log } from "./openai-transport-shared.js";
+import { stripEncryptedReasoningContentFields } from "./openai-responses-replay-messages-internal.js";
 import {
-  sanitizeNonEmptyTransportPayloadText,
-  sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+  isResponsesServiceTierRejection,
+  nextResponsesServiceTier,
+} from "./openai-responses-service-tier.js";
+import { log } from "./openai-transport-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return (
+    ((typeof value === "object" && value !== null) || typeof value === "function") &&
+    Symbol.asyncIterator in value
+  );
+}
+
+export function readResponsesRecoveryEvent(event: unknown) {
+  const record = isRecord(event) ? event : undefined;
+  const response = isRecord(record?.response) ? record.response : undefined;
+  return {
+    failure:
+      record?.type === "response.failed"
+        ? response?.error
+        : record?.type === "error"
+          ? (record.error ?? record)
+          : undefined,
+    hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
+    isPrelude:
+      record !== undefined &&
+      ["response.created", "response.in_progress", "response.queued"].includes(String(record.type)),
+  };
+}
 
 export function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -44,512 +55,426 @@ export function isInvalidEncryptedContentError(error: unknown): boolean {
   if (record.code === "invalid_encrypted_content" || record.code === "thinking_signature_invalid") {
     return true;
   }
-  const message = typeof record.message === "string" ? record.message : "";
+  const message = typeof record.message === "string" ? record.message.toLowerCase() : "";
   return (
     message.includes("invalid_encrypted_content") ||
     message.includes("thinking_signature_invalid") ||
-    // xAI reports this exact prose contract without an error code.
-    (record.status === 400 &&
-      message.toLowerCase().includes("could not decrypt the provided encrypted_content"))
+    ((record.status === 400 ||
+      (record.status == null && /(?:^|[\s(])400(?:[\s):]|$)/.test(message))) &&
+      (message.includes("could not decrypt the provided encrypted_content") ||
+        (message.includes("encrypted content") &&
+          (message.includes("could not be verified") ||
+            message.includes("could not be decrypted or parsed")))))
   );
 }
 
-function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
-  if (!value || typeof value !== "object") {
-    return { value, changed: false };
+function isOrphanedFunctionCallOutputError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
   }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item) => {
-      const stripped = stripEncryptedContentFields(item);
-      changed ||= stripped.changed;
-      return stripped.value;
-    });
-    return changed ? { value: next, changed: true } : { value, changed: false };
-  }
+  const record = error as Record<string, unknown>;
+  const message = typeof record.message === "string" ? record.message : "";
+  // Server rejects a function_call_output whose function_call lives inside the
+  // encrypted compaction blob. Match by substring like the sibling classifiers:
+  // wrapped transport errors prefix the raw body ("400 ...", "HTTP 400: {json}").
+  return /No tool call found for function call output with call_id [A-Za-z0-9_-]+/.test(message);
+}
 
-  let changed = false;
-  const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (key === "encrypted_content") {
-      changed = true;
-      continue;
+type ResponsesEncryptedContentRequest = { input?: ResponseInput };
+
+type ResponsesEncryptedContentAttemptKind = ResponsesPromptObservation["payloadVariant"];
+
+export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
+  kind: ResponsesEncryptedContentAttemptKind;
+  request: TRequest;
+  rejectedCompaction?: CompactionReplayRejection;
+};
+
+export function commitResponsesEncryptedContentAttempt(
+  attempt: ResponsesEncryptedContentAttempt<ResponsesEncryptedContentRequest>,
+  commit: (checkpoint: CompactionReplayRejection | undefined) => void,
+): void {
+  if (attempt.kind === "compaction-stripped") {
+    commit(attempt.rejectedCompaction);
+  }
+}
+
+function stripResponsesRequestEncryptedReasoning<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  const stripped = stripEncryptedReasoningContentFields(request.input);
+  return stripped === request.input ? request : { ...request, input: stripped as ResponseInput };
+}
+
+function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedContentRequest>(
+  request: TRequest,
+): TRequest {
+  if (!Array.isArray(request.input)) {
+    return request;
+  }
+  const input = request.input.filter(
+    (item) =>
+      !(
+        item !== null &&
+        typeof item === "object" &&
+        (item as { type?: unknown }).type === "compaction"
+      ),
+  );
+  return input.length === request.input.length ? request : { ...request, input };
+}
+
+function readOpenAIResponsesCompactionRejection(
+  request: ResponsesEncryptedContentRequest,
+): CompactionReplayRejection | undefined {
+  if (!Array.isArray(request.input)) {
+    return undefined;
+  }
+  const item = request.input.find(
+    (candidate) =>
+      candidate !== null &&
+      typeof candidate === "object" &&
+      (candidate as { type?: unknown }).type === "compaction" &&
+      typeof (candidate as { encrypted_content?: unknown }).encrypted_content === "string",
+  ) as { encrypted_content: string; id?: unknown } | undefined;
+  return item
+    ? { data: item.encrypted_content, ...(typeof item.id === "string" ? { id: item.id } : {}) }
+    : undefined;
+}
+
+export async function resolveNextResponsesEncryptedContentAttempt<
+  TRequest extends ResponsesEncryptedContentRequest,
+>(
+  attempt: ResponsesEncryptedContentAttempt<TRequest>,
+  error: unknown,
+  options: { buildFullHistoryRequest: () => TRequest | Promise<TRequest> },
+): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
+  const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
+  if (
+    (!isInvalidEncryptedContentError(error) && !orphanedFunctionOutput) ||
+    attempt.kind === "compaction-stripped"
+  ) {
+    return undefined;
+  }
+  if (
+    !orphanedFunctionOutput &&
+    (attempt.kind === "initial" || attempt.kind === "continuation-rejected")
+  ) {
+    const reasoningStripped = stripResponsesRequestEncryptedReasoning(attempt.request);
+    if (reasoningStripped !== attempt.request) {
+      return { kind: "reasoning-stripped", request: reasoningStripped };
     }
-    const stripped = stripEncryptedContentFields(child);
-    changed ||= stripped.changed;
-    next[key] = stripped.value;
   }
-  return changed ? { value: next, changed: true } : { value, changed: false };
-}
-
-export function stripResponsesRequestEncryptedContent(
-  params: OpenAIResponsesRequestParams,
-): OpenAIResponsesRequestParams {
-  const stripped = stripEncryptedContentFields(params.input);
-  if (!stripped.changed) {
-    return params;
+  const locallyStripped = stripResponsesRequestCompaction(attempt.request);
+  if (locallyStripped === attempt.request) {
+    return undefined;
+  }
+  // Filtering the already-pruned checkpoint request would leave a context-blind
+  // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
+  let compactionStripped = await options.buildFullHistoryRequest();
+  compactionStripped = stripResponsesRequestCompaction(compactionStripped);
+  if (attempt.kind === "reasoning-stripped") {
+    compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
   }
   return {
-    ...params,
-    input: stripped.value as ResponseInput,
+    kind: "compaction-stripped",
+    request: compactionStripped,
+    rejectedCompaction: readOpenAIResponsesCompactionRejection(attempt.request),
   };
 }
 
-function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? shortHash(normalized) : undefined;
-}
-
-function buildOpenAIResponsesReplayContext(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReplayContext {
-  return {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    baseUrlHash: hashOptionalReplayContextValue(model.baseUrl),
-    sessionHash: hashOptionalReplayContextValue(options?.sessionId),
-    authProfileHash: hashOptionalReplayContextValue(options?.authProfileId),
-  };
-}
-
-export function buildOpenAIResponsesReasoningReplayMetadata(
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): OpenAIResponsesReasoningReplayMetadata {
-  return {
-    v: 1,
-    source: "openai-responses",
-    ...buildOpenAIResponsesReplayContext(model, options),
-  };
-}
-
-export function tagOpenAIResponsesReasoningReplayItem(
-  item: Record<string, unknown>,
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
-): Record<string, unknown> {
-  if (!("encrypted_content" in item)) {
-    return item;
-  }
-  return {
-    ...item,
-    [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: buildOpenAIResponsesReasoningReplayMetadata(
-      model,
-      options,
-    ),
-  };
-}
-
-function isOpenAIResponsesReasoningReplayMetadata(
-  value: unknown,
-): value is OpenAIResponsesReasoningReplayMetadata {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return (
-    record.v === 1 &&
-    record.source === "openai-responses" &&
-    typeof record.provider === "string" &&
-    typeof record.api === "string" &&
-    typeof record.model === "string" &&
-    (record.baseUrlHash === undefined || typeof record.baseUrlHash === "string") &&
-    (record.sessionHash === undefined || typeof record.sessionHash === "string") &&
-    (record.authProfileHash === undefined || typeof record.authProfileHash === "string")
-  );
-}
-
-function encryptedReasoningReplayMetadataMatches(
-  metadata: OpenAIResponsesReasoningReplayMetadata | undefined,
-  context: OpenAIResponsesReplayContext,
-): boolean {
-  if (!metadata) {
-    return false;
-  }
-  return (
-    metadata.provider === context.provider &&
-    metadata.api === context.api &&
-    metadata.model === context.model &&
-    metadata.baseUrlHash === context.baseUrlHash &&
-    metadata.sessionHash === context.sessionHash &&
-    metadata.authProfileHash === context.authProfileHash
-  );
-}
-
-function readOpenAIResponsesReasoningReplayBlockMetadata(
-  block: Record<string, unknown>,
-): OpenAIResponsesReasoningReplayMetadata | undefined {
-  const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
-  return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
-}
-
-function normalizeOpenAIResponsesReasoningReplayItem(
-  item: ReplayableResponseReasoningItem,
-): ReplayableResponseReasoningItem {
-  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
-  if (record.type !== "reasoning" || Array.isArray(record.summary)) {
-    return item;
-  }
-  return { ...record, summary: [] } as ReplayableResponseReasoningItem;
-}
-
-export function prepareOpenAIResponsesReasoningItemForReplay(
-  item: ReplayableResponseReasoningItem,
-  context: OpenAIResponsesReplayContext,
-  blockMetadata?: OpenAIResponsesReasoningReplayMetadata,
-): ReplayableResponseReasoningItem {
-  const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
-    item as ReplayableResponseReasoningItem & Record<string, unknown>;
-  if (!("encrypted_content" in rest)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
-  }
-  const metadata =
-    blockMetadata ??
-    (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
-  if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
-    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
-  }
-  const stripped = stripEncryptedContentFields(rest);
-  return normalizeOpenAIResponsesReasoningReplayItem(
-    stripped.value as ReplayableResponseReasoningItem,
-  );
-}
-
-export async function createResponsesStreamWithEncryptedContentRetry(params: {
+export async function createResponsesStreamWithRecovery(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
-  requestOptions: unknown;
+  requestOptions: { signal?: AbortSignal; headers?: Record<string, string> } | undefined;
   model: Model;
+  encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
-}): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
-  try {
-    params.observePrompt?.(params.request, {
-      egress: "responses-sdk",
-      payloadVariant: "initial",
-    });
-    const { data, response } = await params.client.responses
-      .create(params.request as never, params.requestOptions as never)
-      .withResponse();
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
-  } catch (error) {
-    const retryRequest = stripResponsesRequestEncryptedContent(params.request);
-    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
-      throw error;
+  initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
+  initialRejectedCompaction?: CompactionReplayRejection;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
+  canRetryStream?: () => boolean;
+  onServiceTierRejected?: (tier: "ultrafast" | "priority") => void;
+  wrapStream?: (result: {
+    stream: AsyncIterable<unknown>;
+    response: Response;
+    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
+  }) => AsyncIterable<unknown>;
+  buildFullHistoryRequest: () =>
+    | OpenAIResponsesRequestParams
+    | Promise<OpenAIResponsesRequestParams>;
+}): Promise<{
+  stream: AsyncIterable<unknown>;
+}> {
+  async function* streamWithTerminalDrain(response: Response, body: ReadableStream<Uint8Array>) {
+    const reader = body.getReader();
+    let terminal = false;
+    try {
+      // Decoder cancellation must leave the request reader available for the bounded drain.
+      const forwarded = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) {
+              controller.close();
+            } else {
+              controller.enqueue(value);
+            }
+          },
+          cancel() {},
+        },
+        { highWaterMark: 0 },
+      );
+      const stream = Stream.fromSSEResponse<ResponseStreamEvent>(
+        new Response(forwarded, response),
+        new AbortController(),
+        params.client,
+      );
+      for await (const event of stream) {
+        terminal ||= event?.type === "response.completed" || event?.type === "response.incomplete";
+        yield event;
+      }
+    } finally {
+      if (!terminal) {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      } else {
+        const controller = new AbortController();
+        const unregister = registerSessionResourceCleanup((sessionId) => {
+          if (!sessionId) {
+            controller.abort();
+          }
+        });
+        const signal = AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(250),
+          ...(params.requestOptions?.signal ? [params.requestOptions.signal] : []),
+        ]);
+        const cancel = () => {
+          void reader.cancel().catch(() => undefined);
+        };
+        signal.addEventListener("abort", cancel, { once: true });
+        void (async () => {
+          try {
+            let bytes = 0;
+            while (!signal.aborted && bytes < 64 * 1024) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              bytes += value.byteLength;
+            }
+          } catch {
+            /* Disposal must not change the delivered terminal result. */
+          } finally {
+            cancel();
+            reader.releaseLock();
+            signal.removeEventListener("abort", cancel);
+            unregister();
+          }
+        })();
+      }
     }
-    log.warn(
-      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
-        `api=${params.model.api} model=${params.model.id}`,
-    );
-    params.observePrompt?.(retryRequest, {
-      egress: "responses-sdk",
-      payloadVariant: "encrypted-content-retry",
-    });
-    const { data, response } = await params.client.responses
-      .create(retryRequest as never, params.requestOptions as never)
-      .withResponse();
-    return { stream: data as unknown as AsyncIterable<unknown>, response };
   }
+
+  const encodeBody = params.encodeBody ?? prepareModelRequestBody(undefined);
+  let tierCeiling: "priority" | "default" | undefined;
+  const limitTier = (request: OpenAIResponsesRequestParams) =>
+    tierCeiling &&
+    (request.service_tier === "ultrafast" ||
+      (tierCeiling === "default" && request.service_tier === "priority"))
+      ? { ...request, service_tier: tierCeiling }
+      : request;
+  const recoverServiceTier = (
+    attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
+    error: unknown,
+  ): typeof attempt | undefined => {
+    if (
+      params.requestOptions?.signal?.aborted ||
+      !supportsNativeOpenAIResponsesEndpoint(params.model)
+    ) {
+      return undefined;
+    }
+    const tier = attempt.request.service_tier;
+    const next = nextResponsesServiceTier(tier, error);
+    if (!next || (tier !== "ultrafast" && tier !== "priority")) {
+      return undefined;
+    }
+    tierCeiling = next;
+    params.onServiceTierRejected?.(tier);
+    log.info(`[responses] rejected ${tier} tier; retrying with ${next}`);
+    return { ...attempt, request: { ...attempt.request, service_tier: next } };
+  };
+  const send = async (
+    initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
+  ) => {
+    let attempt = initialAttempt;
+    for (;;) {
+      const cappedRequest = limitTier(attempt.request);
+      if (cappedRequest !== attempt.request) {
+        attempt = {
+          kind: attempt.kind,
+          request: cappedRequest,
+          rejectedCompaction: attempt.rejectedCompaction,
+        };
+      }
+      // Observer failures are not provider rejections and must never enter recovery.
+      params.observePrompt?.(attempt.request, {
+        egress: "responses-sdk",
+        payloadVariant: attempt.kind,
+      });
+      const bodyOptions = await encodeBody(attempt.request);
+      let responseAccepted = false;
+      try {
+        const { data, response } = await params.client.responses
+          .create(attempt.request as never, {
+            ...params.requestOptions,
+            ...bodyOptions,
+            headers: { ...bodyOptions.headers, ...params.requestOptions?.headers },
+          })
+          .withResponse();
+        responseAccepted = true;
+        // Commit a resolved attempt before rejecting a non-stream response.
+        commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {
+          if (checkpoint) {
+            params.onCompactionRejected?.(checkpoint);
+          }
+        });
+        if (!isAsyncIterable(data)) {
+          throw new Error("OpenAI Responses streaming request returned a non-stream response");
+        }
+        const stream =
+          data instanceof Stream && response.body
+            ? streamWithTerminalDrain(response, response.body)
+            : data;
+        return { stream, response, attempt };
+      } catch (error) {
+        let nextAttempt =
+          (!responseAccepted ? recoverServiceTier(attempt, error) : undefined) ??
+          (await resolveNextResponsesEncryptedContentAttempt(attempt, error, {
+            buildFullHistoryRequest: params.buildFullHistoryRequest,
+          }));
+        if (
+          !nextAttempt &&
+          attempt.request.previous_response_id &&
+          error &&
+          typeof error === "object" &&
+          typeof (error as { status?: unknown }).status === "number" &&
+          isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
+        ) {
+          const request = {
+            ...(await params.buildFullHistoryRequest()),
+          };
+          delete request.previous_response_id;
+          nextAttempt = { kind: "continuation-rejected", request };
+        }
+        if (!nextAttempt) {
+          throw error;
+        }
+        const retryDescription =
+          nextAttempt.request.service_tier !== attempt.request.service_tier
+            ? "with a slower service tier"
+            : nextAttempt.kind === "reasoning-stripped"
+              ? "without encrypted reasoning content"
+              : nextAttempt.kind === "compaction-stripped"
+                ? "without encrypted compaction content"
+                : "full history after rejected previous_response_id";
+        log.warn(
+          `[responses] retrying ${retryDescription} provider=${params.model.provider} ` +
+            `api=${params.model.api} model=${params.model.id}`,
+        );
+        attempt = nextAttempt;
+      }
+    }
+  };
+  const result = await send({
+    kind: params.initialAttemptKind ?? "initial",
+    request: params.request,
+    ...(params.initialRejectedCompaction
+      ? { rejectedCompaction: params.initialRejectedCompaction }
+      : {}),
+  });
+  return {
+    stream: {
+      async *[Symbol.asyncIterator]() {
+        let current = result;
+        let outputObserved = false;
+        // Advance the source after rejection; retain the caller's one live parser and hooks.
+        for (;;) {
+          let rejectedEvent: unknown;
+          let sourceError: unknown;
+          const source = current.stream;
+          const providerStream = {
+            async *[Symbol.asyncIterator]() {
+              try {
+                yield* source;
+              } catch (error) {
+                sourceError = error;
+                throw error;
+              }
+            },
+          };
+          try {
+            for await (const event of params.wrapStream?.({ ...current, stream: providerStream }) ??
+              providerStream) {
+              const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+              outputObserved ||= hasResponseOutput;
+              if (
+                isRecord(failure) &&
+                params.canRetryStream?.() === true &&
+                (isInvalidEncryptedContentError(failure) ||
+                  (!outputObserved && isResponsesServiceTierRejection(failure)))
+              ) {
+                rejectedEvent = event;
+                const message = typeof failure.message === "string" ? failure.message : "";
+                throw Object.assign(new Error(message), {
+                  code: failure.code,
+                  status: failure.status,
+                  type: failure.type,
+                  param: failure.param,
+                });
+              }
+              outputObserved ||= !isPrelude;
+              yield event;
+            }
+            return;
+          } catch (error) {
+            // Hook cancellation before output must not reissue an already-cancelled request.
+            const nextAttempt =
+              params.canRetryStream?.() === true && !params.requestOptions?.signal?.aborted
+                ? ((!outputObserved && (rejectedEvent !== undefined || sourceError === error)
+                    ? recoverServiceTier(current.attempt, error)
+                    : undefined) ??
+                  (await resolveNextResponsesEncryptedContentAttempt(current.attempt, error, {
+                    buildFullHistoryRequest: params.buildFullHistoryRequest,
+                  })))
+                : undefined;
+            if (!nextAttempt) {
+              if (rejectedEvent !== undefined) {
+                yield rejectedEvent;
+                return;
+              }
+              throw error;
+            }
+            log.warn(
+              `[responses] retrying explicitly rejected stream provider=${params.model.provider} ` +
+                `api=${params.model.api} model=${params.model.id}`,
+            );
+            current = await send(nextAttempt);
+          }
+        }
+      },
+    },
+  };
 }
 
 export function resolveAzureOpenAIApiVersion(env = process.env): string {
   return env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
 }
 
-function normalizeResponsesReplayItemId(
-  id: string | undefined,
-  prefix: string,
-): string | undefined {
-  if (!id) {
-    return undefined;
-  }
-  if (id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH) {
-    return id;
-  }
-  return `${prefix}_${shortHash(id)}`;
-}
-
-function isSafeResponsesReplayItemId(id: unknown): id is string {
-  return (
-    typeof id === "string" &&
-    id.length > 0 &&
-    id.length <= OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH
-  );
-}
-
-export function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
-}
-
-function parseTextSignature(
-  signature: string | undefined,
-): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1) {
-        const id = typeof parsed.id === "string" ? parsed.id : undefined;
-        const phase =
-          parsed.phase === "commentary" || parsed.phase === "final_answer"
-            ? parsed.phase
-            : undefined;
-        // A reasoning-dropped replay keeps the phase but omits the paired id.
-        if (id !== undefined || phase !== undefined) {
-          return { id, phase };
-        }
-        return undefined;
-      }
-    } catch {
-      // Keep legacy plain-string behavior below.
-    }
-  }
-  return { id: signature };
-}
-
-export function buildResponsesInputMessage(
-  role: "user" | "system" | "developer",
-  content: ResponseInputMessageContentList,
-): ResponseInputItem.Message {
-  return { type: "message", role, content };
-}
-
-export function convertResponsesMessages(
-  model: Model,
-  context: Context,
-  allowedToolCallProviders: Set<string>,
-  options?: {
-    includeSystemPrompt?: boolean;
-    supportsDeveloperRole?: boolean;
-    replayReasoningItems?: boolean;
-    replayResponsesItemIds?: boolean;
-    sessionId?: string;
-    authProfileId?: string;
-  },
-): ResponseInput {
-  const messages: ResponseInput = [];
-  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
-  const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
-  const replayContext = buildOpenAIResponsesReplayContext(model, {
-    sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
-  });
-  const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
-  const sanitizeIdPart = (part: string) => part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+$/, "");
-  const normalizeIdPart = (part: string) => {
-    const sanitized = sanitizeIdPart(part);
-    const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
-    return normalized.replace(/_+$/, "");
-  };
-  const buildForeignResponsesItemId = (itemId: string) => {
-    const normalized = `fc_${shortHash(itemId)}`;
-    return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-  };
-  const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
-    const sanitized = sanitizeIdPart(itemId);
-    const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;
-    return candidate.length > 64 ? buildForeignResponsesItemId(itemId) : candidate;
-  };
-  const normalizeToolCallId = (
-    id: string,
-    _targetModel: Model,
-    source: { provider: string; api: Api },
-  ) => {
-    if (!allowedToolCallProviders.has(model.provider)) {
-      return normalizeIdPart(id);
-    }
-    if (!id.includes("|")) {
-      return normalizeIdPart(id);
-    }
-    const separatorIndex = id.indexOf("|");
-    const callId = id.slice(0, separatorIndex);
-    const itemId = id.slice(separatorIndex + 1);
-    const normalizedCallId = normalizeIdPart(callId);
-    const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
-    let normalizedItemId = isForeignToolCall
-      ? buildForeignResponsesItemId(itemId)
-      : model.provider === "github-copilot"
-        ? buildSameProviderCopilotResponsesItemId(itemId)
-        : normalizeIdPart(itemId);
-    if (!normalizedItemId.startsWith("fc_")) {
-      normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
-    }
-    return `${normalizedCallId}|${normalizedItemId}`;
-  };
-  const transformedMessages = transformTransportMessages(
-    context.messages,
-    model,
-    normalizeToolCallId,
-    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
-  );
-  const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-  if (includeSystemPrompt && context.systemPrompt) {
-    messages.push(
-      buildResponsesInputMessage(
-        model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-        [
-          {
-            type: "input_text",
-            text: sanitizeTransportPayloadText(
-              stripSystemPromptCacheBoundary(context.systemPrompt),
-            ),
-          },
-        ],
-      ),
-    );
-  }
-  let msgIndex = 0;
-  for (const msg of transformedMessages) {
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push(
-          buildResponsesInputMessage("user", [
-            { type: "input_text", text: sanitizeTransportPayloadText(msg.content) },
-          ]),
-        );
-      } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
-        if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content));
-        }
-      }
-    } else if (msg.role === "assistant") {
-      const output: ResponseInput = [];
-      let textFallbackOrdinal = 0;
-      let previousReplayItemWasReasoning = false;
-      const isDifferentModel =
-        msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
-      for (const block of msg.content) {
-        if (block.type === "thinking") {
-          if (
-            shouldReplayReasoningItems &&
-            block.thinkingSignature &&
-            block.thinkingSignature.startsWith("{")
-          ) {
-            // openai-completions plain-text reasoning paths persist a
-            // provenance tag (e.g. "reasoning", "reasoning_details", "content")
-            // as thinkingSignature rather than a JSON-encoded reasoning item.
-            // Replaying those values would corrupt the next request payload
-            // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
-            const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
-              reasoningItem,
-              replayContext,
-              readOpenAIResponsesReasoningReplayBlockMetadata(
-                block as unknown as Record<string, unknown>,
-              ),
-            );
-            if (!shouldReplayResponsesItemIds) {
-              delete replayableReasoningItem.id;
-            }
-            if (
-              shouldReplayResponsesItemIds &&
-              model.provider === "github-copilot" &&
-              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
-            ) {
-              continue;
-            }
-            output.push(replayableReasoningItem as ResponseInputItem);
-            previousReplayItemWasReasoning = true;
-          }
-        } else if (block.type === "text") {
-          const textSignature = parseTextSignature(block.textSignature);
-          let msgId = resolveReplayableResponsesMessageId({
-            replayResponsesItemIds: shouldReplayResponsesItemIds,
-            textSignatureId: textSignature?.id,
-            fallbackId: `msg_${msgIndex}`,
-            fallbackOrdinal: textFallbackOrdinal,
-            previousReplayItemWasReasoning,
-          });
-          if (!textSignature?.id) {
-            textFallbackOrdinal += 1;
-          }
-          msgId = normalizeResponsesReplayItemId(msgId, "msg");
-          const messageItem: ReplayableResponseOutputMessage = {
-            type: "message",
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: sanitizeTransportPayloadText(block.text),
-                annotations: [],
-              },
-            ],
-            status: "completed",
-            ...(msgId ? { id: msgId } : {}),
-            phase: textSignature?.phase,
-          };
-          output.push(messageItem as ResponseInputItem);
-          previousReplayItemWasReasoning = false;
-        } else if (block.type === "toolCall") {
-          const separatorIndex = block.id.indexOf("|");
-          const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
-          const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
-          const itemId =
-            shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
-              ? itemIdRaw
-              : undefined;
-          output.push({
-            type: "function_call",
-            ...(itemId ? { id: itemId } : {}),
-            call_id: callId,
-            name: block.name,
-            arguments:
-              typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
-          });
-          previousReplayItemWasReasoning = false;
-        }
-      }
-      if (output.length > 0) {
-        messages.push(...output);
-      }
-    } else if (msg.role === "toolResult") {
-      const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
-      const hasText = sanitizedTextResult.trim().length > 0;
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasImages = msg.content.some(isImageWithMediaPayload);
-      const separatorIndex = msg.toolCallId.indexOf("|");
-      const callId =
-        separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
-      messages.push({
-        type: "function_call_output",
-        call_id: callId,
-        output:
-          hasImages && model.input.includes("image")
-            ? ([
-                ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
-                  : mediaPlaceholder === "(see attached media)"
-                    ? [{ type: "input_text", text: mediaPlaceholder }]
-                    : []),
-                ...msg.content.filter(isImageWithMediaPayload).map((item) => ({
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                })),
-              ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
-      });
-    }
-    msgIndex += 1;
-  }
-  return messages;
-}
+export {
+  buildResponsesInputMessage,
+  convertProviderResponsesMessages,
+  convertResponsesMessages,
+  createOpenAIResponsesAssistantOutput,
+  encodeTextSignatureV1,
+} from "./openai-responses-replay-messages-internal.js";

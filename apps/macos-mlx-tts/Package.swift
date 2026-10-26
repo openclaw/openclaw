@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // Isolated MLX TTS helper package. Keep this out of apps/macos/Package.swift so
 // normal macOS app tests do not compile the full MLX audio stack.
 
@@ -13,10 +13,9 @@ let package = Package(
         .executable(name: "openclaw-mlx-tts", targets: ["OpenClawMLXTTSHelper"]),
     ],
     dependencies: [
-        // Progressive Fish chunks and cancellation from upstream PR #237.
         .package(
             url: "https://github.com/Blaizzy/mlx-audio-swift",
-            revision: "2de211cf80ada19a75f291e491430e2af8e4befe"),
+            exact: "0.1.5"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
     ],
     targets: [

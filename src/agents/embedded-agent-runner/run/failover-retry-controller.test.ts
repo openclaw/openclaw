@@ -1,0 +1,365 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import * as diagnosticsTimeline from "../../../infra/diagnostics-timeline.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+
+const mocks = vi.hoisted(() => ({
+  sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
+  warn: vi.fn((_message: string) => {}),
+}));
+
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return { ...actual, log: { ...actual.log, warn: mocks.warn } };
+});
+
+vi.mock("../../../infra/backoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../infra/backoff.js")>(
+    "../../../infra/backoff.js",
+  );
+  return { ...actual, sleepWithAbort: mocks.sleepWithAbort };
+});
+
+import {
+  createRetryController,
+  type RetryRunParams,
+} from "./failover-retry-controller.test-support.js";
+
+const { sleepWithAbort: sleep, warn } = mocks;
+
+const rotationContext = {
+  failoverProvider: "openai",
+  failoverModel: "gpt-5.6-luna",
+  logFallbackDecision: vi.fn(),
+};
+
+function clock(initialMs = 1_000_000) {
+  let nowMs = initialMs;
+  vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+  return (ms: number) => {
+    nowMs += ms;
+  };
+}
+function expectNoRetry() {
+  expect(sleep).not.toHaveBeenCalled();
+  expect(onRetry).not.toHaveBeenCalled();
+  expect(controller.transientRetryCount).toBe(0);
+}
+type Controller = ReturnType<typeof createRetryController>;
+type RetryInput = Parameters<Controller["maybeRetryTransient"]>[0];
+async function checkRetry(input: RetryInput, expected = true) {
+  await expect(controller.maybeRetryTransient(input)).resolves.toBe(expected);
+}
+async function useRealSleep() {
+  const actual = await vi.importActual<typeof import("../../../infra/backoff.js")>(
+    "../../../infra/backoff.js",
+  );
+  sleep.mockImplementation(actual.sleepWithAbort);
+  vi.useFakeTimers();
+}
+const rotate = (reason: Parameters<Controller["advanceAuthProfile"]>[0] = "rate_limit") =>
+  controller.advanceAuthProfile(reason, rotationContext);
+
+let controller: Controller;
+const onRetry = vi.fn<NonNullable<RetryInput["onRetry"]>>();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+beforeEach(() => {
+  controller = createRetryController();
+  onRetry.mockReset();
+  sleep.mockReset().mockResolvedValue(undefined);
+  warn.mockClear();
+  rotationContext.logFallbackDecision.mockClear();
+});
+
+it("reports the one output-limit continuation independently of transient attempts", async () => {
+  await controller.maybeRetryTransient({ reason: "server_error" });
+  expect(await controller.maybeRetryTransient({ reason: "output_limit", onRetry })).toBe(true);
+  expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("output-limit continuation 1/1"));
+  expect(onRetry).toHaveBeenCalledWith(
+    expect.objectContaining({ attempt: 1, maxRetries: 1, reason: "output_limit" }),
+  );
+  expect(await controller.maybeRetryTransient({ reason: "output_limit" })).toBe(false);
+});
+
+it("omits provider and credential metadata from retry decisions", async () => {
+  const emit = vi.spyOn(diagnosticsTimeline, "emitDiagnosticsTimelineEvent");
+  await checkRetry({ reason: "auth", message: "private-error", retryAfterMs: 1000 }, false);
+  const events = emit.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.name === "model.retry.decision");
+  expect(events).toHaveLength(1);
+  expect(JSON.stringify(events)).not.toMatch(/private-error|openai:p1|modelId|provider|sessionId/);
+});
+
+it.each([
+  {
+    jitter: 0,
+    delays: [
+      500, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000, 30000, 30000,
+      30000,
+    ],
+  },
+  {
+    jitter: 0.999,
+    delays: [
+      1499, 2998, 5996, 11992, 23984, 47968, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,
+      60000,
+    ],
+  },
+])("caps sixteen-attempt rate-limit backoff (jitter=$jitter)", async ({ jitter, delays }) => {
+  vi.spyOn(Math, "random").mockReturnValue(jitter);
+  for (let attempt = 2; attempt <= 16; attempt++) {
+    await checkRetry({ reason: "rate_limit" });
+  }
+  await checkRetry({ reason: "rate_limit" }, false);
+  expect(controller.rateLimitRetriesExhausted).toBe(15);
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual(delays);
+});
+
+it.each([
+  [undefined, 3, 15],
+  [3, 0, 3],
+  [30, 0, 15],
+  [0, 0, 0],
+] as const)(
+  "shares retry ceilings (budget=%s, prior=%s, limit=%s)",
+  async (budget, prior, limit) => {
+    controller.observeAttempt({ providerRetryMaxRetries: budget });
+    for (let retry = 0; retry < limit; retry++) {
+      await checkRetry({ reason: retry < prior ? "server_error" : "rate_limit", onRetry });
+    }
+    await checkRetry({ reason: "rate_limit" }, false);
+    if (!limit) {
+      expect(controller.rateLimitRetriesExhausted).toBe(0);
+    }
+    await checkRetry({ reason: "server_error" }, false);
+    expect(controller.transientRetryCount).toBe(limit);
+    if (limit) {
+      expect(onRetry).toHaveBeenLastCalledWith(expect.objectContaining({ maxRetries: limit }));
+    } else {
+      expectNoRetry();
+    }
+  },
+);
+
+it("backs off beyond a short rate-limit floor", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  for (let retry = 0; retry < 7; retry++) {
+    await checkRetry({ reason: "rate_limit", retryAfterMs: 200 });
+  }
+  await checkRetry({ reason: "rate_limit", retryAfterMs: 120_000 });
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([
+    1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 120_000,
+  ]);
+});
+
+it("retains the non-rate retry window after a long rate-limit wait", async () => {
+  const advanceTime = clock();
+  await checkRetry({ reason: "rate_limit", retryAfterMs: 120000 });
+  expect(sleep).toHaveBeenCalledWith(120000, undefined);
+  advanceTime(120000);
+  await checkRetry({ reason: "server_error" }, false);
+});
+
+it.each([
+  [
+    true,
+    3,
+    'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}',
+  ],
+  [false, undefined, "429 daily request limit reached"],
+] as const)("rejects exhausted usage windows (%s, %s, %s)", async (fallback, budget, message) => {
+  controller = createRetryController({ fallbackConfigured: fallback });
+  controller.observeAttempt({ providerRetryMaxRetries: budget });
+  await checkRetry({ reason: "rate_limit", message, onRetry }, false);
+  expectNoRetry();
+});
+
+it("waits for the provider floor before exhausting recovery and rotating credentials", async () => {
+  const advance = vi.fn(async () => true);
+  controller = createRetryController({
+    runtime: { advanceAttemptAuthProfile: advance },
+    fallbackConfigured: true,
+  });
+  controller.observeAttempt({ providerRetryMaxRetries: 1 });
+  const retry = {
+    reason: "rate_limit" as const,
+    retryAfterMs: 2000,
+    failoverEligible: true,
+  };
+  await checkRetry(retry);
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(2000, undefined);
+  await checkRetry(retry, false);
+  expect(controller.rateLimitRetriesExhausted).toBe(1);
+  await expect(rotate()).resolves.toBe(true);
+  expect(controller.transientRetryCount).toBe(1);
+  await expect(rotate()).rejects.toMatchObject({
+    name: "FailoverError",
+    reason: "rate_limit",
+    status: 429,
+  });
+  expect(advance).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ["fallback", undefined, 30_000, "rate_limit", 9_897_000, false],
+  ["replay-unsafe", false, 30_000, "rate_limit", 9_897_000, true],
+  ["disabled cap", undefined, 0, "rate_limit", 9_897_000, true],
+  ["absent cap", undefined, undefined, "rate_limit", 9_897_000, true],
+  ["inside cap", undefined, 30_000, "rate_limit", 20_000, true],
+  ["non-rate limit", undefined, 30_000, "server_error", 60_000, true],
+] as const)(
+  "handles provider retry floors: %s",
+  async (_name, failoverEligible, maxRetryDelayMs, reason, retryAfterMs, expected) => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    controller = createRetryController({ fallbackConfigured: true });
+    await checkRetry(
+      {
+        reason,
+        retryAfterMs,
+        maxRetryDelayMs,
+        failoverEligible,
+        onRetry,
+      },
+      expected,
+    );
+    expect(controller.transientRetryCount).toBe(expected ? 1 : 0);
+    if (expected) {
+      expect(sleep).toHaveBeenCalledWith(Math.max(1_000, retryAfterMs), undefined);
+    } else {
+      expect(sleep).not.toHaveBeenCalled();
+      expect(onRetry).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("declines an unrepresentable projected provider floor", async () => {
+  const error = { headers: { "retry-after": "9".repeat(400) } };
+  const retryAfterMs = resolveRetryAfterMs(projectProviderError(error).errorMessage);
+  await checkRetry({ reason: "rate_limit", retryAfterMs, onRetry }, false);
+  expectNoRetry();
+});
+
+it.each([false, true])("honors a floor beyond the native timer limit (abort=%s)", async (abort) => {
+  await useRealSleep();
+  const cancellation = new AbortController();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const retryAfterMs = 30 * dayMs;
+  controller = createRetryController({ runParams: { abortSignal: cancellation.signal } });
+  const settled = vi.fn((result: boolean) => result);
+  const retry = controller
+    .maybeRetryTransient({ reason: "rate_limit", retryAfterMs })
+    .then(settled);
+  await vi.advanceTimersByTimeAsync(dayMs + 1);
+  expect(settled).not.toHaveBeenCalled();
+  if (abort) {
+    const rejected = expect(retry).rejects.toMatchObject({ name: "AbortError" });
+    cancellation.abort();
+    await rejected;
+    expect(controller.transientRetryCount).toBe(0);
+  } else {
+    await vi.advanceTimersByTimeAsync(retryAfterMs - dayMs - 2);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(retry).resolves.toBe(true);
+    expect(controller.transientRetryCount).toBe(1);
+  }
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("does not truncate a provider wait to fit the remaining outage window", async () => {
+  const advanceTime = clock();
+  await checkRetry({ reason: "timeout" });
+  advanceTime(89_000);
+  await checkRetry({ reason: "timeout", retryAfterMs: 2000 }, false);
+  expect(sleep).toHaveBeenCalledOnce();
+});
+
+it("bounds transient retries across reasons and honors Retry-After", async () => {
+  // Retry exhaustion includes sleep time.
+  const advanceTime = clock();
+  sleep.mockImplementation(async (delayMs: number) => {
+    advanceTime(delayMs);
+  });
+  await checkRetry({ reason: "server_error", retryAfterMs: 60_000 });
+  await checkRetry({ reason: "timeout", retryAfterMs: 30_000 });
+  await checkRetry({ reason: "overloaded" }, false);
+  expect(controller.transientRetryCount).toBe(2);
+  expect(sleep.mock.calls).toEqual([
+    [60_000, undefined],
+    [30_000, undefined],
+  ]);
+});
+
+it("allows eight transient retries across failure reasons when the ceiling has room", async () => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (const reason of ["rate_limit", "overloaded", "timeout", "server_error"] as const) {
+      await checkRetry({ reason });
+    }
+  }
+  await checkRetry({ reason: "server_error" }, false);
+  expect(controller.transientRetryCount).toBe(8);
+});
+
+it("lets auxiliary runs defer provider failures without sleeping or replaying", async () => {
+  const advance = vi.fn(async () => true);
+  controller = createRetryController({
+    runtime: { advanceAttemptAuthProfile: advance },
+    runParams: { retryTransientErrors: false },
+  });
+  for (const reason of ["rate_limit", "overloaded", "timeout", "server_error"] as const) {
+    await checkRetry({ reason, onRetry }, false);
+    await expect(rotate(reason)).resolves.toBe(false);
+  }
+  expect(advance).not.toHaveBeenCalled();
+  expectNoRetry();
+});
+
+it.each([false, true])(
+  "reports and closes the scheduled retry even when status rejects (%s)",
+  async (rejects) => {
+    await useRealSleep();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const closeRetryWait = vi.fn();
+    controller = createRetryController({ runParams: { onRetryWait: () => closeRetryWait } });
+    if (rejects) {
+      onRetry.mockRejectedValue(new Error("event sink disconnected"));
+    }
+    const retry = controller.maybeRetryTransient({ reason: "server_error", onRetry });
+    expect(onRetry).toHaveBeenCalledWith({
+      attempt: 1,
+      maxRetries: 8,
+      delayMs: 500,
+      reason: "server_error",
+    });
+    expect(controller.transientRetryCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(retry).resolves.toBe(true);
+    expect(controller.transientRetryCount).toBe(1);
+    expect(sleep).toHaveBeenCalledWith(500, undefined);
+    expect(closeRetryWait).toHaveBeenCalledWith(true);
+  },
+);
+
+it("hands the watchdog rate-limit copy for the retries already completed", async () => {
+  const onRetryWait = vi.fn<NonNullable<RetryRunParams["onRetryWait"]>>(() => vi.fn());
+  controller = createRetryController({ runParams: { onRetryWait } });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "server_error" });
+  expect(onRetryWait.mock.calls.map((call) => call[2])).toEqual([
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped without a completed model response. Check completed work before trying again.",
+    },
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped after 1 automatic retry without a completed model response. Check completed work before trying again.",
+    },
+    undefined,
+  ]);
+});

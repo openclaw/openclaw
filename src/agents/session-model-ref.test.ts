@@ -6,126 +6,40 @@ function modelConfig(primary: string, models?: Record<string, object>): OpenClaw
   return {
     agents: {
       defaults: { model: { primary }, ...(models ? { models } : {}) },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   } as OpenClawConfig;
 }
 
 describe("resolveSessionModelRef", () => {
-  test("prefers a complete explicit override over runtime identity and current defaults", () => {
-    const resolved = resolveSessionModelRef(
-      modelConfig("anthropic/claude-opus-4-6"),
-      {
-        providerOverride: "openrouter",
-        modelOverride: "moonshotai/kimi-k2.5",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      },
+  const runtime = { modelProvider: "openai", model: "gpt-5.4" };
+  test.each([
+    [
+      "complete override",
+      { providerOverride: "openrouter", modelOverride: "moonshotai/kimi-k2.5" },
       "main",
-    );
-
-    expect(resolved).toEqual({ provider: "openrouter", model: "moonshotai/kimi-k2.5" });
-  });
-
-  test("uses the current agent default instead of stale runtime identity", () => {
-    const resolved = resolveSessionModelRef(
-      modelConfig("anthropic/claude-opus-4-6"),
-      { modelProvider: "openai", model: "gpt-5.4" },
+      "openrouter",
+      "moonshotai/kimi-k2.5",
+    ],
+    ["current default", {}, "main", "anthropic", "claude-opus-4-6"],
+    ["legacy runtime identity", {}, undefined, "openai", "gpt-5.4"],
+    [
+      "model-only override",
+      { modelOverride: "claude-haiku-4-5" },
       "main",
-    );
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
-  });
-
-  test("preserves runtime identity for legacy callers without an agent id", () => {
-    const resolved = resolveSessionModelRef(modelConfig("anthropic/claude-opus-4-6"), {
-      modelProvider: "openai",
-      model: "gpt-5.4",
+      "anthropic",
+      "claude-haiku-4-5",
+    ],
+  ] as const)("selects %s", (_name, override, agentId, provider, model) => {
+    const cfg = modelConfig("anthropic/claude-opus-4-6");
+    expect(resolveSessionModelRef(cfg, { ...runtime, ...override }, agentId)).toEqual({
+      provider,
+      model,
     });
-
-    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
-  });
-
-  test("prefers a legacy model-only override over runtime identity without an agent id", () => {
-    const resolved = resolveSessionModelRef(modelConfig("anthropic/claude-opus-4-6"), {
-      modelOverride: "claude-haiku-4-5",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-    });
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-haiku-4-5" });
-  });
-
-  test("resolves a legacy model-only override under the current default provider", () => {
-    const resolved = resolveSessionModelRef(
-      modelConfig("anthropic/claude-opus-4-6"),
-      {
-        modelOverride: "claude-haiku-4-5",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      },
-      "main",
-    );
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-haiku-4-5" });
   });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
-  const resolveLegacyIdentityRef = (cfg: OpenClawConfig, modelProvider?: string) =>
-    resolveSessionModelIdentityRef(cfg, {
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-      model: "claude-sonnet-4-6",
-      modelProvider,
-    });
-
-  test("does not inherit default provider for unprefixed legacy runtime model", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview");
-
-    expect(resolveLegacyIdentityRef(cfg)).toEqual({ model: "claude-sonnet-4-6" });
-  });
-
-  test("infers provider from configured model allowlist when unambiguous", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview", {
-      "anthropic/claude-sonnet-4-6": {},
-    });
-
-    expect(resolveLegacyIdentityRef(cfg)).toEqual({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
-  });
-
-  test("infers provider from configured provider catalogs when allowlist is absent", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview");
-    cfg.models = {
-      providers: {
-        "qwen-dashscope": {
-          models: [{ id: "qwen-max" }],
-        },
-      },
-    } as unknown as OpenClawConfig["models"];
-
-    expect(
-      resolveSessionModelIdentityRef(cfg, {
-        sessionId: "custom-provider-runtime-model",
-        updatedAt: Date.now(),
-        model: "qwen-max",
-        modelProvider: undefined,
-      }),
-    ).toEqual({ provider: "qwen-dashscope", model: "qwen-max" });
-  });
-
-  test("keeps provider unknown when configured models are ambiguous", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview", {
-      "anthropic/claude-sonnet-4-6": {},
-      "minimax/claude-sonnet-4-6": {},
-    });
-
-    expect(resolveLegacyIdentityRef(cfg)).toEqual({ model: "claude-sonnet-4-6" });
-  });
-
   test("keeps provider unknown when configured provider catalog matches are ambiguous", () => {
     const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview");
     cfg.models = {
@@ -141,42 +55,24 @@ describe("resolveSessionModelIdentityRef", () => {
 
     expect(
       resolveSessionModelIdentityRef(cfg, {
-        sessionId: "ambiguous-custom-provider-runtime-model",
-        updatedAt: Date.now(),
         model: "qwen-max",
-        modelProvider: undefined,
       }),
     ).toEqual({ model: "qwen-max" });
   });
 
-  test("preserves provider from slash-prefixed runtime model", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview");
-
-    expect(
-      resolveSessionModelIdentityRef(cfg, {
-        sessionId: "slash-model",
-        updatedAt: Date.now(),
-        model: "anthropic/claude-sonnet-4-6",
-        modelProvider: undefined,
-      }),
-    ).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
-  });
-
-  test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
-    const cfg = modelConfig("google-gemini-cli/gemini-3.1-pro-preview", {
-      "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
-    });
-
-    expect(
-      resolveSessionModelIdentityRef(cfg, {
-        sessionId: "slash-model",
-        updatedAt: Date.now(),
-        model: "anthropic/claude-sonnet-4-6",
-        modelProvider: undefined,
-      }),
-    ).toEqual({
-      provider: "vercel-ai-gateway",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-  });
+  test.each([false, true])(
+    "resolves slash-prefixed identity with wrapper allowlist: %s",
+    (wrapped) => {
+      const model = "anthropic/claude-sonnet-4-6";
+      const cfg = modelConfig(
+        "google-gemini-cli/gemini-3.1-pro-preview",
+        wrapped ? { [`vercel-ai-gateway/${model}`]: {} } : undefined,
+      );
+      expect(resolveSessionModelIdentityRef(cfg, { model })).toEqual(
+        wrapped
+          ? { provider: "vercel-ai-gateway", model }
+          : { provider: "anthropic", model: "claude-sonnet-4-6" },
+      );
+    },
+  );
 });

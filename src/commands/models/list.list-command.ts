@@ -1,270 +1,272 @@
-/** Implementation of `openclaw models list`. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { parseModelRef } from "../../agents/model-selection-normalize.js";
+/** Reads the selected Gateway catalog or an explicitly identified local published view. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
+import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
-import type { ModelRegistry } from "../../llm/model-registry.js";
-import type { Model } from "../../llm/types.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { createModelListAuthIndex } from "./list.auth-index.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
-import { formatErrorWithStack } from "./list.errors.js";
-import { ensureFlagCompatibility } from "./list.options.js";
-import { printModelTable } from "./list.table.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
+import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
+import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
-import { loadModelsConfigWithSource } from "./load-config.js";
-import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+import { loadModelsConfig } from "./load-config.js";
+import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
-const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+// The catalog worker permits three minutes; leave room for connection and result projection.
+const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;
 
-type PromotionsModule = typeof import("./list.promotions.js");
-type RegistryLoadModule = typeof import("./list.registry-load.js");
-type RowSourcesModule = typeof import("./list.row-sources.js");
+const MODEL_PAD = 42;
+const INPUT_PAD = 10;
+const CTX_PAD = 11;
+const STATE_PAD = 5;
 
-const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
-  () => import("./list.promotions.js"),
-);
-const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
-  () => import("./list.registry-load.js"),
-);
-const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
-  () => import("./list.row-sources.js"),
-);
-
-function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
-  return registryLoadModuleLoader.load();
-}
-
-function loadRowSourcesModule(): Promise<RowSourcesModule> {
-  return rowSourcesModuleLoader.load();
-}
-
-/** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
   opts: {
     all?: boolean;
+    refresh?: boolean;
     local?: boolean;
     provider?: string;
+    agent?: string;
     json?: boolean;
     plain?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const parsedProviderFilter = (() => {
-    const raw = opts.provider?.trim();
-    if (!raw) {
-      return undefined;
-    }
-    if (/\s/u.test(raw)) {
-      runtime.error(
-        `Invalid provider filter "${raw}". Use a provider id such as "moonshot", not a display label.`,
-      );
-      process.exitCode = 1;
-      return null;
-    }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
-  })();
-  if (parsedProviderFilter === null) {
-    return;
+  const rawProvider = opts.provider?.trim();
+  if (rawProvider && /\s/u.test(rawProvider)) {
+    const message = `Invalid provider filter "${sanitizeTerminalText(rawProvider)}". Use a provider id such as "moonshot", not a display label.`;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
-  const humanReadable = !opts.json && !opts.plain;
-  const [
-    { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
-    { resolveDefaultAgentWorkspaceDir },
-  ] = await Promise.all([
-    import("../../agents/auth-profiles/store.js"),
-    import("../../agents/agent-scope.js"),
-    import("../../agents/workspace.js"),
-  ]);
-  const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
-    commandName: "models list",
-    runtime,
-  });
-  const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveDefaultAgentDir(cfg);
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
-  const metadataSnapshot = loadManifestMetadataSnapshot({
-    config: cfg,
-    workspaceDir,
-    env: process.env,
-  });
-  const providerFilter = parsedProviderFilter
-    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
-        cfg,
-        metadataSnapshot,
-      })
-    : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
-  const authIndex = createModelListAuthIndex({
-    cfg,
-    authStore,
-    agentDir,
-    workspaceDir,
-    metadataSnapshot,
-    // Default output can append authenticated catalog rows beyond the configured
-    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
-    externalCliProviderIds: ["openai"],
-  });
-
-  let modelRegistry: ModelRegistry | undefined;
-  let registryModels: Model[] = [];
-  let discoveredKeys = new Set<string>();
-  let availableKeys: Set<string> | undefined;
-  let availabilityErrorMessage: string | undefined;
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  // The default configured view remains lazy; full and filtered views share
-  // the registry and the same committed model generation as the Gateway.
-  const includePreparedCatalog = Boolean(opts.all || providerFilter);
-  const providerDiscoveryProviderIds = (() => {
-    if (opts.all && !providerFilter) {
-      return undefined;
-    }
-    if (providerFilter) {
-      return [providerFilter];
-    }
-    return [
-      ...new Set([
-        ...(authIndex.providerDiscoveryProviderIds ?? []),
-        ...entries.map((entry) => entry.ref.provider),
-        ...Object.keys(cfg.models?.providers ?? {}),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right));
-  })();
-  const providerRuntimeDiscoveryProviderIds = providerFilter
-    ? [providerFilter]
-    : opts.all
-      ? undefined
-      : [];
-  // Default lists use authenticated providers' authored fallback rows. Live
-  // account discovery remains explicit because it imports full provider runtimes.
-  const providerManifestFallbackProviderIds =
-    !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
-  const loadRegistryState = async (optsLocal?: {
-    normalizeModels?: boolean;
-    loadAvailability?: boolean;
-  }) => {
-    const { loadListModelRegistry } = await loadRegistryLoadModule();
-    const loaded = await loadListModelRegistry(cfg, {
-      agentId,
-      agentDir,
-      providerFilter,
-      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: optsLocal?.loadAvailability,
-      workspaceDir,
-    });
-    modelRegistry = loaded.registry;
-    registryModels = loaded.models;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
-    availabilityErrorMessage = loaded.availabilityErrorMessage;
+  const provider = rawProvider ? normalizeProviderId(rawProvider) : undefined;
+  // Gateway selection needs connection config, not local provider credentials or plugins.
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+  const params: ModelsListParams = {
+    ...(opts.agent?.trim() ? { agentId: opts.agent.trim() } : {}),
+    view: opts.all || provider ? "all" : "default",
+    ...(provider ? { provider } : {}),
+    includeDetails: true,
+    ...(opts.refresh ? { refresh: true } : {}),
   };
-  try {
-    if (includePreparedCatalog) {
-      await loadRegistryState();
-    } else if (!opts.all && opts.local) {
-      const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
-        agentId,
-        agentDir,
-        providerFilter,
-        workspaceDir,
-      });
-      modelRegistry = loaded.registry;
-      discoveredKeys = loaded.discoveredKeys;
-      availableKeys = loaded.availableKeys;
-    }
-  } catch (err) {
-    runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
-    process.exitCode = 1;
-    return;
-  }
-  const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
-  const promotionsRefreshPromise = promotionsModulePromise
-    ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
-    .catch(() => undefined);
-  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
+  let result = await readSelectedGatewayModelCatalog(
     cfg,
-    agentId,
-    agentDir,
-    inheritedAuthDir: agentDir,
-    authIndex,
-    providerDiscoveryProviderIds,
-    providerRuntimeDiscoveryProviderIds,
-    providerManifestFallbackProviderIds,
-    availableKeys,
-    configuredByKey,
-    discoveredKeys,
-    filter: {
-      provider: providerFilter,
-      local: opts.local,
-    },
-    skipRuntimeModelSuppression,
-    metadataSnapshot,
-    workspaceDir,
-  });
-  const rows: ModelRow[] = [];
-
-  if (includePreparedCatalog) {
-    const { appendAllModelRowSources } = await loadRowSourcesModule();
-    await appendAllModelRowSources({
-      rows,
-      entries,
-      context: buildRowContext(false),
-      modelRegistry,
-      registryModels,
-    });
-  } else {
-    const { appendConfiguredModelRowSources } = await loadRowSourcesModule();
-    await appendConfiguredModelRowSources({
-      rows,
-      entries,
-      modelRegistry,
-      context: buildRowContext(!modelRegistry),
-    });
-  }
-
-  if (availabilityErrorMessage !== undefined) {
+    params,
+    opts.refresh ? MODEL_CATALOG_REFRESH_TIMEOUT_MS : undefined,
+  );
+  if (!result) {
     runtime.error(
-      `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
+      opts.refresh
+        ? "Gateway is not running. Refreshing the local model catalog."
+        : "Gateway is not running. Showing the local cached model catalog. Use --refresh to discover provider models.",
+    );
+    const [
+      { resolvePublishedModelCatalogOwner },
+      { withPreparedModelCatalogOwner },
+      { getPreparedModelRuntimeAuthMaterializations },
+      { buildModelsListResult },
+    ] = await Promise.all([
+      import("../../agents/prepared-model-catalog-owner.js"),
+      import("../../agents/prepared-model-catalog.js"),
+      import("../../agents/prepared-model-runtime-auth.js"),
+      import("../../gateway/server-methods/models-list-result.js"),
+    ]);
+    const readLocal = async (refreshOwner?: {
+      env: NodeJS.ProcessEnv;
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => {
+      const localConfig = await loadModelsConfig({
+        commandName: "models list",
+        runtime,
+      });
+      const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
+        kind: "read",
+      });
+      if (refreshOwner) {
+        const [
+          { prepareOpenClawAgentDatabaseExecution },
+          { resolveAuthProfileDatabasePath },
+          { prepareLocalCapabilityAccountSecrets },
+        ] = await Promise.all([
+          import("../../state/openclaw-agent-execution.js"),
+          import("../../agents/auth-profiles/sqlite.js"),
+          import("../../cli/capability-cli/local-account-secrets.js"),
+        ]);
+        // Prepare the catalog's writable store before secrets observe its initial file identity.
+        await prepareOpenClawAgentDatabaseExecution(
+          { agentId, path: resolveAuthProfileDatabasePath(agentDir), env: refreshOwner.env },
+          refreshOwner.assertCurrent,
+          refreshOwner.signal,
+        );
+        await prepareLocalCapabilityAccountSecrets({ cfg: localConfig, agentId });
+        refreshOwner.assertCurrent();
+      }
+      const proxy = opts.refresh ? await startProxy(localConfig.proxy) : null;
+      try {
+        return await withPreparedModelCatalogOwner(
+          {
+            agentId,
+            agentDir,
+            config: localConfig,
+            readOnly: opts.refresh !== true,
+            ...(opts.refresh ? { refreshFullCatalog: true, persistOfflineRefresh: true } : {}),
+          },
+          async (snapshot) => {
+            const owner = resolvePublishedModelCatalogOwner(snapshot);
+            // Complete row projection and its final readiness reads before releasing a temporary owner.
+            return await buildModelsListResult({
+              source: {
+                kind: "published",
+                owner: {
+                  ...owner,
+                  authMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+                },
+              },
+              agentId,
+              params,
+            });
+          },
+        );
+      } finally {
+        await stopProxy(proxy);
+      }
+    };
+    result = opts.refresh
+      ? await runWithLocalStateOwner({
+          method: "models.list",
+          params,
+          target: "local model catalog",
+          onForeignOwner: "refuse",
+          runLocal: async (owner) => {
+            const refreshed = await readLocal(owner);
+            owner.assertCurrent();
+            return refreshed;
+          },
+        })
+      : await readLocal();
+  }
+  for (const warning of getModelCatalogWarnings(result)) {
+    runtime.error(`${warning.message} ${warning.fixHint}`);
+  }
+  if (result.refreshFailed) {
+    runtime.error(
+      "Model discovery could not refresh all providers. Showing the available published model list.",
     );
   }
-
-  // Promotion decorations are best-effort: claim tags come from local
-  // provenance, and the discovery section reads a cadence-gated feed cache.
-  // Neither may break the core listing; stale refreshes have a short timeout.
-  const promotionsModule = await (promotionsModulePromise ?? promotionsModuleLoader.load());
-  try {
-    promotionsModule.applyPromotionClaimTags(rows);
-  } catch {
-    // Tags are annotation-only.
+  for (const outcome of result.providerOutcomes ?? []) {
+    if (outcome.status === "ready") {
+      continue;
+    }
+    const label = `${sanitizeTerminalText(outcome.provider)}${outcome.profileId ? ` (profile ${sanitizeTerminalText(outcome.profileId)})` : ""}`;
+    runtime.error(
+      outcome.status === "auth-rejected"
+        ? `Model discovery authentication was rejected for ${label}. Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.`
+        : `Model discovery is unavailable for ${label}. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.`,
+    );
   }
+  const rows = result.models
+    .filter((model) => !opts.local || model.local === true)
+    .map((model): ModelRow => ({
+      key: modelKey(model.provider, model.id),
+      name: model.name,
+      input: model.input?.join("+") || "-",
+      contextWindow: model.contextWindow ?? null,
+      contextTokens: model.contextTokens,
+      local: model.local ?? null,
+      available: model.available ?? null,
+      tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
+    }));
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
+  } else if (opts.json) {
+    const providerOutcomes = result.providerOutcomes?.map(
+      ({ provider: outcomeProvider, profileId, status, unlistedConfiguredModelIds }) => ({
+        provider: outcomeProvider,
+        profileId: profileId || undefined,
+        status,
+        unlistedConfiguredModelIds:
+          status === "ready" && unlistedConfiguredModelIds?.length
+            ? unlistedConfiguredModelIds
+            : undefined,
+      }),
+    );
+    writeRuntimeJson(runtime, {
+      count: rows.length,
+      models: rows,
+      ...(providerOutcomes?.length ? { providerOutcomes } : {}),
+    });
+  } else if (opts.plain) {
+    for (const row of rows) {
+      writeRuntimeStdout(runtime, sanitizeTerminalText(row.key));
+    }
   } else {
-    printModelTable(rows, runtime, opts);
-  }
-  if (promotionsRefreshPromise) {
-    // Runs on the empty listing too: a fresh install with zero configured
-    // models is exactly the user passive discovery is for. Compares against
-    // the configured entries, not the rendered rows — filtered and --all
-    // listings show a different set.
-    try {
-      const refresh = await promotionsRefreshPromise;
-      if (refresh) {
-        await promotionsModule.printAvailablePromotionsSection({
-          configuredKeys: new Set(entries.map((entry) => entry.key)),
-          refresh,
-          runtime,
-        });
-      }
-    } catch {
-      // Passive discovery must never fail the listing.
+    const rich = isRich(opts);
+    const formatRowTag = rich
+      ? (rawTag: string) => {
+          const tag = sanitizeTerminalText(rawTag);
+          switch (tag) {
+            case "default":
+              return theme.success(tag);
+            case "image":
+              return theme.accentBright(tag);
+            case "configured":
+              return theme.accent(tag);
+            case "missing":
+              return theme.error(tag);
+          }
+          if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
+            return theme.warn(tag);
+          }
+          if (tag.startsWith("alias:")) {
+            return theme.accentDim(tag);
+          }
+          return theme.muted(tag);
+        }
+      : sanitizeTerminalText;
+    const formatState = (value: boolean | null, unavailableColor = theme.muted) =>
+      colorize(
+        rich,
+        value === null ? theme.muted : value ? theme.success : unavailableColor,
+        padTerminalCell(value === null ? "-" : value ? "yes" : "no", STATE_PAD),
+      );
+    const header = [
+      padTerminalCell("Model", MODEL_PAD),
+      padTerminalCell("Input", INPUT_PAD),
+      padTerminalCell("Ctx", CTX_PAD),
+      padTerminalCell("Local", STATE_PAD),
+      padTerminalCell("Auth", STATE_PAD),
+      "Tags",
+    ].join(" ");
+    runtime.log(rich ? theme.heading(header) : header);
+
+    for (const row of rows) {
+      const keyLabel = padTerminalCell(truncate(row.key, MODEL_PAD), MODEL_PAD);
+      const coloredInput = colorize(
+        rich,
+        row.input.includes("image") ? theme.accentBright : theme.info,
+        padTerminalCell(sanitizeTerminalText(row.input) || "-", INPUT_PAD),
+      );
+
+      const contextLabel =
+        typeof row.contextTokens === "number" &&
+        Number.isFinite(row.contextTokens) &&
+        row.contextTokens > 0 &&
+        row.contextTokens !== row.contextWindow
+          ? `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`
+          : formatTokenK(row.contextWindow);
+      const line = [
+        rich ? theme.accent(keyLabel) : keyLabel,
+        coloredInput,
+        padTerminalCell(contextLabel, CTX_PAD),
+        formatState(row.local),
+        formatState(row.available, theme.error),
+        row.tags.map(formatRowTag).join(","),
+      ].join(" ");
+      runtime.log(line);
     }
   }
   requestExitAfterOneShotOutput(runtime);

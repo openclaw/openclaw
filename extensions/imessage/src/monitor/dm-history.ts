@@ -1,8 +1,9 @@
-// Imessage plugin module implements dm history behavior.
 import {
   formatInboundEnvelope,
   type resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageRpcClient } from "../client.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -87,8 +88,7 @@ function historyEntryFromMessage(message: IMessagePayload, fallbackSender: strin
   if (!body) {
     return null;
   }
-  const timestamp =
-    typeof message.created_at === "string" ? Date.parse(message.created_at) : Number.NaN;
+  const timestamp = parseDateStringTimestampMs(message.created_at);
   return {
     sender:
       message.is_from_me === true
@@ -96,7 +96,7 @@ function historyEntryFromMessage(message: IMessagePayload, fallbackSender: strin
         : normalizeIMessageHandle(normalizeOptionalString(message.sender) ?? fallbackSender) ||
           fallbackSender,
     body,
-    ...(Number.isFinite(timestamp) ? { timestamp } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
   };
 }
 
@@ -106,7 +106,6 @@ export async function resolveIMessageDmHistoryContext(params: {
   senderNormalized: string;
   limit: number;
   envelopeOptions: ReturnType<typeof resolveEnvelopeFormatOptions>;
-  logVerbose?: (msg: string) => void;
 }): Promise<IMessageDmHistoryContext> {
   const maxMessages = Math.max(0, Math.floor(params.limit));
   const chatId =
@@ -129,7 +128,7 @@ export async function resolveIMessageDmHistoryContext(params: {
       { timeoutMs: DM_HISTORY_RPC_TIMEOUT_MS },
     );
   } catch (err) {
-    params.logVerbose?.(`imessage: DM history fetch failed for chat_id=${chatId}: ${String(err)}`);
+    logVerbose(`imessage: DM history fetch failed for chat_id=${chatId}: ${String(err)}`);
     return {};
   }
 

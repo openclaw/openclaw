@@ -10,6 +10,11 @@ OpenClaw remembers things by writing plain Markdown files in your agent's
 workspace (default `~/.openclaw/workspace`). The model only remembers what gets
 saved to disk; there is no hidden state.
 
+Workspace `USER.md` and `MEMORY.md` context does not require a memory search
+plugin to implement provenance classification. When that optional capability is
+missing, OpenClaw uses its workspace provenance records. Files recorded as
+untrusted and remote files without a valid read-source identity remain excluded.
+
 ## How it works
 
 Your agent has four memory-related files:
@@ -47,6 +52,10 @@ of a session. It is not a raw transcript, daily log, or exhaustive archive.
 observations, session summaries, and raw context that may still be useful
 later. These are indexed for `memory_search` and `memory_get`, but are not
 injected into the bootstrap prompt on every turn.
+
+Daily-memory maintenance requires valid UTF-8. If decoding fails, the operation
+stops before rewriting that file. Preserve the original and convert a copy to
+UTF-8 before retrying.
 
 Over time, useful material from daily notes is distilled into `MEMORY.md` by
 the default [dreaming](/concepts/dreaming) sweep. The generated workspace
@@ -144,16 +153,32 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
-## Retired inferred commitments
+## PostgreSQL memory search
 
-Some future follow-ups are not durable facts. If a future event should trigger
-an action, use a [standing intent](/concepts/standing-intents). If a clock time
-should trigger it, use a [scheduled task](/automation/cron-jobs).
+The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
+long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
+corpus-wide inverse document frequency (IDF), so common and mixed-frequency
+queries can still rank differently. Hybrid search retains the same vector/text
+weights.
 
-The inferred commitments experiment is retired. OpenClaw no longer extracts or
-delivers those follow-ups. Use [scheduled tasks](/automation/cron-jobs) for
-future actions; the legacy `openclaw commitments` command remains available to
-inspect or dismiss existing stored rows.
+Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
+when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
+search, explicitly set `memory.search.provider: "none"` (or the agent override).
+This mode needs no `vector` extension and appears in memory status as provider
+`none`, search mode `fts-only`. A vector request without the capability fails with
+`DATABASE_SEARCH_CAPABILITY_UNAVAILABLE` and an actionable next step.
+
+Forgetting removes indexed text and vectors together with their source rows.
+`openclaw memory reset` clears derived memory data while preserving memory files,
+sessions, and the admitted search schema; run `openclaw memory index` to rebuild.
+See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
+permissions, storage diagnostics, and PostgreSQL limitations.
 
 ## Memory tools
 
@@ -165,7 +190,31 @@ The agent has three tools for working with memory:
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+All three tools are provided by the active memory plugin (default: `memory-core`).
+
+The agent can answer directly when the conversation, bootstrap files, or supplied
+recall fully answers the question. It uses memory tools to retrieve missing facts
+when that context is absent or only answers part of the question. Partial, stale,
+or unavailable recall still requires disclosure.
+
+If `memory_search` reports that its storage scope closed, run
+`openclaw plugins reload memory-core`, or restart the Gateway, then retry.
+This is a storage lifecycle failure, not an embedding provider error. See
+[Plugin reload](/cli/plugins/uninstall-and-update#reload) for reload behavior.
+
+When session indexing is enabled, `memory_search` can also return session
+transcript hits. Their `sessions/...jsonl` paths are search references, not files
+that `memory_get` can read. Use `sessions_search` with distinctive text from the
+snippet (optionally scope `sessionKey` to the transcript ID), then pass its returned
+`sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
+sanitized excerpt. These tools enforce session visibility independently on each
+request. Memory-search line numbers are not session-history offsets.
+
+The recall prompt recommends only enabled tools. Without session-history tools,
+report the excerpt limitation instead of reading raw transcript files.
+`memory_get` reports unsupported paths as read errors, not missing arguments or a
+globally disabled memory service. Memory-file reads and optional wiki reads keep
+their existing range, continuation, and partial-corpus semantics.
 
 ## Memory search
 
@@ -184,16 +233,12 @@ a generic OpenAI-compatible endpoint.
 See [Memory search](/concepts/memory-search) for how search works, tuning
 options, and provider setup.
 
-## Memory backends
+## Memory engines
 
 <CardGroup cols={3}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
-</Card>
-<Card title="QMD" icon="search" href="/concepts/memory-qmd">
-Local-first sidecar with reranking, query expansion, and the ability to index
-directories outside the workspace.
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and
@@ -209,7 +254,7 @@ auto-capture, and local Ollama embedding support. Plugin install.
 
 If you want durable memory to behave more like a maintained knowledge base
 than raw notes, use the bundled `memory-wiki` plugin. It compiles durable
-knowledge into a wiki vault with deterministic page structure, structured
+knowledge into a wiki vault with fixed page structure, structured
 claims and evidence, contradiction and freshness tracking, generated
 dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 `wiki_search`, `wiki_get`, `wiki_apply`, `wiki_lint`).
@@ -231,31 +276,53 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 
 Before [compaction](/concepts/compaction) summarizes your conversation,
 OpenClaw runs a silent turn that reminds the agent to save important context
-to memory files. This is on by default; set
+to durable memory. Memory Core saves to a workspace memory file. A selected
+memory plugin can supply its own persistence tools. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
+OpenClaw resolves when the flush runs from that host config and the active
+context window. The selected memory provider supplies the prompts and
+persistence target or tools. It inherits host timing unless it deliberately
+overrides an optional timing field.
 
-To keep that housekeeping turn on a local model, set an exact override that
-applies only to the memory-flush turn (it does not inherit the active
-session's model fallback chain):
+When a model server omits usage data, OpenClaw estimates context pressure from
+the active conversation so the memory checkpoint can still run. These estimates
+do not replace provider-reported token usage in session status.
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses a private copy of the conversation, so its housekeeping messages
+never appear in later user turns, even if interrupted. Its writes to memory
+are still saved normally.
+
+Memory Core's file flush requires writable workspace access. Sessions whose sandbox
+requires read-only or no workspace access skip the flush, including sessions
+with a persisted sandbox requirement that overrides the agent's configuration.
+
+During that flush, `write` appends only to the daily note. Its `content` must
+contain only new text. Replayed whole notes and copied paragraphs are rejected
+without changing the file, so the model can retry with just the new entries.
+Reusing Markdown headings with new facts is allowed. This check compares text
+with normalized line endings; it does not deduplicate paraphrases or repair
+existing notes.
+
+A native provider's tools-based flush does not require a writable workspace;
+other flush plans are not resolved for sessions that cannot write it. It exposes
+`read`, the provider's declared persistence tools, and optional read-only lookup
+tools, subject to normal tool policies. Those tools receive the source turn's
+memory audience and sandbox state. Missing lookup tools produce a warning but do
+not block a flush that can still persist. The flush is skipped if no valid
+audience or permitted persistence tool is available. It succeeds when a
+persistence tool completes without error or the agent returns `NO_REPLY`; lookup
+success alone does not complete the flush. Skipping or failing this optional step
+does not prevent compaction. Plugin authors can find the contract and retry
+identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
+
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
 
 <Tip>
-The memory flush prevents context loss during compaction. If your agent has
-important facts in the conversation that are not yet written to a file, they
-are saved automatically before the summary happens.
+The memory flush gives the agent a chance to save important facts before
+compaction summarizes the conversation. Check your memory plugin's saved notes
+or records when you need to confirm that a fact was retained.
 </Tip>
 
 ## Dreaming
@@ -270,9 +337,9 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
   job for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
-- **Consolidated**: a bounded subagent rewrite merges duplicates and
-  supersedes stale entries after the deterministic gate. Invalid or
-  unavailable rewrites use append-only fallback.
+- **Consolidated**: a tool-free completion selects merges and supersessions
+  after the rule-based check. The memory writer composes the result from
+  validated source evidence; invalid or unavailable decisions use append-only fallback.
 - **Taint gated**: untrusted and system-derived candidates never enter the
   consolidation prompt or durable promotion path.
 - **Reviewable**: phase summaries and diary entries are written to
@@ -289,11 +356,20 @@ Dream Diary details.
 
 The dreaming system has two related review lanes:
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses to decide what
-  graduates into `MEMORY.md`.
+- **Live dreaming** works from short-term dreaming state in SQLite plugin
+  storage and is what the normal deep phase uses to decide what graduates into
+  `MEMORY.md`.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
+
+Dreaming JSON journals from before July 2026 are no longer imported. The
+migration check leaves `memory/.dreams/daily-ingestion.json`, `session-ingestion.json`,
+`short-term-recall.json`, and `phase-signals.json` untouched. Existing SQLite
+state remains authoritative. If Doctor cannot establish valid stored state,
+restore a backup from a July 2026 or newer release. An empty ingestion store
+without a previous migration acknowledgement is indistinguishable from
+unmigrated state; after verifying its SQLite state, back up and move the retired
+JSON file aside, then rerun `openclaw doctor --fix`.
 
 Grounded backfill is useful for replaying older notes and inspecting what the
 system considers durable, without manually editing `MEMORY.md`.
@@ -328,15 +404,20 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
+- [Memory architecture](/concepts/memory-architecture): the storage, indexing, and retrieval layers behind every memory feature.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
-- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
 - [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory provenance and deletion](/concepts/memory-provenance): session lineage, admission policy, and `memory forget`.
 - [Memory configuration reference](/reference/memory-config): all config knobs.
 - [Compaction](/concepts/compaction): how compaction interacts with memory.
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.
 - [User model](/concepts/user-model): directive-based durable preferences and profile facts.
 - [Standing intents](/concepts/standing-intents): event-conditioned prospective memory.
+
+## Related
+
+- [`openclaw memory`](/cli/memory) — command reference for inspecting and editing memory

@@ -1,5 +1,37 @@
-// Feishu plugin module implements card ux shared behavior.
 import type { FeishuCardInteractionEnvelope } from "./card-interaction.js";
+
+export function buildFeishuActionCard(params: {
+  title: string;
+  template: string;
+  content: string;
+  actions: ReturnType<typeof buildFeishuCardButton>[];
+}): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: { width_mode: "fill" },
+    header: {
+      title: { tag: "plain_text", content: params.title },
+      template: params.template,
+    },
+    body: {
+      elements: [
+        { tag: "markdown", content: params.content },
+        // Card JSON 2.0 rejects the legacy "action" container.
+        {
+          tag: "column_set",
+          flex_mode: "none",
+          horizontal_spacing: "default",
+          columns: params.actions.map((button) => ({
+            tag: "column",
+            width: "auto",
+            vertical_align: "center",
+            elements: [button],
+          })),
+        },
+      ],
+    },
+  };
+}
 
 export function buildFeishuCardButton(params: {
   label: string;

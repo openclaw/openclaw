@@ -3,19 +3,55 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginCompatibilityNotice } from "./status.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import type { PluginHookName } from "./types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export { createPluginRecord };
 
+export function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram"],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, enabledConfig };
+}
+
+export function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
+
+export function createInstalledPluginIndexSnapshot(
+  plugins: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  const { version, ...index } = createIndexFixture({ generatedAtMs: 0 });
+  return { version, warning: "test", ...index, plugins };
+}
+
 export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
-export const DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE =
-  "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.";
 export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
   "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
-  params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
+  params: Pick<PluginCompatibilityNotice, "pluginId"> & {
+    code: "hook-only" | "removed-session-transcript-file-api";
+  },
 ): PluginCompatibilityNotice {
   switch (params.code) {
     case "hook-only":
@@ -25,14 +61,6 @@ export function createCompatibilityNotice(
         compatCode: "hook-only-plugin-shape",
         severity: "info",
         message: HOOK_ONLY_MESSAGE,
-      };
-    case "deprecated-memory-embedding-provider-api":
-      return {
-        pluginId: params.pluginId,
-        code: params.code,
-        compatCode: "deprecated-memory-embedding-provider-api",
-        severity: "warn",
-        message: DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
       };
     case "removed-session-transcript-file-api":
       return {
@@ -53,19 +81,6 @@ export function createBundledPluginRecord(id: string): PluginRecord {
     rootDir: `/bundled/${id}`,
     origin: "bundled",
   });
-}
-
-export function createTypedHook(params: {
-  pluginId: string;
-  hookName: PluginHookName;
-  source?: string;
-}): PluginRegistry["typedHooks"][number] {
-  return {
-    pluginId: params.pluginId,
-    hookName: params.hookName,
-    handler: () => undefined,
-    source: params.source ?? `/tmp/${params.pluginId}/index.ts`,
-  };
 }
 
 export function createCustomHook(params: {

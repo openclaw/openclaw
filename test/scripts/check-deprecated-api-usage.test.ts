@@ -1,121 +1,72 @@
-// Check Deprecated Api Usage tests cover check deprecated api usage script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
-  BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
-  buildDeprecatedPluginSdkModuleSpecifiers,
-} from "../../scripts/lib/deprecated-plugin-sdk-usage.mjs";
-import deprecatedPublicPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-deprecated-public-subpaths.json" with { type: "json" };
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
-const GUARD_SCRIPT_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../scripts/check-deprecated-api-usage.mjs",
-);
+const { createTempDir } = createScriptTestHarness();
+const inbound = "openclaw/plugin-sdk/inbound-reply-dispatch";
 
-function runFacadeImportRule(sourceByRepoPath: Record<string, string>) {
-  // realpath first: macOS os.tmpdir() is a /var -> /private/var symlink and the
-  // script reports repo-relative paths from its resolved cwd.
-  const fixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "deprecated-guard-")));
-  try {
-    for (const [repoPath, source] of Object.entries(sourceByRepoPath)) {
-      const filePath = path.join(fixtureRoot, repoPath);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, source);
+it("scans overlapping roots once and reports violations in rule/root order", () => {
+  const root = fs.realpathSync(createTempDir("deprecated-guard-"));
+  const preload = path.join(root, "account-source-io.mjs");
+  writeFixtureFiles(root, {
+    "src/a.ts": `import { x } from "${inbound}";\nimport { y } from "@${inbound}";\ndeliverOutboundPayloads();`,
+    "extensions/probe/a.ts": `export { x } from "${inbound}";\ndeliverOutboundPayloads();`,
+    "packages/a.ts": `import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();`,
+    "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
+    "src/a.test.ts": "deliverOutboundPayloads();",
+    "account-source-io.mjs": `import fs from "node:fs";
+import path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
+const seen = new Set();
+for (const method of ["readFileSync", "readdirSync"]) {
+  const original = fs[method];
+  fs[method] = function (file, ...args) {
+    const relative = typeof file === "string" ? path.relative(process.cwd(), file).split(path.sep).join("/") : "";
+    if (/^(src|extensions|packages)(\\/|$)/.test(relative)) {
+      const key = method + ":" + relative;
+      if (seen.has(key)) throw new Error("Repeated source I/O: " + key);
+      seen.add(key);
     }
-    return spawnSync(process.execPath, [GUARD_SCRIPT_PATH, "--rule=facade-internal-imports"], {
-      cwd: fixtureRoot,
-      encoding: "utf8",
-    });
-  } finally {
-    fs.rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+    return original.call(this, file, ...args);
+  };
 }
-
-describe("scripts/check-deprecated-api-usage", () => {
-  it("bans every curated deprecated public plugin SDK subpath", () => {
-    const specifiers = new Set(buildDeprecatedPluginSdkModuleSpecifiers());
-
-    for (const subpath of deprecatedPublicPluginSdkSubpaths) {
-      expect(specifiers.has(`openclaw/plugin-sdk/${subpath}`), subpath).toBe(true);
-    }
+syncBuiltinESMExports();
+`,
   });
-
-  it("keeps removed root and private compatibility aliases out of the inventory", () => {
-    const specifiers = buildDeprecatedPluginSdkModuleSpecifiers();
-    for (const removedSpecifier of [
-      "openclaw/plugin-sdk",
-      "openclaw/plugin-sdk/agent-dir-compat",
-      "openclaw/plugin-sdk/test-utils",
-    ]) {
-      expect(specifiers).not.toContain(removedSpecifier);
-    }
-  });
-
-  it("bans the scoped @openclaw/plugin-sdk spelling of every deprecated specifier", () => {
-    const specifiers = new Set(buildDeprecatedPluginSdkModuleSpecifiers());
-
-    for (const specifier of specifiers) {
-      if (!specifier.startsWith("@")) {
-        expect(specifiers.has(`@${specifier}`), specifier).toBe(true);
-      }
-    }
-  });
-
-  it("bans internal imports of every deprecated reply facade", () => {
-    const modulePaths = new Set(
-      BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => ban.modulePath),
-    );
-
-    for (const facade of [
-      "src/plugin-sdk/channel-message",
-      "src/plugin-sdk/channel-reply-pipeline",
-      "src/plugin-sdk/inbound-reply-dispatch",
-      "src/channels/message/inbound-reply-dispatch",
-    ]) {
-      expect(modulePaths.has(facade), facade).toBe(true);
-    }
-  });
-
-  it("limits facade import allowlists to the plugin-sdk compat re-export chain", () => {
-    for (const ban of BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES) {
-      for (const importer of ban.allowedImporters ?? []) {
-        expect(importer.startsWith("src/plugin-sdk/"), `${ban.modulePath} -> ${importer}`).toBe(
-          true,
-        );
-      }
-    }
-  });
-
-  it("flags internal facade imports across static, relative, scoped, and dynamic forms", () => {
-    const result = runFacadeImportRule({
-      "src/channels/probe.ts": [
-        'import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";',
-        'export { runChannelInboundEvent } from "./message/inbound-reply-dispatch.js";',
-        'const facade = await import ("../plugin-sdk/channel-message.js", { with: {} });',
-      ].join("\n"),
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "src/channels/probe.ts:1: openclaw/plugin-sdk/channel-reply-pipeline",
-    );
-    expect(result.stderr).toContain("src/channels/probe.ts:2: ./message/inbound-reply-dispatch.js");
-    expect(result.stderr).toContain("src/channels/probe.ts:3: ../plugin-sdk/channel-message.js");
-  });
-
-  it("allows canonical compat re-exports and test files", () => {
-    const result = runFacadeImportRule({
-      "src/plugin-sdk/channel-inbound.ts":
-        'export { runChannelInboundEvent } from "../channels/message/inbound-reply-dispatch.js";',
-      "src/plugin-sdk/channel-message.test.ts":
-        'const mod = await import("openclaw/plugin-sdk/channel-message");',
-    });
-
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-  });
+  const rules = [
+    "message-api",
+    "facade-internal-imports",
+    "extension-plugin-sdk-compat-subpaths",
+    "plugin-sdk-compat-subpaths",
+  ];
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(preload).href,
+      fileURLToPath(new URL("../../scripts/check-deprecated-api-usage.mts", import.meta.url)),
+      ...rules.map((id) => `--rule=${id}`),
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  const locations = [...result.stderr.matchAll(/^- ([^:]+): ([^:]+:\d+): /gm)].map(
+    ([, rule, location]) => `${rule}: ${location}`,
+  );
+  expect(locations).toEqual([
+    ...["src/a.ts:1", "src/a.ts:2", "packages/a.ts:1"].map(
+      (file) => `plugin-sdk-compat-subpaths: ${file}`,
+    ),
+    "extension-plugin-sdk-compat-subpaths: extensions/probe/a.ts:1",
+    ...["src/a.ts:1", "src/a.ts:2", "extensions/probe/a.ts:1"].map(
+      (file) => `facade-internal-imports: ${file}`,
+    ),
+    ...["src/a.ts:3", "extensions/probe/a.ts:2", "packages/a.ts:2"].map(
+      (file) => `message-api: ${file}`,
+    ),
+  ]);
 });

@@ -1,260 +1,198 @@
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
+  SessionPlacementMoveSchema,
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
+  validateSessionsMoveParams,
+  validateSessionsMoveResult,
   validateSessionsReclaimParams,
+  validateSessionsReclaimResult,
 } from "../index.js";
+import { schemaValidation, validation } from "./protocol-validation.test-support.js";
 
-const placementStates = [
-  "local",
-  "requested",
-  "provisioning",
-  "syncing",
-  "starting",
-  "active",
-  "draining",
-  "reconciling",
-  "reclaimed",
-  "failed",
-] as const;
-
-const basePlacement = {
-  generation: 4,
-  createdAtMs: 100,
-  updatedAtMs: 200,
-  stateChangedAtMs: 150,
-};
+const basePlacement = { generation: 4, createdAtMs: 100, updatedAtMs: 200, stateChangedAtMs: 150 };
 const workerBundleHash = "a".repeat(64);
-const environmentFields = {
-  environmentId: "environment-1",
-  workerBundleHash,
-};
+const environmentFields = { environmentId: "environment-1", workerBundleHash };
 const workspaceFields = {
   workspaceBaseManifestRef: "manifest-1",
   remoteWorkspaceDir: "/workspace/session-1",
 };
-const workerOwnedFields = {
-  ...environmentFields,
-  ...workspaceFields,
-  activeOwnerEpoch: 7,
-};
+const workerOwnedFields = { ...environmentFields, ...workspaceFields, activeOwnerEpoch: 7 };
+const placed = <T extends object>(state: string, fields: T) => ({
+  ...basePlacement,
+  state,
+  ...fields,
+});
+const key = "agent:main:dispatch";
+const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
+const moveRequest = (target: unknown, fields: object = {}) => ({ expected, target, ...fields });
+const gateway = { kind: "gateway" };
+const device = (deviceId = "device-1") => ({ kind: "device", deviceId });
+const profile = (overrides: object = {}) => ({
+  kind: "profile",
+  profileId: "development",
+  ...overrides,
+});
+const placement = schemaValidation(SessionPlacementSchema);
+const progress = schemaValidation(SessionPlacementMoveSchema);
+const dispatch = validation(validateSessionsDispatchParams);
+const reclaim = validation(validateSessionsReclaimParams);
+const reclaimed = validation(validateSessionsReclaimResult);
+const moved = validation(validateSessionsMoveResult);
+const moving = validation(validateSessionsMoveParams);
+const retryProgress = (retry: { target: unknown }) => ({
+  target: retry.target,
+  updatedAtMs: 1,
+  error: "move interrupted",
+  retry,
+});
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts only the dedicated dispatch selector and configured profile", () => {
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        agentId: "main",
-        profileId: "development",
-      }),
-    ).toBe(true);
-    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(false);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        task: "run remotely",
-      }),
-    ).toBe(false);
+  it("accepts an explicit target, automatic device selection, or configured-default lookup", () => {
+    const request = (target: Record<string, unknown>) => ({ key, ...target });
+    dispatch.accepts(
+      ...[
+        { agentId: "main", profileId: "development", machineClass: "beast", os: "windows/wsl2" },
+        { deviceId: "device-1" },
+        { autoDevice: true },
+        {},
+        { profileId: "development", os: "x".repeat(64) },
+      ].map(request),
+    );
+    dispatch.rejects(
+      ...[
+        { os: "windows/wsl2" },
+        { deviceId: "device-1", os: "windows/wsl2" },
+        { autoDevice: true, os: "windows/wsl2" },
+        { profileId: "development", os: "" },
+        { profileId: "development", os: "x".repeat(65) },
+        { machineClass: "beast" },
+        { profileId: "development", deviceId: "device-1" },
+        { deviceId: "device-1", machineClass: "beast" },
+        { autoDevice: false },
+        { autoDevice: true, profileId: "development" },
+        { autoDevice: true, deviceId: "device-1" },
+        { autoDevice: true, machineClass: "beast" },
+        { profileId: "development", machineClass: "" },
+        { profileId: "development", machineClass: "x".repeat(129) },
+        { profileId: "development", task: "run remotely" },
+      ].map(request),
+    );
   });
 
-  it("accepts only a session selector for worker reclaim", () => {
-    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
-      true,
+  it("accepts a session selector and exact failed generation for Gateway recovery", () => {
+    reclaim.accepts({ key, agentId: "main" }, { key, recoverToGateway: { expectedGeneration: 3 } });
+    reclaim.rejects(
+      { key, profileId: "dev" },
+      ...[{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }].map((recoverToGateway) => ({
+        key,
+        recoverToGateway,
+      })),
     );
-    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
-      false,
-    );
+  });
+
+  it("accepts exactly the reclaim owner's terminal outcomes", () => {
+    const result = (value: unknown) => ({
+      ok: true,
+      key,
+      sessionId: "session-1",
+      placement: value,
+    });
+    reclaimed.accepts(...["local", "reclaimed"].map((state) => result(placed(state, {}))));
+    reclaimed.rejects(result(placed("requested", {})), result(placed("active", workerOwnedFields)));
   });
 
   it("keeps placement states closed", () => {
-    for (const state of placementStates) {
-      expect(Value.Check(SessionPlacementStateSchema, state)).toBe(true);
-    }
-    expect(Value.Check(SessionPlacementStateSchema, "unknown")).toBe(false);
-  });
-
-  it("keeps local and requested placement free of worker metadata", () => {
-    expect(Value.Check(SessionPlacementSchema, { state: "local", ...basePlacement })).toBe(true);
-    expect(Value.Check(SessionPlacementSchema, { state: "requested", ...basePlacement })).toBe(
-      true,
-    );
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "local",
-        ...basePlacement,
-        environmentId: "environment-1",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "requested",
-        ...basePlacement,
-        workerBundleHash,
-      }),
-    ).toBe(false);
-  });
-
-  it("allows only the optional reserved environment while provisioning", () => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "provisioning",
-        ...basePlacement,
-        environmentId: "environment-1",
-      }),
-    ).toBe(true);
-    expect(Value.Check(SessionPlacementSchema, { state: "provisioning", ...basePlacement })).toBe(
-      true,
-    );
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "provisioning",
-        ...basePlacement,
-        ...environmentFields,
-      }),
-    ).toBe(false);
-  });
-
-  it("requires the provisioned bundle while syncing", () => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "syncing",
-        ...basePlacement,
-        ...environmentFields,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "syncing",
-        ...basePlacement,
-        environmentId: "environment-1",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "syncing",
-        ...basePlacement,
-        ...environmentFields,
-        ...workspaceFields,
-      }),
-    ).toBe(false);
+    const states = schemaValidation(SessionPlacementStateSchema);
+    states.accepts("active");
+    states.rejects("unknown");
   });
 
   it("requires workspace identity while starting", () => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        ...workspaceFields,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        remoteWorkspaceDir: "/workspace/session-1",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        ...workspaceFields,
-        lastTranscriptAckCursor: 0,
-      }),
-    ).toBe(false);
+    const starting = placed("starting", { ...environmentFields, ...workspaceFields });
+    placement.accepts(starting);
+    const { workspaceBaseManifestRef: _manifest, ...missingManifest } = starting;
+    placement.rejects(missingManifest, { ...starting, lastTranscriptAckCursor: 0 });
   });
 
-  it.each(["active", "draining", "reconciling"] as const)(
-    "requires complete worker ownership for %s placement",
-    (state) => {
-      expect(
-        Value.Check(SessionPlacementSchema, {
-          state,
-          ...basePlacement,
-          ...workerOwnedFields,
-          lastTranscriptAckCursor: 2,
-          lastLiveEventAckCursor: 9,
-        }),
-      ).toBe(true);
-      expect(
-        Value.Check(SessionPlacementSchema, {
-          state,
-          ...basePlacement,
-          environmentId: "environment-1",
-          activeOwnerEpoch: 7,
-          workerBundleHash,
-        }),
-      ).toBe(false);
-    },
-  );
-
-  it("preserves optional provenance only in terminal states", () => {
-    expect(Value.Check(SessionPlacementSchema, { state: "reclaimed", ...basePlacement })).toBe(
-      true,
+  it("requires complete worker ownership for active placement", () => {
+    placement.accepts(
+      placed("active", {
+        ...workerOwnedFields,
+        lastTranscriptAckCursor: 2,
+        lastLiveEventAckCursor: 9,
+      }),
     );
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "reclaimed",
-        ...basePlacement,
-        ...workerOwnedFields,
-        workspaceResultConflict: {
-          paths: ["src/local.ts"],
-          stagedResultRef: "refs/openclaw/worker-results/claim-1",
-        },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "reclaimed",
-        ...basePlacement,
-        workspaceResultConflict: {
-          paths: [],
-          stagedResultRef: "refs/openclaw/worker-results/claim-1",
-        },
-      }),
-    ).toBe(false);
+    placement.rejects(placed("active", { ...environmentFields, activeOwnerEpoch: 7 }));
   });
 
-  it("requires recovery evidence for failed placement", () => {
-    const failed = {
-      state: "failed" as const,
-      ...basePlacement,
-      ...workerOwnedFields,
-      recoveryError: "worker admission failed",
+  it("projects bounded durable move progress without operation authority", () => {
+    progress.accepts(
+      { target: gateway, updatedAtMs: 1 },
+      { target: device(), updatedAtMs: 2, error: "device worker is offline" },
+    );
+    progress.rejects({
+      target: gateway,
+      updatedAtMs: 1,
+      operationId: "move:v1:secret",
+    });
+  });
+
+  it("validates projected retries with the same source and target constraints as Move requests", () => {
+    const retries = [
+      moveRequest(gateway),
+      moveRequest(gateway, { abandonSource: true }),
+      moveRequest(device()),
+      moveRequest(profile({ profileId: "team", os: "linux", machineClass: "tiny" })),
+      moveRequest(
+        profile({
+          profileId: "x".repeat(256),
+          machineClass: "x".repeat(128),
+          os: "x".repeat(64),
+        }),
+        { expected: { ...expected, environmentId: "x".repeat(256) } },
+      ),
+    ];
+    for (const retry of retries) {
+      progress.accepts(retryProgress(retry));
+      moving.accepts({ key, ...retry });
+    }
+    for (const retry of [
+      moveRequest(gateway, { expected: { ...expected, ownerEpoch: 0 } }),
+      moveRequest(gateway, { expected: { ...expected, generation: -1 } }),
+      moveRequest(gateway, { abandonSource: false }),
+      moveRequest(device(), { abandonSource: true }),
+      moveRequest(profile({ profileId: "team" }), { abandonSource: true }),
+      moveRequest(gateway, { operationId: "move:v1:opaque" }),
+      ...["", "x".repeat(129)].map((machineClass) => moveRequest(profile({ machineClass }))),
+      ...["", "x".repeat(65)].map((os) => moveRequest(profile({ os }))),
+      ...["x".repeat(257), " leading", "trailing "].flatMap((value) => [
+        moveRequest(gateway, { expected: { ...expected, environmentId: value } }),
+        moveRequest(device(value)),
+      ]),
+    ]) {
+      progress.rejects(retryProgress(retry));
+      moving.rejects({ key, ...retry });
+    }
+  });
+
+  it("keeps the move result bounded to terminal placement state", () => {
+    const result = {
+      ok: true,
+      key: "agent:main:dispatch",
+      sessionId: "session-dispatch",
+      placement: { state: "active", generation: 5 },
     };
-    expect(Value.Check(SessionPlacementSchema, failed)).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "failed",
-        ...basePlacement,
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects unknown placement fields", () => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "active",
-        ...basePlacement,
-        ...workerOwnedFields,
-        unexpected: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects extra fields in dispatch params", () => {
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        extra: true,
-      }),
-    ).toBe(false);
+    moved.accepts(result);
+    moved.rejects(
+      { ...result, placement: { state: "requested", generation: 5 } },
+      { ...result, placement: { state: "reclaimed", generation: 5 } },
+      {
+        ...result,
+        placement: { ...result.placement, remoteWorkspaceDir: "/workspace/session-dispatch" },
+      },
+      { ...result, providerSettings: {} },
+    );
   });
 });

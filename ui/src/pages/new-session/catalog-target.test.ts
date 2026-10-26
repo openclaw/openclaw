@@ -1,48 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  allowsSelectedAgent,
-  resolveAgentId,
-  resolveCreateTarget,
-  routeKey,
-} from "./catalog-target.ts";
+import { resolveCreateTarget, routeKey, routeKeyFromSearch } from "./catalog-target.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 
 describe("new-session catalog target", () => {
-  const agents = [{ id: "main" }, { id: "research" }];
-
-  it("keeps the draft identity stable while target metadata resolves", () => {
-    const pending = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "claude",
-      model: "",
-      catalogLabel: "",
-    };
-    const ready = {
-      ...pending,
-      model: "anthropic/claude-opus-4-8",
-      catalogLabel: "Claude Code",
-    };
-
-    expect(routeKey(pending)).toBe(routeKey(ready));
-    expect(allowsSelectedAgent(pending, { id: "main" })).toBe(false);
-    expect(allowsSelectedAgent(ready, { id: "main" })).toBe(true);
-  });
-
-  it("keeps the draft identity stable while the target agent resolves", () => {
-    const requested = {
-      requestedAgentId: "research",
-      catalogId: "claude",
-      model: "",
-      catalogLabel: "",
-    };
-    const unresolved = { ...requested, agentId: "" };
-    const resolved = { ...requested, agentId: "research" };
-
-    expect(routeKey(unresolved)).toBe(routeKey(resolved));
-    // Only a navigation changes the requested agent or the target.
-    expect(routeKey({ ...resolved, requestedAgentId: "main" })).not.toBe(routeKey(resolved));
-    expect(routeKey({ ...resolved, catalogId: "codex" })).not.toBe(routeKey(resolved));
+  it("isolates model-specific drafts while retaining ordinary draft storage keys", () => {
+    const plain = createNewSessionRouteData();
+    const first = { ...plain, requestedModel: "example/first" };
+    const second = { ...plain, requestedModel: "example/second" };
+    expect(routeKey(plain)).toBe('["main","",""]');
+    expect(routeKey(first)).not.toBe(routeKey(plain));
+    expect(routeKey(first)).not.toBe(routeKey(second));
+    expect(routeKeyFromSearch("?agent=main&model=example%2Ffirst")).toBe(routeKey(first));
   });
 
   it("fails closed when the requested creation capability is unavailable", async () => {
@@ -67,31 +36,37 @@ describe("new-session catalog target", () => {
     });
   });
 
-  it("preserves a valid requested agent for catalog-targeted sessions", () => {
-    expect(
-      resolveAgentId(
+  it("resolves native terminal hosts without model-chat eligibility", async () => {
+    const request = vi.fn(async () => ({
+      catalogs: [
         {
-          agentId: "research",
-          catalogId: "claude",
+          id: "claude",
+          label: "Claude Code",
+          capabilities: {
+            continueSession: true,
+            archive: false,
+            startTerminal: true,
+          },
+          hosts: [
+            {
+              hostId: "node:dev",
+              label: "Dev",
+              kind: "node",
+              connected: false,
+              canStartTerminal: true,
+              sessions: [],
+            },
+          ],
         },
-        agents,
-        "main",
-      ),
-    ).toBe("research");
-  });
+      ],
+    }));
 
-  it("canonicalizes the requested agent or falls back before catalog resolution", () => {
-    const target = { agentId: "Research", catalogId: "claude" };
-
-    expect(resolveAgentId(target, agents, "main")).toBe("research");
-    expect(resolveAgentId({ ...target, agentId: "retired" }, agents, "main")).toBe("main");
-    expect(resolveAgentId({ ...target, agentId: "" }, agents, "research")).toBe("research");
-  });
-
-  it("reconciles a provisional new-thread picker value after the roster loads", () => {
-    const location = { agentId: "main", catalogId: "" };
-
-    expect(resolveAgentId(location, [], "main")).toBe("main");
-    expect(resolveAgentId(location, [{ id: "roboclaw" }], "roboclaw")).toBe("roboclaw");
+    await expect(
+      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+    ).resolves.toEqual({
+      catalogLabel: "Claude Code",
+      startTerminal: true,
+      terminalHosts: [{ hostId: "node:dev", label: "Dev" }],
+    });
   });
 });

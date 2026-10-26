@@ -2,11 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { createDeferred as createSharedDeferred } from "../shared/deferred.js";
-import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
@@ -24,10 +21,6 @@ type PassiveChannelStatusSnapshot = {
 type TrafficStatusSnapshot = {
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
-};
-
-type StoppableMonitor = {
-  stop: () => void;
 };
 
 type RequireOpenAllowFromFn = (params: {
@@ -75,23 +68,6 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
     lastInboundAt: snapshot?.lastInboundAt ?? null,
     lastOutboundAt: snapshot?.lastOutboundAt ?? null,
   };
-}
-
-/**
- * Runs a passive monitor until the supplied abort signal fires, then calls `stop()`.
- * This adapts simple plugin monitors to the shared passive account lifecycle.
- */
-export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
-  abortSignal: AbortSignal;
-  start: () => Promise<TMonitor>;
-}): Promise<void> {
-  await runPassiveAccountLifecycle({
-    abortSignal: params.abortSignal,
-    start: params.start,
-    stop: async (monitor) => {
-      monitor.stop();
-    },
-  });
 }
 
 /**
@@ -151,7 +127,7 @@ export function coerceStatusIssueAccountId(value: unknown): string | undefined {
 
 /** Creates a promise with externally controlled resolve/reject hooks for async handoff code. */
 export function createDeferred<T>() {
-  return createSharedDeferred<T>();
+  return createDeferredCore<T>();
 }
 
 const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [
@@ -214,23 +190,6 @@ export function mapPluginConfigIssues(
     path: normalizePluginConfigIssuePath(issue.path),
     message: formatPluginConfigIssue(issue, options),
   }));
-}
-
-/** Checks whether a read-only plugin path may resolve a secret through an env provider. */
-export function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
 }
 
 /** Reads plugin package versions across source, bundled, and test layouts with a fallback. */

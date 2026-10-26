@@ -4,37 +4,75 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { fsHandlers } from "./fs.js";
 
-const tempRoots: string[] = [];
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-listdir-"));
-  tempRoots.push(root);
-  // macOS tmpdir is a /var -> /private/var symlink; the handler returns resolved paths.
-  return await fs.realpath(root);
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function call(
   params: Record<string, unknown>,
   context: Record<string, unknown> = {
+    getRuntimeConfig: () => ({}),
     nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
   },
+  client: Record<string, unknown> = { connect: { scopes: ["operator.admin"] } },
 ) {
   const respond = vi.fn();
-  await fsHandlers["fs.listDir"]?.({ params, respond, context } as never);
-  return respond.mock.calls[0];
+  await fsHandlers["fs.listDir"]?.({ params, respond, context, client } as never);
+  return expectDefined(respond.mock.calls[0], "fs.listDir response");
 }
 
-afterEach(async () => {
-  for (const root of tempRoots.splice(0)) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+const writeClient = { connect: { scopes: ["operator.write"] } };
+
+function workspaceContext(workspace: string) {
+  return nodeContext(vi.fn(), null, { agents: { entries: { main: { workspace } } } });
+}
+
+const connectedNode = {
+  connId: "conn-1",
+  nodeId: "macbook",
+  platform: "macos",
+  deviceFamily: "Mac",
+  commands: ["fs.listDir"],
+};
+function nodeContext(
+  invoke: ReturnType<typeof vi.fn>,
+  node: Record<string, unknown> | null = connectedNode,
+  config = {},
+) {
+  return {
+    getRuntimeConfig: () => config,
+    nodeRegistry: { get: vi.fn().mockReturnValue(node ?? undefined), invoke },
+  };
+}
 
 describe("fs.listDir", () => {
+  it.each(["operator.admin", "operator.write"])(
+    "reopens the exact returned directory path with %s",
+    async (scope) => {
+      const root = fsSync.realpathSync(tempDirs.make("openclaw-fs-path-identity-"));
+      await fs.mkdir(path.join(root, "Project", "ordinary-child"), { recursive: true });
+      await fs.mkdir(path.join(root, "Project ", "spaced-child"), { recursive: true });
+      const context = workspaceContext(root);
+      const client = { connect: { scopes: [scope] } };
+      const [listed, initial] = await call({ path: root }, context, client);
+      expect(listed).toBe(true);
+      const selected = expectDefined(
+        (initial as FsListDirResult).entries.find((entry) => entry.name === "Project "),
+        "directory with a trailing space",
+      );
+      const [opened, result] = await call({ path: selected.path }, context, client);
+      expect(opened).toBe(true);
+      expect(result).toMatchObject({
+        path: selected.path,
+        entries: [{ name: "spaced-child", path: path.join(selected.path, "spaced-child") }],
+      });
+    },
+  );
+
   it("lists only directories, visible before hidden, in byte order", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "zeta"));
     await fs.mkdir(path.join(root, "alpha"));
     await fs.mkdir(path.join(root, ".hidden"));
@@ -58,7 +96,7 @@ describe("fs.listDir", () => {
   });
 
   it("follows directory symlinks and skips file or broken symlinks", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "real"));
     await fs.writeFile(path.join(root, "plain.txt"), "file");
     fsSync.symlinkSync(path.join(root, "real"), path.join(root, "linked-dir"));
@@ -84,58 +122,89 @@ describe("fs.listDir", () => {
   });
 
   it("rejects relative paths and invalid params", async () => {
-    const [relativeOk, , relativeError] = expectDefined(
-      await call({ path: "relative/dir" }),
-      'await call({ path: "relative/dir" }) test invariant',
-    );
-    expect(relativeOk).toBe(false);
-    expect(String((relativeError as { message?: string })?.message)).toContain("absolute");
-
-    const [invalidOk] = expectDefined(
-      await call({ path: 42 }),
-      "await call({ path: 42 }) test invariant",
-    );
-    expect(invalidOk).toBe(false);
+    expect(await call({ path: "relative/dir" })).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("absolute") },
+    ]);
+    expect((await call({ path: 42 }))[0]).toBe(false);
   });
 
   it("reports missing directories as request errors", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-fs-listdir-");
+    const missing = path.join(root, "does-not-exist");
     const [ok, , error] = expectDefined(
-      await call({ path: path.join(root, "does-not-exist") }),
-      'await call({ path: path.join(root, "does-not-exist") }) test invariant',
+      await call({ path: missing }),
+      "missing directory response",
     );
     expect(ok).toBe(false);
-    expect((error as { message?: string })?.message).toContain("ENOENT");
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
+  });
+
+  it("allows write-scoped browsing inside a configured workspace", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const nested = path.join(workspace, "packages");
+    await fs.mkdir(nested);
+
+    const [ok, result] = expectDefined(
+      await call({ path: nested }, workspaceContext(workspace), writeClient),
+      "write-scoped workspace listing",
+    );
+
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ path: nested, parent: workspace });
+  });
+
+  it("defaults write-scoped browsing to the workspace root and clamps its parent", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+
+    const [ok, result] = await call({}, workspaceContext(workspace), writeClient);
+
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ path: workspace });
+    expect(result).not.toHaveProperty("parent");
+  });
+
+  it.each(["outside", "symlink escape"])("rejects write-scoped browsing via %s", async (route) => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const outside = tempDirs.make("openclaw-fs-outside-");
+    const target = route === "outside" ? outside : path.join(workspace, "escape");
+    if (route !== "outside") {
+      fsSync.symlinkSync(outside, target);
+    }
+    const [ok, , error] = await call({ path: target }, workspaceContext(workspace), writeClient);
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ message: expect.stringContaining("operator.admin") });
+  });
+
+  it("keeps missing workspace descendants as filesystem errors instead of scope errors", async () => {
+    const workspace = tempDirs.make("openclaw-fs-workspace-");
+    const missing = path.join(workspace, "missing", "child");
+
+    const [ok, , error] = await call({ path: missing }, workspaceContext(workspace), writeClient);
+
+    expect(ok).toBe(false);
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
   });
 
   it("routes node listings through the connected node capability", async () => {
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
-      payloadJSON: JSON.stringify({
-        path: "/Users/peter",
-        home: "/Users/peter",
-        entries: [{ name: "Projects", path: "/Users/peter/Projects" }],
-      }),
+      payloadJSON: JSON.stringify({ path: "/Users/peter", home: "/Users/peter", entries: [] }),
     });
-    const context = {
-      getRuntimeConfig: () => ({}),
-      nodeRegistry: {
-        get: vi.fn().mockReturnValue({
-          connId: "conn-1",
-          pairingGeneration: "generation-1",
-          nodeId: "macbook",
-          platform: "macos",
-          deviceFamily: "Mac",
-          commands: ["system.run", "fs.listDir"],
-        }),
-        invoke,
-      },
-    };
+    const context = nodeContext(invoke, {
+      ...connectedNode,
+      pairingGeneration: "generation-1",
+      commands: ["system.run", "fs.listDir"],
+    });
 
-    const [ok, result] = expectDefined(
-      await call({ nodeId: "macbook" }, context),
-      'await call({ nodeId: "macbook" }, context) test invariant',
-    );
+    const [ok, result] = await call({ nodeId: "macbook" }, context);
 
     expect(ok).toBe(true);
     expect(result).toMatchObject({ path: "/Users/peter", home: "/Users/peter" });
@@ -148,27 +217,33 @@ describe("fs.listDir", () => {
     });
   });
 
+  it.each([
+    [
+      "INVALID_REQUEST",
+      "Error: ENOENT: no such file or directory, scandir '/Users/de'",
+      "INVALID_REQUEST",
+    ],
+    ["TIMEOUT", "node timed out", "UNAVAILABLE"],
+  ])(
+    "preserves node %s errors with the appropriate availability code",
+    async (code, message, expectedCode) => {
+      const context = nodeContext(
+        vi.fn().mockResolvedValueOnce({ ok: false, error: { code, message } }),
+      );
+      expect((await call({ nodeId: "macbook", path: "/Users/de" }, context))[2]).toMatchObject({
+        code: expectedCode,
+        message,
+      });
+    },
+  );
+
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
-    const context = {
-      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: ["fs.listDir"] } } } }),
-      nodeRegistry: {
-        get: vi.fn().mockReturnValue({
-          connId: "conn-1",
-          nodeId: "macbook",
-          platform: "macos",
-          deviceFamily: "Mac",
-          commands: ["fs.listDir"],
-        }),
-        invoke,
-      },
-    };
+    const context = nodeContext(invoke, undefined, {
+      gateway: { nodes: { commands: { deny: ["fs.listDir"] } } },
+    });
 
-    const [ok, , error] = expectDefined(
-      await call({ nodeId: "macbook" }, context),
-      'await call({ nodeId: "macbook" }, context) test invariant',
-    );
-
+    const [ok, , error] = await call({ nodeId: "macbook" }, context);
     expect(ok).toBe(false);
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",
@@ -177,32 +252,21 @@ describe("fs.listDir", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rejects disconnected and directory-browse-incompatible nodes", async () => {
-    const disconnected = expectDefined(
-      await call({ nodeId: "offline" }, { nodeRegistry: { get: vi.fn(), invoke: vi.fn() } }),
-      'await call( { nodeId: "offline" }, { nodeRegistry: { get: vi.fn(), in... test invariant',
-    );
-    expect(expectDefined(disconnected[0], "disconnected[0] test invariant")).toBe(false);
-    expect(expectDefined(disconnected[2], "disconnected[2] test invariant")).toMatchObject({
-      code: "UNAVAILABLE",
-    });
-
-    const unsupported = expectDefined(
-      await call(
-        { nodeId: "old-node" },
-        {
-          nodeRegistry: {
-            get: vi.fn().mockReturnValue({ connId: "conn-2", commands: ["system.run"] }),
-            invoke: vi.fn(),
-          },
-        },
-      ),
-      'await call( { nodeId: "old-node" }, { nodeRegistry: { get: vi.fn().mo... test invariant',
-    );
-    expect(expectDefined(unsupported[0], "unsupported[0] test invariant")).toBe(false);
-    expect(expectDefined(unsupported[2], "unsupported[2] test invariant")).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("does not support"),
-    });
+  it.each([
+    ["offline", null, { code: "UNAVAILABLE" }],
+    [
+      "old-node",
+      { connId: "conn-2", commands: ["system.run"] },
+      {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("does not support"),
+      },
+    ],
+  ] as const)("rejects unavailable directory browsing on %s", async (nodeId, node, error) => {
+    expect(await call({ nodeId }, nodeContext(vi.fn(), node))).toMatchObject([
+      false,
+      undefined,
+      error,
+    ]);
   });
 });

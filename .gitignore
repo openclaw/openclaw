@@ -70,12 +70,15 @@ apps/macos-mlx-tts/.build/**
 apps/ios/*.xcfilelist
 
 # Vendor build artifacts
+.bundle.hash
+
+# Retired A2UI build outputs (#182109). Existing Git installs keep these generated
+# files; unignored, they make `openclaw update` refuse the checkout as dirty.
 vendor/a2ui/renderers/lit/dist/
 src/canvas-host/a2ui/*.bundle.js
 src/canvas-host/a2ui/*.map
 extensions/canvas/src/host/a2ui/*.bundle.js
 extensions/canvas/src/host/a2ui/*.map
-.bundle.hash
 
 # fastlane (iOS)
 apps/ios/fastlane/README.md
@@ -92,7 +95,8 @@ apps/android/fastlane/Preview.html
 apps/android/fastlane/test_output/
 apps/android/fastlane/logs/
 apps/android/fastlane/.env
-apps/android/fastlane/metadata/android/**/images/
+apps/android/fastlane/metadata/android/**/images/**
+!apps/android/fastlane/metadata/android/en-US/images/icon.png
 
 # fastlane build artifacts (local)
 apps/ios/*.ipa
@@ -146,9 +150,11 @@ package-lock.json
 !.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
 .claude/*
-# Track the shared Claude Code project config (worktree auto-install hook); keep
-# everything else under .claude/ (worktrees, skills, settings.local.json) ignored.
+# Track the shared Claude Code project config (worktree auto-install hook) and the
+# skills symlink into .agents/skills; keep everything else under .claude/
+# (worktrees, settings.local.json) ignored.
 !.claude/settings.json
+!.claude/skills
 .agent/
 skills-lock.json
 
@@ -184,11 +190,14 @@ ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
+ui/.vitest/
 
 # Generated docs baseline artifacts (locally generated, only drift detectors tracked)
 docs/.generated/*.json
 !docs/.generated/config-baseline.counts.json
 docs/.generated/*.jsonl
+!docs/.generated/plugin-sdk-api-baseline/
+!docs/.generated/plugin-sdk-api-baseline/*.json
 
 # Deprecated changelog fragment workflow
 changelog/fragments/
@@ -201,6 +210,7 @@ changelog/fragments/
 .mypy_cache/
 .vmux*
 .artifacts/
+.amp/portals/
 .openclaw-config-doc-cache/
 openclaw-path-alias-*/
 /.pi/
@@ -228,3 +238,6 @@ extensions/discord/assets/embedded-app-sdk.mjs
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
+.build/

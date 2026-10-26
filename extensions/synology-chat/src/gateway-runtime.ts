@@ -1,8 +1,10 @@
-// Synology Chat plugin module implements gateway runtime behavior.
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
+import { sendMessage } from "./client.js";
+import { resolveSynologyPublicWebhookRouteKey } from "./hosted-media-route.js";
+import { getSynologyRuntime } from "./runtime.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import {
   createWebhookHandler,
@@ -24,12 +26,9 @@ type SynologyGatewayStartupIssueCode =
   | "empty-allowlist"
   | "empty-open-allowlist"
   | "inherited-shared-webhook-path"
-  | "duplicate-webhook-path";
-type SynologyGatewayStartupIssue = {
-  code: SynologyGatewayStartupIssueCode;
-  logLevel: "info" | "warn";
-  message: string;
-};
+  | "duplicate-webhook-path"
+  | "duplicate-webhook-url";
+type SynologyGatewayStartupIssue = ReturnType<typeof buildStartupIssue>;
 
 const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
@@ -37,26 +36,8 @@ function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
   message: string,
   logLevel: "info" | "warn" = "warn",
-): SynologyGatewayStartupIssue {
-  return { code, logLevel, message };
-}
-
-function logStartupIssues(
-  log: SynologyGatewayLog | undefined,
-  issues: SynologyGatewayStartupIssue[],
 ) {
-  for (const issue of issues) {
-    const message = `Synology Chat ${issue.message}`;
-    if (issue.logLevel === "info") {
-      log?.info?.(message);
-      continue;
-    }
-    log?.warn?.(message);
-  }
-}
-
-function getRouteKey(account: ResolvedSynologyChatAccount): string {
-  return `${account.accountId}:${account.webhookPath}`;
+  return { code, logLevel, message };
 }
 
 function createUnknownArgsLogAdapter(
@@ -130,13 +111,27 @@ function collectSynologyGatewayStartupIssues(params: {
     );
   }
 
-  const conflictingAccounts = accountIds.filter((candidateId) => {
+  const conflictingAccounts: string[] = [];
+  const conflictingPublicAccounts: string[] = [];
+  const publicRouteKey = resolveSynologyPublicWebhookRouteKey(account.webhookUrl);
+  for (const candidateId of accountIds) {
     if (candidateId === accountId) {
-      return false;
+      continue;
     }
     const candidate = resolveAccount(cfg, candidateId);
-    return candidate.enabled && candidate.webhookPath === account.webhookPath;
-  });
+    if (!candidate.enabled) {
+      continue;
+    }
+    if (candidate.webhookPath === account.webhookPath) {
+      conflictingAccounts.push(candidateId);
+    }
+    if (
+      publicRouteKey &&
+      resolveSynologyPublicWebhookRouteKey(candidate.webhookUrl) === publicRouteKey
+    ) {
+      conflictingPublicAccounts.push(candidateId);
+    }
+  }
   if (conflictingAccounts.length > 0) {
     issues.push(
       buildStartupIssue(
@@ -146,13 +141,22 @@ function collectSynologyGatewayStartupIssues(params: {
     );
   }
 
+  if (conflictingPublicAccounts.length > 0) {
+    issues.push(
+      buildStartupIssue(
+        "duplicate-webhook-url",
+        `account ${accountId} conflicts on webhookUrl with ${conflictingPublicAccounts.join(", ")}; refusing to start ambiguous public route. Set a unique externally reachable callback URL for each account.`,
+      ),
+    );
+  }
+
   return issues;
 }
 
-export function collectSynologyGatewayRoutingWarnings(params: {
+export function collectSynologyGatewayRoutingFindings(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-}): string[] {
+}) {
   return collectSynologyGatewayStartupIssues({
     cfg: params.cfg,
     account: params.account,
@@ -160,9 +164,16 @@ export function collectSynologyGatewayRoutingWarnings(params: {
   })
     .filter(
       (issue) =>
-        issue.code === "inherited-shared-webhook-path" || issue.code === "duplicate-webhook-path",
+        issue.code === "inherited-shared-webhook-path" ||
+        issue.code === "duplicate-webhook-path" ||
+        issue.code === "duplicate-webhook-url",
     )
-    .map((issue) => `- Synology Chat: ${issue.message}`);
+    .map((issue) => ({
+      checkId: `channels.synology-chat.routing.${issue.code}`,
+      severity: issue.code === "duplicate-webhook-url" ? ("critical" as const) : ("warn" as const),
+      title: "Synology Chat security warning",
+      detail: `Synology Chat: ${issue.message}`,
+    }));
 }
 
 export function validateSynologyGatewayAccountStartup(params: {
@@ -173,7 +184,9 @@ export function validateSynologyGatewayAccountStartup(params: {
 }): { ok: true } | { ok: false } {
   const issues = collectSynologyGatewayStartupIssues(params);
   if (issues.length > 0) {
-    logStartupIssues(params.log, issues);
+    for (const issue of issues) {
+      params.log?.[issue.logLevel]?.(`Synology Chat ${issue.message}`);
+    }
     return { ok: false };
   }
   return { ok: true };
@@ -182,12 +195,11 @@ export function validateSynologyGatewayAccountStartup(params: {
 export async function registerSynologyWebhookRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-  accountId: string;
   log?: SynologyGatewayLog;
   abortSignal?: AbortSignal;
 }): Promise<() => Promise<void>> {
   const { cfg, account, log } = params;
-  const routeKey = getRouteKey(account);
+  const routeKey = `${account.accountId}:${account.webhookPath}`;
   const previousCleanup = activeRouteCleanups.get(routeKey);
   if (previousCleanup) {
     log?.info?.(`Deregistering stale route before re-registering: ${account.webhookPath}`);
@@ -208,11 +220,129 @@ export async function registerSynologyWebhookRoute(params: {
         lifecycle,
         log: logAdapter,
         deliver: async (msg, turnAdoptionLifecycle) => {
-          await dispatchSynologyChatInboundEvent({
-            account,
-            msg,
-            log: logAdapter,
-            turnAdoptionLifecycle,
+          const rt = getSynologyRuntime();
+          // SAFETY: Routing and inbound preparation only read the host-validated config snapshot.
+          const currentCfg = rt.config.current() as OpenClawConfig;
+
+          // The Chat API user_id (for sending) may differ from the webhook
+          // user_id (used for sessions/pairing). Use chatUserId for API calls.
+          const sendUserId = msg.chatUserId ?? msg.from;
+          const route = rt.channel.routing.resolveAgentRoute({
+            cfg: currentCfg,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            peer: { kind: "direct", id: msg.from },
+          });
+          const sessionKey = buildAgentSessionKey({
+            agentId: route.agentId,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            peer: { kind: "direct", id: msg.from },
+            // Synology Chat supports multiple independent accounts on one gateway.
+            // Keep direct-message sessions isolated per account and user.
+            dmScope: "per-account-channel-peer",
+            identityLinks: currentCfg.session?.identityLinks,
+          });
+
+          await rt.channel.inbound.run({
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            raw: msg,
+            ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+            adapter: {
+              ingest: (message) => ({
+                id: message.messageId,
+                timestamp: Date.now(),
+                rawText: message.body,
+                textForAgent: message.body,
+                textForCommands: message.body,
+                raw: message,
+              }),
+              resolveTurn: async (input) => {
+                const chatKind =
+                  msg.chatType === "group" || msg.chatType === "channel" ? msg.chatType : "direct";
+                const channelIngress = await msg.resolveChannelIngress({
+                  agentId: route.agentId,
+                  sessionKey,
+                  messageId: input.id,
+                  inboundEventKind: "user_request",
+                });
+                const msgCtx = rt.channel.inbound.buildContext({
+                  channelIngress,
+                  channel: CHANNEL_ID,
+                  accountId: account.accountId,
+                  messageId: input.id,
+                  timestamp: input.timestamp,
+                  from: `synology-chat:${msg.from}`,
+                  sender: {
+                    id: msg.from,
+                    name: msg.senderName,
+                  },
+                  conversation: {
+                    kind: chatKind,
+                    id: msg.from,
+                    label: msg.senderName || msg.from,
+                  },
+                  route: {
+                    agentId: route.agentId,
+                    dmScope: route.dmScope,
+                    accountId: account.accountId,
+                    routeSessionKey: sessionKey,
+                    dispatchSessionKey: sessionKey,
+                  },
+                  reply: {
+                    to: `synology-chat:${msg.from}`,
+                  },
+                  message: {
+                    rawBody: input.rawText,
+                    commandBody: input.textForCommands,
+                    bodyForAgent: input.textForAgent,
+                  },
+                  extra: {
+                    ChatType: msg.chatType,
+                    CommandAuthorized: msg.commandAuthorized,
+                  },
+                });
+                return {
+                  cfg: currentCfg,
+                  channel: CHANNEL_ID,
+                  accountId: account.accountId,
+                  route: {
+                    agentId: route.agentId,
+                    dmScope: route.dmScope,
+                    sessionKey: route.sessionKey,
+                  },
+                  ctxPayload: msgCtx,
+                  delivery: {
+                    durable: () => ({
+                      to: sendUserId,
+                    }),
+                    deliver: async (payload) => {
+                      const text = payload.text;
+                      const visibleReplySent = text
+                        ? await sendMessage(
+                            account.incomingUrl,
+                            text,
+                            sendUserId,
+                            account.allowInsecureSsl,
+                          )
+                        : false;
+                      return { visibleReplySent: Boolean(visibleReplySent) };
+                    },
+                  },
+                  dispatcherOptions: {
+                    onReplyStart: () => {
+                      logAdapter?.info?.(`Agent reply started for ${msg.from}`);
+                    },
+                  },
+                  record: {
+                    onRecordError: (err) => {
+                      logAdapter?.info?.(`Session metadata update failed for ${msg.from}`, err);
+                    },
+                  },
+                };
+              },
+            },
           });
         },
       });
@@ -235,7 +365,13 @@ export async function registerSynologyWebhookRoute(params: {
       accountId: account.accountId,
       log: (msg: string) => log?.info?.(msg),
       throwOnFailure: true,
-      handler,
+      handler: async (req, res) => {
+        const { tryHandleSynologyHostedMediaRequest } = await import("./outbound-media.js");
+        if (await tryHandleSynologyHostedMediaRequest(req, res, account)) {
+          return true;
+        }
+        return await handler(req, res);
+      },
     });
   } catch (error) {
     await ingress.stop();

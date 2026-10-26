@@ -1,12 +1,10 @@
 // Coverage for converting sensitive/unhandled stop reasons into assistant errors.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  createAssistantMessageEventStream,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 
 const anthropicModel = {
   api: "anthropic-messages",
@@ -15,65 +13,39 @@ const anthropicModel = {
 } as Model<"anthropic-messages">;
 
 describe("wrapStreamFnHandleSensitiveStopReason", () => {
-  it("rewrites unhandled stop-reason errors into structured assistant errors", async () => {
-    // Some providers surface unhandled stop reasons as stream errors; convert
-    // them into a normal assistant error so fallback/retry paths can inspect it.
+  it.each([
+    { mode: "stream", stopReason: "sensitive" },
+    { mode: "throw", stopReason: "refusal_policy" },
+  ])("converts $mode errors with stop reason $stopReason", async ({ mode, stopReason }) => {
     const baseStreamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
+      const errorMessage = `Unhandled stop reason: ${stopReason}`;
+      if (mode === "throw") {
+        throw new Error(errorMessage);
+      }
+      return createQueuedAssistantStream((push) => {
+        push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant",
+          error: makeAgentAssistantMessage({
             content: [],
             api: anthropicModel.api,
             provider: anthropicModel.provider,
             model: anthropicModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
             stopReason: "error",
-            errorMessage: "Unhandled stop reason: sensitive",
+            errorMessage,
             timestamp: Date.now(),
-          },
+          }),
         });
-        stream.end();
       });
-      return stream;
     };
-
     const wrapped = wrapStreamFnHandleSensitiveStopReason(baseStreamFn);
     const stream = await Promise.resolve(
       wrapped(anthropicModel, { messages: [] } as Context, undefined),
     );
     const result = await stream.result();
-
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(
-      "The model stopped because the provider returned an unhandled stop reason: sensitive. Please rephrase and try again.",
-    );
-  });
-
-  it("includes the extracted stop reason when converting synchronous throws", async () => {
-    const baseStreamFn: StreamFn = () => {
-      throw new Error("Unhandled stop reason: refusal_policy");
-    };
-
-    const wrapped = wrapStreamFnHandleSensitiveStopReason(baseStreamFn);
-    const stream = await Promise.resolve(
-      wrapped(anthropicModel, { messages: [] } as Context, undefined),
-    );
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(
-      "The model stopped because the provider returned an unhandled stop reason: refusal_policy. Please rephrase and try again.",
+      `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`,
     );
   });
 });

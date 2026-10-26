@@ -6,7 +6,7 @@ export const compactEmbeddedAgentSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
-export const resolveSessionAuthProfileOverrideMock: Mock = vi.fn();
+export const resolveSessionAuthSelectionMock: Mock = vi.fn();
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -84,28 +84,29 @@ export async function runDirectiveBehaviorPreparedReply(params: unknown) {
 
 export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("../agents/embedded-agent.runtime.js", () => ({
+vi.mock("../agents/embedded-agent.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.runtime.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
+  resolveActiveSessionRunId: vi.fn().mockReturnValue(undefined),
+  isSessionRunActive: vi.fn().mockReturnValue(false),
+  isSessionNativeAttemptStreaming: vi.fn().mockReturnValue(false),
+  waitForSessionRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
@@ -114,6 +115,7 @@ vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
     ...actual,
     // These tests cover directive acknowledgements and persistence, not harness selection.
     // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveCandidateAgentRuntime: () => "openclaw",
     resolveEffectiveAgentRuntime: () => "openclaw",
   };
 });
@@ -126,8 +128,7 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: (...args: unknown[]) =>
     clearSessionAuthProfileOverrideMock(...args),
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
@@ -140,7 +141,8 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
+vi.mock("./reply/agent-runner-run.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/agent-runner-run.js")>()),
   runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),
 }));
 

@@ -1,115 +1,74 @@
-// Classification coverage for compaction failure and skip reason telemetry.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { describeFailoverError, resolveFailoverReasonFromError } from "../failover-error.js";
 import {
   classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
-  resolveCompactionFailureReason,
+  resolveCompactionFailure,
 } from "./compact-reasons.js";
 
-describe("resolveCompactionFailureReason", () => {
-  it("replaces generic compaction cancellation with the safeguard reason", () => {
-    // Safeguard cancellation is the actionable root cause; preserving only the
-    // generic cancellation text would hide the provider/auth failure.
-    expect(
-      resolveCompactionFailureReason({
-        reason: "Compaction cancelled",
-        safeguardCancelReason:
-          "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
-      }),
-    ).toBe("Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.");
-  });
+const providerError = Object.assign(new Error("provider rejected the request"), {
+  status: 429,
+  code: "rate_limit_exceeded",
+});
+const safeguardCancellation = { reason: "Summarization could not finish.", error: providerError };
 
-  it("preserves non-generic compaction failures", () => {
-    expect(
-      resolveCompactionFailureReason({
-        reason: "Compaction timed out",
-        safeguardCancelReason:
-          "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
-      }),
-    ).toBe("Compaction timed out");
+it("recovers provider classification through the generic wrapper", () => {
+  const failure = resolveCompactionFailure({
+    error: new Error("Error: Compaction cancelled"),
+    safeguardCancellation,
+  });
+  expect(failure.reason).toBe(safeguardCancellation.reason);
+  expect(describeFailoverError(failure.error)).toMatchObject({
+    reason: "rate_limit",
+    status: 429,
+    code: "rate_limit_exceeded",
   });
 });
 
-describe("classifyCompactionReason", () => {
-  it('classifies "nothing to compact" as a skip-like reason', () => {
-    expect(classifyCompactionReason("Nothing to compact (session too small)")).toBe(
-      "no_compactable_entries",
-    );
+it("does not classify an intentional decline from keywords in its display reason", () => {
+  const reason = "Quality audit rejected a summary about a request timeout.";
+  const failure = resolveCompactionFailure({
+    error: new Error("Compaction cancelled"),
+    safeguardCancellation: { reason },
   });
-
-  it('classifies "already under target" as below threshold', () => {
-    expect(classifyCompactionReason("already under target")).toBe("below_threshold");
-  });
-
-  it('classifies "already compacted" without implying recency', () => {
-    expect(classifyCompactionReason("already compacted")).toBe("already_compacted");
-  });
-
-  it("classifies deferred background maintenance as a skip-like reason", () => {
-    expect(classifyCompactionReason("deferred to background context-engine maintenance")).toBe(
-      "deferred_background",
-    );
-  });
-
-  it("classifies safeguard messages as guard-blocked", () => {
-    expect(
-      classifyCompactionReason(
-        "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
-      ),
-    ).toBe("guard_blocked");
-  });
-
-  it("keeps unclassified provider errors in the stable unknown bucket", () => {
-    expect(classifyCompactionReason("No API provider registered for api: ollama")).toBe("unknown");
-  });
+  expect(failure.reason).toContain("Quality audit rejected");
+  expect(resolveFailoverReasonFromError(failure.error)).toBeNull();
 });
 
-describe("isBenignCompactionSkipReason", () => {
-  it.each(["already under target", "already compacted"])(
-    "keeps the established %s skip contract",
-    (reason) => {
-      expect(isBenignCompactionSkipReason(reason)).toBe(true);
-    },
-  );
-
-  it("requires an explicit successful-result opt-in for empty transcripts", () => {
-    const reason = "no real conversation messages";
-    expect(isBenignCompactionSkipReason(reason)).toBe(false);
-    expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(true);
-    expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason })).toBe(false);
-    expect(isBenignCompactionSkipResult({ ok: true, compacted: true, reason })).toBe(false);
-  });
-
-  it.each([undefined, "Compaction timed out", "No API provider registered for api: ollama"])(
-    "does not hide the failure reason %s",
-    (reason) => {
-      expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
-    },
-  );
+it.each(["AbortError", "caller abort"])("preserves %s despite stale cancellation", (kind) => {
+  const error = new Error("Compaction cancelled");
+  if (kind === "AbortError") {
+    error.name = kind;
+  }
+  const abortSignal = kind === "caller abort" ? AbortSignal.abort(error) : undefined;
+  const failure = resolveCompactionFailure({ error, safeguardCancellation, abortSignal });
+  expect(failure).toEqual({ reason: error.message, error });
+  expect(failure.error).toBe(error);
+  if (abortSignal) {
+    expect(resolveFailoverReasonFromError(failure.error)).toBeNull();
+  }
 });
 
-describe("formatUnknownCompactionReasonDetail", () => {
-  it("formats unknown reasons as single-token diagnostic detail", () => {
-    expect(formatUnknownCompactionReasonDetail("No API provider registered for api: ollama")).toBe(
-      "No_API_provider_registered_for_api:_ollama",
-    );
-  });
-
-  it("strips terminal escapes and log separators from unknown reasons", () => {
-    // Unknown reason detail is embedded in metric tags, so strip control
-    // characters and separators before exporting it.
-    expect(
-      formatUnknownCompactionReasonDetail("\u001b[31mNo API\u001b[0m provider = ollama\nnext"),
-    ).toBe("No_API_provider_ollama_next");
-  });
-
-  it("omits empty unknown reason detail", () => {
-    expect(formatUnknownCompactionReasonDetail(" \n\t ")).toBeUndefined();
-  });
-
-  it("limits unknown reason detail length", () => {
-    expect(formatUnknownCompactionReasonDetail("x".repeat(120))).toHaveLength(100);
-  });
+it.each([
+  ['Authentication failed for "anthropic". Credentials may have expired.', "auth_failed"],
+  ["Provider API error (429): too many requests", "provider_error_4xx"],
+  ["OpenAI API error (500): upstream failed", "provider_error_5xx"],
+])("classifies compaction failure %s", (reason, expected) => {
+  expect(classifyCompactionReason(reason)).toBe(expected);
 });
+
+it("requires an explicit successful-result opt-in for empty transcripts", () => {
+  const reason = "no real conversation messages";
+  expect(isBenignCompactionSkipReason(reason)).toBe(false);
+  expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(true);
+  expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason })).toBe(false);
+  expect(isBenignCompactionSkipResult({ ok: true, compacted: true, reason })).toBe(false);
+});
+
+it.each([undefined, "No API provider registered for api: ollama"])(
+  "does not hide the failure reason %s",
+  (reason) => {
+    expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
+  },
+);

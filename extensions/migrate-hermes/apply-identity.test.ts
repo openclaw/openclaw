@@ -1,20 +1,14 @@
 // Migrate Hermes tests cover apply result identity.
-import path from "node:path";
 import type { MigrationPlan } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { applyHermesPlan } from "./apply.js";
-import { cleanupTempRoots, makeContext, makeTempRoot } from "./test/provider-helpers.js";
+import { useHermesFixture } from "./test/migration-fixture.js";
 
 describe("Hermes migration apply identity", () => {
-  afterEach(async () => {
-    await cleanupTempRoots();
-  });
+  const fixture = useHermesFixture();
 
   it("keeps results separate when report item ids repeat", async () => {
-    const root = await makeTempRoot();
-    const source = path.join(root, "hermes");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
+    const { source } = fixture.paths;
     const plan: MigrationPlan = {
       providerId: "hermes",
       source,
@@ -46,7 +40,7 @@ describe("Hermes migration apply identity", () => {
     };
 
     const result = await applyHermesPlan({
-      ctx: makeContext({ source, stateDir, workspaceDir }),
+      ctx: fixture.context(),
       plan,
     });
 

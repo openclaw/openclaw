@@ -1,27 +1,31 @@
-// Shared media-understanding provider, attachment, output, and capability contracts.
-
-/** Kind of media-understanding output produced for an attachment. */
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
   | "image.description";
 
-/** Capability exposed by a media-understanding provider. */
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
-/** Capability registry keyed by provider id. */
 export type MediaUnderstandingCapabilityRegistry = Map<
   string,
   {
     capabilities?: MediaUnderstandingCapability[];
+    sharedEntryCapabilities?: MediaUnderstandingCapability[];
   }
 >;
 
-/** Media attachment passed to understanding providers. */
 export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  kind?: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
+  /**
+   * Name the sender gave the file, when the channel recorded one. Channels stage
+   * a download under a generated name, so `path` cannot answer "what's in
+   * notes.txt?"; this is the only name the user can refer to. Untrusted input:
+   * display only, never format detection.
+   */
+  fileName?: string;
+  workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
 };
@@ -33,15 +37,6 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
-};
-
-/** Provider shape used for capability discovery and dispatch. */
-export type MediaUnderstandingProvider = {
-  id: string;
-  capabilities?: MediaUnderstandingCapability[];
-  transcribeAudio?: unknown;
-  describeVideo?: unknown;
-  describeImage?: unknown;
-  describeImages?: unknown;
-  extractStructured?: unknown;
+  requestedBackend?: string;
+  observedBackend?: string;
 };

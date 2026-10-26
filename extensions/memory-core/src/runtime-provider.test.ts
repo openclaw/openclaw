@@ -4,11 +4,9 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { describe, expect, it, vi } from "vitest";
 
 const managerDebug = {
-  backend: "qmd" as const,
+  backend: "builtin" as const,
   purpose: "default" as const,
   managerMs: 7,
-  managerCacheState: "cached-full-hit" as const,
-  qmdIdentityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 };
 
 const getMemorySearchManagerMock = vi.hoisted(() =>
@@ -35,7 +33,12 @@ vi.mock("./dreaming-state.js", () => ({
   configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
-import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
+import { createMemoryRuntime } from "./runtime-provider.js";
+
+const memoryRuntime = createMemoryRuntime({
+  runInBackgroundContext: runInMemoryTestBackgroundContext,
+});
 
 describe("memoryRuntime", () => {
   it("preserves manager debug metadata", async () => {
@@ -50,6 +53,26 @@ describe("memoryRuntime", () => {
     expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+    });
+  });
+
+  it("forwards optional diagnostic source inspection", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await memoryRuntime.getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
     });
   });
 
@@ -81,34 +104,6 @@ describe("memoryRuntime", () => {
     });
   });
 
-  it("keeps SQLite lease coordination scoped to each runtime instance", async () => {
-    const cfg = {} as OpenClawConfig;
-    const firstLease = vi.fn();
-    const secondLease = vi.fn();
-
-    await Promise.all([
-      createMemoryRuntime({ withLease: firstLease }).getMemorySearchManager({
-        cfg,
-        agentId: "first",
-      }),
-      createMemoryRuntime({ withLease: secondLease }).getMemorySearchManager({
-        cfg,
-        agentId: "second",
-      }),
-    ]);
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "first",
-      withLease: firstLease,
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "second",
-      withLease: secondLease,
-    });
-  });
-
   it("binds the scoped state opener inside each lazy runtime instance", async () => {
     const cfg = {} as OpenClawConfig;
     const openKeyedStore = vi.fn();
@@ -135,10 +130,6 @@ describe("memoryRuntime", () => {
       },
     ];
     filterMemorySearchHitsBySessionVisibilityMock.mockResolvedValue([]);
-    if (!memoryRuntime.authorizeSearchHits) {
-      throw new Error("memory runtime search authorizer is unavailable");
-    }
-
     await expect(
       memoryRuntime.authorizeSearchHits({
         cfg,

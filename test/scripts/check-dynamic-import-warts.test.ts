@@ -1,158 +1,74 @@
-// Check Dynamic Import Warts tests cover check dynamic import warts script behavior.
-import { describe, expect, it } from "vitest";
-import { findDynamicImportAdvisories } from "../../scripts/check-dynamic-import-warts.mjs";
+import { afterAll, expect, it } from "vitest";
+import { findDynamicImportAdvisories } from "../../scripts/check-dynamic-import-warts.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 
-describe("check-dynamic-import-warts", () => {
-  it("flags runtime static plus dynamic imports of the same module", () => {
-    const source = `
-      import { run } from "./runtime.js";
-      export async function start() {
-        return await import("./runtime.js");
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 4,
-        reason: 'runtime static + dynamic import of "./runtime.js" (static line 2)',
-      },
-    ]);
-  });
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+const start = 'export async function start() { return await import("./runtime.js"); }';
+const loader = `let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
+function loadRuntime() { return runtimePromise ??= import("./runtime.js"); }`;
+function advisories(source: string) {
+  return findDynamicImportAdvisories(source, "file.ts", parser.parseSourceFile("file.ts", source));
+}
+function runtimeMix(title: string, source: string, staticLine: number) {
+  return {
+    title,
+    source,
+    line: 2,
+    reason: `runtime static + dynamic import of "./runtime.js" (static line ${staticLine})`,
+  };
+}
 
-  it("ignores type-only static imports", () => {
-    const source = `
-      import { type Runtime } from "./runtime.js";
-      export async function start(): Promise<Runtime> {
-        return (await import("./runtime.js")).createRuntime();
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
+it.each([
+  runtimeMix("flags static imports", 'import { run } from "./runtime.js";\n' + start, 1),
+  runtimeMix("flags static re-exports", loader + '\nexport { run } from "./runtime.js";', 3),
+  runtimeMix(
+    "flags mixed runtime and type re-exports",
+    loader + '\nexport { type Runtime, createRuntime } from "./runtime.js";',
+    3,
+  ),
+  {
+    title: "flags repeated direct dynamic imports",
+    source: start + '\nexport async function two() { return await import("./runtime.js"); }',
+    line: 1,
+    reason: 'repeated direct dynamic import of "./runtime.js" (2 callsites: 1, 2)',
+  },
+])("$title", ({ source, line, reason }) => {
+  expect(advisories(source)).toEqual([{ line, reason }]);
+});
 
-  it("flags runtime static re-exports plus dynamic imports of the same module", () => {
-    const source = `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
-      export { run } from "./runtime.js";
-    `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 4,
-        reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
-      },
-    ]);
-  });
+it.each([
+  [
+    "ignores type-only static imports",
+    'import { type Runtime } from "./runtime.js";\nexport async function start(): Promise<Runtime> { return (await import("./runtime.js")).createRuntime(); }',
+  ],
+  ["ignores type-only static re-exports", 'export type { Runtime } from "./runtime.js";\n' + start],
+  [
+    "ignores inline type-only static re-exports",
+    'export { type Runtime, type RuntimeOptions } from "./runtime.js";\n' + start,
+  ],
+  [
+    "ignores local export declarations without module specifiers",
+    "const run = true; export { run };\n" + start,
+  ],
+  [
+    "allows execute paths that call cached loaders",
+    loader +
+      "\nexport function createTool() { return { execute: async () => await loadRuntime() }; }",
+  ],
+])("%s", (_title, source) => {
+  expect(advisories(source)).toStrictEqual([]);
+});
 
-  it("ignores type-only static re-exports", () => {
-    const source = `
-      export type { Runtime } from "./runtime.js";
-      export async function start() {
-        return (await import("./runtime.js")).createRuntime();
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
-
-  it("ignores inline type-only static re-exports", () => {
-    const source = `
-      export { type Runtime, type RuntimeOptions } from "./runtime.js";
-      export async function start() {
-        return (await import("./runtime.js")).createRuntime();
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
-
-  it("flags mixed runtime and inline type-only static re-exports", () => {
-    const source = `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
-      export { type Runtime, createRuntime } from "./runtime.js";
-    `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 4,
-        reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
-      },
-    ]);
-  });
-
-  it("ignores local export declarations without module specifiers", () => {
-    const source = `
-      const run = true;
-      export { run };
-      export async function start() {
-        return await import("./runtime.js");
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
-
-  it("flags repeated direct dynamic imports", () => {
-    const source = `
-      export async function one() {
-        return await import("./runtime.js");
-      }
-      export async function two() {
-        return await import("./runtime.js");
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 3,
-        reason: 'repeated direct dynamic import of "./runtime.js" (2 callsites: 3, 6)',
-      },
-    ]);
-  });
-
-  it("ignores cached loader patterns", () => {
-    const source = `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
-
-  it("flags direct dynamic imports inside execute paths", () => {
-    const source = `
-      export function createTool() {
-        return {
-          execute: async () => {
-            return await import("./runtime.js");
-          },
-        };
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 5,
-        reason:
-          'direct dynamic import of "./runtime.js" inside execute path; move it behind a cached loader',
-      },
-    ]);
-  });
-
-  it("allows execute paths that call cached loaders", () => {
-    const source = `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
-      export function createTool() {
-        return {
-          execute: async () => await loadRuntime(),
-        };
-      }
-    `;
-    expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
-  });
+it("flags direct dynamic imports inside execute paths", () => {
+  const source = `export function createTool() {
+  return { execute: async () => { return await import("./runtime.js"); } };
+}`;
+  expect(advisories(source)).toEqual([
+    {
+      line: 2,
+      reason:
+        'direct dynamic import of "./runtime.js" inside execute path; move it behind a cached loader',
+    },
+  ]);
 });

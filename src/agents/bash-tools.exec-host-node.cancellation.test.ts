@@ -1,253 +1,188 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
-import { createDeferred } from "../test-utils/deferred.js";
-import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-
-type NodeApprovalPolicy = Awaited<
-  ReturnType<typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext>
->;
-
-const mocks = vi.hoisted(() => ({
-  analyzeNodeApprovalRequirement: vi.fn(),
-  callGatewayTool: vi.fn(
-    async (
-      _method: string,
-      _options: unknown,
-      _params?: { command?: string },
-      _extra?: { scopes?: string[]; signal?: AbortSignal },
-    ) => ({ payload: { success: true, stdout: "ok", exitCode: 0 } }),
-  ),
-  invokeNodeSystemRunDirect: vi.fn(),
-  registerNodeApproval: vi.fn(async () => undefined),
-  requiresExecApproval: vi.fn(),
-  resolveExecHostApprovalContext: vi.fn(),
-}));
-
-vi.mock("../infra/exec-approvals.js", () => ({
-  maxAsk: (left: ExecAsk, right: ExecAsk) => {
-    const priority: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
-    return priority[left] >= priority[right] ? left : right;
-  },
-  minSecurity: (left: ExecSecurity, right: ExecSecurity) => {
-    const priority: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
-    return priority[left] <= priority[right] ? left : right;
-  },
-  requiresExecApproval: mocks.requiresExecApproval,
-  resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
-  resolveExecApprovalUnavailableDecisions: vi.fn(() => []),
-}));
-
-vi.mock("../infra/exec-auto-review.js", () => ({
-  defaultExecAutoReviewer: vi.fn(),
-  resolveExecAutoReviewDecision: vi.fn(async (reviewer: ExecAutoReviewer, input) =>
-    reviewer(input),
-  ),
-}));
-
-vi.mock("./bash-tools.exec-approval-request.js", () => ({
-  buildExecApprovalRequesterContext: vi.fn(() => ({})),
-  buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
-  isExecApprovalRunAbortedError: vi.fn(() => false),
-  registerExecApprovalRequestForHostOrThrow: mocks.registerNodeApproval,
-}));
-
-vi.mock("./bash-tools.exec-host-node-phases.js", () => ({
-  analyzeNodeApprovalRequirement: mocks.analyzeNodeApprovalRequirement,
-  buildNodeSystemRunInvoke: vi.fn(() => ({ command: "system.run" })),
-  formatNodeRunToolResult: vi.fn(() => ({
-    content: [],
-    details: { status: "completed" },
-  })),
-  invokeNodeSystemRunDirect: mocks.invokeNodeSystemRunDirect,
-  prepareNodeSystemRun: vi.fn(async () => ({
-    plan: {},
-    argv: ["tool", "--version"],
-    rawCommand: "tool --version",
-    transportRawCommand: "tool --version",
-    cwd: "/tmp/work",
-    agentId: "agent",
-    sessionKey: "agent:main:main",
-  })),
-  resolveNodeExecutionTarget: vi.fn(async () => ({
-    nodeId: "node-1",
-    argv: ["tool", "--version"],
-    invokeDeadlineMs: 30_000,
-    invokeWaitMs: 35_000,
-    supportsSystemRunPrepare: true,
-  })),
-  shouldSkipNodeApprovalPrepare: vi.fn(
-    (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) =>
-      policy.hostSecurity === "full" && policy.hostAsk === "off",
-  ),
-}));
-
-vi.mock("./bash-tools.exec-host-shared.js", () => ({
-  resolveExecHostApprovalContext: mocks.resolveExecHostApprovalContext,
-}));
-
-vi.mock("./bash-process-registry.js", () => ({ tail: vi.fn((text: string) => text) }));
-
-vi.mock("./bash-tools.exec-runtime.js", () => ({
-  createApprovalSlug: vi.fn(() => "approval"),
-}));
-
-vi.mock("./embedded-agent-runner/run/abortable.js", () => ({
-  abortable: vi.fn(async (_signal: AbortSignal, pending: Promise<unknown>) => pending),
-}));
-
-vi.mock("./tools/gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
-
+import type { PreparedRunExecPolicy } from "../infra/system-run-approval-context.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
+import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import * as execHostShared from "./bash-tools.exec-host-shared.js";
+
+type NodeApprovalPolicy = Awaited<ReturnType<typeof execHostShared.resolveExecHostApprovalContext>>;
+type GatewayCallParams = {
+  command?: string;
+  params?: Parameters<typeof buildSystemRunPreparePayload>[0];
+  id?: string;
+};
+const callGatewayToolMock = vi.hoisted(() =>
+  vi.fn<(method: string, options: unknown, params?: GatewayCallParams) => Promise<unknown>>(),
+);
+
+vi.mock("./tools/gateway.js", () => ({ callGatewayTool: callGatewayToolMock }));
+vi.mock("./tools/nodes-utils.js", () => ({
+  listNodes: async () => [
+    {
+      nodeId: "node-1",
+      connected: true,
+      platform: process.platform,
+      commands: ["system.run", "system.run.prepare"],
+    },
+  ],
+  resolveNodeIdFromList: () => "node-1",
+}));
 
 function createPolicy(security: ExecSecurity, ask: ExecAsk): NodeApprovalPolicy {
+  nodePolicy = { security, ask };
+  const defaults = { ...nodePolicy, askFallback: "deny" as const, autoAllowSkills: false };
   return {
-    approvals: {
-      path: "",
-      socketPath: "",
-      token: "",
-      defaults: { security, ask, askFallback: "deny", autoAllowSkills: false },
-      agent: { security, ask, askFallback: "deny", autoAllowSkills: false },
-      agentSources: { security: null, ask: null, askFallback: null },
-      allowlist: [],
-      file: { version: 1, agents: {} },
-    },
+    approvals: resolveExecApprovalsFromFile({
+      file: { version: 1, defaults, agents: {} },
+      agentId: "main",
+    }),
     hostSecurity: security,
     hostAsk: ask,
     askFallback: "deny",
   };
 }
 
+let executable: string;
+let workdir: string;
+let nodePolicy: PreparedRunExecPolicy;
+let policySpy: MockInstance<typeof execHostShared.resolveExecHostApprovalContext>;
+let controller: AbortController;
+let reviewer: ReturnType<typeof vi.fn<ExecAutoReviewer>>;
+
 function createRequest(overrides: Partial<ExecuteNodeHostCommandParams>) {
   return {
-    command: "tool --version",
-    workdir: "/tmp/work",
+    command: formatExecCommand([executable, "--version"]),
+    workdir,
     env: {},
     security: "full",
     ask: "off",
     defaultTimeoutSec: 30,
     approvalRunningNoticeMs: 0,
     warnings: [],
-    agentId: "agent",
+    agentId: "main",
     sessionKey: "agent:main:main",
+    autoReviewer: reviewer,
+    signal: controller.signal,
     ...overrides,
   } satisfies ExecuteNodeHostCommandParams;
 }
 
 describe("node-host dispatch cancellation", () => {
+  beforeAll(async () => {
+    executable = await fs.realpath(process.execPath);
+    workdir = await fs.realpath(process.cwd());
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveExecHostApprovalContext.mockReset();
-    mocks.requiresExecApproval.mockImplementation(({ ask }: { ask: ExecAsk }) => ask !== "off");
-    mocks.analyzeNodeApprovalRequirement.mockResolvedValue({
-      analysisOk: true,
-      allowlistSatisfied: false,
-      durableApprovalSatisfied: false,
-      nodeApprovalPolicyKnown: true,
-      nodeSecurity: "allowlist",
-      nodeAsk: "on-miss",
-      inlineEvalHit: null,
-      requiresSecurityAuditSuppressionApproval: false,
-      autoReviewArgv: ["tool", "--version"],
-      allowAlwaysPersistence: { kind: "patterns", patterns: [] },
-    });
-    mocks.invokeNodeSystemRunDirect.mockResolvedValue({
-      content: [],
-      details: { status: "completed" },
+    controller = new AbortController();
+    reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "safe command",
+    }));
+    nodePolicy = { security: "full", ask: "off" };
+    policySpy = vi.spyOn(execHostShared, "resolveExecHostApprovalContext");
+    callGatewayToolMock.mockReset().mockImplementation(async (method, _options, params) => {
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: nodePolicy,
+            agents: { main: { allowlist: [] } },
+          },
+        };
+      }
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: params?.id };
+      }
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      if (method === "node.invoke" && params?.command === "system.run.prepare") {
+        if (!params.params) {
+          throw new Error("expected system.run.prepare parameters");
+        }
+        const prepared = buildSystemRunPreparePayload(params.params);
+        return { payload: { ...prepared.payload, execPolicy: nodePolicy } };
+      }
+      if (method === "node.invoke" && params?.command === "system.run") {
+        return { payload: { success: true, stdout: "ok", exitCode: 0 } };
+      }
+      throw new Error(`unexpected gateway call: ${method} ${params?.command ?? ""}`);
     });
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    { name: "direct full/off", security: "full", ask: "off", autoReview: false },
-    {
-      name: "auto-reviewed allowlist",
-      security: "allowlist",
-      ask: "on-miss",
-      autoReview: true,
+    ["full", "off", false],
+    ["allowlist", "on-miss", true],
+  ] as const)(
+    "never dispatches %s/%s after cancellation during final policy",
+    async (security, ask, autoReview) => {
+      const reason = new Error("cancelled during final node dispatch policy");
+      const policy = createPolicy(security, ask);
+      const checkpoint = createDeferred<NodeApprovalPolicy>();
+      const policyEntered = createDeferred();
+      policySpy.mockResolvedValueOnce(policy).mockImplementationOnce(() => {
+        policyEntered.resolve();
+        return checkpoint.promise;
+      });
+      const result = executeNodeHostCommand(createRequest({ security, ask, autoReview }));
+      // Observe early fixture failures immediately and drain blocked work before restoring spies.
+      const drained = result.catch(() => undefined);
+      try {
+        await Promise.race([policyEntered.promise, result]);
+        controller.abort(reason);
+        checkpoint.resolve(policy);
+
+        await expect(result).rejects.toBe(reason);
+        expect(
+          callGatewayToolMock.mock.calls.some(
+            ([method, , params]) => method === "node.invoke" && params?.command === "system.run",
+          ),
+        ).toBe(false);
+        expect(
+          callGatewayToolMock.mock.calls.filter(([method]) => method === "exec.approval.request"),
+        ).toHaveLength(autoReview ? 1 : 0);
+        expect(reviewer).toHaveBeenCalledTimes(autoReview ? 1 : 0);
+      } finally {
+        controller.abort(reason);
+        checkpoint.resolve(policy);
+        await drained;
+      }
     },
-  ] as const)("never dispatches $name after cancellation during final policy", async (scenario) => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled during final node dispatch policy");
-    const policy = createPolicy(scenario.security, scenario.ask);
-    const checkpoint = createDeferred<NodeApprovalPolicy>();
-    mocks.resolveExecHostApprovalContext
-      .mockResolvedValueOnce(policy)
-      .mockReturnValueOnce(checkpoint.promise);
-    const reviewer: ExecAutoReviewer = async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "safe command",
-    });
-
-    const result = executeNodeHostCommand(
-      createRequest({
-        security: scenario.security,
-        ask: scenario.ask,
-        autoReview: scenario.autoReview,
-        autoReviewer: reviewer,
-        signal: controller.signal,
-      }),
-    );
-
-    await vi.waitFor(() => expect(mocks.resolveExecHostApprovalContext).toHaveBeenCalledTimes(2));
-    controller.abort(reason);
-    checkpoint.resolve(policy);
-
-    await expect(result).rejects.toBe(reason);
-    expect(mocks.invokeNodeSystemRunDirect).not.toHaveBeenCalled();
-    expect(
-      mocks.callGatewayTool.mock.calls.some(
-        ([method, , params]) => method === "node.invoke" && params?.command === "system.run",
-      ),
-    ).toBe(false);
-    expect(mocks.registerNodeApproval).toHaveBeenCalledTimes(scenario.autoReview ? 1 : 0);
-  });
+  );
 
   it("forwards cancellation without removing auto-reviewed execution scopes", async () => {
-    const controller = new AbortController();
-    mocks.resolveExecHostApprovalContext.mockResolvedValue(createPolicy("allowlist", "on-miss"));
-    const reviewer: ExecAutoReviewer = async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "safe command",
-    });
+    policySpy.mockResolvedValue(createPolicy("allowlist", "on-miss"));
 
-    await executeNodeHostCommand(
-      createRequest({
-        security: "allowlist",
-        ask: "on-miss",
-        autoReview: true,
-        autoReviewer: reviewer,
-        signal: controller.signal,
-      }),
+    const result = await executeNodeHostCommand(
+      createRequest({ security: "allowlist", ask: "on-miss", autoReview: true }),
     );
 
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: "ok" });
+    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\nok" }]);
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
-      { timeoutMs: 35_000 },
+      { timeoutMs: 40_000 },
       expect.objectContaining({ command: "system.run" }),
-      { scopes: ["operator.write", "operator.approvals"], signal: controller.signal },
-    );
-  });
-
-  it("forwards cancellation for prepared commands that need no approval", async () => {
-    const controller = new AbortController();
-    mocks.resolveExecHostApprovalContext.mockResolvedValue(createPolicy("allowlist", "off"));
-
-    await executeNodeHostCommand(
-      createRequest({
-        security: "allowlist",
-        ask: "off",
+      {
+        scopes: ["operator.write", "operator.approvals"],
         signal: controller.signal,
-      }),
+        dispatchAuthority: {
+          version: 2,
+          kind: "source-bound",
+          assertCurrent: expect.any(Function),
+        },
+      },
     );
-
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      { timeoutMs: 35_000 },
-      expect.objectContaining({ command: "system.run" }),
-      { signal: controller.signal },
-    );
-    expect(mocks.registerNodeApproval).not.toHaveBeenCalled();
   });
 });

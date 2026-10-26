@@ -1,4 +1,3 @@
-// Claude catalog terminal ownership: validated local and paired-node resume plans.
 import fs from "node:fs/promises";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
@@ -7,20 +6,10 @@ import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js
 import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
+  CLAUDE_TERMINAL_START_COMMAND,
   ClaudeCatalogParamsError,
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
-
-type ClaudeTerminalDependencies = {
-  listClaudeSessions: () => Promise<
-    Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
-  >;
-  resolveNodeClaudeRecord: (params: {
-    runtime: OpenClawPluginApi["runtime"];
-    nodeId: string;
-    threadId: string;
-  }) => Promise<{ source?: string; cwd?: string }>;
-};
 
 export function isClaudeCliAvailable(pathEnv = process.env.PATH ?? ""): boolean {
   const env = { ...process.env, PATH: pathEnv };
@@ -31,49 +20,78 @@ export function claudeNodeTerminalCapability(node: {
   connected?: boolean;
   commands?: string[];
   invocableCommands?: string[];
-}): {
-  canOpenTerminalClaude?: true;
-} {
+}) {
   const commands = node.invocableCommands ?? node.commands;
-  return node.connected === true && commands?.includes(CLAUDE_TERMINAL_RESUME_COMMAND) === true
-    ? { canOpenTerminalClaude: true }
-    : {};
-}
-
-function isLocalClaudeResumable(host: { hostId: string }, source: string | undefined): boolean {
-  return host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(source);
-}
-
-function canOpenClaudeTerminalSession(
-  host: { hostId: string; canOpenTerminalClaude?: boolean },
-  source: string | undefined,
-  localCliAvailable: boolean,
-): boolean {
-  return (
-    isResumableClaudeSource(source) &&
-    ((host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && localCliAvailable) ||
-      host.canOpenTerminalClaude === true)
-  );
+  return {
+    canOpenTerminalClaude:
+      node.connected === true && commands?.includes(CLAUDE_TERMINAL_RESUME_COMMAND) === true,
+    canStartTerminal:
+      node.connected === true &&
+      node.invocableCommands?.includes(CLAUDE_TERMINAL_START_COMMAND) === true,
+  };
 }
 
 export function terminalEligibility(
   host: { hostId: string; canOpenTerminalClaude?: boolean },
   source: string | undefined,
   localCliAvailable: boolean,
-): { localResumable: boolean; canOpenTerminal: boolean } {
+) {
+  const resumable = isResumableClaudeSource(source);
+  const local = host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID;
   return {
-    localResumable: isLocalClaudeResumable(host, source),
-    canOpenTerminal: canOpenClaudeTerminalSession(host, source, localCliAvailable),
+    localResumable: local && resumable,
+    canOpenTerminal:
+      resumable && ((local && localCliAvailable) || host.canOpenTerminalClaude === true),
   };
 }
 
-export async function openClaudeCatalogTerminal(
-  params: {
-    api: OpenClawPluginApi;
-    hostId: string;
+export async function startClaudeCatalogTerminal(params: {
+  cwd: string;
+  initialMessage?: string;
+  nodeId?: string;
+}): Promise<SessionCatalogTerminalPlan> {
+  if (params.nodeId) {
+    return {
+      kind: "node",
+      nodeId: params.nodeId,
+      command: CLAUDE_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
+      paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
+      cwd: params.cwd,
+      title: "claude",
+    };
+  }
+  const resolution = resolveClaudeTerminalExecutable();
+  if (!resolution) {
+    throw new ClaudeCatalogParamsError(
+      "Claude CLI is unavailable; install Claude Code or add claude to PATH, then restart the gateway",
+    );
+  }
+  return {
+    kind: "local",
+    argv: [
+      resolution.executable,
+      ...(params.initialMessage !== undefined ? ["--", params.initialMessage] : []),
+    ],
+    cwd: params.cwd,
+    ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+    title: "claude",
+  };
+}
+
+export async function openClaudeCatalogTerminal(params: {
+  api: OpenClawPluginApi;
+  hostId: string;
+  threadId: string;
+  listClaudeSessions: () => Promise<
+    Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
+  >;
+  resolveNodeClaudeRecord: (params: {
+    runtime: OpenClawPluginApi["runtime"];
+    nodeId: string;
     threadId: string;
-  } & ClaudeTerminalDependencies,
-): Promise<SessionCatalogTerminalPlan> {
+  }) => Promise<{ source?: string; cwd?: string }>;
+}): Promise<SessionCatalogTerminalPlan> {
   const title = `claude --resume ${params.threadId.slice(0, 8)}…`;
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     const record = (await params.listClaudeSessions()).find(
@@ -126,6 +144,7 @@ export async function openClaudeCatalogTerminal(
     kind: "node",
     nodeId,
     command: CLAUDE_TERMINAL_RESUME_COMMAND,
+    uploadPathStyle: "native",
     paramsJSON: JSON.stringify({ threadId: params.threadId }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,

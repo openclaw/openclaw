@@ -1,4 +1,3 @@
-// Googlechat plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -10,7 +9,7 @@ import {
   defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 // Google Chat's nested streaming schema is delivery-only ({chunkMode, block});
 // it has no preview mode (legacy streamMode is removed outright above), so
@@ -113,20 +112,16 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
 ];
 
-function normalizeRetiredGoogleChatKeys(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
-  return normalizeChannelConfigEntries({
-    cfg,
-    channelId: "googlechat",
-    normalizeEntry: normalizeGoogleChatEntry,
-  });
-}
-
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const retired = normalizeRetiredGoogleChatKeys(cfg);
+  const retired = normalizeChannelConfigEntries({
+    cfg,
+    channelId: "googlechat",
+    normalizeEntry: normalizeGoogleChatEntry,
+  });
   return streamingAliasMigration.normalizeChannelConfig({
     cfg: retired.config,
     changes: retired.changes,

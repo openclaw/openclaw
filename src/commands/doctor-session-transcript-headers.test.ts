@@ -1,20 +1,18 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
-  upsertSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import { readSqliteTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as agentDatabase from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,9 +29,20 @@ const SESSION_ID = "headerless-session";
 const SESSION_KEY = "agent:main:headerless-session";
 const SPAWNED_CWD = "/workspace/headerless-child";
 
+function message(content = "hello", id = "user-1", parentId: string | null = null) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp: "2026-07-15T21:23:03.698Z",
+    message: { role: "user", content },
+  };
+}
+
 describe("doctor SQLite session transcript header repair", () => {
   let state: OpenClawTestState;
   let cfg: OpenClawConfig;
+  let transcriptDatabaseOptions: OpenClawAgentDatabaseOptions;
   let scope: {
     agentId: string;
     env: NodeJS.ProcessEnv;
@@ -41,6 +50,12 @@ describe("doctor SQLite session transcript header repair", () => {
     sessionKey: string;
     storePath: string;
   };
+  const database = () => openOpenClawAgentDatabase(transcriptDatabaseOptions);
+  const rows = () => readTranscriptStorageRows(database(), SESSION_ID);
+  const health = (shouldRepair = true) =>
+    noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair });
+  const expectNote = (text: unknown) =>
+    expect(note).toHaveBeenCalledWith(text, "Session transcript headers");
 
   beforeEach(async () => {
     note.mockClear();
@@ -49,8 +64,9 @@ describe("doctor SQLite session transcript header repair", () => {
       prefix: "openclaw-doctor-transcript-headers-",
     });
     cfg = {
-      agents: { list: [{ id: AGENT_ID, workspace: state.workspaceDir }] },
+      agents: { entries: { [AGENT_ID]: { workspace: state.workspaceDir } } },
     };
+    transcriptDatabaseOptions = { agentId: AGENT_ID, env: state.env };
     scope = {
       agentId: AGENT_ID,
       env: state.env,
@@ -61,25 +77,30 @@ describe("doctor SQLite session transcript header repair", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
     await state.cleanup();
   });
 
-  async function seedHeaderlessTranscript(
-    events: readonly unknown[],
+  async function seedTranscript(
+    events: readonly unknown[] = [message()],
     options: { spawnedCwd?: string } = { spawnedCwd: SPAWNED_CWD },
-  ): Promise<void> {
-    await upsertSessionEntry(scope, {
+  ) {
+    const entry = await upsertSessionEntryCore(scope, {
       sessionId: SESSION_ID,
       ...(options.spawnedCwd ? { spawnedCwd: options.spawnedCwd } : {}),
       updatedAt: 10,
     });
+    if (!entry) {
+      throw new Error("Failed to seed session entry");
+    }
     expect(replaceTranscriptEventsSync(scope, [...events])).toBe(true);
+    return entry;
   }
 
-  it("detects read-only, repairs atomically, and keeps event identities stable", async () => {
-    await seedHeaderlessTranscript([
+  it("repairs headerless history with legacy projection and unchanged event bytes", async () => {
+    const userText =
+      "Please quote <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> literally.\r\n  Keep spacing.";
+    await seedTranscript([
       {
         type: "model_change",
         id: "model-1",
@@ -88,13 +109,7 @@ describe("doctor SQLite session transcript header repair", () => {
         provider: "github-copilot",
         modelId: "claude-opus-4.8",
       },
-      {
-        type: "message",
-        id: "user-1",
-        parentId: "model-1",
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Is all good?" },
-      },
+      message(userText, "user-1", "model-1"),
       {
         type: "leaf",
         id: "leaf-1",
@@ -103,61 +118,65 @@ describe("doctor SQLite session transcript header repair", () => {
         timestamp: "2026-07-15T21:23:03.699Z",
       },
     ]);
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    const beforeRows = readSqliteTranscriptStorageRows(database, SESSION_ID);
-    runOpenClawAgentWriteTransaction((transactionDatabase) => {
+    const db = database();
+    const beforeRows = rows();
+    const originalStorage = db.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all();
+    const recoveryDirectories = () =>
+      fs
+        .readdirSync(path.dirname(db.path))
+        .filter((name) => name.startsWith("openclaw-transcript-headers-recovery-"));
+    agentDatabase.runOpenClawAgentWriteTransaction((transactionDatabase) => {
       transactionDatabase.db
         .prepare(
           "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
         )
         .run(1_000_000, 999_000, SESSION_ID);
-    }, databaseOptions);
+    }, transcriptDatabaseOptions);
 
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
       "require doctor/import migration before runtime use",
     );
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: false }),
-    ).resolves.toEqual({ found: 1, repaired: 0 });
-    expect(readSqliteTranscriptStorageRows(database, SESSION_ID)).toEqual(beforeRows);
-    expect(note).toHaveBeenCalledWith(
-      '- Found 1 canonical session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
-      "Session transcript headers",
+    await expect(health(false)).resolves.toEqual({ found: 1, repaired: 0 });
+    expect(rows()).toEqual(beforeRows);
+    expect(recoveryDirectories()).toEqual([]);
+    expectNote(
+      '- Found 1 stored session transcript without a header.\n- Run "openclaw doctor --fix" to repair it before resuming the session.',
     );
 
     note.mockClear();
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 1, repaired: 1 });
+    await expect(health()).resolves.toEqual({ found: 1, repaired: 1 });
+    const backups = recoveryDirectories();
+    expect(backups).toHaveLength(1);
+    {
+      using backup = openNodeSqliteDatabase(
+        path.join(path.dirname(db.path), backups[0]!, "database.sqlite"),
+        { readOnly: true },
+      );
+      expect(backup.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
+        originalStorage,
+      );
+    }
 
-    const repairedRows = readSqliteTranscriptStorageRows(database, SESSION_ID);
+    const repairedRows = rows();
     const repairedEvents = repairedRows.map((row) => JSON.parse(row.eventJson));
     expect(repairedEvents[0]).toMatchObject({
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: 3,
       id: SESSION_ID,
       cwd: SPAWNED_CWD,
       timestamp: new Date(beforeRows[0]?.createdAt ?? 0).toISOString(),
     });
-    expect(
-      repairedEvents.slice(1).map((event) => ({
-        id: event.id,
-        parentId: event.parentId,
-        targetId: event.targetId,
-      })),
-    ).toEqual([
-      { id: "model-1", parentId: null, targetId: undefined },
-      { id: "user-1", parentId: "model-1", targetId: undefined },
-      { id: "leaf-1", parentId: "user-1", targetId: "user-1" },
-    ]);
+    // Exact event JSON below also preserves ids, parents, and the leaf target.
     expect(repairedRows.slice(1).map((row) => row.createdAt)).toEqual(
       beforeRows.map((row) => row.createdAt),
     );
+    expect(repairedRows.slice(1).map((row) => row.eventJson)).toEqual(
+      beforeRows.map((row) => row.eventJson),
+    );
     expect(repairedRows.map((row) => row.seq)).toEqual([0, 1, 2, 3]);
 
-    const identities = database.db
+    const identities = db.db
       .prepare(
         "SELECT event_id, parent_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq ASC",
       )
@@ -168,55 +187,75 @@ describe("doctor SQLite session transcript header repair", () => {
       { event_id: "user-1", parent_id: "model-1", seq: 2 },
       { event_id: "leaf-1", parent_id: "user-1", seq: 3 },
     ]);
+    await waitForSessionTranscriptIndexReconcile(transcriptDatabaseOptions);
     expect(
-      database.db
+      db.db
         .prepare(
           "SELECT event_seq FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position ASC",
         )
         .all(SESSION_ID),
     ).toEqual([{ event_seq: 1 }, { event_seq: 2 }]);
     expect(
-      database.db
+      db.db
         .prepare("SELECT transcript_updated_at AS value FROM session_windows WHERE session_id = ?")
         .get(SESSION_ID),
     ).toEqual({ value: 1_000_001 });
     const repairedManager = SessionManager.open(scope, state.workspaceDir);
     expect(repairedManager.getEntries().map((entry) => entry.id)).toEqual(["model-1", "user-1"]);
     expect(repairedManager.buildSessionContext().messages).toEqual([
-      { role: "user", content: "Is all good?" },
+      { role: "user", content: userText },
     ]);
-    expect(note).toHaveBeenCalledWith(
-      "- Prepended current headers to 1 session transcript.",
-      "Session transcript headers",
-    );
+    expectNote("- Prepended missing headers to 1 session transcript.");
 
     note.mockClear();
-    const afterFirstRepair = readSqliteTranscriptStorageRows(database, SESSION_ID);
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 0, repaired: 0 });
-    expect(readSqliteTranscriptStorageRows(database, SESSION_ID)).toEqual(afterFirstRepair);
+    const afterFirstRepair = rows();
+    await expect(health()).resolves.toEqual({ found: 0, repaired: 0 });
+    expect(rows()).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
+    expect(recoveryDirectories()).toEqual(backups);
   });
 
-  it("does not admit legacy headerless rows into the current runtime shape", async () => {
-    await seedHeaderlessTranscript([
-      { type: "message", message: { role: "user", content: "legacy message" } },
-      { type: "message", message: { role: "hookMessage", content: "legacy hook" } },
-    ]);
-    const database = openOpenClawAgentDatabase({ agentId: AGENT_ID, env: state.env });
-    const before = readSqliteTranscriptStorageRows(database, SESSION_ID);
+  it("leaves retained history unchanged when its recovery copy cannot be saved", async () => {
+    await seedTranscript([message("retained history")]);
+    const before = rows();
+    const copyFile = fs.copyFileSync;
+    vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
+      if (String(destination).includes("openclaw-transcript-headers-recovery-")) {
+        throw new Error("recovery copy: disk full");
+      }
+      return copyFile(source, destination, mode);
+    });
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 0, repaired: 0 });
+    await expect(health()).resolves.toEqual({ found: 1, repaired: 0 });
+    expect(rows()).toEqual(before);
+    expectNote(expect.stringContaining("recovery copy: disk full"));
+  });
 
-    expect(readSqliteTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
-    expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
-      "require doctor/import migration before runtime use",
+  it("rejects a row timestamp change between detection and header repair", async () => {
+    await seedTranscript();
+    const before = rows();
+    const transaction = agentDatabase.runOpenClawAgentWriteTransaction;
+    vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction").mockImplementationOnce(
+      (write, options, transactionOptions) => {
+        transaction((db) => {
+          db.db
+            .prepare(
+              "UPDATE transcript_events SET created_at = created_at + 1 WHERE session_id = ?",
+            )
+            .run(SESSION_ID);
+        }, transcriptDatabaseOptions);
+        return transaction(write, options, transactionOptions);
+      },
     );
-    expect(loadTranscriptEventsSync(scope)).toHaveLength(2);
-    expect(note).not.toHaveBeenCalled();
+    await expect(health()).resolves.toEqual({ found: 1, repaired: 0 });
+    expect(rows()).toEqual(
+      before.map((row) => ({
+        seq: row.seq,
+        eventJson: row.eventJson,
+        createdAt: row.createdAt + 1,
+      })),
+    );
+    expectNote(expect.stringContaining("transcript changed while preparing header repair"));
   });
 
   it.each([
@@ -224,10 +263,7 @@ describe("doctor SQLite session transcript header repair", () => {
       name: "a malformed current entry",
       events: [
         {
-          type: "message",
-          id: "malformed-message",
-          parentId: null,
-          timestamp: "2026-07-15T21:23:03.698Z",
+          ...message("not a current message", "malformed-message"),
           message: { role: "invalid", content: "not a current message" },
         },
       ],
@@ -235,13 +271,7 @@ describe("doctor SQLite session transcript header repair", () => {
     {
       name: "an invalid leaf control",
       events: [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: "2026-07-15T21:23:03.698Z",
-          message: { role: "user", content: "hello" },
-        },
+        message(),
         {
           type: "leaf",
           id: "invalid-leaf",
@@ -250,15 +280,12 @@ describe("doctor SQLite session transcript header repair", () => {
       ],
     },
   ])("does not repair $name", async ({ events }) => {
-    await seedHeaderlessTranscript(events);
-    const database = openOpenClawAgentDatabase({ agentId: AGENT_ID, env: state.env });
-    const before = readSqliteTranscriptStorageRows(database, SESSION_ID);
+    await seedTranscript(events);
+    const before = rows();
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 0, repaired: 0 });
+    await expect(health()).resolves.toEqual({ found: 0, repaired: 0 });
 
-    expect(readSqliteTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
+    expect(rows()).toEqual(before);
     expect(() => SessionManager.open(scope, state.workspaceDir)).toThrow(
       "require doctor/import migration before runtime use",
     );
@@ -266,98 +293,68 @@ describe("doctor SQLite session transcript header repair", () => {
   });
 
   it("does not repair duplicate event identities", async () => {
-    await seedHeaderlessTranscript([
+    await seedTranscript([
+      message("first"),
       {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "first" },
-      },
-      {
-        type: "message",
-        id: "user-2",
-        parentId: "user-1",
+        ...message("second", "user-2", "user-1"),
         timestamp: "2026-07-15T21:23:03.699Z",
-        message: { role: "user", content: "second" },
       },
     ]);
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    runOpenClawAgentWriteTransaction((transactionDatabase) => {
+    agentDatabase.runOpenClawAgentWriteTransaction((transactionDatabase) => {
       const duplicate = {
-        type: "message",
-        id: "user-1",
-        parentId: "user-1",
+        ...message("second", "user-1", "user-1"),
         timestamp: "2026-07-15T21:23:03.699Z",
-        message: { role: "user", content: "second" },
       };
       transactionDatabase.db
         .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
         .run(JSON.stringify(duplicate), SESSION_ID);
-    }, databaseOptions);
-    const before = readSqliteTranscriptStorageRows(database, SESSION_ID);
+    }, transcriptDatabaseOptions);
+    const before = rows();
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 0, repaired: 0 });
+    await expect(health()).resolves.toEqual({ found: 0, repaired: 0 });
 
-    expect(readSqliteTranscriptStorageRows(database, SESSION_ID)).toEqual(before);
+    expect(rows()).toEqual(before);
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("uses the configured agent workspace when the session has no spawned cwd", async () => {
-    await seedHeaderlessTranscript(
-      [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: "2026-07-15T21:23:03.698Z",
-          message: { role: "user", content: "hello" },
-        },
-      ],
-      {},
-    );
+  it("uses the logical agent workspace in a shared store without a spawned cwd", async () => {
+    const storePath = state.path("shared.sqlite");
+    transcriptDatabaseOptions = { agentId: "alpha", env: state.env, path: storePath };
+    openOpenClawAgentDatabase(transcriptDatabaseOptions);
+    cfg = {
+      agents: { entries: { beta: { workspace: state.workspaceDir } } },
+      session: { store: storePath },
+    };
+    scope = { ...scope, agentId: "beta", sessionKey: `agent:beta:${SESSION_ID}`, storePath };
+    await seedTranscript([message()], {});
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 1, repaired: 1 });
+    await expect(health()).resolves.toEqual({ found: 1, repaired: 1 });
 
-    const database = openOpenClawAgentDatabase({ agentId: AGENT_ID, env: state.env });
-    const header = JSON.parse(readSqliteTranscriptStorageRows(database, SESSION_ID)[0]!.eventJson);
+    const header = JSON.parse(rows()[0]!.eventJson);
     expect(header).toMatchObject({ type: "session", cwd: state.workspaceDir });
   });
 
   it("does not borrow the spawned cwd from a newer session on the same key", async () => {
-    await seedHeaderlessTranscript([
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "hello" },
-      },
-    ]);
-    const databaseOptions = { agentId: AGENT_ID, env: state.env };
-    runOpenClawAgentWriteTransaction((database) => {
-      database.db
+    const seededEntry = await seedTranscript();
+    agentDatabase.runOpenClawAgentWriteTransaction((writer) => {
+      writer.db
         .prepare(
           "UPDATE session_nodes SET current_session_id = ?, entry_json = ? WHERE session_key = ?",
         )
         .run(
           "newer-session",
-          JSON.stringify({ sessionId: "newer-session", spawnedCwd: "/workspace/newer" }),
+          JSON.stringify({
+            sessionId: "newer-session",
+            updatedAt: seededEntry.updatedAt,
+            spawnedCwd: "/workspace/newer",
+          }),
           SESSION_KEY,
         );
-    }, databaseOptions);
+    }, transcriptDatabaseOptions);
 
-    await expect(
-      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
-    ).resolves.toEqual({ found: 1, repaired: 1 });
+    await expect(health()).resolves.toEqual({ found: 1, repaired: 1 });
 
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    const header = JSON.parse(readSqliteTranscriptStorageRows(database, SESSION_ID)[0]!.eventJson);
+    const header = JSON.parse(rows()[0]!.eventJson);
     expect(header).toMatchObject({ type: "session", cwd: state.workspaceDir });
   });
 });

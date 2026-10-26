@@ -1,14 +1,12 @@
 /** Discovers plugin-declared environment variable names for channel credential setup. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 type ChannelEnvVarLookupParams = {
   /** Config snapshot used to discover enabled/installed plugin manifests. */
   config?: OpenClawConfig;
-  /** Workspace root used for local plugin metadata discovery. */
-  workspaceDir?: string;
   /** Env snapshot used by metadata loading; defaults to process env. */
   env?: NodeJS.ProcessEnv;
 };
@@ -20,9 +18,8 @@ type ChannelEnvVarLookupParams = {
 function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
-    workspaceDir: params?.workspaceDir,
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params?.config,
     env: params?.env ?? process.env,
   });
   const candidates: Record<string, string[]> = {};
@@ -46,7 +43,7 @@ function resolveChannelEnvVars(
 export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLookupParams): string[] {
   const channelEnvVars = resolveChannelEnvVars(params);
   const envVars = Object.hasOwn(channelEnvVars, channelId) ? channelEnvVars[channelId] : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
+  return [...(envVars ?? [])];
 }
 
 /**

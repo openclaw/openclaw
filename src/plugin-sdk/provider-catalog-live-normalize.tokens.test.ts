@@ -1,5 +1,6 @@
 // Plugin SDK tests cover vendor token-limit field mapping in live discovery.
 import { describe, expect, it } from "vitest";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -16,6 +17,18 @@ function firstModel(row: Record<string, unknown>) {
 }
 
 describe("live discovery vendor token-limit fields", () => {
+  it("fills an omitted seed window from the matching live row", () => {
+    const [model] = buildOpenAICompatibleLiveModels(
+      [{ id: "transport-only", object: "model", context_window: 262_144 }],
+      {
+        ...fallback,
+        models: [makeCatalogModel("transport-only", "Transport only", { maxTokens: 8192 })],
+      },
+    );
+
+    expect(model?.contextWindow).toBe(262_144);
+  });
+
   it("reads Anthropic's max_input_tokens and max_tokens", () => {
     // Anthropic names the context window by its input side and the output cap
     // as max_tokens; before this mapping both fell back to generic defaults.

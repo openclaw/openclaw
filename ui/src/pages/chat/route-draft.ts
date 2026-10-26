@@ -1,32 +1,52 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { SESSION_COMPOSER_FOCUS_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_COMPOSER_FOCUS_PARAM,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
 
-function draftFromLocation(location: RouteLocation): string | undefined {
-  return new URLSearchParams(location.search).get("draft") || undefined;
-}
-
-function focusComposerFromLocation(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
-}
-
-export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
-  const draft = draftFromLocation(location);
+export function sessionRouteHints(location: RouteLocation) {
   return {
-    draft,
-    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
+    ...draftRouteDataFromLocation(location),
+    ...(new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
+      ? { dashboardExpanded: true as const }
+      : {}),
+  };
+}
+
+export function locationWithoutDraft(
+  location: RouteLocation,
+  destination: Partial<RouteLocation> = {},
+): RouteLocation {
+  const params = new URLSearchParams(location.search);
+  for (const [name, value] of new URLSearchParams(destination.search)) {
+    params.set(name, value);
+  }
+  params.delete("draft");
+  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
+  const search = params.toString();
+  return { ...location, ...destination, search: search ? `?${search}` : "" };
+}
+
+function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
+  const search = new URLSearchParams(location.search);
+  const focusComposer = search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
+  return {
+    draft: search.get("draft") || undefined,
+    ...(focusComposer ? { focusComposer: true } : {}),
   };
 }
 
 export function draftSearchFromLocation(location: RouteLocation): string {
   const search = new URLSearchParams();
-  const draft = draftFromLocation(location);
+  const { draft, focusComposer } = draftRouteDataFromLocation(location);
   if (draft) {
     search.set("draft", draft);
   }
-  if (draft && focusComposerFromLocation(location)) {
+  if (focusComposer) {
     search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   return search.size > 0 ? "?" + search.toString() : "";
@@ -38,5 +58,7 @@ export function routeDraft(
   consumed: RouteDraftData | null,
   sessionKey = data?.sessionKey,
 ): string | undefined {
-  return !data || sessionKey !== data.sessionKey || consumed === data ? undefined : data.draft;
+  return !data || !areUiSessionKeysEquivalent(sessionKey, data.sessionKey) || consumed === data
+    ? undefined
+    : data.draft;
 }

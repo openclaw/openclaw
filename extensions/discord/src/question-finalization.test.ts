@@ -22,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 });
 vi.mock("./send.components.js", () => ({ editDiscordComponentMessage: hoisted.edit }));
 
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 
 describe("Discord question finalization", () => {
   it("removes action rows and appends terminal status", async () => {
@@ -42,7 +42,13 @@ describe("Discord question finalization", () => {
           },
         },
       },
-      results: [{ channel: "discord", messageId: "55", channelId: "123" }],
+      results: [
+        {
+          channel: "discord",
+          messageId: "55",
+          target: { kind: "channel", id: "123" },
+        },
+      ],
     });
 
     await hoisted.registration?.finalize("Expired");

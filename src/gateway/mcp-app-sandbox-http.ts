@@ -7,55 +7,74 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import {
-  buildSandboxHostContentSecurityPolicy,
-  buildSandboxHostProxyHtml,
+  buildSandboxHostDocument,
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
-const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
-
-function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): void {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
-    res.statusCode = 400;
-    res.end("Bad Request");
-    return;
+function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
+    respondPlainText(res, 400, "Bad Request");
+    return true;
   }
   if (url.pathname !== SANDBOX_HOST_PATH || (req.method !== "GET" && req.method !== "HEAD")) {
-    res.statusCode = 404;
-    res.end("Not Found");
-    return;
+    return false;
   }
 
   let csp;
   try {
     csp = decodeSandboxHostCsp(url.searchParams.get("csp"));
   } catch {
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("invalid MCP App sandbox policy");
-    return;
+    respondPlainText(res, 400, "invalid MCP App sandbox policy");
+    return true;
   }
 
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
+  const { html, headers, version } = buildSandboxHostDocument(
+    csp,
+    ingress ? [ingress.publicOrigin, ...ingress.frameAncestors] : undefined,
+  );
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Security-Policy", buildSandboxHostContentSecurityPolicy(csp));
-  res.setHeader("Permissions-Policy", MCP_APP_PERMISSIONS_POLICY);
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.setHeader("Origin-Agent-Cluster", "?1");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml(csp));
+  for (const [name, value] of Object.entries(headers)) {
+    res.setHeader(name, value);
+  }
+  // A mismatched URL can come from another Gateway version sharing this host.
+  // Serve the current shell, but never retain it under a different content hash.
+  res.setHeader(
+    "Cache-Control",
+    url.searchParams.get("v") === version ? "public, max-age=31536000, immutable" : "no-store",
+  );
+  // Keep GET and HEAD representation metadata aligned while suppressing the HEAD body.
+  res.setHeader("Content-Length", String(Buffer.byteLength(html)));
+  res.end(req.method === "HEAD" ? undefined : html);
+  return true;
 }
 
-/** Dedicated listener: this origin must never serve Control UI or authenticated Gateway data. */
+/** Dedicated listener for the sandbox proxy, never Gateway data. */
 export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer {
-  const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleMcpAppSandboxHttpRequest(req, res);
+  const handler = createSandboxHostHttpRequestHandler();
+  const listener = (req: IncomingMessage, res: ServerResponse) => {
+    void handler(req, res);
   };
-  return tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler);
+  return tlsOptions ? createHttpsServer(tlsOptions, listener) : createHttpServer(listener);
+}
+
+/** Shared dedicated-surface owner for listener and virtual ingress transports. */
+export function createSandboxHostHttpRequestHandler(): (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<void> {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    if (!handleMcpAppSandboxHttpRequest(req, res)) {
+      respondPlainText(res, 404, "Not Found");
+    }
+  };
 }

@@ -16,9 +16,15 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts sdk"
   },
   "dependencies": {
-    "@openclaw/gateway-client": "workspace:*"
+    "@openclaw/gateway-client": "workspace:*",
+    "@openclaw/gateway-protocol": "workspace:*",
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*"
+  },
+  "devDependencies": {
+    "@openclaw/session-url-contract": "workspace:*"
   }
 }

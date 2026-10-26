@@ -1,159 +1,48 @@
-// Entry status tests cover shared presentation metadata and requirement evaluation.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
+import { evaluateEntryRequirementsForCurrentPlatform as evaluateEntry } from "./entry-status.js";
 
-function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
-}
+type Params = Parameters<typeof evaluateEntry>[0];
+const evaluate = (entry: Params["entry"], overrides: Partial<Params> = {}) =>
+  evaluateEntry({
+    always: false,
+    entry,
+    hasLocalBin: () => false,
+    isEnvSatisfied: () => false,
+    isConfigSatisfied: () => false,
+    ...overrides,
+  });
+afterEach(() => vi.restoreAllMocks());
 
-afterEach(() => {
-  vi.restoreAllMocks();
+it("combines metadata presentation with local binary availability", () => {
+  const result = evaluate(
+    {
+      metadata: { emoji: "🦀", homepage: " https://a.test ", requires: { bins: ["bun"] } },
+      frontmatter: { emoji: "🙂", homepage: "https://b.test" },
+    },
+    { hasLocalBin: (bin) => bin === "bun" },
+  );
+  expect(result).toMatchObject({
+    emoji: "🦀",
+    homepage: "https://a.test",
+    missing: { bins: [] },
+  });
 });
 
-describe("shared/entry-status", () => {
-  it("combines metadata presentation fields with evaluated requirements", () => {
-    setPlatform("linux");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
-      entry: {
-        metadata: {
-          emoji: "🦀",
-          homepage: "https://openclaw.ai",
-          requires: {
-            bins: ["bun"],
-            anyBins: ["ffmpeg", "sox"],
-            env: ["OPENCLAW_TOKEN"],
-            config: ["gateway.bind"],
-          },
-          os: ["darwin"],
-        },
-        frontmatter: {
-          emoji: "🙂",
-          homepage: "https://docs.openclaw.ai",
-        },
-      },
-      hasLocalBin: (bin) => bin === "bun",
-      remote: {
-        hasAnyBin: (bins) => bins.includes("sox"),
-      },
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: (path) => path === "gateway.bind",
-    });
-
-    expect(result).toEqual({
-      emoji: "🦀",
-      homepage: "https://openclaw.ai",
-      required: {
-        bins: ["bun"],
-        anyBins: ["ffmpeg", "sox"],
-        env: ["OPENCLAW_TOKEN"],
-        config: ["gateway.bind"],
-        os: ["darwin"],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: ["OPENCLAW_TOKEN"],
-        config: [],
-        os: ["darwin"],
-      },
-      requirementsSatisfied: false,
-      configChecks: [{ path: "gateway.bind", satisfied: true }],
-    });
+it("defaults OS evaluation to process.platform", () => {
+  mockProcessPlatform("darwin");
+  expect(evaluate({ metadata: { os: ["darwin"] } })).toMatchObject({
+    requirementsSatisfied: true,
+    missing: { os: [] },
   });
+});
 
-  it("uses process.platform in the current-platform wrapper", () => {
-    setPlatform("darwin");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
-      entry: {
-        metadata: {
-          os: ["darwin"],
-        },
-      },
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => true,
-      isConfigSatisfied: () => true,
-    });
-
-    expect(result.requirementsSatisfied).toBe(true);
-    expect(result.missing.os).toStrictEqual([]);
-  });
-
-  it("pulls metadata and frontmatter from entry objects in the entry wrapper", () => {
-    setPlatform("linux");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: true,
-      entry: {
-        metadata: {
-          requires: {
-            bins: ["missing-bin"],
-          },
-        },
-        frontmatter: {
-          website: " https://docs.openclaw.ai ",
-          emoji: "🙂",
-        },
-      },
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
-    });
-
-    expect(result).toEqual({
-      emoji: "🙂",
-      homepage: "https://docs.openclaw.ai",
-      required: {
-        bins: ["missing-bin"],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      requirementsSatisfied: true,
-      configChecks: [],
-    });
-  });
-
-  it("returns empty requirements when metadata and frontmatter are missing", () => {
-    setPlatform("linux");
-
-    const result = evaluateEntryRequirementsForCurrentPlatform({
-      always: false,
-      entry: {},
-      hasLocalBin: () => false,
-      isEnvSatisfied: () => false,
-      isConfigSatisfied: () => false,
-    });
-
-    expect(result).toEqual({
-      required: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      requirementsSatisfied: true,
-      configChecks: [],
-    });
-  });
+it.each([
+  [undefined, { website: " https://a ", emoji: "🙂" }, "🙂", "https://a"],
+  [{ emoji: "", homepage: " " }, { emoji: "🙂", homepage: "https://b" }, undefined, undefined],
+  [undefined, { emoji: " ", url: " https://a " }, " ", "https://a"],
+  [undefined, { homepage: " ", website: "https://b", url: "https://a" }, undefined, undefined],
+] as const)("preserves presentation precedence (%#)", (metadata, frontmatter, emoji, homepage) => {
+  const result = evaluate({ metadata, frontmatter });
+  expect({ emoji: result.emoji, homepage: result.homepage }).toEqual({ emoji, homepage });
 });

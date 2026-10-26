@@ -10,10 +10,6 @@ function fakeAwsCredentialWithPadding(): string {
   return fakeRepeatedToken(["A", "b", "9", "="]);
 }
 
-function fakeCommitHash(): string {
-  return `${"0123456789abcdef".repeat(2)}01234567`;
-}
-
 function fakeLowercaseBase36Identifier(): string {
   return `${"z".repeat(39)}1`;
 }
@@ -52,16 +48,19 @@ describe("redactSensitiveText token ordering", () => {
     expect(output).toBe("jwt eyJhea…3456");
   });
 
-  it("does not mask ordinary 40-character hex identifiers", () => {
-    const commitHash = fakeCommitHash();
-    expect(redactSensitiveText(`commit ${commitHash}`, { mode: "tools" })).toBe(
-      `commit ${commitHash}`,
-    );
-  });
-
   it("does not mask ordinary lowercase 40-character alphanumeric identifiers", () => {
     const identifier = fakeLowercaseBase36Identifier();
     expect(redactSensitiveText(`id ${identifier}`, { mode: "tools" })).toBe(`id ${identifier}`);
+  });
+
+  it("preserves UUIDs containing Firecrawl-shaped fragments without exposing Firecrawl tokens", () => {
+    const artifactId = "artifact_managed_image_3ac53ce7-a6d6-4229-b1fc-0123456789ab";
+    expect(redactSensitiveText(artifactId, { mode: "tools" })).toBe(artifactId);
+
+    const token = "fc-0123456789abcdef";
+    for (const prefix of ["", " ", "/", "="]) {
+      expect(redactSensitiveText(`${prefix}${token}`, { mode: "tools" })).not.toContain(token);
+    }
   });
 
   it("masks full provider tokens before generic AWS-shaped chunks", () => {

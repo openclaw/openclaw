@@ -1,4 +1,3 @@
-// Message channel helpers classify and format channel identifiers.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -10,6 +9,8 @@ import {
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
@@ -17,22 +18,12 @@ export {
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
-/**
- * Message channel and Gateway client classification helpers.
- *
- * This module keeps channel normalization, client identity checks, and markdown
- * capability lookup in one place for send/render decisions.
- */
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
 
@@ -41,13 +32,11 @@ type GatewayClientInfoLike = {
   id?: string | null;
 };
 
-/** Return whether a Gateway client is the CLI transport. */
 export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boolean {
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
 /**
- * Return whether a Gateway client is an ephemeral control-plane connection.
  * Test-mode clients stay excluded from this list: suites use them as stand-ins
  * for real clients and assert presence propagation through the full pipeline.
  */
@@ -60,7 +49,6 @@ export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null):
   );
 }
 
-/** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
   return (
@@ -70,7 +58,6 @@ export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boole
   );
 }
 
-/** Return whether a client is the browser Control UI. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
   return (
@@ -79,32 +66,16 @@ export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null)
   );
 }
 
-/** Return whether a client is the first-party browser side-panel copilot. */
 export function isBrowserCopilotClient(client?: GatewayClientInfoLike | null): boolean {
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT;
 }
 
-/** Return whether a raw channel id resolves to OpenClaw's internal channel. */
 export function isInternalMessageChannel(
   raw?: string | null,
 ): raw is typeof INTERNAL_MESSAGE_CHANNEL {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 
-/** Return whether a channel can resolve exec approvals in the originating chat. */
-export function isNativeApprovalChannel(value?: string | null): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value === INTERNAL_MESSAGE_CHANNEL) {
-    return true;
-  }
-  return listBundledChannelCatalogEntries().some(
-    (entry) => entry.id === value && entry.channel.approvalFlags?.includes("native"),
-  );
-}
-
-/** Return whether a Gateway client is the public webchat surface. */
 export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
@@ -113,7 +84,26 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
-/** Resolve whether a channel can receive markdown without plain-text downgrade. */
+const PROGRESS_CARD_RENDERER_PLATFORMS = new Set(["web", "ios", "android", "macos", "darwin"]);
+
+export function isProgressCardRendererClient(
+  paired?: {
+    clientId?: string | null;
+    clientMode?: string | null;
+    platform?: string | null;
+  } | null,
+): boolean {
+  const clientId = normalizeGatewayClientName(paired?.clientId);
+  const rendererClient =
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.MACOS_APP;
+  const platform = paired?.platform?.trim().toLowerCase();
+  return rendererClient || (platform ? PROGRESS_CARD_RENDERER_PLATFORMS.has(platform) : false);
+}
+
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
   if (!channel) {

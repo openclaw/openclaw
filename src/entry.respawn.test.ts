@@ -1,385 +1,240 @@
-// Tests entrypoint respawn behavior for compile cache and process flags.
-import type { ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
-const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
-const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
+vi.mock("./process/child-process-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./process/child-process-bridge.js")>()),
+  attachChildProcessBridge: vi.fn(),
+}));
 
-type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
+const warningFlag = "--disable-warning=ExperimentalWarning";
+const caReady = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const optionsReady = "OPENCLAW_NODE_OPTIONS_READY";
 
-function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): CliRespawnPlan {
-  if (plan === null) {
-    throw new Error("Expected CLI respawn plan");
-  }
-  return plan;
+type PlanOptions = NonNullable<Parameters<typeof buildCliRespawnPlan>[0]> & { args?: string[] };
+function buildPlan({ args = ["status"], ...params }: PlanOptions) {
+  return buildCliRespawnPlan({
+    argv: ["node", "openclaw", ...args],
+    env: {},
+    execArgv: [],
+    platform: "linux",
+    ...params,
+  });
 }
 
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
+function requirePlan(params: Parameters<typeof buildPlan>[0]) {
+  return expectDefined(buildPlan(params), "Expected CLI respawn plan");
 }
 
-describe("buildCliRespawnPlan", () => {
-  it("returns null when respawn policy skips the argv", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: ["node", "openclaw", "--help"],
-        env: {},
-        execArgv: [],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      }),
-    ).toBeNull();
-  });
+const warningPrefix = ["--import", CLI_PARENT_BOUND_PRELOAD, warningFlag];
+const systemCa = "/etc/ssl/certs/ca-certificates.crt";
+const windowsNode = "C:\\Program Files\\nodejs\\node.exe";
+const windowsScript =
+  "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+const windowsTail = [windowsScript, "node.exe", "status"];
+const voltaShim = "/home/alice/.volta/bin/volta-shim";
 
-  it("does not detach native hook relays through a startup respawn", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
-        env: {},
-        execArgv: [],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
+const originalExitCode = process.exitCode;
+afterEach(() => {
+  process.exitCode = originalExitCode;
+  vi.restoreAllMocks();
+  vi.mocked(attachChildProcessBridge).mockReset();
+  vi.unstubAllGlobals();
+});
 
-  it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
-    const plan = buildCliRespawnPlan({
-      argv: ["node", "openclaw", "status"],
-      env: {},
-      execArgv: [],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.command).toBe(process.execPath);
-    expect(respawnPlan.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
-    expect(respawnPlan.detachForProcessTree).toBe(true);
-  });
-
-  it.each(["tui", "terminal", "chat"] as const)(
-    "preserves NODE_EXTRA_CA_CERTS respawn for interactive %s",
-    (command) => {
-      const plan = buildCliRespawnPlan({
-        argv: ["node", "openclaw", command],
-        env: {},
-        execArgv: [],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      });
-
-      const respawnPlan = expectCliRespawnPlan(plan);
-      expect(respawnPlan.argv).toEqual(["openclaw", command]);
-      expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-      expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
-      expect(respawnPlan.detachForProcessTree).toBe(false);
-    },
-  );
-
-  it("keeps bare-root startup respawns attached to the terminal", () => {
-    const plan = buildCliRespawnPlan({
-      argv: ["node", "openclaw"],
-      env: {},
-      execArgv: [],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
-    expect(respawnPlan.detachForProcessTree).toBe(false);
-  });
-
-  it("preserves macOS system CA trust through one-shot warning respawns", () => {
-    const plan = buildCliRespawnPlan({
-      argv: ["node", "openclaw", "cron", "list", "--json"],
-      env: { NODE_USE_SYSTEM_CA: "1" },
-      execArgv: [],
-      autoNodeExtraCaCerts: undefined,
+it.each([undefined, "--max-old-space-size=4096"])(
+  "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
+  (nodeOptions) => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+    const args = ["--profile", "work", "config", "get", "gateway.mode"];
+    const argv = ["bun", "/app/runtime/openclaw.mjs", ...args];
+    const respawnPlan = requirePlan({
+      argv,
+      env: { NODE_OPTIONS: nodeOptions },
       platform: "darwin",
     });
 
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual([
-      EXPERIMENTAL_WARNING_FLAG,
-      "openclaw",
-      "cron",
-      "list",
-      "--json",
-    ]);
-    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
-  });
-
-  it.each([
-    ["interactive commands", ["node", "openclaw", "tui"]],
-    ["the foreground Gateway", ["node", "openclaw", "gateway", "run"]],
-  ] as const)("keeps macOS system CA loading for %s", (_label, argv) => {
-    expect(
-      buildCliRespawnPlan({
-        argv: [...argv],
-        env: { NODE_USE_SYSTEM_CA: "1" },
-        execArgv: [],
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not respawn one-shot commands only to change CA trust", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: ["node", "openclaw", "cron", "list", "--json"],
-        env: {
-          NODE_USE_SYSTEM_CA: "1",
-          [OPENCLAW_NODE_OPTIONS_READY]: "1",
-        },
-        execArgv: [EXPERIMENTAL_WARNING_FLAG],
-        autoNodeExtraCaCerts: undefined,
-        platform: "darwin",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not respawn interactive commands for warning suppression only", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: ["node", "openclaw", "tui"],
-        env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
-        execArgv: [],
-        autoNodeExtraCaCerts: undefined,
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not overwrite an existing NODE_EXTRA_CA_CERTS value", () => {
-    const plan = buildCliRespawnPlan({
-      argv: ["node", "openclaw", "status"],
-      env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
-      execArgv: [],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-      platform: "linux",
+    expect(respawnPlan).toMatchObject({
+      argv: args,
+      env: {
+        NODE_OPTIONS: nodeOptions ? `${nodeOptions} ${warningFlag}` : warningFlag,
+        [optionsReady]: "1",
+        OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid),
+      },
     });
+    expect(buildPlan({ argv, env: respawnPlan.env, platform: "darwin" })).toBeNull();
+  },
+);
 
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
-  });
+it.each(["linux", "win32"] as const)(
+  "leaves foreground Gmail shutdown with its lifecycle owner on %s",
+  (platform) => {
+    const plan = (args: string[], ca?: string) =>
+      buildPlan({ args, platform, autoNodeExtraCaCerts: ca });
+    for (const args of [
+      ["webhooks", "gmail", "run", "--account", "fixture@example.com"],
+      ["--profile", "fixture", "webhooks", "gmail", "run"],
+    ]) {
+      expect(plan(args, systemCa)).toBeNull();
+    }
+    expect(plan(["webhooks", "gmail", "setup"])).not.toBeNull();
+  },
+);
 
-  it("returns null when both respawn guards are already satisfied", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: ["node", "openclaw", "status"],
-        env: {
-          [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1",
-          [OPENCLAW_NODE_OPTIONS_READY]: "1",
-        },
-        execArgv: [EXPERIMENTAL_WARNING_FLAG],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "linux",
-      }),
-    ).toBeNull();
-  });
-
-  it("adds a larger V8 stack size on Windows", () => {
-    const plan = buildCliRespawnPlan({
-      argv: [
-        "node",
-        "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-        "dashboard",
-      ],
-      env: {},
-      execArgv: [],
-      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+it.each([
+  [
+    "bare-root startup stays attached to the terminal",
+    { args: [], autoNodeExtraCaCerts: systemCa },
+    { argv: [...warningPrefix, "openclaw"], detachForProcessTree: false },
+  ],
+  [
+    "macOS system CA trust survives one-shot warning respawns",
+    {
+      args: ["cron", "list", "--json"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      platform: "darwin",
+    },
+    {
+      argv: [...warningPrefix, "openclaw", "cron", "list", "--json"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+    },
+  ],
+  [
+    "explicit NODE_EXTRA_CA_CERTS survives discovery",
+    { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" }, autoNodeExtraCaCerts: systemCa },
+    { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" } },
+  ],
+  [
+    "Windows normalization preserves post-script node.exe arguments",
+    {
+      argv: [windowsNode, windowsNode, ...windowsTail],
+      execPath: windowsNode,
       platform: "win32",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual([
-      "--stack-size=8192",
-      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-      "dashboard",
-    ]);
-    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
-    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
-    expect(respawnPlan.detachForProcessTree).toBe(false);
-  });
-
-  it("normalizes duplicated Windows node.exe argv before respawning", () => {
-    const scriptPath =
-      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
-    const plan = buildCliRespawnPlan({
-      argv: [
-        "C:\\Program Files\\nodejs\\node.exe",
-        "C:\\Program Files\\nodejs\\node.exe",
-        scriptPath,
-        "node.exe",
-        "dashboard",
-        "--no-open",
-      ],
-      env: {},
-      execArgv: [],
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      platform: "win32",
-    });
-
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
-  });
-
-  it("does not respawn on Windows when stack size is already configured", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: [
-          "node",
-          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-          "dashboard",
-        ],
-        env: {},
-        execArgv: ["--stack-size=16384"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "win32",
-      }),
-    ).toBeNull();
-  });
-
-  it("does not respawn on Windows when underscore stack size spelling is already configured", () => {
-    expect(
-      buildCliRespawnPlan({
-        argv: [
-          "node",
-          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-          "dashboard",
-        ],
-        env: {},
-        execArgv: ["--stack_size=16384"],
-        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-        platform: "win32",
-      }),
-    ).toBeNull();
-  });
-
-  it("respawns Volta shims through node so the shim is not called directly", () => {
-    const plan = buildCliRespawnPlan({
-      argv: ["/home/alice/.volta/bin/volta-shim", "/usr/local/bin/openclaw", "status"],
+    },
+    {
+      argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "--stack-size=8192", ...windowsTail],
+      detachForProcessTree: false,
+    },
+  ],
+  [
+    "Volta shims respawn through node instead of calling the shim",
+    {
+      argv: [voltaShim, "/usr/local/bin/openclaw", "status"],
       env: { PATH: "/home/alice/.volta/bin:/usr/bin:/bin" },
-      execArgv: [],
-      execPath: "/home/alice/.volta/bin/volta-shim",
-      autoNodeExtraCaCerts: undefined,
-      platform: "linux",
-    });
+      execPath: voltaShim,
+    },
+    {
+      command: "node",
+      argv: [...warningPrefix, "/usr/local/bin/openclaw", "status"],
+      detachForProcessTree: true,
+    },
+  ],
+] satisfies [string, Parameters<typeof buildPlan>[0], object][])("%s", (_name, params, expected) =>
+  expect(requirePlan(params)).toMatchObject(expected),
+);
 
-    const respawnPlan = expectCliRespawnPlan(plan);
-    expect(respawnPlan.command).toBe("node");
-    expect(respawnPlan.argv).toEqual([
-      EXPERIMENTAL_WARNING_FLAG,
-      "/usr/local/bin/openclaw",
-      "status",
-    ]);
-    expect(respawnPlan.detachForProcessTree).toBe(true);
-  });
+it.each([
+  [
+    "interactive macOS retains system CA loading",
+    {
+      args: ["tui"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      platform: "darwin",
+    },
+  ],
+  [
+    "satisfied respawn guards prevent another respawn",
+    {
+      env: { [caReady]: "1", [optionsReady]: "1" },
+      execArgv: [warningFlag],
+      autoNodeExtraCaCerts: systemCa,
+    },
+  ],
+  [
+    "Windows accepts underscore stack-size spelling",
+    {
+      argv: ["node", windowsScript, "dashboard"],
+      execArgv: ["--stack_size=16384"],
+      autoNodeExtraCaCerts: systemCa,
+      platform: "win32",
+    },
+  ],
+] satisfies [string, Parameters<typeof buildPlan>[0]][])("%s", (_name, params) => {
+  expect(buildPlan(params)).toBeNull();
 });
 
-describe("runCliRespawnPlan", () => {
-  it("spawns and bridges the respawn child", () => {
-    const child = new EventEmitter() as ChildProcess;
-    const spawn = vi.fn(() => child);
-    const attachChildProcessBridge = vi.fn();
-    const exit = vi.fn();
-    const writeError = vi.fn();
-
-    runCliRespawnPlan(
-      {
-        command: "/usr/bin/node",
-        argv: ["/repo/openclaw/dist/entry.js", "status"],
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detachForProcessTree: true,
-      },
-      {
-        spawn: spawn as unknown as typeof import("node:child_process").spawn,
-        attachChildProcessBridge,
-        exit: exit as unknown as (code?: number) => never,
-        writeError,
-      },
-    );
-
-    expect(spawn).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      ["/repo/openclaw/dist/entry.js", "status"],
-      {
-        stdio: "inherit",
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
-      },
-    );
-    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
-      attachChildProcessBridge,
-      "child process bridge attach",
-    );
-    expect(bridgeChild).toBe(child);
-    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
-
-    child.emit("exit", 0, null);
-
-    expect(exit).toHaveBeenCalledWith(0);
-    expect(writeError).not.toHaveBeenCalled();
+it.each([
+  ["injects a discovered CA for whitespace", "linux", " ", "/etc/ca.pem", "/etc/ca.pem", "1"],
+  ["drops whitespace without discovery", "linux", " ", undefined, undefined, undefined],
+  ["drops whitespace on Windows", "win32", " ", undefined, undefined, undefined],
+] as const)("%s", (_label, platform, inherited, discovered, expected, expectedReady) => {
+  const respawnPlan = requirePlan({
+    env: { NODE_EXTRA_CA_CERTS: inherited },
+    autoNodeExtraCaCerts: discovered,
+    platform,
   });
 
-  it("force-kills a signaled respawn child that does not exit", () => {
-    vi.useFakeTimers();
-    const child = new EventEmitter() as ChildProcess;
-    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
-    child.kill = kill as ChildProcess["kill"];
-    const spawn = vi.fn(() => child);
-    const exit = vi.fn();
-    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
-
-    try {
-      runCliRespawnPlan(
-        {
-          command: "/usr/bin/node",
-          argv: ["/repo/openclaw/dist/entry.js", "tui"],
-          env: {},
-          detachForProcessTree: false,
-        },
-        {
-          spawn: spawn as unknown as typeof import("node:child_process").spawn,
-          attachChildProcessBridge: vi.fn((_child, options) => {
-            onSignal = options?.onSignal;
-            return { detach: vi.fn() };
-          }),
-          exit: exit as unknown as (code?: number) => never,
-          writeError: vi.fn(),
-        },
-      );
-
-      onSignal?.("SIGTERM");
-      vi.advanceTimersByTime(1_000);
-
-      expect(kill).toHaveBeenCalledWith("SIGTERM");
-      expect(exit).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(1_000);
-
-      expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-      expect(exit).not.toHaveBeenCalled();
-
-      child.emit("exit", null, "SIGKILL");
-
-      expect(exit).toHaveBeenCalledWith(1);
-    } finally {
-      vi.useRealTimers();
-    }
+  expect([respawnPlan.env.NODE_EXTRA_CA_CERTS, respawnPlan.env[caReady]]).toEqual([
+    expected,
+    expectedReady,
+  ]);
+});
+function mockChild() {
+  const child = new EventEmitter() as ChildProcess;
+  const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+  const detach = vi.fn();
+  vi.mocked(attachChildProcessBridge).mockReturnValue({ detach });
+  return { child, spawn, detach };
+}
+it("spawns the standalone plan without adding runtime flags", async () => {
+  vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+  const plan = requirePlan({
+    argv: [process.execPath, "/app/runtime/openclaw.mjs", "doctor"],
+    platform: "darwin",
   });
+  const { child, spawn } = mockChild();
+  const completion = runCliRespawnPlan(plan, vi.fn());
+  expect(spawn.mock.calls[0]).toEqual([
+    process.execPath,
+    ["doctor"],
+    expect.objectContaining({
+      env: expect.objectContaining({ OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) }),
+    }),
+  ]);
+  child.emit("close", 0, null);
+  await completion;
+});
+
+it("records status after the respawn child closes", async () => {
+  process.exitCode = undefined;
+  const { child, spawn, detach } = mockChild();
+  const writeError = vi.fn();
+
+  const plan = {
+    command: "/usr/bin/node",
+    argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
+    env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+    detachForProcessTree: true,
+  };
+  const completion = runCliRespawnPlan(plan, writeError);
+
+  expect(spawn).toHaveBeenCalledWith(plan.command, plan.argv, {
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
+    env: plan.env,
+    detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+    windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
+  });
+  expect(vi.mocked(attachChildProcessBridge).mock.calls[0]).toEqual([child, expect.any(Function)]);
+
+  child.emit("exit", 7, null);
+  expect(process.exitCode).toBeUndefined();
+  child.emit("close", 7, null);
+  await completion;
+  expect(process.exitCode).toBe(7);
+  expect(detach).toHaveBeenCalledOnce();
+  expect(writeError).not.toHaveBeenCalled();
 });

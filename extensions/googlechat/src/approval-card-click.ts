@@ -2,19 +2,50 @@ import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { formatApprovalDecisionLabel } from "openclaw/plugin-sdk/approval-runtime";
 import { updateGoogleChatMessage } from "./api.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
-  claimGoogleChatApprovalCardBinding,
-  completeGoogleChatApprovalCardBinding,
-  getGoogleChatApprovalCardBinding,
-  releaseGoogleChatApprovalCardBinding,
+  googleChatApprovalControls,
   readGoogleChatApprovalActionToken,
 } from "./approval-card-actions.js";
-import { buildGoogleChatCanonicalApprovalTerminalCards } from "./approval-terminal-card.js";
+import {
+  buildGoogleChatApprovalTextWidget as buildTextWidget,
+  escapeGoogleChatApprovalCardText as escapeGoogleChatText,
+} from "./approval-card-text.js";
 import type { WebhookTarget } from "./monitor-types.js";
-import type { GoogleChatEvent } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatEvent } from "./types.js";
+
+const GOOGLECHAT_APPROVAL_CARD_ID = "openclaw-approval";
+function formatCanonicalOutcome(approval: ApprovalResolveResult["approval"]): string {
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
+  }
+  return approval.status === "expired"
+    ? "Expired"
+    : approval.status === "cancelled"
+      ? "Cancelled"
+      : "Unavailable";
+}
+
+function buildSubjectSection(
+  presentation: ApprovalResolveResult["approval"]["presentation"],
+): NonNullable<GoogleChatCardV2["card"]["sections"]>[number] {
+  if (presentation.kind === "exec") {
+    return {
+      header: "Command",
+      widgets: [buildTextWidget(presentation.commandPreview ?? presentation.commandText)],
+    };
+  }
+  const description = presentation.description.trim();
+  const requestText = `<b>${escapeGoogleChatText(presentation.title)}</b>${
+    description ? `<br>${escapeGoogleChatText(description)}` : ""
+  }`;
+  return {
+    header: "Request",
+    widgets: [buildTextWidget(requestText, "html")],
+  };
+}
 
 function logIgnored(target: WebhookTarget, message: string): void {
   target.runtime.log?.(`[${target.account.accountId}] googlechat approval ignored: ${message}`);
@@ -33,7 +64,7 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     return false;
   }
 
-  const binding = getGoogleChatApprovalCardBinding(token);
+  const binding = googleChatApprovalControls.get(token);
   if (!binding) {
     logIgnored(params.target, "unknown or expired card token");
     return true;
@@ -68,47 +99,67 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     return true;
   }
 
-  const claim = claimGoogleChatApprovalCardBinding(token);
-  if (claim.kind === "missing") {
-    logIgnored(params.target, "card token already consumed");
-    return true;
-  }
-  if (claim.kind === "in-flight") {
-    logIgnored(params.target, "card token resolve already in flight");
-    return true;
-  }
-  const consumed = claim.binding;
-
-  let result: ApprovalResolveResult;
-  try {
-    result = await resolveApprovalOverGateway({
+  const outcome = await googleChatApprovalControls.settle(token, async (consumed) => {
+    const result = await resolveApprovalOverGateway({
       cfg: params.target.config,
       approvalId: consumed.approvalId,
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
+      channel: "googlechat",
+      accountId: params.target.account.accountId,
       senderId: actor,
-      clientDisplayName: `Google Chat approval (${actor?.trim() || "unknown"})`,
     });
+    // Render the canonical first-answer result without retaining any actionable buttons.
+    const { approval } = result;
+    const kindLabel = approval.presentation.kind === "plugin" ? "Plugin" : "Exec";
+    const detailLines = [
+      `<b>Approval ID:</b> ${escapeGoogleChatText(JSON.stringify(approval.id).slice(1, -1))}`,
+      `<b>Status:</b> ${escapeGoogleChatText(approval.status)}`,
+      ...(approval.status === "allowed" || approval.status === "denied"
+        ? [`<b>Decision:</b> ${escapeGoogleChatText(approval.decision)}`]
+        : []),
+      `<b>Reason:</b> ${escapeGoogleChatText(approval.reason)}`,
+    ];
     await updateGoogleChatMessage({
       account: params.target.account,
       messageName: consumed.messageName,
-      cardsV2: buildGoogleChatCanonicalApprovalTerminalCards(result),
+      cardsV2: [
+        {
+          cardId: GOOGLECHAT_APPROVAL_CARD_ID,
+          card: {
+            header: {
+              title: `${kindLabel} Approval: ${formatCanonicalOutcome(approval)}`,
+              subtitle: result.applied ? "Resolved by this action" : "Already resolved",
+            },
+            sections: [
+              buildSubjectSection(approval.presentation),
+              {
+                header: "Details",
+                widgets: [buildTextWidget(detailLines.join("<br>"), "html")],
+              },
+            ],
+          },
+        },
+      ],
     });
-  } catch (error) {
-    if (isApprovalNotFoundError(error)) {
-      // Missing approvals cannot recover; retire the card instead of rearming its token.
-      completeGoogleChatApprovalCardBinding(token);
-      logIgnored(params.target, `approval expired or no longer exists id=${consumed.approvalId}`);
-      return true;
-    }
-    releaseGoogleChatApprovalCardBinding(token);
-    throw error;
+    return result;
+  });
+  if (outcome.kind !== "settled") {
+    logIgnored(
+      params.target,
+      outcome.kind === "missing"
+        ? "card token already consumed"
+        : outcome.kind === "in-flight"
+          ? "card token resolve already in flight"
+          : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
+    );
+    return true;
   }
-  completeGoogleChatApprovalCardBinding(token);
-  const outcome = result.applied ? "resolved" : "already resolved";
+  const { binding: consumed, result } = outcome;
+  const label = result.applied ? "resolved" : "already resolved";
   const decision = "decision" in result.approval ? result.approval.decision : "none";
   params.target.runtime.log?.(
-    `[${params.target.account.accountId}] googlechat approval ${outcome} id=${consumed.approvalId} status=${result.approval.status} decision=${decision} sender=${actor || "unknown"}`,
+    `[${params.target.account.accountId}] googlechat approval ${label} id=${consumed.approvalId} status=${result.approval.status} decision=${decision} sender=${actor || "unknown"}`,
   );
   return true;
 }

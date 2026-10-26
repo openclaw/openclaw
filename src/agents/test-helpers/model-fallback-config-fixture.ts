@@ -1,9 +1,17 @@
-/**
- * Model fallback config fixture.
- *
- * Builds a minimal config with primary and fallback models for model-selection tests.
- */
+/** Model-selection config fixtures for fallback and off-catalog routes. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+export function createFixtureRouteModels(): OpenClawConfig["models"] {
+  return {
+    providers: {
+      "fixture-route": {
+        api: "openai-responses",
+        baseUrl: "https://fixture.invalid/v1",
+        models: [],
+      },
+    },
+  };
+}
 
 export function makeModelFallbackCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
@@ -17,4 +25,14 @@ export function makeModelFallbackCfg(overrides: Partial<OpenClawConfig> = {}): O
     },
     ...overrides,
   } as OpenClawConfig;
+}
+
+export function createModelFallbackConfig(primary: string, fallbacks: string[]): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary, fallbacks },
+      },
+    },
+  };
 }

@@ -1,14 +1,49 @@
+import { setImmediate } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EventStream } from "./event-stream.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../../../src/test-utils/node-process.js";
+import { collect } from "../../../../test/helpers/async-iterable.js";
+import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
+import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
+import { EventStream, getEventStreamCompletion } from "./event-stream.js";
 
-function createNumberStream(): EventStream<number, number> {
-  return new EventStream(
+const createNumberStream = () =>
+  new EventStream<number>(
     (event) => event === -1,
     (event) => event,
   );
-}
 
 describe("EventStream", () => {
+  it("releases consumed events but retains unread events and results", async ({ signal }) => {
+    const result = await runNodeScript(
+      [
+        "--expose-gc",
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(eventStreamRetentionEntrypoint),
+          resolveTestNodeExecPath(),
+        ),
+      ],
+      { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
+      15_000,
+      {
+        cwd: fileURLToPath(new URL("../../../../", import.meta.url)),
+        signal,
+        maxBuffer: 64 * 1024,
+        requireProcessTreeExit: process.platform !== "win32",
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      { completed: false, consumedRetained: false, finalRetained: false },
+      { completed: true, consumedRetained: false, finalRetained: true },
+    ]);
+  }, 30_000);
+
   it("preserves interleaved queued and waiting push/pull order", async () => {
     const stream = createNumberStream();
     const iterator = stream[Symbol.asyncIterator]();
@@ -33,9 +68,10 @@ describe("EventStream", () => {
       stream.push(value);
     }
 
-    for (let value = 0; value < 1024; value += 1) {
-      expect(await iterator.next()).toEqual({ value, done: false });
-    }
+    const read = (length: number) => Promise.all(Array.from({ length }, () => iterator.next()));
+    expect(await read(1024)).toEqual(
+      Array.from({ length: 1024 }, (_, value) => ({ value, done: false })),
+    );
     const queueState = stream as unknown as { queue: number[]; queueHead: number };
     expect(queueState.queueHead).toBe(0);
     expect(queueState.queue).toHaveLength(1024);
@@ -44,9 +80,49 @@ describe("EventStream", () => {
       stream.push(value);
     }
     stream.end();
-    for (let value = 1024; value < 2052; value += 1) {
-      expect(await iterator.next()).toEqual({ value, done: false });
-    }
+    expect(await read(1028)).toEqual(
+      Array.from({ length: 1028 }, (_, index) => ({ value: index + 1024, done: false })),
+    );
     expect(await iterator.next()).toEqual({ value: undefined, done: true });
+  });
+
+  it("resolves result() from a terminal event and from an explicit end(result)", async () => {
+    const terminal = createNumberStream();
+    terminal.push(-1);
+    terminal.end();
+    await expect(terminal.result()).resolves.toBe(-1);
+    await expect(getEventStreamCompletion(terminal)).resolves.toBe(-1);
+
+    const explicit = createNumberStream();
+    explicit.push(7);
+    explicit.end(42);
+    await expect(explicit.result()).resolves.toBe(42);
+    await expect(getEventStreamCompletion(explicit)).resolves.toBe(42);
+  });
+
+  it("rejects result() when the stream ends without a terminal event or explicit result", async () => {
+    const stream = createNumberStream();
+    stream.push(1);
+    stream.end();
+    const error = "event stream ended without a terminal event or final result";
+    await expect(stream.result()).rejects.toThrow(error);
+    await expect(getEventStreamCompletion(stream)).rejects.toThrow(error);
+    expect(await collect(stream)).toEqual([1]);
+  });
+
+  it("keeps iterate-only consumers free of unhandled rejections on bare end()", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const stream = createNumberStream();
+      stream.push(1);
+      stream.end();
+      expect(await collect(stream)).toEqual([1]);
+      await setImmediate(); // Let any unhandled rejection surface.
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
   });
 });

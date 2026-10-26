@@ -1,11 +1,9 @@
+import Darwin
 import Foundation
 import Network
 import OpenClawKit
 import OSLog
 import Subprocess
-#if canImport(Darwin)
-import Darwin
-#endif
 
 /// Port forwarding tunnel for remote mode.
 ///
@@ -18,314 +16,37 @@ final class RemotePortTunnel: @unchecked Sendable {
         let identity: String
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
+        let preferredLocalPort: UInt16?
     }
 
-    let localPort: UInt16?
+    let localPort: UInt16
     var isRunning: Bool {
         self.process.isRunning
     }
 
-    var processIdentifier: pid_t {
-        self.process.processIdentifier
-    }
+    let processIdentifier: pid_t
 
     private let process: ManagedProcess
-    private let stderrHandle: FileHandle?
+    private let stderrReader: PipeReadStream
     private let guardianReceipt: PortGuardian.Record
-
-    private final class StderrCapture: @unchecked Sendable {
-        private let lock = NSLock()
-        private var text = ""
-        private let limit = 4096
-
-        func append(_ chunk: String) {
-            let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            if !self.text.isEmpty {
-                self.text += "\n"
-            }
-            self.text += trimmed
-            if self.text.count > self.limit {
-                self.text = String(self.text.suffix(self.limit))
-            }
-        }
-
-        func snapshot() -> String {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return self.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
-
-    private enum ProcessWakeReason: Sendable {
-        case exited
-        case terminate
-    }
-
-    private struct ProcessStartFailure: LocalizedError, Sendable {
-        let message: String
-
-        var errorDescription: String? {
-            self.message
-        }
-    }
-
-    private final class ProcessStartSignal: @unchecked Sendable {
-        private let lock = NSLock()
-        private var result: Result<pid_t, ProcessStartFailure>?
-        private var continuation: CheckedContinuation<pid_t, any Error>?
-
-        func wait() async throws -> pid_t {
-            try await withCheckedThrowingContinuation { continuation in
-                self.lock.lock()
-                if let result = self.result {
-                    self.lock.unlock()
-                    continuation.resume(with: result)
-                    return
-                }
-                self.continuation = continuation
-                self.lock.unlock()
-            }
-        }
-
-        func succeed(_ processIdentifier: pid_t) {
-            self.resolve(.success(processIdentifier))
-        }
-
-        func fail(_ error: ProcessStartFailure) {
-            self.resolve(.failure(error))
-        }
-
-        private func resolve(_ result: Result<pid_t, ProcessStartFailure>) {
-            self.lock.lock()
-            guard self.result == nil else {
-                self.lock.unlock()
-                return
-            }
-            self.result = result
-            let continuation = self.continuation
-            self.continuation = nil
-            self.lock.unlock()
-            continuation?.resume(with: result)
-        }
-    }
-
-    private final class ProcessWakeSignal: @unchecked Sendable {
-        private let lock = NSLock()
-        private var reason: ProcessWakeReason?
-        private var continuation: CheckedContinuation<ProcessWakeReason, Never>?
-        private var source: DispatchSourceProcess?
-
-        func wait(processIdentifier: pid_t) async -> ProcessWakeReason {
-            await withCheckedContinuation { continuation in
-                self.lock.lock()
-                if let reason = self.reason {
-                    self.lock.unlock()
-                    continuation.resume(returning: reason)
-                    return
-                }
-                self.continuation = continuation
-                self.lock.unlock()
-
-                if Self.hasExited(processIdentifier) {
-                    self.resolve(.exited)
-                    return
-                }
-
-                let source = DispatchSource.makeProcessSource(
-                    identifier: processIdentifier,
-                    eventMask: .exit,
-                    queue: .global(qos: .userInitiated))
-                source.setEventHandler { [weak self] in
-                    self?.resolve(.exited)
-                }
-
-                self.lock.lock()
-                if self.reason == nil {
-                    self.source = source
-                }
-                let shouldStart = self.reason == nil
-                self.lock.unlock()
-
-                source.resume()
-                if !shouldStart {
-                    source.cancel()
-                    return
-                }
-                // Cover an exit between the preflight waitid and kqueue registration.
-                if Self.hasExited(processIdentifier) {
-                    self.resolve(.exited)
-                }
-            }
-        }
-
-        func requestTermination() {
-            self.resolve(.terminate)
-        }
-
-        private func resolve(_ reason: ProcessWakeReason) {
-            self.lock.lock()
-            guard self.reason == nil else {
-                self.lock.unlock()
-                return
-            }
-            self.reason = reason
-            let continuation = self.continuation
-            self.continuation = nil
-            let source = self.source
-            self.source = nil
-            self.lock.unlock()
-            source?.cancel()
-            continuation?.resume(returning: reason)
-        }
-
-        private static func hasExited(_ processIdentifier: pid_t) -> Bool {
-            var info = siginfo_t()
-            let result = waitid(
-                P_PID,
-                id_t(processIdentifier),
-                &info,
-                WEXITED | WNOHANG | WNOWAIT)
-            return result == 0 && info.si_pid != 0
-        }
-    }
-
-    private final class ProcessCompletionState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var finished = false
-        private var status: TerminationStatus?
-
-        var isRunning: Bool {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return !self.finished
-        }
-
-        var terminationStatus: TerminationStatus? {
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            return self.status
-        }
-
-        func finish(status: TerminationStatus?) {
-            self.lock.lock()
-            self.finished = true
-            self.status = status
-            self.lock.unlock()
-        }
-    }
-
-    fileprivate final class ManagedProcess: @unchecked Sendable {
-        let processIdentifier: pid_t
-        private let task: Task<Void, Never>
-        private let wakeSignal: ProcessWakeSignal
-        private let state: ProcessCompletionState
-
-        var isRunning: Bool {
-            self.state.isRunning
-        }
-
-        var terminationStatus: TerminationStatus? {
-            self.state.terminationStatus
-        }
-
-        private init(
-            processIdentifier: pid_t,
-            task: Task<Void, Never>,
-            wakeSignal: ProcessWakeSignal,
-            state: ProcessCompletionState)
-        {
-            self.processIdentifier = processIdentifier
-            self.task = task
-            self.wakeSignal = wakeSignal
-            self.state = state
-        }
-
-        static func start(
-            configuration: Subprocess.Configuration,
-            error: some ErrorOutputProtocol & Sendable) async throws -> ManagedProcess
-        {
-            let startSignal = ProcessStartSignal()
-            let wakeSignal = ProcessWakeSignal()
-            let state = ProcessCompletionState()
-            let task = Task.detached(priority: .userInitiated) {
-                do {
-                    let result = try await Subprocess.run(
-                        configuration,
-                        input: .none,
-                        output: .discarded,
-                        error: error)
-                    { execution in
-                        let processIdentifier = execution.processIdentifier.value
-                        startSignal.succeed(processIdentifier)
-                        let reason = await wakeSignal.wait(processIdentifier: processIdentifier)
-                        switch reason {
-                        case .terminate:
-                            try? execution.send(signal: .terminate, toProcessGroup: true)
-                            try? await Task.sleep(for: .milliseconds(250))
-                            // The leader stays unreaped until this body returns, so its
-                            // process-group identity cannot be reused before escalation.
-                            try? execution.send(signal: .kill, toProcessGroup: true)
-                        case .exited:
-                            // A crashed SSH leader can leave ProxyCommand descendants.
-                            // The zombie leader still pins the group identity here.
-                            try? execution.send(signal: .kill, toProcessGroup: true)
-                        }
-                    }
-                    state.finish(status: result.terminationStatus)
-                } catch {
-                    let message = if let subprocessError = error as? SubprocessError {
-                        subprocessError.description
-                    } else {
-                        error.localizedDescription
-                    }
-                    startSignal.fail(ProcessStartFailure(message: message))
-                    state.finish(status: nil)
-                }
-            }
-            let processIdentifier = try await startSignal.wait()
-            return ManagedProcess(
-                processIdentifier: processIdentifier,
-                task: task,
-                wakeSignal: wakeSignal,
-                state: state)
-        }
-
-        func requestTermination() {
-            self.wakeSignal.requestTermination()
-        }
-
-        func terminate() async {
-            self.requestTermination()
-            await self.task.value
-        }
-
-        deinit {
-            self.requestTermination()
-        }
-    }
 
     private init(
         process: ManagedProcess,
-        localPort: UInt16?,
-        stderrHandle: FileHandle?,
+        processIdentifier: pid_t,
+        localPort: UInt16,
+        stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {
         self.process = process
+        self.processIdentifier = processIdentifier
         self.localPort = localPort
-        self.stderrHandle = stderrHandle
+        self.stderrReader = stderrReader
         self.guardianReceipt = guardianReceipt
     }
 
     deinit {
-        Self.cleanupStderr(self.stderrHandle)
+        self.stderrReader.close()
         let receipt = self.guardianReceipt
-        guard self.process.isRunning else {
-            Task { await PortGuardian.shared.removeRecord(receipt) }
-            return
-        }
         // deinit cannot wait. Leave the receipt durable until a later sweep proves
         // the child exited; deleting it after TERM alone can orphan a resistant SSH.
         Task { await PortGuardian.shared.relinquishRecord(receipt) }
@@ -334,12 +55,44 @@ final class RemotePortTunnel: @unchecked Sendable {
 
     func terminate() async {
         await self.process.terminate()
-        Self.cleanupStderr(self.stderrHandle)
-        let receipt = self.guardianReceipt
-        Task { await PortGuardian.shared.removeRecord(receipt) }
+        await self.stderrReader.finish()
+        // Finish retiring this receipt before a replacement spawn reserves the ledger.
+        await PortGuardian.shared.removeRecord(self.guardianReceipt)
     }
 
-    static func configuration(remotePort: Int) throws -> Configuration {
+    static func localPort(
+        root: [String: Any],
+        legacyPort: Int? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> Int
+    {
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              let host = url.host, LoopbackHost.isLoopbackHost(host),
+              let port = GatewayRemoteConfig.defaultPort(for: url), (1...65535).contains(port)
+        else {
+            return GatewayEnvironment.resolvedGatewayPort(
+                environment: environment,
+                configPort: OpenClawConfigFile.gatewayPort(root: root),
+                storedPort: legacyPort ?? GatewayEnvironment.gatewayPort(root: root),
+                profile: .current)
+        }
+        return port
+    }
+
+    static func ports(
+        root: [String: Any],
+        sshHost: String,
+        legacyPort: Int? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> (local: Int, remote: Int)
+    {
+        // Shipped SSH profiles without a URL use the shared port until hosting repair
+        // materializes their route. Explicit remote fields own the split configuration.
+        let legacyPort = legacyPort ?? GatewayEnvironment.gatewayPort(root: root)
+        return (
+            self.localPort(root: root, legacyPort: legacyPort, environment: environment),
+            self.resolveRemotePortOverride(defaultRemotePort: legacyPort, for: sshHost, root: root) ?? legacyPort)
+    }
+
+    static func configuration() throws -> Configuration {
         let root = OpenClawConfigFile.loadDict()
         let settings = CommandResolver.connectionSettings(configRoot: root)
         guard settings.mode == .remote,
@@ -351,30 +104,21 @@ final class RemotePortTunnel: @unchecked Sendable {
                 code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
-        let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedRemotePort = Self.resolveRemotePortOverride(
-            defaultRemotePort: remotePort,
-            for: sshHost,
-            root: root) ?? remotePort
+        let ports = Self.ports(root: root, sshHost: target.host)
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
-            remotePort: resolvedRemotePort,
-            hostKeyPolicy: settings.sshHostKeyPolicy)
+            remotePort: ports.remote,
+            hostKeyPolicy: settings.sshHostKeyPolicy,
+            preferredLocalPort: UInt16(ports.local))
     }
 
-    static func create(
-        configuration: Configuration,
-        preferredLocalPort: UInt16? = nil,
-        allowRandomLocalPort: Bool = true) async throws -> RemotePortTunnel
-    {
+    static func create(configuration: Configuration) async throws -> RemotePortTunnel {
         // Reap orphans from crashed instances before picking a port, otherwise a dead
         // session's tunnel squats the preferred port and forces an ephemeral one.
         await PortGuardian.shared.reapOrphanedTunnels()
 
-        let localPort = try await Self.findPort(
-            preferred: preferredLocalPort,
-            allowRandom: allowRandomLocalPort)
+        let localPort = try await Self.findPort(preferred: configuration.preferredLocalPort ?? 18789)
         let sshHost = configuration.target.host
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
@@ -391,30 +135,25 @@ final class RemotePortTunnel: @unchecked Sendable {
         let pipe = Pipe()
         let stderrHandle = pipe.fileHandleForReading
         let stderrWriter = pipe.fileHandleForWriting
-        let stderrCapture = StderrCapture()
+        let stderrCapture = PipeTextCapture(characterLimit: 4096, retention: .tail)
 
-        // Consume stderr so ssh cannot block if it logs.
-        stderrHandle.readabilityHandler = { handle in
-            let data = handle.readSafely(upToCount: 64 * 1024)
-            guard !data.isEmpty else {
-                // EOF (or read failure): stop monitoring to avoid spinning on a closed pipe.
-                Self.cleanupStderr(handle)
-                return
-            }
-            guard let line = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !line.isEmpty
-            else { return }
-            stderrCapture.append(line)
+        defer { try? stderrHandle.close() }
+        let consumeStderr: @Sendable (Data, Bool) -> Void = { data, atEOF in
+            let line = stderrCapture.append(data, atEOF: atEOF)
+            guard !line.isEmpty else { return }
             Self.logger.error("ssh tunnel stderr: \(line, privacy: .public)")
         }
+        let stderrReader = try PipeReadStream(
+            handle: stderrHandle,
+            onData: { consumeStderr($0, false) },
+            onClose: { consumeStderr(Data(), true) })
         let spawnPreparation: PortGuardian.SpawnPreparation
         do {
             // Legacy reconciliation can inspect many live processes. Complete it
             // before spawn so a crash during migration cannot orphan this SSH child.
             spawnPreparation = try await PortGuardian.shared.prepareForTunnelSpawn()
         } catch {
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw NSError(
                 domain: "RemotePortTunnel",
                 code: 5,
@@ -426,30 +165,28 @@ final class RemotePortTunnel: @unchecked Sendable {
 
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
-        platformOptions.createSession = true
-        platformOptions.teardownSequence = [
-            .send(
-                signal: .terminate,
-                toProcessGroup: true,
-                allowedDurationToNextStep: .milliseconds(250)),
-        ]
         let processConfiguration = Subprocess.Configuration(
-            .path(.init("/usr/bin/ssh")),
+            executable: .path(.init("/usr/bin/ssh")),
             arguments: Arguments(args),
-            environment: self.environment(from: CommandResolver.sshEnvironment()),
+            environment: ManagedProcess.environment(from: CommandResolver.sshEnvironment()),
             platformOptions: platformOptions)
-        let process: ManagedProcess
+        let process = ManagedProcess.launch(
+            configuration: processConfiguration,
+            input: .none,
+            output: .discarded,
+            error: .fileDescriptor(
+                .init(rawValue: stderrWriter.fileDescriptor),
+                closeAfterSpawningProcess: false),
+            closeAfterSpawn: [stderrWriter])
+        let processIdentifier: pid_t
         do {
-            process = try await ManagedProcess.start(
-                configuration: processConfiguration,
-                error: .fileDescriptor(
-                    .init(rawValue: stderrWriter.fileDescriptor),
-                    closeAfterSpawningProcess: false))
-            try? stderrWriter.close()
+            processIdentifier = try await process.waitUntilStarted()
         } catch {
+            // Cancellation abandons the waiter, not the detached spawn. Reap the
+            // child before releasing its reservation or closing inherited handles.
+            await process.terminate(gracefully: false)
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
-            try? stderrWriter.close()
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw error
         }
 
@@ -459,7 +196,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             // a crash window where a live SSH process has no durable reap receipt.
             receipt = try await PortGuardian.shared.record(
                 port: Int(localPort),
-                pid: process.processIdentifier,
+                pid: processIdentifier,
                 command: "/usr/bin/ssh",
                 mode: .remote,
                 preparation: spawnPreparation)
@@ -468,7 +205,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             // Keep the reservation exclusive until this exact child is reaped.
             // Only then may another operation migrate or open the ledger.
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             throw NSError(
                 domain: "RemotePortTunnel",
                 code: 5,
@@ -481,44 +218,46 @@ final class RemotePortTunnel: @unchecked Sendable {
         do {
             try await Self.waitForListener(
                 process: process,
+                processIdentifier: processIdentifier,
                 localPort: localPort,
-                stderrHandle: stderrHandle,
+                stderrReader: stderrReader,
                 stderrCapture: stderrCapture)
         } catch {
             await process.terminate()
-            Self.cleanupStderr(stderrHandle)
+            stderrReader.close()
             await PortGuardian.shared.removeRecord(receipt)
             throw error
         }
 
         return RemotePortTunnel(
             process: process,
+            processIdentifier: processIdentifier,
             localPort: localPort,
-            stderrHandle: stderrHandle,
+            stderrReader: stderrReader,
             guardianReceipt: receipt)
     }
 
     private static func waitForListener(
         process: ManagedProcess,
+        processIdentifier: pid_t,
         localPort: UInt16,
-        stderrHandle: FileHandle,
-        stderrCapture: StderrCapture) async throws
+        stderrReader: PipeReadStream,
+        stderrCapture: PipeTextCapture) async throws
     {
         let deadline = Date().addingTimeInterval(6)
         repeat {
             if !process.isRunning {
-                let stderr = Self.drainStderr(stderrHandle, captured: stderrCapture.snapshot())
+                // The reader owns the entire pipe; wait for its final bytes instead
+                // of starting a competing read after the child exits.
+                await stderrReader.finish()
+                let stderr = stderrCapture.snapshot()
                 let msg = stderr.isEmpty ? "ssh tunnel exited before listening" : "ssh tunnel failed: \(stderr)"
                 throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
             }
-            if await PortGuardian.shared.isListening(port: Int(localPort), pid: process.processIdentifier) {
+            if await PortGuardian.shared.isListening(port: Int(localPort), pid: processIdentifier) {
                 return
             }
-            do {
-                try await Task.sleep(nanoseconds: 100_000_000)
-            } catch {
-                throw error
-            }
+            try await Task.sleep(nanoseconds: 100_000_000)
         } while Date() < deadline
 
         let stderr = stderrCapture.snapshot()
@@ -526,28 +265,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 
-    private static func environment(from values: [String: String]) -> Environment {
-        var converted: [Environment.Key: String] = [:]
-        converted.reserveCapacity(values.count)
-        for (key, value) in values {
-            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
-            converted[environmentKey] = value
-        }
-        return .custom(converted)
-    }
-
-    /// Shared with MacChatTranscriptCache: the offline cache identity must key
-    /// on the same remote gateway port this tunnel actually forwards to, or two
-    /// gateways behind one SSH target would share cached transcripts.
-    static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
-        let root = OpenClawConfigFile.loadDict()
-        return self.resolveRemotePortOverride(
-            defaultRemotePort: defaultRemotePort,
-            for: sshHost,
-            root: root)
-    }
-
-    private static func resolveRemotePortOverride(
+    static func resolveRemotePortOverride(
         defaultRemotePort: Int,
         for sshHost: String,
         root: [String: Any]) -> Int?
@@ -557,19 +275,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
-              let urlRaw = remote["url"] as? String
-        else {
-            return nil
-        }
-        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port else {
-            return nil
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
+              let raw = (remote["url"] as? String)?.trimmedNonEmpty,
+              let url = URL(string: raw), let port = url.port,
+              let host = url.host?.trimmedNonEmpty
+        else { return nil }
         if LoopbackHost.isLoopbackHost(host) {
             return port == defaultRemotePort ? nil : port
         }
@@ -586,18 +295,12 @@ final class RemotePortTunnel: @unchecked Sendable {
         return port
     }
 
-    private static func sshOptions(
+    static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        [
-            "-o", "BatchMode=yes",
-            // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            "-o", "ControlPersist=no",
-            "-o", "ForkAfterAuthentication=no",
+        ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
@@ -605,19 +308,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
     }
 
-    private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
-        if let preferred, self.portIsFree(preferred) { return preferred }
-        if let preferred, !allowRandom {
-            throw NSError(
-                domain: "RemotePortTunnel",
-                code: 5,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Local port \(preferred) is unavailable",
-                ])
-        }
+    private static func findPort(preferred: UInt16) async throws -> UInt16 {
+        if self.portIsFree(preferred) { return preferred }
 
         return try await withCheckedThrowingContinuation { cont in
             let queue = DispatchQueue(label: "ai.openclaw.remote.tunnel.port", qos: .utility)
@@ -647,53 +342,23 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
     }
 
-    private static func portIsFree(_ port: UInt16) -> Bool {
-        #if canImport(Darwin)
+    static func portIsFree(_ port: UInt16) -> Bool {
         // NWListener can succeed even when only one address family is held. Mirror what ssh needs by checking
         // both 127.0.0.1 and ::1 for availability.
-        return self.canBindIPv4(port) && self.canBindIPv6(port)
-        #else
-        do {
-            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
-            listener.cancel()
-            return true
-        } catch {
-            return false
-        }
-        #endif
+        self.canBindIPv4(port) && self.canBindIPv6(port)
     }
 
-    #if canImport(Darwin)
     private static func canBindIPv4(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        return result == 0
+        return self.canBind(&addr, family: AF_INET)
     }
 
     private static func canBindIPv6(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET6, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in6()
         addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
         addr.sin6_family = sa_family_t(AF_INET6)
@@ -703,110 +368,21 @@ final class RemotePortTunnel: @unchecked Sendable {
             inet_pton(AF_INET6, "::1", ptr)
         }
         addr.sin6_addr = loopback
+        return self.canBind(&addr, family: AF_INET6)
+    }
 
-        let result = withUnsafePointer(to: &addr) { ptr in
+    private static func canBind<Address>(_ address: inout Address, family: Int32) -> Bool {
+        let fd = socket(family, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { _ = Darwin.close(fd) }
+
+        var one: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+
+        return withUnsafePointer(to: &address) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<Address>.size)) == 0
             }
         }
-        return result == 0
     }
-    #endif
-
-    private static func cleanupStderr(_ handle: FileHandle?) {
-        guard let handle else { return }
-        Self.cleanupStderr(handle)
-    }
-
-    private static func cleanupStderr(_ handle: FileHandle) {
-        if handle.readabilityHandler != nil {
-            handle.readabilityHandler = nil
-        }
-        try? handle.close()
-    }
-
-    private static func drainStderr(_ handle: FileHandle, captured: String) -> String {
-        handle.readabilityHandler = nil
-        defer { try? handle.close() }
-
-        do {
-            let data = try handle.readToEnd() ?? Data()
-            let remaining = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if captured.isEmpty {
-                return remaining
-            }
-            if remaining.isEmpty {
-                return captured
-            }
-            return captured + "\n" + remaining
-        } catch {
-            self.logger.debug("Failed to drain ssh stderr: \(error, privacy: .public)")
-            return captured
-        }
-    }
-
-    #if SWIFT_PACKAGE
-    static func _testPortIsFree(_ port: UInt16) -> Bool {
-        self.portIsFree(port)
-    }
-
-    static func _testResolveRemotePortOverride(defaultRemotePort: Int, sshHost: String) -> Int? {
-        self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
-    }
-
-    static func _testSSHOptions(
-        localPort: UInt16,
-        remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
-    {
-        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
-    }
-
-    static func _testDrainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle, captured: "")
-    }
-
-    final class TestProcess: @unchecked Sendable {
-        private let process: ManagedProcess
-
-        fileprivate init(process: ManagedProcess) {
-            self.process = process
-        }
-
-        var isRunning: Bool {
-            self.process.isRunning
-        }
-
-        var terminationStatus: TerminationStatus? {
-            self.process.terminationStatus
-        }
-
-        func requestTermination() {
-            self.process.requestTermination()
-        }
-
-        func terminate() async {
-            await self.process.terminate()
-        }
-    }
-
-    static func _testStartProcess(
-        executable: String,
-        arguments: [String],
-        environment: [String: String] = [:]) async throws -> TestProcess
-    {
-        var platformOptions = PlatformOptions()
-        platformOptions.createSession = true
-        let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
-            arguments: Arguments(arguments),
-            environment: self.environment(from: environment),
-            platformOptions: platformOptions)
-        return try await TestProcess(process: ManagedProcess.start(
-            configuration: configuration,
-            error: .discarded))
-    }
-
-    #endif
 }

@@ -1,4 +1,3 @@
-// Slack plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -10,14 +9,13 @@ import {
   defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
-} from "openclaw/plugin-sdk/runtime-doctor";
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "slack",
   streaming: {
-    // Slack maps its legacy draft stream modes (replace/status_final/append)
-    // through its own resolver instead of the generic mode parser.
     defaultMode: "partial",
     resolveMode: resolveSlackStreamingMode,
     resolveNativeTransport: resolveSlackNativeStreaming,
@@ -41,12 +39,6 @@ const threadMentionPolicyMigration = defineKeyMoveMigration({
     `Moved ${sourcePath} → ${targetPath} (${String(mappedValue)}).`,
 });
 
-const channelAllowMigration = defineKeyMoveMigration({
-  scope: ["channels", "*"],
-  from: ["allow"],
-  to: ["enabled"],
-});
-
 function hasInteractiveRepliesCapability(value: unknown): boolean {
   const capabilities = asObjectRecord(value)?.capabilities;
   if (Array.isArray(capabilities)) {
@@ -60,6 +52,10 @@ function hasInteractiveRepliesCapability(value: unknown): boolean {
     (Object.keys(capabilitiesRecord).length === 0 ||
       Object.hasOwn(capabilitiesRecord, "interactiveReplies")),
   );
+}
+
+function hasEnterpriseOrgInstall(value: unknown): boolean {
+  return Object.hasOwn(asObjectRecord(value) ?? {}, "enterpriseOrgInstall");
 }
 
 function removeInteractiveRepliesCapability(params: {
@@ -112,6 +108,17 @@ function removeInteractiveRepliesCapability(params: {
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
   {
+    path: ["channels", "slack", "enterpriseOrgInstall"],
+    message:
+      'channels.slack.enterpriseOrgInstall is retired; Slack now detects org-wide installations automatically. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.enterpriseOrgInstall is retired; Slack now detects org-wide installations automatically. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasEnterpriseOrgInstall),
+  },
+  {
     path: ["channels", "slack"],
     message:
       'channels.slack.capabilities.interactiveReplies is retired; use typed presentation actions instead. Run "openclaw doctor --fix".',
@@ -148,18 +155,6 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     match: (value) =>
       hasLegacyAccountStreamingAliases(value, threadMentionPolicyMigration.hasLegacy),
   },
-  {
-    path: ["channels", "slack"],
-    message:
-      'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: channelAllowMigration.hasLegacy,
-  },
-  {
-    path: ["channels", "slack", "accounts"],
-    message:
-      'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, channelAllowMigration.hasLegacy),
-  },
 ];
 
 function normalizeSlackEntry(params: {
@@ -173,10 +168,9 @@ function normalizeSlackEntry(params: {
     entry: retiredInteractiveReplies.entry,
   });
   const thread = threadMentionPolicyMigration.normalize({ ...params, entry: dm.entry });
-  const channels = channelAllowMigration.normalize({ ...params, entry: thread.entry });
   return {
-    entry: channels.entry,
-    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed || channels.changed,
+    entry: thread.entry,
+    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed,
   };
 }
 
@@ -186,7 +180,20 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
-  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const retired = stripRetiredChannelKeys({
+    cfg,
+    channelId: "slack",
+    keys: new Set(["enterpriseOrgInstall"]),
+    scope: "root-and-accounts",
+    onRemove: ({ key, pathPrefix }) =>
+      changes.push(
+        `Removed retired ${pathPrefix}.${key}; Slack detects org-wide installations automatically.`,
+      ),
+  });
+  const aliases = streamingAliasMigration.normalizeChannelConfig({
+    cfg: retired.config,
+    changes,
+  });
   return normalizeChannelConfigEntries({
     cfg: aliases.config,
     channelId: "slack",

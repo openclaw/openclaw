@@ -1,99 +1,48 @@
-// Covers resolving the active agent id from session keys and explicit config.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import { setRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
+import { AgentSelectionRequiredError } from "./agent-scope-config.js";
+import { resolveSessionAgentIdStrict as resolve, resolveSessionAgentIds } from "./agent-scope.js";
 
-describe("resolveSessionAgentIds", () => {
-  const cfg = {
-    agents: {
-      list: [{ id: "main" }, { id: "beta", default: true }],
-    },
-  } as OpenClawConfig;
+const config: OpenClawConfig = { agents: { entries: { main: {}, beta: {} } } };
 
-  it("falls back to the configured default when sessionKey is missing", () => {
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      config: cfg,
-    });
-    expect(defaultAgentId).toBe("beta");
-    expect(sessionAgentId).toBe("beta");
+describe("session agent ownership", () => {
+  it.each([
+    { config: {}, expected: "main" },
+    { config: { agents: { entries: { beta: {} } } }, expected: "beta" },
+  ])("preserves ownerless fallback for %j", ({ config: fallbackConfig, expected }) => {
+    expect(resolve({ config: fallbackConfig })).toBe(expected);
   });
 
-  it("falls back to the configured default when sessionKey is non-agent", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "quietchat:slash:123",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
+  it("does not use retained migration metadata to select a runtime owner", () => {
+    const migrated: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+    };
+    setRetainedLegacyDefaultAgentId(migrated, "beta");
+    expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
+    setRetainedLegacyDefaultAgentId(migrated, "retired");
+    expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
   });
 
-  it("falls back to the configured default for global sessions", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "global",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
+  it("selects an explicit owner before the prepared fallback", () => {
+    expect(
+      resolve({
+        config,
+        sessionKey: "feishu:direct:ou_user1",
+        agentId: "beta",
+        fallbackAgentId: "main",
+      }),
+    ).toBe("beta");
   });
 
-  it("keeps the agent id for provider-qualified agent sessions", () => {
-    // Channel-qualified agent session keys still carry the owning agent in the
-    // second segment.
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "agent:beta:quietchat:channel:c1",
-      config: cfg,
+  it("keeps the selected owner for paired callers despite retained migration metadata", () => {
+    const paired: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+    };
+    setRetainedLegacyDefaultAgentId(paired, "main");
+    expect(resolveSessionAgentIds({ config: paired, agentId: "beta" })).toEqual({
+      defaultAgentId: "beta",
+      sessionAgentId: "beta",
     });
-    expect(sessionAgentId).toBe("beta");
-  });
-
-  it("uses the agent id from agent session keys", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "agent:main:main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("main");
-  });
-
-  it("uses explicit agentId when sessionKey is missing", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      agentId: "main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("main");
-  });
-
-  it("prefers explicit agentId over non-agent session keys", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "quietchat:slash:123",
-      agentId: "main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("main");
-  });
-
-  it("uses fallbackAgentId for unscoped channel session keys", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "feishu:direct:ou_user1",
-      fallbackAgentId: "main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("main");
-  });
-
-  it("prefers session-key agent over fallbackAgentId", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "agent:beta:feishu:direct:ou_user1",
-      fallbackAgentId: "main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
-  });
-
-  it("prefers explicit agentId over fallbackAgentId", () => {
-    const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "feishu:direct:ou_user1",
-      agentId: "beta",
-      fallbackAgentId: "main",
-      config: cfg,
-    });
-    expect(sessionAgentId).toBe("beta");
   });
 });

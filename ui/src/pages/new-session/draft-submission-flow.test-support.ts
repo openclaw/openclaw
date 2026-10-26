@@ -1,0 +1,253 @@
+import { createRouter } from "@openclaw/uirouter";
+import { expect, onTestFinished, vi } from "vitest";
+import { createChangeListeners } from "../../../../src/shared/listeners.ts";
+import type { RouteId } from "../../app-routes.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
+import { DraftGatewayState } from "./draft-gateway-state.ts";
+import { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionCallbacks } from "./draft-submission-contract.ts";
+import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import type { NewSessionRouteData } from "./location.ts";
+
+type FixtureOptions = {
+  onChange?: () => void;
+  updateComplete?: () => Promise<unknown>;
+  gateway?: ApplicationContext["gateway"];
+  takePreparedTitle?: () => string | undefined;
+  retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
+  phase?: "connected" | "connecting";
+  agents?: unknown[];
+  methods?: string[];
+  scopes?: string[];
+  selfUser?: { id: string };
+  data?: NewSessionRouteData;
+  request?: (method: string, params?: unknown) => Promise<unknown>;
+  modelCatalog?: (params?: unknown) => Promise<unknown>;
+  placementPolicy?: () => Promise<unknown>;
+};
+
+export const backgroundCreateOptions = {
+  reconciliation: "background",
+  signal: expect.any(AbortSignal),
+};
+
+export async function readyChatRoute() {
+  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+}
+
+export function resetSubmissionMocks() {
+  document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  localStorage.clear();
+}
+
+export function createDraftFixture(options: FixtureOptions = {}) {
+  const request = vi.fn((method: string, params?: unknown) => {
+    if (method === "models.list") {
+      return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
+    if (method === "agents.list" && options.placementPolicy) {
+      return options.placementPolicy();
+    }
+    if (options.request) {
+      return options.request(method, params);
+    }
+    return Promise.resolve({});
+  });
+  const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
+  const phase = options.phase ?? "connected";
+  const router = createRouter<RouteId, ApplicationContext>({
+    routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+  });
+  const lifetime = new AbortController();
+  onTestFinished(() => lifetime.abort());
+  const roster = {
+    defaultId: "main",
+    agents: options.agents ?? [
+      {
+        id: "main",
+        workspace: "/workspace",
+        workspaceGit: false,
+        model: { primary: "openai/gpt-5.6-luna" },
+      },
+    ],
+  };
+  // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agentListeners = createChangeListeners();
+  const agents = {
+    subscribe: agentListeners.subscribe,
+    state: { agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} } },
+    refreshList: async () => {
+      // A failed refresh publishes no policy, like the roster owner.
+      const policy = await options.placementPolicy?.().catch(() => undefined);
+      if (policy) {
+        agents.state.agentsList = Object.assign({}, roster, policy);
+        agentListeners.publish();
+      }
+      return agents.state.agentsList;
+    },
+  };
+  const context = {
+    lifecycleAbortSignal: lifetime.signal,
+    router,
+    gateway: options.gateway ?? {
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+      connection: { gatewayUrl: "ws://gateway.example" },
+      snapshot: {
+        phase,
+        client: phase === "connected" ? client : null,
+        sessionKey: "",
+        ...(options.selfUser ? { selfUser: options.selfUser } : {}),
+        hello:
+          phase === "connected"
+            ? {
+                server: { bootId: "gateway-boot-a" },
+                auth: {
+                  recoveryScope: client.recoveryScope,
+                  role: "operator",
+                  scopes: options.scopes ?? ["operator.read", "operator.write"],
+                },
+                features: { methods: options.methods ?? ["sessions.create"] },
+              }
+            : null,
+      },
+      setSessionKey: vi.fn(),
+    },
+    agents,
+    sessions: {
+      subscribe: () => () => undefined,
+      state: { result: null },
+      createResult: vi.fn(),
+      describe: ((params, describeOptions) => {
+        if (!describeOptions?.client) {
+          throw new Error("placement describe requires its captured client");
+        }
+        return describeOptions.client.request("sessions.describe", params);
+      }) satisfies ApplicationContext["sessions"]["describe"],
+    },
+    placementStartup: { get: vi.fn(() => undefined), hasPendingTurn: vi.fn(() => false) },
+    chatSubmissions: createChatSubmissions(),
+    agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
+    config: {
+      subscribe: () => () => undefined,
+      current: { cliAgentsEnabled: true, terminalEnabled: true },
+    },
+    basePath: "",
+    replace: vi.fn(),
+    navigateAndWait: vi.fn(async () => undefined),
+    preload: vi.fn(async () => undefined),
+  } as unknown as ApplicationContext;
+  Object.assign(context, { agentIdentity: createAgentIdentityCapability(context.gateway) });
+  // The navigation spy represents an admitted Chat route; route ownership is
+  // exercised with the real router in the transition tests.
+  void router.navigate("chat", context);
+  vi.mocked(context.gateway.setSessionKey).mockImplementation((sessionKey) => {
+    context.gateway.snapshot.sessionKey = sessionKey;
+  });
+  const gateway = new DraftGatewayState(
+    () => ({
+      context,
+      data: options.data,
+      isConnected: phase === "connected",
+      isAdmin: place?.isAdmin() ?? false,
+      canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
+      visibility: flow?.visibility ?? "normal",
+      cloudProfileId: place?.cloudProfileId ?? "",
+      pendingPlacement: flow?.pendingPlacement ?? {
+        sessionKey: "",
+        gatewayUrl: "",
+        recoveryScope: "",
+      },
+      agentsHydrated: place?.agentsHydrated ?? false,
+      runtimeId: place?.devicePlacementRuntime()?.id ?? "",
+    }),
+    {
+      readAgents: () => context.agents,
+      changed: vi.fn(options.onChange),
+      updateComplete: options.updateComplete ?? (() => Promise.resolve()),
+      onInvalidate: vi.fn(),
+      onVisibilityRetired: () => flow?.setVisibility("normal"),
+      onCloudProfileCleared: () => place?.clearCloudProfile(),
+      onCloudState: (error) => flow?.setError(error),
+      onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),
+      onRecoveryReady: (gatewayUrl, recoveryScope) =>
+        flow?.restorePendingPlacementRecovery(gatewayUrl, recoveryScope),
+      onAdoptAgentDefaults: () =>
+        place?.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true }),
+    },
+  );
+  const browser = new DraftPlaceBrowser(
+    gateway,
+    () => ({ context, isAdmin: place?.isAdmin() ?? false }),
+    {
+      changed: vi.fn(options.onChange),
+      updateComplete: () => Promise.resolve(),
+      onProjectMissing: () => place?.clearProjectSelection(),
+      onSelectProject: (projectId) => place?.selectProjectId(projectId),
+      onApprovedListing: (listing) => place?.recordGatewayApprovedListing(listing),
+      activeElement: () => null,
+    },
+  );
+  const place = new DraftPlaceState(
+    gateway,
+    browser,
+    () => ({
+      context,
+      data: options.data,
+      submitting: flow?.submitting ?? false,
+      pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
+    }),
+    {
+      changed: vi.fn(options.onChange),
+      onError: (error) => flow?.setError(error),
+      onClearError: (error) => flow?.clearError(error),
+    },
+  );
+  const changed = vi.fn(options.onChange);
+  const flow = new DraftSubmissionFlow(
+    gateway,
+    place,
+    () => ({ context, data: options.data, isConnected: phase === "connected" }),
+    {
+      changed,
+      closeTransientUi: vi.fn(),
+      takePreparedTitle: options.takePreparedTitle,
+      retainForHandoff: options.retainForHandoff,
+    },
+  );
+  gateway.synchronize(context.gateway);
+  place.agentsHydrated = true;
+  place.adoptAgentDefaults();
+  return { capabilities: flow.capabilities, context, flow, gateway, place, request, changed };
+}
+
+export function registerTextPayload(id: string) {
+  return registerChatAttachmentPayload({
+    attachment: { id, mimeType: "text/plain", fileName: `${id}.txt` },
+    dataUrl: `data:text/plain;base64,${btoa(id)}`,
+    file: new File([id], `${id}.txt`, { type: "text/plain" }),
+  });
+}
+
+export function stubObjectUrls(...urls: string[]) {
+  const createObjectURL = vi.fn();
+  urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  return revokeObjectURL;
+}

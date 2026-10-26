@@ -1,1096 +1,732 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { readSessionMessageIdentity as readBrowserSessionMessageIdentity } from "./browser.js";
 import { readSessionMessageIdentity as readNodeSessionMessageIdentity } from "./index.js";
 import {
-  createSessionProjection,
-  hasSessionProjectionAcceptedFinal,
-  isLocallyOptimisticSessionMessage,
+  hasSessionProjectionAcceptedFinal as acceptedFinal,
+  isLocallyOptimisticSessionMessage as isOptimistic,
   normalizeSessionProjectionRunId,
-  projectLiveSessionMessage,
-  readSessionMessageIdentity,
+  projectLiveSessionMessage as project,
+  readSessionMessageIdentity as identity,
   readSessionMessageSequence,
-  reconcileSessionProjectionSnapshot,
-  reduceSessionProjection,
-  reduceSessionProjectionRunEvent,
-  type SessionProjectionScope,
+  reconcileSessionProjectionSnapshot as reconcile,
+  reduceSessionProjection as reduce,
+  type SessionProjectionState,
 } from "./session-projection.js";
-
-const primaryScope: SessionProjectionScope = {
-  sessionKey: "agent:main:shared",
-  sessionId: "session-1",
-  agentId: "main",
-  lifecycleRevision: 1,
-  activeLeafEntryId: "leaf-1",
-};
-
-function createMessage(
-  role: "user" | "assistant",
-  text: string,
-  metadata?: Record<string, unknown>,
-) {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    ...(metadata ? { __openclaw: metadata } : {}),
+import {
+  assistant as reply,
+  primaryScope,
+  projection,
+  terminal,
+  user,
+  savedUser,
+  savedReply,
+  prompt as keyedUser,
+  persist,
+  pending as sendPending,
+  acknowledge,
+  delta,
+} from "./session-projection.test-support.js";
+const expectRows = (state: SessionProjectionState, ...messages: unknown[]) =>
+  expect(state.messages).toEqual(messages);
+const segment = <T extends object>(message: T, runId?: string) => ({
+  ...message,
+  openclawStreamFallback: { itemId: "item-1", runId, source: "segment" },
+});
+it("reads the same canonical contract from both supported package barrels", () => {
+  const message = savedUser("hello", "persisted", 7);
+  expect(readBrowserSessionMessageIdentity(message)).toEqual(identity(message));
+  expect(readNodeSessionMessageIdentity(message)).toEqual(identity(message));
+});
+it("normalizes an empty user-suffixed run ID", () => {
+  expect(normalizeSessionProjectionRunId(":user")).toBe(null);
+});
+it("keeps assistant dedupe identity separate from producer-owned run identity", () => {
+  const assistant = (idempotencyKey: string, runId?: string) => ({
+    ...reply("commentary", { mirrorOrigin: "codex-app-server", runId }),
+    idempotencyKey,
+  });
+  const key = "codex-app-server:thread-1:turn-1:commentary:item-1";
+  expect(identity(assistant(key, "run-1"))).toMatchObject({
+    idempotencyKey: key,
+    runId: "run-1",
+  });
+  expect(identity(assistant("codex-app-server:thread-1:history:turn-1:assistant"))).toHaveProperty(
+    "runId",
+    null,
+  );
+});
+it("preserves the durable sequence of role-less history and status markers", () => {
+  expect(readSessionMessageSequence({ __openclaw: { seq: 7 } })).toBe(7);
+});
+it("keeps every early same-run reply behind its delayed durable prompt", () => {
+  const first = reply("first current reply");
+  const second = reply("second current reply");
+  const later = reply("later current reply");
+  const unrelated = reply("unrelated live reply");
+  const previous = savedReply("previous durable reply", "previous", 10);
+  const following = savedUser("following durable prompt", "following", 20);
+  const prompt = savedUser("delayed current prompt", "current-prompt", 11, {
+    idempotencyKey: "current-run:user",
+  });
+  let state = project(projection(), unrelated, { runId: "unrelated-run" });
+  state = project(state, first, { runId: "current-run" });
+  state = project(state, second, { runId: "current-run" });
+  state = project(state, previous);
+  state = project(state, following);
+  state = project(state, later, { runId: "current-run" });
+  state = project(state, prompt);
+  expect(state.messages).toEqual([unrelated, previous, prompt, first, second, following, later]);
+  expect(reconcile(state, [], primaryScope).messages).toEqual(state.messages);
+});
+it("does not promote a provisional final into same-run Codex commentary", () => {
+  const commentary = reply("commentary", {
+    id: "commentary-1",
+    mirrorOrigin: "codex-app-server",
+    runId: "run-1",
+  });
+  const final = reply("final answer");
+  let state = project(projection(), commentary, { runId: "run-1" });
+  state = project(state, final, { runId: "run-1" });
+  expect(state.messages).toEqual([commentary, final]);
+});
+it("does not adopt commentary with an unknown run", () => {
+  const local = segment(
+    reply("Repeated progress.", { id: undefined, seq: undefined, importedFrom: undefined }),
+  );
+  const durable = segment(
+    savedReply("Repeated progress.", "persisted", 3, {
+      runId: "run-1",
+      mirrorOrigin: "codex-app-server",
+    }),
+  );
+  const final = savedReply("Finished.", "final", 4, { runId: "run-1" });
+  let state = projection([local, final]);
+  state = project(state, durable);
+  expectRows(state, local, durable, final);
+  state = reduce(state, { type: "transportGap" });
+  state = reduce(state, { type: "reconnected" });
+  state = project(state, durable);
+  expectRows(state, local, durable, final);
+});
+it("keeps authoritative commentary when its provisional item replays with different text", () => {
+  const durable = segment(
+    savedReply("Authoritative progress.", "persisted", 3, { runId: "run-1" }),
+  );
+  const local = segment(reply("Partial progress."), "run-1");
+  const state = project(projection(), durable);
+  expectRows(project(state, local), durable);
+  expectRows(reconcile(state, [durable], primaryScope), durable);
+});
+it("keeps a post-boundary tail until its own durable row arrives live", () => {
+  const prefix = savedReply("saved prefix", "prefix", 2, { runId: "active-run" });
+  const steer = savedUser("continue", "steer", 3);
+  const tail = reply("unseen tail");
+  const savedTail = savedReply("unseen tail", "tail", 4, { runId: "active-run" });
+  let state = project(projection([prefix, steer]), tail, {
+    runId: "active-run",
+    afterSequence: 3,
+  });
+  state = reconcile(state, [prefix, steer], primaryScope);
+  expectRows(state, prefix, steer, tail);
+  state = project(state, savedTail);
+  expectRows(state, prefix, steer, savedTail);
+});
+it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
+  const synthetic = reply("delta-only final", { idempotencyKey: "final-run" });
+  const first = savedReply("first final", "assistant-first", 7, { idempotencyKey: "final-run" });
+  const second = savedReply("second final", "assistant-second", 8, {
+    idempotencyKey: "final-run",
+  });
+  const state = project(projection(), synthetic);
+  expectRows(reconcile(state, [first, second], primaryScope), first, second, synthetic);
+  expectRows(project(projection([first, second]), synthetic), first, second, synthetic);
+  const ambiguous = reconcile(state, [first, second], primaryScope);
+  expectRows(project(ambiguous, structuredClone(first)), first, second, synthetic);
+});
+it("promotes a native sequence-only live row to its durable snapshot identity", () => {
+  const live = user("live projection", { seq: 7 });
+  const persisted = savedUser("persisted projection", "canonical-user-7", 7);
+  const state = project(projection(), live);
+  expectRows(reconcile(state, [persisted], primaryScope), persisted);
+});
+it("rejects live events from another agent, session, reset epoch, or branch", () => {
+  const prompt = savedUser("isolated", "isolated", 1);
+  const state = projection();
+  for (const scope of [
+    { sessionKey: "agent:other:shared" },
+    { sessionId: "other-session" },
+    { agentId: "other" },
+    { lifecycleRevision: 2 },
+    { activeLeafEntryId: "other-leaf" },
+  ]) {
+    expect(project(state, prompt, undefined, scope)).toBe(state);
+  }
+});
+it("keeps imported ID collisions separate without valid placement", () => {
+  const native = savedUser("native", "provider-local", 1);
+  const imported = savedUser("imported", "provider-local", 2, {
+    importedFrom: "claude-cli",
+    cliSessionId: "cli-session",
+    externalId: "provider-local",
+    transcriptPosition: { source: "foreign", rawSeq: -1 },
+  });
+  let state = project(projection(), native);
+  state = project(state, imported);
+  const otherSession = {
+    ...imported,
+    __openclaw: { ...imported["__openclaw"], cliSessionId: "other" },
   };
-}
-
-describe("readSessionMessageIdentity", () => {
-  it("reads the same canonical contract from both supported package barrels", () => {
-    const message = createMessage("user", "hello", { id: "persisted", seq: 7 });
-    expect(readBrowserSessionMessageIdentity(message)).toEqual(readSessionMessageIdentity(message));
-    expect(readNodeSessionMessageIdentity(message)).toEqual(readSessionMessageIdentity(message));
-  });
-
-  it("prefers persisted identity, sequence, and send key to conflicting Gateway facts", () => {
-    const message = createMessage("user", "hello", {
-      id: "persisted-message",
-      seq: 7,
-      idempotencyKey: "persisted-run:user",
-    });
-    expect(
-      readSessionMessageIdentity(message, {
-        messageId: "conflicting-envelope",
-        messageSeq: 8,
-        clientRunId: "conflicting-run",
-      }),
-    ).toEqual({
-      role: "user",
-      id: "persisted-message",
-      sequence: 7,
-      idempotencyKey: "persisted-run:user",
-      runId: "persisted-run",
-      isImported: false,
-      externalSource: null,
-    });
-  });
-
-  it("adopts metadata-free authoritative Gateway envelopes", () => {
-    expect(
-      readSessionMessageIdentity(createMessage("user", "hello"), {
-        messageId: "envelope-message",
-        messageSeq: 9,
-        clientRunId: "envelope-run",
-      }),
-    ).toMatchObject({
-      id: "envelope-message",
-      sequence: 9,
-      idempotencyKey: "envelope-run",
-      runId: "envelope-run",
-    });
-  });
-
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
-    "does not trust unsafe transcript sequence %s",
-    (sequence) => {
-      expect(
-        readSessionMessageIdentity(createMessage("user", "hello", { seq: sequence })),
-      ).toHaveProperty("sequence", null);
-    },
-  );
-
-  it.each([null, undefined, [], "user", 1, {}, { role: "  " }])(
-    "rejects non-message identity %j",
-    (message) => {
-      expect(readSessionMessageIdentity(message)).toBeNull();
-    },
-  );
-
-  it.each([
-    ["run:user", "run"],
-    ["run:user:user", "run:user"],
-    ["  run:user  ", "run"],
-    ["run", "run"],
-    [":user", null],
-    ["  ", null],
-    [undefined, null],
-  ])("normalizes exactly one user suffix from %j", (input, expected) => {
-    expect(normalizeSessionProjectionRunId(input)).toBe(expected);
-  });
-
-  it("requires every imported source component before claiming provider identity", () => {
-    const identity = readSessionMessageIdentity(
-      createMessage("user", "imported", {
-        id: "provider-local",
-        importedFrom: "claude-cli",
-        cliSessionId: "cli-session",
-        externalId: "provider-local",
-      }),
-    );
-    expect(identity).toMatchObject({
-      isImported: true,
-      externalSource: JSON.stringify(["claude-cli", "cli-session", "provider-local"]),
-    });
-  });
-
-  it.each([
-    { importedFrom: "claude-cli", cliSessionId: "cli-session" },
-    { importedFrom: "claude-cli", externalId: "provider-local" },
-    { cliSessionId: "cli-session", externalId: "provider-local" },
-  ])("does not invent a complete source for partial imported metadata %j", (metadata) => {
-    expect(readSessionMessageIdentity(createMessage("user", "imported", metadata))).toMatchObject({
-      isImported: true,
-      externalSource: null,
-    });
-  });
+  const partial = user("partial", { importedFrom: "claude-cli", seq: 3 });
+  state = project(project(project(state, otherSession), partial), imported);
+  expectRows(state, native, imported, otherSession, partial);
 });
-
-describe("readSessionMessageSequence", () => {
-  it("preserves the durable sequence of role-less history and status markers", () => {
-    expect(readSessionMessageSequence({ __openclaw: { seq: 7 } })).toBe(7);
+it("adopts snapshot projections of partial imports by canonical session sequence", () => {
+  const live = savedUser("live imported projection", "provider-local", 7, {
+    importedFrom: "claude-cli",
   });
-
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects unsafe role-less marker sequence %s",
-    (sequence) => {
-      expect(readSessionMessageSequence({ __openclaw: { seq: sequence } })).toBeNull();
-    },
-  );
+  const snapshot = savedUser("snapshot imported projection", "provider-local", 7, {
+    importedFrom: "claude-cli",
+  });
+  const state = project(projection(), live);
+  expectRows(reconcile(state, [snapshot], primaryScope), snapshot);
 });
-
-describe("session transcript projection", () => {
-  it("preserves live authoritative prompts missing from stale history in sequence order", () => {
-    const prompt = createMessage("user", "shared prompt", { id: "user-1", seq: 1 });
-    const reply = createMessage("assistant", "shared reply", { id: "assistant-2", seq: 2 });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), prompt);
-
-    expect(reconcileSessionProjectionSnapshot(state, [reply], primaryScope).messages).toEqual([
-      prompt,
-      reply,
-    ]);
+it("does not merge a partial import into a complete source tuple at the same sequence", () => {
+  const partial = user("partial source", { importedFrom: "claude-cli", seq: 7 });
+  const complete = user("complete source", {
+    importedFrom: "claude-cli",
+    cliSessionId: "cli-session",
+    externalId: "provider-local",
+    seq: 7,
   });
-
-  it("adopts the snapshot projection of an already observed live message exactly once", () => {
-    const live = createMessage("user", "live projection", { id: "user-1", seq: 1 });
-    const persisted = createMessage("user", "persisted projection", { id: "user-1", seq: 1 });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), live);
-
-    expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual([
-      persisted,
-    ]);
-  });
-
-  it("promotes a synthetic final exactly once when canonical run history catches up", () => {
-    const synthetic = createMessage("assistant", "delta-only final", {
-      idempotencyKey: "final-run",
+  let state = project(projection(), partial);
+  state = project(state, complete);
+  expectRows(state, partial, complete);
+});
+it("explicitly promotes only the admitted sequenced handoff", () => {
+  const turn = (seq: number, id?: string) =>
+    user("continue", {
+      idempotencyKey: "initial-run:user",
+      seq,
+      ...(id ? { id } : {}),
     });
-    const persisted = createMessage("assistant", "canonical final", {
-      id: "assistant-final",
-      seq: 7,
-      idempotencyKey: "final-run",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), synthetic);
-    state = reconcileSessionProjectionSnapshot(state, [], primaryScope);
-    expect(state.messages).toEqual([synthetic]);
-    state = reconcileSessionProjectionSnapshot(state, [persisted], primaryScope);
-    expect(state.messages).toEqual([persisted]);
-    expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual([
-      persisted,
-    ]);
-  });
-
-  it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
-    const synthetic = createMessage("assistant", "delta-only final", {
-      idempotencyKey: "final-run",
-    });
-    const first = createMessage("assistant", "first final", {
-      id: "assistant-first",
-      seq: 7,
-      idempotencyKey: "final-run",
-    });
-    const second = createMessage("assistant", "second final", {
-      id: "assistant-second",
-      seq: 8,
-      idempotencyKey: "final-run",
-    });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), synthetic);
-
-    expect(
-      reconcileSessionProjectionSnapshot(state, [first, second], primaryScope).messages,
-    ).toEqual([first, second, synthetic]);
-  });
-
-  it("promotes a native sequence-only live row to its durable snapshot identity", () => {
-    const live = createMessage("user", "live projection", { seq: 7 });
-    const persisted = createMessage("user", "persisted projection", {
-      id: "canonical-user-7",
-      seq: 7,
-    });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), live);
-
-    expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual([
-      persisted,
-    ]);
-  });
-
-  it("does not promote conflicting durable identities that share a snapshot sequence", () => {
-    const live = createMessage("user", "different live turn", {
-      id: "different-canonical-user",
-      seq: 7,
-    });
-    const persisted = createMessage("user", "persisted turn", {
-      id: "snapshot-canonical-user",
-      seq: 7,
-    });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), live);
-
-    expect(reconcileSessionProjectionSnapshot(state, [persisted], primaryScope).messages).toEqual([
-      persisted,
-      live,
-    ]);
-  });
-
-  it("never promotes a sequence-only live row from a second live Gateway event", () => {
-    const first = createMessage("user", "first live turn", { seq: 7 });
-    const second = createMessage("user", "different live turn", {
-      id: "canonical-user-7",
-      seq: 7,
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), first);
-    state = projectLiveSessionMessage(state, second);
-
-    expect(state.messages).toEqual([first, second]);
-  });
-
-  it("does not promote an imported live row into a native snapshot identity", () => {
-    const imported = createMessage("user", "imported turn", {
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const native = createMessage("user", "native turn", {
-      id: "canonical-user-7",
-      seq: 7,
-    });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), imported);
-
-    expect(reconcileSessionProjectionSnapshot(state, [native], primaryScope).messages).toEqual([
-      native,
-      imported,
-    ]);
-  });
-
-  it("never resurrects an ordinary removed historical message", () => {
-    const removed = createMessage("user", "removed", { id: "removed", seq: 1 });
-    const retained = createMessage("assistant", "retained", { id: "retained", seq: 2 });
-    const state = createSessionProjection(primaryScope, [removed, retained]);
-
-    expect(reconcileSessionProjectionSnapshot(state, [retained], primaryScope).messages).toEqual([
-      retained,
-    ]);
-  });
-
-  it("rejects live events from another agent, session, reset epoch, or branch", () => {
-    const prompt = createMessage("user", "isolated", { id: "isolated", seq: 1 });
-    const state = createSessionProjection(primaryScope);
-    for (const scope of [
-      { sessionKey: "agent:other:shared" },
-      { sessionId: "other-session" },
-      { agentId: "other" },
-      { lifecycleRevision: 2 },
-      { activeLeafEntryId: "other-leaf" },
-    ]) {
-      expect(projectLiveSessionMessage(state, prompt, undefined, scope)).toBe(state);
-    }
-  });
-
-  it("preserves distinct same-text prompts belonging to different runs", () => {
-    const first = createMessage("user", "continue", {
-      id: "first-user",
-      seq: 1,
-      idempotencyKey: "first-run:user",
-    });
-    const second = createMessage("user", "continue", {
-      id: "second-user",
-      seq: 2,
-      idempotencyKey: "second-run:user",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), first);
-    state = projectLiveSessionMessage(state, second);
-
-    expect(state.messages).toEqual([first, second]);
-  });
-
-  it("does not mistake a shared run for the identity of distinct persisted messages", () => {
-    const first = createMessage("user", "first", { idempotencyKey: "shared-run:user" });
-    const second = createMessage("user", "second", { idempotencyKey: "shared-run:user" });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), first);
-    state = projectLiveSessionMessage(state, second);
-
-    expect(state.messages).toEqual([first, second]);
-  });
-
-  it("does not merge native messages with colliding imported provider-local IDs", () => {
-    const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
-    const imported = createMessage("user", "imported", {
-      id: "provider-local",
-      seq: 2,
+  const peer = turn(1);
+  const handoff = turn(2);
+  const answer = reply("already working", { seq: 3 });
+  let state = projection([peer, handoff, answer]);
+  state = sendPending(state, "initial-run", handoff);
+  expectRows(reduce(state, { type: "sendFailed", runId: "initial-run" }), peer, answer);
+  const wrongSequence = turn(4, "wrong-sequence-user");
+  state = persist(state, wrongSequence);
+  expectRows(state, peer, handoff, answer, wrongSequence);
+  expect(state.entries[1]).toMatchObject({ pending: true, pendingRunId: "initial-run" });
+  const authoritative = turn(2, "initial-user");
+  state = persist(state, authoritative);
+  expectRows(state, peer, authoritative, answer, wrongSequence);
+  expect(reduce(state, { type: "sendFailed", runId: "initial-run" })).toBe(state);
+  for (const protectedMessage of [
+    savedUser("persisted", "persisted-user", 4, { idempotencyKey: "protected-run:user" }),
+    user("imported", {
       importedFrom: "claude-cli",
       cliSessionId: "cli-session",
-      externalId: "provider-local",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
-    state = projectLiveSessionMessage(state, imported);
-
-    expect(state.messages).toEqual([native, imported]);
+      externalId: "external-user",
+      idempotencyKey: "protected-run:user",
+      seq: 4,
+    }),
+  ]) {
+    const protectedState = projection([protectedMessage]);
+    expect(sendPending(protectedState, "protected-run", protectedMessage)).toBe(protectedState);
+  }
+});
+it("reconciles a restored pending send with a completed queued execution", () => {
+  const pending = keyedUser("Update the menu", "queued-send:user");
+  const persisted = savedUser("Update the menu", "persisted-prompt", 1, {
+    idempotencyKey: "queued-send:user",
+    runId: "queued-execution",
   });
-
-  it("does not merge incomplete imported source tuples", () => {
-    const first = createMessage("user", "same words", {
-      id: "source-local",
-      importedFrom: "cli",
-      externalId: "source-local",
-    });
-    const second = createMessage("user", "same words", {
-      id: "source-local",
-      importedFrom: "cli",
-      externalId: "source-local",
-    });
-    expect(
-      projectLiveSessionMessage(projectLiveSessionMessage(createSessionProjection(), first), second)
-        .messages,
-    ).toEqual([first, second]);
+  const response = savedReply("Menu updated", "persisted-reply", 2, {
+    runId: "queued-execution",
   });
-
-  it("deduplicates incomplete imported live replays by their canonical session sequence", () => {
-    const live = createMessage("user", "imported live", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const replay = createMessage("user", "imported replay", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), live);
-    state = projectLiveSessionMessage(state, replay);
-
-    expect(state.messages).toEqual([replay]);
+  const state = projection([persisted, response, pending]);
+  const reconciled = reconcile(state, [persisted, response], primaryScope);
+  expectRows(reconciled, persisted, response);
+  expectRows(sendPending(reconciled, "queued-send", pending), persisted, response);
+});
+it("rejects a delayed old-epoch snapshot after the selected session resets", () => {
+  const oldMessage = savedUser("before reset", "old", 1);
+  let state = project(projection(), oldMessage);
+  const currentScope = { ...primaryScope, lifecycleRevision: 2, activeLeafEntryId: "reset-leaf" };
+  state = reduce(state, { type: "sessionReset", ...currentScope });
+  const resetState = state;
+  expect(project(state, oldMessage, undefined, primaryScope)).toBe(resetState);
+  state = reduce(state, {
+    type: "snapshotLoaded",
+    scope: primaryScope,
+    messages: [oldMessage],
   });
-
-  it("adopts snapshot projections of partial imports by canonical session sequence", () => {
-    const live = createMessage("user", "live imported projection", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const snapshot = createMessage("user", "snapshot imported projection", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), live);
-
-    expect(reconcileSessionProjectionSnapshot(state, [snapshot], primaryScope).messages).toEqual([
-      snapshot,
-    ]);
+  expect(state).toBe(resetState);
+  expectRows(state);
+  const current = savedUser("after reset", "current", 1);
+  state = project(state, current, undefined, currentScope);
+  expect(state.scope).toEqual(currentScope);
+  expectRows(state, current);
+});
+it("classifies only metadata-free or send-key-only local turns as optimistic", () => {
+  const pending = keyedUser("local", "local-run:user");
+  const assistant = reply("streaming locally");
+  const sequenced = user("durable sequence", { seq: 2 });
+  const persisted = savedUser("durable", "persisted-user", 3, {
+    idempotencyKey: "local-run:user",
   });
-
-  it("keeps partial imported sources with distinct canonical sequences separate", () => {
-    const first = createMessage("user", "same imported words", {
-      id: "provider-local",
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const second = createMessage("user", "same imported words", {
-      id: "provider-local",
-      importedFrom: "other-cli",
-      seq: 8,
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), first);
-    state = projectLiveSessionMessage(state, second);
-
-    expect(state.messages).toEqual([first, second]);
-  });
-
-  it("does not merge a partial import into a complete source tuple at the same sequence", () => {
-    const partial = createMessage("user", "partial source", {
-      importedFrom: "claude-cli",
-      seq: 7,
-    });
-    const complete = createMessage("user", "complete source", {
-      importedFrom: "claude-cli",
-      cliSessionId: "cli-session",
-      externalId: "provider-local",
-      seq: 7,
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), partial);
-    state = projectLiveSessionMessage(state, complete);
-
-    expect(state.messages).toEqual([partial, complete]);
-  });
-
-  it("adopts a persisted pending run once and protects it from stale send failures", () => {
-    const firstPending = createMessage("user", "continue", { idempotencyKey: "first-run:user" });
-    const secondPending = createMessage("user", "continue", { idempotencyKey: "second-run:user" });
-    const firstPersisted = createMessage("user", "continue", {
-      id: "first-user",
-      seq: 1,
-      idempotencyKey: "first-run:user",
-    });
-    let state = createSessionProjection(primaryScope);
-    state = reduceSessionProjection(state, {
-      type: "sendPending",
-      runId: "first-run",
-      message: firstPending,
-    });
-    state = reduceSessionProjection(state, {
-      type: "sendPending",
-      runId: "second-run",
-      message: secondPending,
-    });
-    const persisted = { type: "messagePersisted", message: firstPersisted } as const;
-    state = reduceSessionProjection(state, persisted);
-
-    expect(state.messages).toEqual([firstPersisted, secondPending]);
-    expect(state.entries[1]).toMatchObject({ pending: true, pendingRunId: "second-run" });
-    expect(reduceSessionProjection(state, { type: "sendFailed", runId: "first-run" })).toBe(state);
-    expect(reduceSessionProjection(state, persisted)).toBe(state);
-  });
-
-  it("reconciles an attachment-only optimistic turn solely by its actual send key", () => {
-    const pending = { role: "user", content: "", __openclaw: { idempotencyKey: "image-run:user" } };
-    const persisted = {
-      role: "user",
-      content: "",
-      __openclaw: {
-        id: "image-user",
-        seq: 1,
-        idempotencyKey: "image-run:user",
-        media: [{ path: "/image.png", contentType: "image/png" }],
-      },
-    };
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "sendPending",
-      runId: "image-run",
-      message: pending,
-    });
-    state = projectLiveSessionMessage(state, persisted);
-
-    expect(state.messages).toEqual([persisted]);
-    expect(state.entries[0]).toMatchObject({ live: true, pending: false });
-  });
-
-  it("rejects a delayed old-epoch snapshot after the selected session resets", () => {
-    const oldMessage = createMessage("user", "before reset", { id: "old", seq: 1 });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), oldMessage);
-    state = reduceSessionProjection(state, {
-      type: "sessionReset",
-      lifecycleRevision: 2,
-    });
-    const resetState = state;
-    state = reduceSessionProjection(state, {
-      type: "snapshotLoaded",
-      scope: primaryScope,
-      messages: [oldMessage],
-    });
-
-    expect(state).toBe(resetState);
-    expect(state.scope.lifecycleRevision).toBe(2);
-    expect(state.messages).toEqual([]);
-  });
-
-  it("does not reopen a completed run when a stale stream delta arrives", () => {
-    const completed = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-    });
-
-    expect(
-      reduceSessionProjection(completed, {
-        type: "runDelta",
-        runId: "run-1",
-        message: createMessage("assistant", "late stream"),
-      }),
-    ).toBe(completed);
-  });
-
-  it("upgrades an empty completed final exactly once without reopening the run", () => {
-    const emptyMessage = createMessage("assistant", "");
-    const deliveredMessage = createMessage("assistant", "eventual final");
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: emptyMessage,
-    });
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], emptyMessage)).toBe(false);
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: deliveredMessage,
-    });
-
-    expect(state.runs["run-1"]).toMatchObject({
-      status: "completed",
-      message: deliveredMessage,
-    });
-    const laterFinal = createMessage("assistant", "later distinct final");
-    const laterEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: laterFinal,
-    } as const;
-    const acceptedLaterFinal = reduceSessionProjection(state, laterEvent);
-    expect(acceptedLaterFinal.runs["run-1"]?.message).toBe(deliveredMessage);
-    expect(hasSessionProjectionAcceptedFinal(acceptedLaterFinal.runs["run-1"], laterFinal)).toBe(
-      true,
-    );
-    expect(reduceSessionProjection(acceptedLaterFinal, laterEvent)).toBe(acceptedLaterFinal);
-  });
-
-  it("accepts distinct same-run persisted finals and ignores the later final's replay", () => {
-    const first = createMessage("assistant", "first final", { id: "assistant-a", seq: 4 });
-    const second = createMessage("assistant", "second final", { id: "assistant-b", seq: 5 });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(false);
-
-    const secondEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
-
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], first)).toBe(true);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
-  });
-
-  it.each(["error", "aborted"] as const)(
-    "accepts a displayable final after a message-less %s without replaying it",
-    (initialStatus) => {
-      const delivered = createMessage("assistant", "recovered final", {
-        id: "recovered-assistant",
-        seq: 7,
-      });
-      let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-        type: "runTerminal",
-        runId: "run-1",
-        status: initialStatus,
-        ...(initialStatus === "error"
-          ? { errorKind: "provider_error", errorMessage: "provider diagnostic" }
-          : { stopReason: "aborted" }),
-      });
-      const finalEvent = {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: delivered,
-      } as const;
-      state = reduceSessionProjection(state, finalEvent);
-
-      expect(state.runs["run-1"]).toMatchObject({
-        status: initialStatus,
-        message: delivered,
-      });
-      expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], delivered)).toBe(true);
-      expect(reduceSessionProjection(state, finalEvent)).toBe(state);
-      if (initialStatus === "error") {
-        expect(state.runs["run-1"]?.errorMessage).toBe("provider diagnostic");
-      }
+  expect(isOptimistic(pending)).toBe(true);
+  expect(isOptimistic(assistant)).toBe(true);
+  expect(isOptimistic(sequenced)).toBe(false);
+  expect(isOptimistic(persisted)).toBe(false);
+  expect(isOptimistic({ role: "system", content: "marker" })).toBe(false);
+});
+it("filters hidden snapshot, authoritative live, and pending rows in one canonical pass", () => {
+  const visible = savedUser("visible", "visible", 1);
+  const hiddenSnapshot = savedReply("hidden snapshot", "hidden-snapshot", 2);
+  const hiddenLive = savedUser("hidden live", "hidden-live", 3);
+  const hiddenPending = keyedUser("hidden pending", "hidden-run:user");
+  let state = sendPending(projection(), "hidden-run", hiddenPending);
+  state = project(state, hiddenLive);
+  state = reduce(state, {
+    type: "snapshotLoaded",
+    messages: [visible, hiddenSnapshot],
+    scope: primaryScope,
+    options: {
+      shouldIncludeMessage: (message) =>
+        message !== hiddenSnapshot && message !== hiddenLive && message !== hiddenPending,
     },
-  );
-
-  it("remembers distinct recovered finals after an initial message-less error", () => {
-    const first = createMessage("assistant", "first recovered final", {
-      id: "recovered-a",
-      seq: 7,
-    });
-    const second = createMessage("assistant", "second recovered final", {
-      id: "recovered-b",
-      seq: 8,
-    });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "error",
-      errorKind: "provider_error",
-      errorMessage: "original diagnostic",
-    });
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    const secondEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
-
-    expect(state.runs["run-1"]).toMatchObject({
-      status: "error",
-      message: first,
-      errorMessage: "original diagnostic",
-    });
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
   });
-
-  it("does not replace a displayable error with a conflicting later final", () => {
-    const errorMessage = createMessage("assistant", "displayable failure");
-    const state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "error",
-      errorKind: "provider_error",
-      message: errorMessage,
-    });
-
-    expect(
-      reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: createMessage("assistant", "conflicting final"),
-      }),
-    ).toBe(state);
-    expect(state.runs["run-1"]?.message).toBe(errorMessage);
+  expectRows(state, visible);
+});
+it("rekeys provisional pending turns without adopting a same-text peer", () => {
+  const pending = keyedUser("same prompt", "provisional-run:user");
+  const peer = savedUser("same prompt", "peer-user", 1, {
+    idempotencyKey: "peer-run:user",
+    runId: "provisional-run",
   });
-
-  it("distinguishes and deduplicates metadata-free finals by canonical visible content", () => {
-    const first = createMessage("assistant", "first metadata-free final");
-    const second = createMessage("assistant", "second metadata-free final");
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
-    });
-    const secondEvent = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: second,
-    } as const;
-    state = reduceSessionProjection(state, secondEvent);
-
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(2);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], second)).toBe(true);
-    expect(reduceSessionProjection(state, secondEvent)).toBe(state);
+  let state = project(projection([pending]), peer);
+  state = acknowledge(state, "provisional-run", "accepted-run");
+  expectRows(state, pending, peer);
+  expect(state.entries[0]).toMatchObject({ pending: true, pendingRunId: "accepted-run" });
+  const accepted = savedUser("same prompt", "accepted-user", 2, {
+    idempotencyKey: "accepted-run:user",
+    runId: "queued-execution",
   });
-
-  it("bounds accepted same-run final identities without losing the first delivered reply", () => {
-    const first = createMessage("assistant", "final 0", { id: "assistant-0", seq: 1 });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: first,
+  expectRows(project(state, accepted), peer, accepted);
+  const persistedBeforeAck = project(projection([pending]), accepted);
+  const adopted = acknowledge(persistedBeforeAck, "provisional-run", "accepted-run");
+  expectRows(adopted, accepted);
+  expect(acknowledge(adopted, "provisional-run", "accepted-run")).toBe(adopted);
+});
+it("removes only a failed pending turn while preserving same-text authoritative peers", () => {
+  const pending = keyedUser("same prompt", "failed-run:user");
+  const assistant = reply("optimistic stream");
+  const otherAnswer = reply("independent stream", { idempotencyKey: "other-run" });
+  const unkeyedUser = user("intervening unkeyed user");
+  const unownedAssistant = reply("unowned stream");
+  const peer = savedUser("same prompt", "peer-user", 1, { idempotencyKey: "peer-run:user" });
+  const initial = projection([
+    pending,
+    assistant,
+    otherAnswer,
+    unkeyedUser,
+    unownedAssistant,
+    peer,
+  ]);
+  const failed = reduce(initial, { type: "sendFailed", runId: "failed-run" });
+  expectRows(failed, otherAnswer, unkeyedUser, unownedAssistant, peer);
+  expect(reduce(failed, { type: "sendFailed", runId: "failed-run" })).toBe(failed);
+});
+it("places an authoritative prompt ahead of its already projected same-run final", () => {
+  const assistant = reply("already delivered", {
+    id: "assistant-1",
+    idempotencyKey: "shared-run",
+  });
+  let state = projection([assistant]);
+  state = terminal(state, { runId: "shared-run", message: assistant });
+  const prompt = user("late peer prompt", { id: "user-1", idempotencyKey: "shared-run:user" });
+  expectRows(project(state, prompt), prompt, assistant);
+});
+const runId = "run-1";
+const snapshot = (state: SessionProjectionState, messages: unknown[]) =>
+  reconcile(state, messages, state.scope);
+const partial = (metadata = {}) => reply("Saved partial reply", metadata);
+const receipt = (id: string, seq: number, metadata = {}) => ({
+  ...partial({ id, seq, runId, mirrorOrigin: "codex-app-server", idempotencyKey: id, ...metadata }),
+  stopReason: "error",
+});
+const selected = reply("Selected answer");
+// #148297: a selected final can inherit the run's toolUse stop reason.
+const saved = { ...savedReply("Selected answer", "saved", 217, { runId }), stopReason: "toolUse" };
+const tool = (id = "later-tool", seq = 218, stopReason?: string) => ({
+  ...savedReply("Checking another file.", id, seq, { runId }),
+  content: [
+    { type: "text", text: "Checking another file." },
+    { type: "toolCall", id: "read-next", name: "read", arguments: {} },
+  ],
+  ...(stopReason ? { stopReason } : {}),
+});
+const announce = (message: unknown = selected, state = projection(), cloneLive = false) =>
+  project(terminal(state, { message }), cloneLive ? structuredClone(message) : message, { runId });
+const text = (...parts: string[]) => parts.map((value) => ({ type: "text", text: value }));
+it("recovers an empty terminal only with its matching saved occurrence", () => {
+  const empty = { ...partial({ runId, idempotencyKey: "selected" }), content: [] };
+  let state = terminal(projection(), { message: empty });
+  state = terminal(state, { message: receipt("other", 2) });
+  expect(state.runs[runId]?.message).toBe(empty);
+  const durable = receipt("selected", 3);
+  expect(terminal(state, { message: durable }).runs[runId]?.message).toBe(durable);
+});
+it.each([
+  { status: "error", stopReason: "error" },
+  { status: "completed", stopReason: "toolUse" },
+] as const)("reconciles $status/$stopReason by receipt", ({ status, stopReason }) => {
+  const live = partial({ runId, idempotencyKey: "saved-final" });
+  const durable = {
+    ...receipt("saved-final", 2),
+    stopReason,
+    content: [
+      { type: "text", text: "Saved transformed text" },
+      { type: "image", source: { type: "url", url: "https://example.test/image.png" } },
+    ],
+  };
+  for (const persistedFirst of [false, true]) {
+    let state = terminal(persistedFirst ? persist(projection(), durable) : projection(), {
+      message: live,
+      status,
     });
-    for (let index = 1; index < 48; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: "run-1",
-        status: "completed",
-        message: createMessage("assistant", `final ${index}`, {
-          id: `assistant-${index}`,
-          seq: index + 1,
-        }),
-      });
+    state = reduce(state, { type: "messagePersisted", message: live, runId });
+    if (!persistedFirst) {
+      state = persist(state, durable);
     }
-
-    expect(state.runs["run-1"]?.message).toBe(first);
-    expect(state.runs["run-1"]?.acceptedFinalMessageIdentities).toHaveLength(32);
-    expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], first)).toBe(true);
-    expect(
-      hasSessionProjectionAcceptedFinal(
-        state.runs["run-1"],
-        createMessage("assistant", "final 47", { id: "assistant-47", seq: 48 }),
-      ),
-    ).toBe(true);
+    expectRows(state, durable);
+    expectRows(persist(snapshot(state, [structuredClone(durable)]), durable), durable);
+  }
+});
+it("does not merge distinct saved occurrences, commentary, tools, or imported identity", () => {
+  const first = receipt("first", 1),
+    last = receipt("last", 4);
+  const toolRow = {
+    ...receipt("tool", 2),
+    content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }],
+  };
+  const commentary = {
+    ...last,
+    openclawStreamFallback: { source: "segment", itemId: "commentary", runId },
+  };
+  const collision = receipt("different-durable-id", 5, { idempotencyKey: "last" });
+  const imported = receipt("external", 6, {
+    idempotencyKey: "last",
+    importedFrom: "codex",
+    cliSessionId: "cli",
+    externalId: "external",
   });
-
-  it("ignores whitespace diagnostics and accepts one meaningful late provider error", () => {
-    const emptyError = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "empty-error",
-      status: "error",
-      errorMessage: " \n\t ",
-    });
-    expect(emptyError.runs["empty-error"]?.errorMessage).toBeUndefined();
-    const delivered = createMessage("assistant", "delivered final", {
-      id: "delivered-assistant",
-      seq: 7,
-    });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "completed",
-      message: delivered,
-    });
-    const completed = state;
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "error",
-      errorKind: "provider_error",
-      errorMessage: "  \n\t ",
-    });
-    expect(state).toBe(completed);
-
-    const actionableError = {
-      type: "runTerminal",
-      runId: "run-1",
-      status: "error",
-      errorKind: "provider_error",
-      errorMessage: "  provider rejected request  ",
-    } as const;
-    state = reduceSessionProjection(state, actionableError);
-
-    expect(state.runs["run-1"]).toMatchObject({
-      status: "completed",
-      message: delivered,
-      errorKind: "provider_error",
-      errorMessage: "provider rejected request",
-    });
-    expect(reduceSessionProjection(state, actionableError)).toBe(state);
-  });
-
-  it("bounds long-session terminal history without evicting any active stream", () => {
-    let state = createSessionProjection(primaryScope);
-    for (const runId of ["active-first", "active-second"]) {
-      state = reduceSessionProjection(state, {
-        type: "runDelta",
+  const history = [first, toolRow, last, commentary, collision, imported];
+  const state = persist(projection(history), partial({ runId, idempotencyKey: "first" }));
+  expect(state.messages).toEqual(history);
+  expect(
+    persist(state, partial({ runId, idempotencyKey: "new-occurrence" })).messages,
+  ).toHaveLength(history.length + 1);
+});
+it("keeps a receipt-less fallback provisional through cache and unrelated persistence", () => {
+  const fallback = {
+    ...partial(),
+    openclawStreamFallback: { source: "current", runId, afterSequence: 3 },
+  };
+  let state = projection(structuredClone([fallback]));
+  const priorRun = receipt("prior", 5, { runId: "run-prior", runTerminal: true });
+  const beforeFence = receipt("old-occurrence", 2, { runTerminal: true });
+  const failedA = receipt("failed-A", 6),
+    failedB = receipt("failed-B", 7);
+  for (const message of [priorRun, beforeFence, failedA, failedB]) {
+    state = persist(state, message);
+    expect(state.messages).toContainEqual(fallback);
+  }
+  state = snapshot(state, [beforeFence, priorRun, failedA, failedB]);
+  expect(state.messages).toContainEqual(fallback);
+  const savedTerminal = receipt("selected-terminal", 8, { runTerminal: true });
+  expectRows(persist(state, savedTerminal), beforeFence, priorRun, failedA, failedB, savedTerminal);
+});
+it("keeps durable replay idempotent despite contradictory same-run history", () => {
+  const later = tool("later-tool", 218, "toolUse");
+  let state = projection([saved, later]);
+  for (let replay = 0; replay < 2; replay += 1) {
+    state = persist(state, structuredClone(saved));
+    expect(state.messages).toEqual([saved, later]);
+  }
+});
+it.each(["history-first", "live-first", "persisted"])(
+  "keeps contradictory history (%s)",
+  (order) => {
+    const later = tool("later-tool", 218, "toolUse");
+    let state = announce(
+      selected,
+      order === "history-first" ? snapshot(projection(), [saved, later]) : projection(),
+    );
+    if (order === "persisted") {
+      state = persist(persist(state, later), saved);
+    } else if (order === "live-first") {
+      state = snapshot(state, [saved, later]);
+    }
+    expect(state.messages).toHaveLength(3);
+    for (const message of [selected, saved, later]) {
+      expect(state.messages).toContain(message);
+    }
+  },
+);
+it.each(["history-first", "durable-second", "snapshot-second"])(
+  "restores a %s inferred final across repeated contradictory snapshots",
+  (order) => {
+    let state = announce(
+      selected,
+      order === "history-first" ? snapshot(projection(), [saved]) : projection(),
+    );
+    if (order === "durable-second") {
+      state = persist(state, saved);
+    } else if (order === "snapshot-second") {
+      state = snapshot(state, [saved]);
+    }
+    expect(state.messages).toEqual([saved]);
+    state = snapshot(state, [saved]);
+    expect(state.messages).toEqual([saved]);
+    const later = tool("later-tool", 218, "toolUse");
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      state = snapshot(state, [saved, later]);
+      expect(state.messages).toEqual([saved, later, selected]);
+    }
+  },
+);
+it.each(["durable-first", "live-first"])(
+  "keeps different-content toolUse and live answers separate (%s)",
+  (order) => {
+    const different = reply("A different final answer");
+    if (order === "durable-first") {
+      expectRows(announce(different, snapshot(projection(), [saved])), saved, different);
+    } else {
+      const differentSaved = { ...saved, content: different.content };
+      const state = project(project(projection(), selected, { runId }), differentSaved, {
         runId,
-        message: createMessage("assistant", `stream ${runId}`),
       });
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages).toContain(selected);
+      expect(state.messages).toContain(differentSaved);
     }
-    for (let index = 0; index < 1_000; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: `completed-${index}`,
-        status: "completed",
-        stopReason: "stop",
-      });
-    }
-
-    expect(Object.keys(state.runs).length).toBeLessThanOrEqual(200);
-    expect(state.runs["active-first"]?.status).toBe("streaming");
-    expect(state.runs["active-second"]?.status).toBe("streaming");
-    expect(state.runs["completed-0"]).toBeUndefined();
-    expect(state.runs["completed-999"]).toMatchObject({
-      status: "completed",
-      stopReason: "stop",
-    });
+  },
+);
+it("adopts a durable answer when its live terminal also carries a status notice", () => {
+  const prompt = savedUser("Check the workspace.", "fallback-user", 1, {
+    idempotencyKey: `${runId}:user`,
   });
-
-  it("retains a newly completed live stream ahead of older terminal diagnostics", () => {
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "runDelta",
-      runId: "active-first",
-      message: createMessage("assistant", "stream"),
-    });
-    for (let index = 0; index < 199; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runTerminal",
-        runId: `older-${index}`,
-        status: "completed",
-      });
-    }
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "active-first",
-      status: "completed",
-    });
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "newest",
-      status: "completed",
-    });
-
-    expect(Object.keys(state.runs)).toHaveLength(150);
-    expect(state.runs["older-0"]).toBeUndefined();
-    expect(state.runs["active-first"]?.status).toBe("completed");
-    expect(state.runs.newest?.status).toBe("completed");
-  });
-
-  it("protects every concurrent active stream when terminal retention reaches its soft cap", () => {
-    let state = createSessionProjection(primaryScope);
-    for (let index = 0; index < 205; index += 1) {
-      state = reduceSessionProjection(state, {
-        type: "runDelta",
-        runId: `active-${index}`,
-      });
-    }
-
-    expect(Object.keys(state.runs)).toHaveLength(205);
-    expect(state.runs["active-0"]?.status).toBe("streaming");
-    expect(state.runs["active-204"]?.status).toBe("streaming");
-  });
-
-  it("clears a transport gap only after an authoritative snapshot", () => {
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "transportGap",
-    });
-    expect(state.hasTransportGap).toBe(true);
-
-    state = reduceSessionProjection(state, { type: "reconnected" });
-    expect(state.hasTransportGap).toBe(true);
-
-    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [] });
-    expect(state.hasTransportGap).toBe(false);
-  });
-
-  it("classifies only metadata-free or send-key-only local turns as optimistic", () => {
-    const pending = createMessage("user", "local", { idempotencyKey: "local-run:user" });
-    const assistant = createMessage("assistant", "streaming locally");
-    const persisted = createMessage("user", "durable", {
-      id: "persisted-user",
-      seq: 3,
-      idempotencyKey: "local-run:user",
-    });
-
-    expect(isLocallyOptimisticSessionMessage(pending)).toBe(true);
-    expect(isLocallyOptimisticSessionMessage(assistant)).toBe(true);
-    expect(isLocallyOptimisticSessionMessage(persisted)).toBe(false);
-    expect(isLocallyOptimisticSessionMessage({ role: "system", content: "marker" })).toBe(false);
-  });
-
-  it("infers one canonical pending owner for a local prompt and its assistant stream", () => {
-    const pending = createMessage("user", "local prompt", {
-      idempotencyKey: "local-run:user",
-    });
-    const assistant = createMessage("assistant", "streaming locally");
-    const projection = createSessionProjection(primaryScope, [pending, assistant]);
-
-    expect(
-      projection.entries.map(({ pending: isPending, pendingRunId }) => ({
-        pending: isPending,
-        pendingRunId,
-      })),
-    ).toEqual([
-      { pending: true, pendingRunId: "local-run" },
-      { pending: true, pendingRunId: "local-run" },
-    ]);
-  });
-
-  it("filters hidden snapshot, authoritative live, and pending rows in one canonical pass", () => {
-    const visible = createMessage("user", "visible", { id: "visible", seq: 1 });
-    const hiddenSnapshot = createMessage("assistant", "hidden snapshot", {
-      id: "hidden-snapshot",
-      seq: 2,
-    });
-    const hiddenLive = createMessage("user", "hidden live", { id: "hidden-live", seq: 3 });
-    const hiddenPending = createMessage("user", "hidden pending", {
-      idempotencyKey: "hidden-run:user",
-    });
-    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
-      type: "sendPending",
-      runId: "hidden-run",
-      message: hiddenPending,
-    });
-    state = projectLiveSessionMessage(state, hiddenLive);
-    state = reduceSessionProjection(state, {
-      type: "snapshotLoaded",
-      messages: [visible, hiddenSnapshot],
-      scope: primaryScope,
-      options: {
-        shouldIncludeMessage: (message) =>
-          message !== hiddenSnapshot && message !== hiddenLive && message !== hiddenPending,
-      },
-    });
-
-    expect(state.messages).toEqual([visible]);
-  });
-
-  it("rekeys provisional pending turns without adopting a same-text peer", () => {
-    const pending = createMessage("user", "same prompt", {
-      idempotencyKey: "provisional-run:user",
-    });
-    const peer = createMessage("user", "same prompt", {
-      id: "peer-user",
-      seq: 1,
-      idempotencyKey: "peer-run:user",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope, [pending]), peer);
-    state = reduceSessionProjection(state, {
-      type: "sendAcknowledged",
-      previousRunId: "provisional-run",
-      runId: "accepted-run",
-    });
-
-    expect(state.messages).toEqual([pending, peer]);
-    expect(state.entries[0]).toMatchObject({ pending: true, pendingRunId: "accepted-run" });
-    const accepted = createMessage("user", "same prompt", {
-      id: "accepted-user",
-      seq: 2,
-      idempotencyKey: "accepted-run:user",
-    });
-    expect(projectLiveSessionMessage(state, accepted).messages).toEqual([peer, accepted]);
-
-    const persistedBeforeAck = projectLiveSessionMessage(
-      createSessionProjection(primaryScope, [pending]),
-      accepted,
-    );
-    const acknowledge = {
-      type: "sendAcknowledged",
-      previousRunId: "provisional-run",
-      runId: "accepted-run",
-    } as const;
-    const adopted = reduceSessionProjection(persistedBeforeAck, acknowledge);
-    expect(adopted.messages).toEqual([accepted]);
-    expect(reduceSessionProjection(adopted, acknowledge)).toBe(adopted);
-  });
-
-  it("removes only a failed pending turn while preserving same-text authoritative peers", () => {
-    const pending = createMessage("user", "same prompt", {
-      idempotencyKey: "failed-run:user",
-    });
-    const assistant = createMessage("assistant", "optimistic stream");
-    const independentAssistant = createMessage("assistant", "independent stream", {
-      idempotencyKey: "other-run",
-    });
-    const unkeyedUser = createMessage("user", "intervening unkeyed user");
-    const unownedAssistant = createMessage("assistant", "unowned stream");
-    const peer = createMessage("user", "same prompt", {
-      id: "peer-user",
-      seq: 1,
-      idempotencyKey: "peer-run:user",
-    });
-    const initial = createSessionProjection(primaryScope, [
-      pending,
-      assistant,
-      independentAssistant,
-      unkeyedUser,
-      unownedAssistant,
-      peer,
-    ]);
-    expect(initial.entries.map((entry) => entry.pendingRunId)).toEqual([
-      "failed-run",
-      "failed-run",
-      "other-run",
-      null,
-      null,
-      null,
-    ]);
-    const failed = reduceSessionProjection(initial, { type: "sendFailed", runId: "failed-run" });
-
-    expect(failed.messages).toEqual([independentAssistant, unkeyedUser, unownedAssistant, peer]);
-    expect(reduceSessionProjection(failed, { type: "sendFailed", runId: "failed-run" })).toBe(
-      failed,
-    );
-  });
-
-  it("places an authoritative prompt ahead of its already projected same-run final", () => {
-    const assistant = createMessage("assistant", "already delivered", {
-      id: "assistant-1",
-      idempotencyKey: "shared-run",
-    });
-    let state = createSessionProjection(primaryScope, [assistant]);
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "shared-run",
-      status: "completed",
-      message: assistant,
-    });
-    const prompt = createMessage("user", "late peer prompt", {
-      id: "user-1",
-      idempotencyKey: "shared-run:user",
-    });
-
-    expect(projectLiveSessionMessage(state, prompt).messages).toEqual([prompt, assistant]);
-  });
-
-  it.each([
-    {
-      name: "regular final",
-      event: { state: "final" },
-      status: "completed",
+  const streamed = {
+    ...selected,
+    openclawStreamFallback: {
+      itemId: "fallback-answer-item",
+      replacementText: "Selected answer",
+      runId,
+      source: "segment",
     },
-    {
-      name: "yielded end turn",
-      event: { state: "final", yielded: true, stopReason: "end_turn" },
-      status: "yielded",
-    },
-    {
-      name: "message-owned error",
-      event: {
-        state: "final",
-        message: { role: "assistant", content: "failure", stopReason: "error" },
-      },
-      status: "error",
-    },
-    {
-      name: "provider timeout",
-      event: { state: "error", errorKind: "timeout" },
-      status: "timeout",
-    },
-    {
-      name: "aborted run",
-      event: { state: "aborted" },
-      status: "aborted",
-    },
-    {
-      name: "live delta",
-      event: { state: "delta" },
-      status: "streaming",
-    },
-  ])("normalizes a $name identically for browser and TUI", ({ event, status }) => {
-    const result = reduceSessionProjectionRunEvent(
-      createSessionProjection(primaryScope),
-      { ...event, runId: "shared-run" },
-      primaryScope,
-    );
-
-    expect(result?.previousRun).toBeUndefined();
-    expect(result?.currentRun?.status).toBe(status);
-    expect(result?.projection.runs["shared-run"]?.status).toBe(status);
+  };
+  const final = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "Model Fallback: backup/model", openclawStatusNotice: true },
+      ...selected.content,
+    ],
+  };
+  const durable = savedReply("Selected answer", "fallback-answer", 2, {
+    runId,
+    runTerminal: true,
   });
-
-  it("returns both canonical run projections for a duplicate Gateway terminal", () => {
-    const final = {
-      runId: "shared-run",
-      state: "final",
-      message: createMessage("assistant", "delivered final", { id: "final-1", seq: 1 }),
-    };
-    const first = reduceSessionProjectionRunEvent(createSessionProjection(primaryScope), final);
-    expect(first).not.toBeNull();
-    if (!first) {
-      return;
-    }
-    const repeated = reduceSessionProjectionRunEvent(first.projection, final);
-
-    expect(repeated?.previousRun).toBe(first.currentRun);
-    expect(repeated?.projection).toBe(first.projection);
-    expect(repeated?.currentRun).toBe(first.currentRun);
+  const state = announce(final, projection([prompt, streamed]));
+  expect(state.messages).toEqual([prompt, streamed, final]);
+  expect(
+    reduce(state, { type: "messagePersisted", message: durable, envelope: { runId } }).messages,
+  ).toEqual([prompt, streamed, durable]);
+});
+it("promotes an unmarked same-run CLI terminal with a terminal stop reason", () => {
+  const persisted = {
+    ...savedReply("Selected answer", "assistant-final", 4),
+    api: "cli",
+    idempotencyKey: `cli-assistant:${runId}`,
+    stopReason: "stop",
+  };
+  expectRows(snapshot(announce(selected, projection(), true), [persisted]), persisted);
+});
+it("restores an inferred terminal when later history reveals a tool boundary", () => {
+  const prompt = savedUser("Inspect the repository.", "user-prompt", 1, {
+    idempotencyKey: `${runId}:user`,
   });
-
-  it.each(["status", "unknown", undefined])("rejects non-run Gateway event state %j", (state) => {
-    expect(
-      reduceSessionProjectionRunEvent(createSessionProjection(primaryScope), {
-        runId: "shared-run",
-        state,
-      }),
-    ).toBeNull();
+  const earlier = savedReply("Selected answer", "assistant-earlier", 2, { runId });
+  const later = tool("assistant-tool-boundary", 3);
+  const state = snapshot(announce(), [prompt, earlier]);
+  expect(state.messages).toEqual([prompt, earlier]);
+  expectRows(snapshot(state, [prompt, earlier, later]), prompt, earlier, later, selected);
+});
+it("does not restore a removed or filtered inferred terminal", () => {
+  const prompt = savedUser("Finish the task.", "user", 1, { runId });
+  const persisted = savedReply("Selected answer", "final", 2, { runId });
+  const state = snapshot(announce(), [prompt, persisted]);
+  expect(state.messages).toEqual([prompt, persisted]);
+  const removed = snapshot(state, [prompt]);
+  const filtered = reconcile(state, [prompt, persisted], state.scope, {
+    shouldIncludeMessage: (message) => message === prompt,
   });
-
-  it("does not mutate source messages, snapshots, or previous reducer states", () => {
-    const message = Object.freeze(createMessage("user", "immutable", { id: "user", seq: 1 }));
-    const messages = Object.freeze([message]);
-    const initial = createSessionProjection(primaryScope);
-    const live = projectLiveSessionMessage(initial, message);
-    const replayed = reconcileSessionProjectionSnapshot(live, messages, primaryScope);
-
-    expect(initial.messages).toEqual([]);
-    expect(replayed.messages).toEqual([message]);
-    expect(messages).toEqual([message]);
+  for (const retired of [removed, filtered]) {
+    expect(retired.messages).toEqual([prompt]);
+    expect(snapshot(retired, [prompt]).messages).toEqual([prompt]);
+  }
+});
+it("retains an unsequenced terminal when multiple same-run rows have terminal content", () => {
+  const first = savedReply("Selected answer", "assistant-first", 2, { runId });
+  const second = savedReply("Selected answer", "assistant-second", 3, { runId });
+  expect(snapshot(announce(), [first, second]).messages).toEqual([first, second, selected]);
+});
+/** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
+it.each([
+  ["input text error", [{ type: "input_text", text: "provider rate limit" }], true],
+  ["thinking only", [{ type: "thinking", thinking: "Internal reasoning" }], true],
+  ["empty turn marker", text("[assistant turn failed before producing content]"), true],
+  ["split provider error", text("⚠️ Error: provider", "rate limit"), true],
+  [
+    "split empty turn error",
+    text("⚠️ Error: The agent run failed", "before producing a reply."),
+    true,
+  ],
+  ["useful text", text("Useful partial reply."), false],
+  ["image", [{ type: "image", source: "synthetic-image" }], false],
+] as const)("resumes only diagnostic-only failed content: %s", (_name, content, resumes) => {
+  const failed = terminal(projection(), {
+    status: "error",
+    seq: 10,
+    errorMessage: "provider rate limit",
+    message: { role: "assistant", content, stopReason: "error" },
   });
+  const next = delta(failed, "run-1", reply(resumes ? "I" : "late stream"), 11);
+  if (resumes) {
+    expect(next.runs["run-1"]).toMatchObject({ status: "streaming" });
+    expect(next.runs["run-1"]?.errorMessage).toBeUndefined();
+    expect(next.runs["run-1"]?.stopReason).toBeUndefined();
+  } else {
+    expect(next).toBe(failed);
+  }
+});
+it("upgrades an identified empty completed final exactly once without reopening the run", () => {
+  const emptyMessage = savedReply("", "assistant-final", 7);
+  const deliveredMessage = savedReply("eventual final", "assistant-final", 7);
+  let state = terminal(projection(), { message: emptyMessage });
+  expect(acceptedFinal(state.runs[runId], emptyMessage)).toBe(false);
+  const mismatchedMessage = savedReply("wrong final", "different-assistant-final", 7);
+  state = terminal(state, { message: mismatchedMessage });
+  expect(state.runs["run-1"]?.message).toBe(emptyMessage);
+  state = terminal(state, { message: deliveredMessage });
+  expect(state.runs["run-1"]).toMatchObject({ status: "completed", message: deliveredMessage });
+  const laterFinal = reply("later distinct final");
+  const acceptedLaterFinal = terminal(state, { message: laterFinal });
+  expect(acceptedLaterFinal.runs["run-1"]?.message).toBe(deliveredMessage);
+  expect(acceptedFinal(acceptedLaterFinal.runs[runId], laterFinal)).toBe(true);
+  expect(terminal(acceptedLaterFinal, { message: laterFinal })).toBe(acceptedLaterFinal);
+});
+it("recovers a sequence-identified empty final when persisted metadata adds an ID", () => {
+  const emptyMessage = reply("", { seq: 7 });
+  const deliveredMessage = savedReply("eventual final", "assistant-final", 7);
+  let state = terminal(projection(), { message: emptyMessage });
+  state = terminal(state, { message: deliveredMessage });
+  expect(state.runs["run-1"]?.message).toBe(deliveredMessage);
+});
+it("remembers distinct recovered finals after an initial message-less error", () => {
+  const first = savedReply("first recovered final", "recovered-a", 7);
+  const second = savedReply("second recovered final", "recovered-b", 8);
+  let state = terminal(projection(), {
+    status: "error",
+    errorKind: "provider_error",
+    errorMessage: "original diagnostic",
+  });
+  state = terminal(state, { message: first });
+  state = terminal(state, { message: second });
+  expect(state.runs["run-1"]).toMatchObject({
+    status: "error",
+    message: first,
+    errorMessage: "original diagnostic",
+  });
+  expect(acceptedFinal(state.runs[runId], second)).toBe(true);
+  expect(terminal(state, { message: second })).toBe(state);
+});
+it("ignores whitespace diagnostics and accepts one meaningful late provider error", () => {
+  const emptyError = terminal(projection(), {
+    runId: "empty-error",
+    status: "error",
+    errorMessage: " \n\t ",
+  });
+  expect(emptyError.runs["empty-error"]?.errorMessage).toBeUndefined();
+  const delivered = savedReply("delivered final", "delivered-assistant", 7);
+  let state = terminal(projection(), { message: delivered });
+  const completed = state;
+  state = terminal(state, {
+    status: "error",
+    errorKind: "provider_error",
+    errorMessage: "  \n\t ",
+  });
+  expect(state).toBe(completed);
+  const actionableError = {
+    status: "error",
+    errorKind: "provider_error",
+    errorMessage: "  provider rejected request  ",
+  } as const;
+  state = terminal(state, actionableError);
+  expect(state.runs["run-1"]).toMatchObject({
+    status: "completed",
+    message: delivered,
+    errorKind: "provider_error",
+    errorMessage: "provider rejected request",
+  });
+  expect(terminal(state, actionableError)).toBe(state);
+});
+it("retains a newly completed live stream ahead of older terminal diagnostics", () => {
+  let state = delta(projection(), "active-first", reply("stream"));
+  for (let index = 0; index < 199; index += 1) {
+    state = terminal(state, { runId: `older-${index}` });
+  }
+  state = terminal(state, { runId: "active-first" });
+  state = terminal(state, { runId: "newest" });
+  expect(Object.keys(state.runs)).toHaveLength(150);
+  expect(state.runs["older-0"]).toBeUndefined();
+  expect(state.runs["active-first"]?.status).toBe("completed");
+  expect(state.runs.newest?.status).toBe("completed");
+});
+it("does not re-enumerate retained runs while an existing stream advances", () => {
+  let state = delta(projection(), "active", reply("First"), 1);
+  for (let index = 0; index < 199; index += 1) {
+    state = terminal(state, { runId: `older-${index}` });
+  }
+  const retained = state.runs["older-0"];
+  const entries = vi.spyOn(Object, "entries");
+  onTestFinished(() => entries.mockRestore());
+  for (let seq = 2; seq <= 4; seq += 1) {
+    const message = reply(`Revision ${seq}`);
+    state = delta(state, "active", message, seq);
+    expect(state.runs.active).toMatchObject({ message, seq, status: "streaming" });
+    expect(state.runs["older-0"]).toBe(retained);
+    expect(entries.mock.calls.filter(([value]) => value === state.runs)).toHaveLength(0);
+  }
+  state = delta(state, "new-active", reply("New stream"), 1);
+  expect(Object.keys(state.runs)).toHaveLength(150);
+  expect(state.runs["older-0"]).toBeUndefined();
+  expect(state.runs.active?.status).toBe("streaming");
+  expect(state.runs["new-active"]?.status).toBe("streaming");
+});
+it("protects every concurrent active stream when terminal retention reaches its soft cap", () => {
+  let state = projection();
+  for (let index = 0; index < 205; index += 1) {
+    state = delta(state, `active-${index}`);
+  }
+  expect(Object.keys(state.runs)).toHaveLength(205);
+  expect(state.runs["active-0"]?.status).toBe("streaming");
+  expect(state.runs["active-204"]?.status).toBe("streaming");
+  state = terminal(state, { runId: "active-0" });
+  expect(Object.keys(state.runs)).toHaveLength(204);
+  expect(state.runs["active-0"]).toBeUndefined();
+  expect(state.runs["active-204"]?.status).toBe("streaming");
 });

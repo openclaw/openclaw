@@ -1,0 +1,95 @@
+import AppKit
+import SwiftUI
+import Testing
+@testable import OpenClaw
+
+@Suite(.serialized, .testWaitLimit)
+@MainActor
+struct GatewaySettingsSmokeTests {
+    @Test func `first Reconnect prefills the Gateway and Add starts a fresh empty editor`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let profile = try MacGatewayProfile(
+                id: "editor-fixture",
+                name: "Project Gateway",
+                url: #require(URL(string: "wss://gateway.example.test:8443/control/")))
+            try await withHostedSettings(GatewaySettings(profiles: [profile])) { hosting, window in
+                var requestOrdinal = 0
+                for (action, reconnecting) in [("Reconnect", true), ("Add Gateway", false)] {
+                    requestOrdinal += 1
+                    let buttons = try await AppKitTestSupport.accessibilityElements(
+                        in: hosting,
+                        diagnosticContext: "action=\(action) phase=buttons request=\(requestOrdinal)")
+                    let button = try #require(buttons.first {
+                        $0.accessibilityRole?() == .button &&
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(action)
+                    })
+                    #expect(button.accessibilityPerformPress?() == true)
+                    try await TestWait.state("\(action) sheet") { window.attachedSheet != nil }
+                    let sheet = try #require(window.attachedSheet?.contentView)
+                    var values: [String] = []
+                    var connectEnabled: Bool?
+                    try await TestWait.state("\(action) sheet fields") {
+                        sheet.layoutSubtreeIfNeeded()
+                        requestOrdinal += 1
+                        let elements = try await AppKitTestSupport.accessibilityElements(
+                            in: sheet,
+                            diagnosticContext: "action=\(action) phase=fields request=\(requestOrdinal)")
+                        values = elements.filter { $0.accessibilityRole?() == .textField }.map {
+                            let value: Any? = $0.accessibilityValue?()
+                            return value as? String ?? ""
+                        }
+                        let submitAction = reconnecting ? "Reconnect" : "Connect"
+                        connectEnabled = elements.first {
+                            $0.accessibilityRole?() == .button &&
+                                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
+                                .contains(submitAction)
+                        }?.isAccessibilityEnabled?()
+                        let populated = values.contains(profile.name) && values.contains(profile.url.absoluteString)
+                        return values.count >= 2 && connectEnabled == reconnecting &&
+                            (reconnecting ? populated : values.allSatisfy(\.isEmpty))
+                    }
+                    #expect(values.count >= 2)
+                    #expect(connectEnabled == reconnecting)
+                    if reconnecting {
+                        #expect(values.contains(profile.name))
+                        #expect(values.contains(profile.url.absoluteString))
+                    } else {
+                        let hasOnlyEmptyFields = values.allSatisfy(\.isEmpty)
+                        #expect(hasOnlyEmptyFields)
+                    }
+                    requestOrdinal += 1
+                    let cancel = try #require(try await AppKitTestSupport.accessibilityElements(
+                        in: sheet,
+                        diagnosticContext: "action=\(action) phase=Cancel request=\(requestOrdinal)").first {
+                        $0.accessibilityRole?() == .button &&
+                            [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Cancel")
+                    })
+                    #expect(cancel.accessibilityPerformPress?() == true)
+                    try await TestWait.state("\(action) sheet dismissal") { window.attachedSheet == nil }
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+private func withHostedSettings<Content: View>(
+    _ view: Content,
+    _ body: (NSHostingView<Content>, NSWindow) async throws -> Void) async throws
+{
+    _ = AppKitTestSupport.application
+    let hosting = NSHostingView(rootView: view)
+    hosting.frame = NSRect(x: 0, y: 0, width: 1000, height: 800)
+    let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = hosting
+    defer {
+        if let sheet = window.attachedSheet { window.endSheet(sheet) }
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+    window.orderFront(nil)
+    hosting.layoutSubtreeIfNeeded()
+    try await body(hosting, window)
+}

@@ -1,32 +1,34 @@
 import { Buffer } from "node:buffer";
 import { resolve as resolveFilePath } from "node:path";
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawPluginApi } from "./api.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { MemoryConfig } from "./config.js";
 
-type OpenAiEmbeddingClient = {
-  post<T>(
-    path: string,
-    options: { body: unknown; timeout?: number; maxRetries?: number },
-  ): Promise<T>;
-};
 const loadOpenAiModule = createLazyRuntimeModule(() => import("openai"));
 const loadMemoryEmbeddingProviderModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-core-host-engine-embeddings"),
 );
 
+type EmbeddingConfig = MemoryConfig["embedding"];
+
 export type Embeddings = {
-  embed(agentId: string, text: string, options?: { timeoutMs?: number }): Promise<number[]>;
+  embed(
+    agentId: string,
+    text: string,
+    embedding: EmbeddingConfig,
+    timeoutMs?: number,
+  ): Promise<number[]>;
   close?(): Promise<void>;
 };
 
@@ -35,51 +37,16 @@ type AgentEmbeddingProvider = {
   agentDir: string;
   promise: Promise<MemoryEmbeddingProvider>;
   activeUses: number;
-  idleWaiters: Set<() => void>;
+  idleResolver?: () => void;
 };
 
-type ProviderAdapterLifecycleState = {
-  retainedProviders: Set<MemoryEmbeddingProvider>;
-  tail: Promise<void>;
-};
-
-const PROVIDER_ADAPTER_LIFECYCLE = resolveGlobalSingleton<ProviderAdapterLifecycleState>(
-  Symbol.for("openclaw.memoryLanceDbEmbeddingProviderLifecycle.v1"),
-  // Plugin reload replaces the service instance. Retain failed closes process-wide so
-  // the next instance cannot create a provider before its predecessor retires.
-  () => ({ retainedProviders: new Set(), tail: Promise.resolve() }),
-);
-
-function runProviderAdapterLifecycle<T>(operation: () => Promise<T>): Promise<T> {
-  const result = PROVIDER_ADAPTER_LIFECYCLE.tail.then(operation, operation);
-  PROVIDER_ADAPTER_LIFECYCLE.tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
+function embeddingConfigFingerprint(embedding: EmbeddingConfig): string {
+  const { provider, model, apiKey, baseUrl, dimensions } = embedding;
+  return JSON.stringify([provider, model, apiKey, baseUrl, dimensions]);
 }
 
-async function drainRetainedProviders(): Promise<void> {
-  let firstError: unknown;
-  let closeFailed = false;
-  for (const provider of PROVIDER_ADAPTER_LIFECYCLE.retainedProviders) {
-    try {
-      await provider.close?.();
-      PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.delete(provider);
-    } catch (err) {
-      if (!closeFailed) {
-        firstError = err;
-      }
-      closeFailed = true;
-    }
-  }
-  if (closeFailed) {
-    throw toErrorObject(firstError, "memory-lancedb embedding provider retirement failed");
-  }
-}
-
-class OpenAiCompatibleEmbeddings implements Embeddings {
-  private clientPromise: Promise<OpenAiEmbeddingClient>;
+class OpenAiCompatibleEmbeddings {
+  private clientPromise: Promise<OpenAI>;
 
   constructor(
     apiKey: string,
@@ -88,16 +55,15 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     private dimensions?: number,
   ) {
     this.clientPromise = loadOpenAiModule().then(
-      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }),
     );
   }
 
-  async embed(_agentId: string, text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+  async embed(text: string, timeoutMs?: number): Promise<number[]> {
     const dimensions = this.dimensions;
-    const startedAtMs =
-      options?.timeoutMs && Number.isFinite(options.timeoutMs) ? Date.now() : null;
+    const startedAtMs = timeoutMs && Number.isFinite(timeoutMs) ? Date.now() : null;
     try {
-      const response = await this.postEmbedding(text, { includeDimensions: true, options });
+      const response = await this.postEmbedding(text, dimensions, timeoutMs);
       return normalizeEmbeddingVector(response.data?.[0]?.embedding);
     } catch (error) {
       if (typeof dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
@@ -105,31 +71,24 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       }
     }
 
-    const fallbackOptions =
-      startedAtMs === null || options?.timeoutMs === undefined
-        ? options
-        : { timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAtMs)) };
-    const response = await this.postEmbedding(text, {
-      includeDimensions: false,
-      options: fallbackOptions,
-    });
+    const fallbackTimeoutMs =
+      startedAtMs === null || timeoutMs === undefined
+        ? timeoutMs
+        : Math.max(1, timeoutMs - (Date.now() - startedAtMs));
+    const response = await this.postEmbedding(text, undefined, fallbackTimeoutMs);
     const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
     return truncateEmbeddingVector(embedding, dimensions, this.model);
   }
 
   private async postEmbedding(
     text: string,
-    request: {
-      includeDimensions: boolean;
-      options?: { timeoutMs?: number };
-    },
+    dimensions: number | undefined,
+    timeoutMs: number | undefined,
   ): Promise<EmbeddingCreateResponse> {
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
-      ...(request.includeDimensions && typeof this.dimensions === "number"
-        ? { dimensions: this.dimensions }
-        : {}),
+      ...(typeof dimensions === "number" ? { dimensions } : {}),
     };
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -141,13 +100,13 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       await this.clientPromise
     ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
-      ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
+      ...(timeoutMs ? { timeout: timeoutMs, maxRetries: 0 } : {}),
     });
   }
 }
 
 function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
-  const record = asRecord(error);
+  const record = asOptionalRecord(error);
   if (record?.status !== 400 && record?.status !== 422) {
     return false;
   }
@@ -170,7 +129,7 @@ function isUnsupportedEmbeddingFieldError(details: string): boolean {
 }
 
 function stringifyEmbeddingApiError(error: unknown): string {
-  const record = asRecord(error);
+  const record = asOptionalRecord(error);
   const parts = error instanceof Error ? [error.message] : [];
   for (const value of [record?.code, record?.type, record?.param, record?.error]) {
     if (typeof value === "string" || typeof value === "number") {
@@ -203,33 +162,29 @@ function truncateEmbeddingVector(embedding: number[], dimensions: number, model:
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providers = new Map<string, AgentEmbeddingProvider>();
+  private embeddingFingerprint: string | undefined;
   private unregisterAuthMutationListener: (() => void) | undefined;
   private closePromise: Promise<void> | null = null;
+  private retirement: Promise<void> = Promise.resolve();
   private closed = false;
-  private activeUses = 0;
-  private idleWaiters = new Set<() => void>();
 
-  constructor(
-    private api: OpenClawPluginApi,
-    private embedding: MemoryConfig["embedding"],
-  ) {}
+  constructor(private api: OpenClawPluginApi) {}
 
-  private getProvider(agentId: string): AgentEmbeddingProvider {
-    const config = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
+  private getProvider(agentId: string, embedding: EmbeddingConfig): AgentEmbeddingProvider {
+    const config = this.api.runtime.config.current() as OpenClawConfig;
     const agentDir = this.api.runtime.agent.resolveAgentDir(config, agentId);
     const existing = this.providers.get(agentId);
     if (existing?.config === config && existing.agentDir === agentDir) {
       return existing;
     }
     if (existing) {
-      this.providers.delete(agentId);
-      this.retireProvider(existing);
+      this.retireMatchingProviders((entry) => entry === existing);
     }
 
     const entry: AgentEmbeddingProvider = {
       config,
       agentDir,
-      promise: this.createProvider(config, agentDir).catch((err: unknown) => {
+      promise: this.createProvider(config, agentDir, embedding).catch((err: unknown) => {
         // Failed auth must not poison this agent or any other agent's provider cache.
         if (this.providers.get(agentId) === entry) {
           this.providers.delete(agentId);
@@ -237,29 +192,35 @@ class ProviderAdapterEmbeddings implements Embeddings {
         throw err;
       }),
       activeUses: 0,
-      idleWaiters: new Set(),
     };
     this.providers.set(agentId, entry);
     return entry;
   }
 
-  private retireProvider(entry: AgentEmbeddingProvider): void {
-    const retirement = runProviderAdapterLifecycle(async () => {
-      // Config replacement revokes the old credential immediately, but a request
-      // already admitted under that identity must finish before its client closes.
-      if (entry.activeUses > 0) {
-        await new Promise<void>((resolve) => {
-          entry.idleWaiters.add(resolve);
-        });
+  invalidate(fingerprint?: string): void {
+    if (this.embeddingFingerprint === fingerprint) {
+      return;
+    }
+    this.embeddingFingerprint = fingerprint;
+    this.retireMatchingProviders(() => true);
+  }
+
+  private retireMatchingProviders(predicate: (entry: AgentEmbeddingProvider) => boolean): void {
+    const entries: AgentEmbeddingProvider[] = [];
+    for (const [agentId, entry] of this.providers) {
+      if (predicate(entry)) {
+        this.providers.delete(agentId);
+        entries.push(entry);
       }
-      const provider = await entry.promise.catch(() => null);
-      if (provider) {
-        PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
-      }
-      await drainRetainedProviders();
+    }
+    if (entries.length === 0) {
+      return;
+    }
+    void this.retireProviders(entries).catch(() => {
+      this.api.logger.warn(
+        "memory-lancedb: embedding provider cleanup failed; restart the Gateway to reclaim resources",
+      );
     });
-    // The next provider create/close retries process-global retained ownership.
-    void retirement.catch(() => undefined);
   }
 
   private invalidateProvidersForAuthMutation(event: {
@@ -267,61 +228,41 @@ class ProviderAdapterEmbeddings implements Embeddings {
     affectsInheritedStores: boolean;
   }): void {
     const changedAgentDir = event.agentDir ? resolveFilePath(event.agentDir) : undefined;
-    for (const [agentId, entry] of this.providers) {
-      if (!event.affectsInheritedStores && resolveFilePath(entry.agentDir) !== changedAgentDir) {
-        continue;
-      }
-      this.providers.delete(agentId);
-      this.retireProvider(entry);
-    }
+    this.retireMatchingProviders(
+      (entry) =>
+        event.affectsInheritedStores || resolveFilePath(entry.agentDir) === changedAgentDir,
+    );
   }
 
-  private acquireUse(): () => void {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
-    this.activeUses += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      this.activeUses -= 1;
-      if (this.activeUses === 0) {
-        const waiters = Array.from(this.idleWaiters);
-        this.idleWaiters.clear();
-        for (const resolve of waiters) {
-          resolve();
+  private retireProviders(entries: AgentEmbeddingProvider[]): Promise<void> {
+    this.retirement = Promise.allSettled([
+      this.retirement,
+      ...entries.map(async (entry) => {
+        // Admission records the entry lease before embed() first yields, so this
+        // covers invalidation, pending creation, and explicit service close.
+        if (entry.activeUses > 0) {
+          await new Promise<void>((resolve) => {
+            entry.idleResolver = resolve;
+          });
         }
+        const provider = await entry.promise.catch(() => null);
+        await provider?.close?.();
+      }),
+    ]).then((results) => {
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) {
+        throw toErrorObject(failure.reason, "memory-lancedb embedding provider retirement failed");
       }
-    };
-  }
-
-  private async awaitIdle(): Promise<void> {
-    if (this.activeUses === 0) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      this.idleWaiters.add(resolve);
     });
+    return this.retirement;
   }
 
   private async createProvider(
     config: OpenClawConfig,
     agentDir: string,
+    embedding: EmbeddingConfig,
   ): Promise<MemoryEmbeddingProvider> {
-    return await runProviderAdapterLifecycle(async () => {
-      await drainRetainedProviders();
-      return await this.createProviderAfterRetirement(config, agentDir);
-    });
-  }
-
-  private async createProviderAfterRetirement(
-    config: OpenClawConfig,
-    agentDir: string,
-  ): Promise<MemoryEmbeddingProvider> {
-    const providerId = this.embedding.provider;
+    const providerId = embedding.provider;
     const { getMemoryEmbeddingProvider, registerRuntimeAuthProfileStoreMutationListener } =
       await loadMemoryEmbeddingProviderModule();
     if (!this.closed && !this.unregisterAuthMutationListener) {
@@ -336,10 +277,10 @@ class ProviderAdapterEmbeddings implements Embeddings {
       throw new Error(`Unknown memory embedding provider: ${providerId}`);
     }
     const remote =
-      this.embedding.apiKey || this.embedding.baseUrl
+      embedding.apiKey || embedding.baseUrl
         ? {
-            ...(this.embedding.apiKey ? { apiKey: this.embedding.apiKey } : {}),
-            ...(this.embedding.baseUrl ? { baseUrl: this.embedding.baseUrl } : {}),
+            ...(embedding.apiKey ? { apiKey: embedding.apiKey } : {}),
+            ...(embedding.baseUrl ? { baseUrl: embedding.baseUrl } : {}),
           }
         : undefined;
     const result = await adapter.create({
@@ -347,11 +288,9 @@ class ProviderAdapterEmbeddings implements Embeddings {
       agentDir,
       provider: providerId,
       fallback: "none",
-      model: this.embedding.model,
+      model: embedding.model,
       ...(remote ? { remote } : {}),
-      ...(typeof this.embedding.dimensions === "number"
-        ? { outputDimensionality: this.embedding.dimensions }
-        : {}),
+      ...(typeof embedding.dimensions === "number" ? { dimensions: embedding.dimensions } : {}),
     });
     if (!result.provider) {
       throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
@@ -359,123 +298,99 @@ class ProviderAdapterEmbeddings implements Embeddings {
     return result.provider;
   }
 
-  async embed(agentId: string, text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const releaseUse = this.acquireUse();
+  async embed(
+    agentId: string,
+    text: string,
+    embedding: EmbeddingConfig,
+    timeoutMs?: number,
+  ): Promise<number[]> {
+    const deadlineAtMs = timeoutMs ? Date.now() + resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
+    const fingerprint = embeddingConfigFingerprint(embedding);
+    this.invalidate(fingerprint);
+    const entry = this.getProvider(normalizeAgentId(agentId), embedding);
+    entry.activeUses += 1;
     try {
-      const entry = this.getProvider(normalizeAgentId(agentId));
-      entry.activeUses += 1;
+      const provider = await entry.promise;
+      if (deadlineAtMs === undefined) {
+        return await provider.embed(text, { inputType: "query" });
+      }
+      // Shared initialization may finish after recall returns; never dispatch that expired query.
+      const remainingTimeoutMs = deadlineAtMs - Date.now();
+      if (remainingTimeoutMs <= 0) {
+        throw new Error("memory-lancedb embedding timed out");
+      }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const provider = await entry.promise;
-        if (!options?.timeoutMs) {
-          return await provider.embedQuery(text);
-        }
-        const controller = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          timer = setTimeout(
-            () => controller.abort(new Error("memory-lancedb embedding timed out")),
-            resolveTimerTimeoutMs(options.timeoutMs, 1),
-          );
-          timer.unref?.();
-          return await provider.embedQuery(text, { signal: controller.signal });
-        } finally {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        }
+        timer = setTimeout(
+          () => controller.abort(new Error("memory-lancedb embedding timed out")),
+          remainingTimeoutMs,
+        );
+        timer.unref?.();
+        return await provider.embed(text, { signal: controller.signal, inputType: "query" });
       } finally {
-        entry.activeUses -= 1;
-        if (entry.activeUses === 0) {
-          const waiters = Array.from(entry.idleWaiters);
-          entry.idleWaiters.clear();
-          for (const resolve of waiters) {
-            resolve();
-          }
+        if (timer) {
+          clearTimeout(timer);
         }
       }
     } finally {
-      releaseUse();
+      entry.activeUses -= 1;
+      if (entry.activeUses === 0) {
+        // Map removal gives each entry exactly one retirement waiter.
+        const resolveIdle = entry.idleResolver;
+        entry.idleResolver = undefined;
+        resolveIdle?.();
+      }
     }
   }
 
-  async close(): Promise<void> {
-    const existingClose = this.closePromise;
-    if (existingClose) {
-      await existingClose;
-      return;
-    }
-    const closeOperation = this.closeOnce();
-    this.closePromise = closeOperation;
-    try {
-      await closeOperation;
-    } catch (err) {
-      if (this.closePromise === closeOperation) {
-        this.closePromise = null;
-      }
-      throw err;
-    }
+  close(): Promise<void> {
+    return (this.closePromise ??= this.closeOnce());
   }
 
   private async closeOnce(): Promise<void> {
     this.closed = true;
     this.unregisterAuthMutationListener?.();
     this.unregisterAuthMutationListener = undefined;
-    const providers = Array.from(this.providers.entries());
-    await runProviderAdapterLifecycle(async () => {
-      // Close intent is queued before waiting. Replacement instances therefore remain
-      // behind this owner while already-admitted embeddings drain to completion.
-      await this.awaitIdle();
-      for (const [, entry] of providers) {
-        const provider = await entry.promise.catch(() => null);
-        if (provider) {
-          PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
-        }
-      }
-      try {
-        await drainRetainedProviders();
-      } finally {
-        // Ownership moved to the process-global retained set before draining. Clear the
-        // instance even when another retained provider fails, so successful closes stay final.
-        for (const [agentId, entry] of providers) {
-          if (this.providers.get(agentId) === entry) {
-            this.providers.delete(agentId);
-          }
-        }
-      }
-    });
+    const providers = Array.from(this.providers.values());
+    this.providers.clear();
+    // Join this instance's admitted work; failed native closes require a Gateway restart.
+    await this.retireProviders(providers);
   }
 }
 
 export async function runWithTimeout<T>(params: {
   timeoutMs: number;
-  task: () => Promise<T>;
+  task: (deadlineAtMs: number) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const TIMEOUT = Symbol("timeout");
-  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-    timeout = setTimeout(() => resolve(TIMEOUT), resolveTimerTimeoutMs(params.timeoutMs, 1));
-    timeout.unref?.();
-  });
-  const taskPromise = params.task();
-  taskPromise.catch(() => undefined);
-
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  // Share one absolute deadline with native work so the outer race cannot
+  // abandon a still-running operation after reporting a timeout.
+  const deadlineAtMs = Date.now() + timeoutMs;
   try {
-    const result = await Promise.race([taskPromise, timeoutPromise]);
-    if (result === TIMEOUT) {
+    const result = await raceWithTimeout(
+      () => params.task(deadlineAtMs),
+      timeoutMs,
+      (): typeof TIMEOUT => TIMEOUT,
+      { ref: false },
+    );
+    if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
     return { status: "ok", value: result };
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
+  } catch (error) {
+    if (Date.now() >= deadlineAtMs) {
+      return { status: "timeout" };
     }
+    throw error;
   }
 }
 
 export function isMemoryRecallTimeoutError(error: unknown): boolean {
   let current: unknown = error;
   for (let depth = 0; depth < 3 && current !== undefined; depth += 1) {
-    const record = asRecord(current);
+    const record = asOptionalRecord(current);
     const name =
       current instanceof Error ? current.name : typeof record?.name === "string" ? record.name : "";
     const message =
@@ -505,15 +420,12 @@ export function buildMemoryRecallUnavailableResult(error: string): AgentToolResu
   unavailable: true;
   error: string;
 }> {
-  return {
-    content: [{ type: "text", text: "Memory recall is unavailable right now." }],
-    details: {
-      count: 0,
-      disabled: true,
-      unavailable: true,
-      error,
-    },
-  };
+  return textResult("Memory recall is unavailable right now.", {
+    count: 0,
+    disabled: true,
+    unavailable: true,
+    error,
+  });
 }
 
 export class MemoryRecallEmbeddingError extends Error {
@@ -523,19 +435,47 @@ export class MemoryRecallEmbeddingError extends Error {
   }
 }
 
-export const testing = {
-  isEmbeddingDimensionsRejectedError,
-  isMemoryRecallTimeoutError,
-  runWithTimeout,
-  truncateEmbeddingVector,
-} as const;
-
-export function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
-  const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
-  if (provider === "openai" && apiKey) {
-    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions);
-  }
-  return new ProviderAdapterEmbeddings(api, cfg.embedding);
+export function createEmbeddings(api: OpenClawPluginApi): Embeddings & { start(): void } {
+  let provider = new ProviderAdapterEmbeddings(api);
+  let direct: { fingerprint: string; client: OpenAiCompatibleEmbeddings } | undefined;
+  let closed = false;
+  return {
+    start() {
+      if (closed) {
+        provider = new ProviderAdapterEmbeddings(api);
+        closed = false;
+      }
+    },
+    async embed(agentId, text, embedding, timeoutMs) {
+      if (closed) {
+        throw new Error("memory-lancedb embeddings are closed");
+      }
+      if (embedding.provider === "openai" && embedding.apiKey) {
+        provider.invalidate();
+        const fingerprint = embeddingConfigFingerprint(embedding);
+        direct =
+          direct?.fingerprint === fingerprint
+            ? direct
+            : {
+                fingerprint,
+                client: new OpenAiCompatibleEmbeddings(
+                  embedding.apiKey,
+                  embedding.model,
+                  embedding.baseUrl,
+                  embedding.dimensions,
+                ),
+              };
+        return await direct.client.embed(text, timeoutMs);
+      }
+      direct = undefined;
+      return await provider.embed(agentId, text, embedding, timeoutMs);
+    },
+    async close() {
+      closed = true;
+      direct = undefined;
+      await provider.close();
+    },
+  };
 }
 
 type EmbeddingCreateResponse = {
@@ -544,14 +484,7 @@ type EmbeddingCreateResponse = {
   }>;
 };
 
-export function normalizeEmbeddingVector(value: unknown): number[] {
-  if (Array.isArray(value)) {
-    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      throw new Error("Embedding response contains non-numeric values");
-    }
-    return value;
-  }
-
+function normalizeEmbeddingVector(value: unknown): number[] {
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {
@@ -566,8 +499,14 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
     for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
       floats.push(view.getFloat32(offset, true));
     }
-    return floats;
+    return normalizeEmbeddingVector(floats);
   }
 
-  throw new Error("Embedding response is missing a vector");
+  if (!Array.isArray(value)) {
+    throw new Error("Embedding response is missing a vector");
+  }
+  if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Embedding response contains non-numeric values");
+  }
+  return value;
 }

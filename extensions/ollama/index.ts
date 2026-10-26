@@ -1,58 +1,60 @@
-// Ollama plugin entrypoint registers its OpenClaw integration.
-import { createHash } from "node:crypto";
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAppGuidedSetupContext,
   type ProviderAuthContext,
-  type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
   type ProviderPlugin,
-  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildApiKeyCredential,
-  coerceSecretRef,
-  isNonSecretApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { resolveThinkingProfile as resolveOllamaThinkingProfile } from "./provider-policy-api.js";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
+import { ollamaProviderDiscovery } from "./provider-discovery.js";
+import {
+  normalizeResolvedModel,
+  resolveThinkingProfile as resolveOllamaThinkingProfile,
+} from "./provider-policy-api.js";
+import { createOllamaCloudAuthMethod } from "./src/cloud-auth.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  isHostedOllamaCloud,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_CLOUD_PROVIDER_ID,
   OLLAMA_DEFAULT_BASE_URL,
-  OLLAMA_DEFAULT_MODEL,
   OLLAMA_GLM52_CLOUD_MODEL_ID,
   resolveOllamaSetupDefaultBaseUrl,
 } from "./src/defaults.js";
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
+  isOllamaApiKeyMarker,
+  readOllamaStringValue,
   resolveOllamaDiscoveryResult,
   resolveOllamaRuntimeBaseUrl,
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
   createLazyOllamaNodeInferenceTool,
@@ -67,13 +69,15 @@ import {
   capLocalOllamaProviderContext,
   fetchOllamaModels,
   fetchLoadedOllamaModelNames,
+  hasOllamaModelShowInfo,
   isOllamaCloudModel,
   queryOllamaModelShowInfo,
   resolveOllamaApiBase,
+  toDynamicOllamaModel,
 } from "./src/provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
   findAvailableOllamaModelName,
-  OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
   orderPreferredOllamaModelIds,
 } from "./src/setup-model-selection.js";
 import {
@@ -82,19 +86,18 @@ import {
 } from "./src/stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./src/stream-contract.js";
 import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js";
+import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
-const loadOllamaEmbeddingProvider = createLazyRuntimeModule(
-  () => import("./src/embedding-provider.runtime.js"),
+// Registration needs SecretRef syntax, not the asynchronous credential resolution runtime.
+const resolveConfiguredSecretInputString = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("openclaw/plugin-sdk/secret-input-runtime")),
+  (runtime) => runtime.resolveConfiguredSecretInputString,
 );
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
-);
-const loadOllamaMediaUnderstandingProvider = createLazyRuntimeModule(
-  async () =>
-    (await import("./src/media-understanding-provider.js")).ollamaMediaUnderstandingProvider,
 );
 
 const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
@@ -104,25 +107,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
   authProviderId: OLLAMA_PROVIDER_ID,
   create: async (options) =>
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
-};
-
-const lazyOllamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
-  id: OLLAMA_PROVIDER_ID,
-  capabilities: ["image"],
-  describeImage: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImage) {
-      throw new Error("Ollama media understanding provider missing describeImage");
-    }
-    return await provider.describeImage(request);
-  },
-  describeImages: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImages) {
-      throw new Error("Ollama media understanding provider missing describeImages");
-    }
-    return await provider.describeImages(request);
-  },
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -138,15 +122,6 @@ async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<voi
   }
 }
 
-function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
-  return {
-    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    }),
-    sanitizeToolCallIds: false,
-  };
-}
-
 function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   return (
     /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
@@ -154,97 +129,8 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
   );
 }
 
-function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
-  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
-}
-
-const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
-const dynamicManagedCredentialFingerprints = new WeakMap<OpenClawConfig, Map<string, string>>();
-const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
-
-type OllamaNonInteractiveValidationContext = Parameters<
-  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
->[0];
-
-async function validateOllamaNonInteractive(
-  ctx: OllamaNonInteractiveValidationContext,
-): Promise<boolean> {
-  const configuredBaseUrl =
-    typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
-  const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
-  // Reset must only inspect existing models: pulling or storing credentials
-  // here could mutate a healthy installation before its reset is approved.
-  const discovery = await fetchOllamaModels(baseUrl);
-  if (!discovery.reachable) {
-    ctx.runtime.error(
-      `Ollama could not be reached at ${baseUrl}.\nDownload it at https://ollama.com/download`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-
-  const requestedModel =
-    typeof ctx.opts.customModelId === "string"
-      ? ctx.opts.customModelId.trim().replace(/^ollama\//i, "")
-      : undefined;
-  const selectedModel = requestedModel || OLLAMA_DEFAULT_MODEL;
-  const availableModelNames = discovery.models.map((model) => model.name);
-  const normalizeAvailableModelName = (modelName: string) =>
-    modelName
-      .trim()
-      .toLowerCase()
-      .replace(/:latest$/, "");
-  const selectedModelIsAvailable = availableModelNames.some(
-    (modelName) =>
-      normalizeAvailableModelName(modelName) === normalizeAvailableModelName(selectedModel),
-  );
-
-  if (requestedModel && isOllamaCloudModel(requestedModel)) {
-    const { checkOllamaCloudAuth } = await loadOllamaSetup();
-    const cloudAuth = await checkOllamaCloudAuth(baseUrl);
-    if (!cloudAuth.signedIn) {
-      ctx.runtime.error(
-        `Cloud models on this Ollama host need \`ollama signin\`.\n${
-          cloudAuth.signinUrl ?? "Run `ollama signin` on the configured Ollama host."
-        }`,
-      );
-      ctx.runtime.exit(1);
-      return false;
-    }
-    // Catalog rows can be stale; /api/show confirms every cloud model without
-    // downloading or loading it before the destructive reset is approved.
-    const showInfo = await queryOllamaModelShowInfo(baseUrl, requestedModel);
-    if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
-      ctx.runtime.error(
-        `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${
-          availableModelNames.join(", ") || "(none)"
-        }`,
-      );
-      ctx.runtime.exit(1);
-      return false;
-    }
-    return true;
-  }
-
-  if (availableModelNames.length === 0) {
-    ctx.runtime.error(
-      `No Ollama models are available at ${baseUrl}.\nPull a model first, then re-run setup.`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-  if (!selectedModelIsAvailable) {
-    ctx.runtime.error(
-      `Ollama model ${selectedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
-    );
-    ctx.runtime.exit(1);
-    return false;
-  }
-
-  return true;
-}
 
 async function buildLocalOllamaProvider(
   configuredBaseUrl?: string,
@@ -311,159 +197,84 @@ async function discoverAppGuidedOllamaModel(
         (candidate) => findAvailableOllamaModelName(candidate.id, [requestedModelId]) !== undefined,
       )
     : undefined;
-  let requestedModelIsLoaded = false;
+  const requestOptions = {
+    ...connection.discoveryAccess,
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+  };
   let availableModelNames: string[];
   if (requestedModelId) {
     if (!requestedConfiguredModel && !isOllamaCloudModel(requestedModelId)) {
-      const loaded = await fetchLoadedOllamaModelNames(connection.baseUrl, {
-        ...connection.discoveryAccess,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
+      const loaded = await fetchLoadedOllamaModelNames(connection.baseUrl, requestOptions);
       if (
         !loaded.reachable ||
         findAvailableOllamaModelName(requestedModelId, loaded.models) === undefined
       ) {
         return null;
       }
-      requestedModelIsLoaded = true;
     }
     availableModelNames = [requestedModelId];
   } else {
     // Ambient discovery must not turn an installed-but-idle model into a
     // surprise memory allocation. Only /api/ps owns the resident model set.
-    const loaded = await fetchLoadedOllamaModelNames(connection.baseUrl, {
-      ...connection.discoveryAccess,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
-    });
+    const loaded = await fetchLoadedOllamaModelNames(connection.baseUrl, requestOptions);
     if (!loaded.reachable || loaded.models.length === 0) {
       return null;
     }
     availableModelNames = loaded.models;
   }
-  const provider = await buildOllamaProvider(connection.baseUrl, {
-    quiet: true,
-    ...connection.discoveryAccess,
-  });
-  const providerModels = provider.models ?? [];
-  const requestedProviderModel = requestedModelId
-    ? providerModels.find(
-        (candidate) =>
-          candidate.compat?.supportsTools === true &&
-          findAvailableOllamaModelName(candidate.id, [requestedModelId]) !== undefined,
-      )
-    : undefined;
-  // Explicit setup completion may activate an idle configured model. Local
-  // routes must either be configured by setup or still resident from ambient
-  // detection, and must exist in /api/tags. Authenticated cloud routes can use
-  // the static model definition written by their setup flow.
-  const requestedModel =
-    (requestedConfiguredModel || requestedModelIsLoaded) && requestedProviderModel
-      ? requestedProviderModel
-      : requestedConfiguredModel && requestedModelId && isOllamaCloudModel(requestedModelId)
-        ? requestedConfiguredModel
-        : undefined;
-  const toolModels = requestedModelId
-    ? requestedModel
-      ? [requestedModel]
-      : []
-    : providerModels.filter(
-        (candidate) =>
-          candidate.compat?.supportsTools === true &&
-          findAvailableOllamaModelName(candidate.id, availableModelNames) !== undefined,
-      );
-  // Automatic setup needs measured /api/show facts. The catalog fallback is
-  // intentionally optimistic for manual use and must not qualify a weak route.
+  const { models: installedModels } = await fetchOllamaModels(connection.baseUrl, requestOptions);
+  // Setup already knows its eligible names. Scanning the general catalog first
+  // makes idle models consume its deadline and can hide a resident model past its cap.
+  const candidateIds = installedModels
+    .filter((candidate) => findAvailableOllamaModelName(candidate.name, availableModelNames))
+    .map((candidate) => candidate.name);
+  // Hosted routes may use the static definition from explicit cloud setup;
+  // local models must still exist in /api/tags before activation.
+  const configuredCloudModel =
+    requestedConfiguredModel && isOllamaCloudModel(requestedConfiguredModel.id)
+      ? requestedConfiguredModel
+      : undefined;
+  if (configuredCloudModel && !candidateIds.includes(configuredCloudModel.id)) {
+    candidateIds.push(configuredCloudModel.id);
+  }
   let model: ModelDefinitionConfig | undefined;
-  const candidatesById = new Map(toolModels.map((candidate) => [candidate.id, candidate]));
-  for (const candidateId of orderPreferredOllamaModelIds(candidatesById.keys())) {
-    const candidate = candidatesById.get(candidateId);
-    if (!candidate) {
-      continue;
-    }
+  for (const candidateId of orderPreferredOllamaModelIds(candidateIds)) {
     const showInfo = await queryOllamaModelShowInfo(
-      provider.baseUrl,
-      candidate.id,
-      connection.accessValue ? { apiKey: connection.accessValue } : undefined,
+      connection.baseUrl,
+      candidateId,
+      requestOptions,
     );
-    const contextWindow = showInfo.contextWindow ?? candidate.contextWindow;
-    const supportsTools =
-      showInfo.capabilities?.includes("tools") ?? candidate.compat?.supportsTools === true;
-    if (
-      !supportsTools ||
-      contextWindow === undefined ||
-      contextWindow < OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS
-    ) {
-      continue;
-    }
-    model = capLocalOllamaModelContext({
-      ...candidate,
-      contextWindow,
-      contextTokens: contextWindow,
-      compat: { ...candidate.compat, supportsTools: true },
+    model = buildAppGuidedOllamaModel({
+      baseUrl: connection.baseUrl,
+      model: installedModels.find((candidate) => candidate.name === candidateId) ?? {
+        name: candidateId,
+      },
+      showInfo,
+      configuredCloudModel,
     });
-    break;
+    if (model) {
+      break;
+    }
   }
   if (!model) {
     return null;
   }
-  const preparedProvider = capLocalOllamaProviderContext({
-    ...provider,
-    models: providerModels.some((candidate) => candidate.id === model.id)
-      ? providerModels.map((candidate) => (candidate.id === model.id ? model : candidate))
-      : [...providerModels, model],
-  });
-  let ownerValue = connection.existing?.apiKey;
-  if (ownerValue === undefined) {
-    if (connection.accessValue) {
-      ownerValue = "OLLAMA_API_KEY";
-    } else {
-      ownerValue = OLLAMA_DEFAULT_API_KEY;
-    }
-  }
+  const preparedProvider: ModelProviderConfig = {
+    baseUrl: connection.baseUrl,
+    api: "ollama",
+    models: configuredModels.some((candidate) => candidate.id === model.id)
+      ? configuredModels.map((candidate) => (candidate.id === model.id ? model : candidate))
+      : [...configuredModels, model],
+  };
+  const ownerValue =
+    connection.existing?.apiKey ??
+    (connection.accessValue ? "OLLAMA_API_KEY" : OLLAMA_DEFAULT_API_KEY);
   return {
     existing: connection.existing,
     provider: preparedProvider,
     model,
     ownerValue,
   };
-}
-
-function buildDynamicManagedSecretScope(
-  provider: string,
-  baseUrl: string | undefined,
-  configuredApiKey: unknown,
-): string | undefined {
-  const secretRef = coerceSecretRef(configuredApiKey);
-  if (!secretRef || secretRef.source === "env") {
-    return undefined;
-  }
-  return `${provider}\0${resolveOllamaApiBase(baseUrl)}\0${secretRef.source}\0${secretRef.provider}\0${secretRef.id}`;
-}
-
-function buildDynamicCacheKey(
-  provider: string,
-  baseUrl: string | undefined,
-  configuredApiKey: unknown,
-  config?: OpenClawConfig,
-): string {
-  const secretRef = coerceSecretRef(configuredApiKey);
-  const managedSecretScope = buildDynamicManagedSecretScope(provider, baseUrl, configuredApiKey);
-  const apiKey = readUsableOllamaShowApiKey({
-    env: process.env,
-    allowAmbientEnvFallback: !isLocalOllamaBaseUrl(baseUrl),
-    explicitApiKey: configuredApiKey,
-  });
-  // Managed secrets resolve asynchronously; retain their resolved fingerprint
-  // per config so synchronous lookups cannot cross secret-provider ownership.
-  const managedCredentialFingerprint =
-    managedSecretScope && config
-      ? dynamicManagedCredentialFingerprints.get(config)?.get(managedSecretScope)
-      : undefined;
-  const credentialScope =
-    apiKey ?? (secretRef ? `${secretRef.source}\0${secretRef.provider}\0${secretRef.id}` : "");
-  const credentialFingerprint =
-    managedCredentialFingerprint ?? createHash("sha256").update(credentialScope).digest("hex");
-  return `${provider}\0${resolveOllamaApiBase(baseUrl)}\0${credentialFingerprint}`;
 }
 
 function hasOllamaDiscoverySignal(providerConfig: ModelProviderConfig | undefined): boolean {
@@ -474,90 +285,22 @@ function hasOllamaDiscoverySignal(providerConfig: ModelProviderConfig | undefine
   );
 }
 
-function toDynamicOllamaModel(params: {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-  model: ModelDefinitionConfig;
-}): ProviderRuntimeModel {
-  const input = (params.model.input ?? ["text"]).filter(
-    (value): value is "text" | "image" => value === "text" || value === "image",
-  );
-  return {
-    id: params.model.id,
-    name: params.model.name ?? params.model.id,
-    provider: params.provider,
-    api: params.providerConfig.api ?? "ollama",
-    baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
-    reasoning: params.model.reasoning ?? false,
-    input: input.length > 0 ? input : ["text"],
-    cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: params.model.contextWindow ?? 8192,
-    ...(params.model.contextTokens !== undefined
-      ? { contextTokens: params.model.contextTokens }
-      : {}),
-    maxTokens: params.model.maxTokens ?? 8192,
-    ...(params.model.compat ? { compat: params.model.compat as never } : {}),
-    ...(params.model.params ? { params: params.model.params } : {}),
-  };
-}
-
-function stripTrailingAuthProfile(raw: string): string {
-  const trimmed = raw.trim();
-  const lastSlash = trimmed.lastIndexOf("/");
-  let delimiter = trimmed.indexOf("@", lastSlash + 1);
-  if (delimiter <= 0) {
-    return trimmed;
-  }
-  const suffix = () => trimmed.slice(delimiter + 1);
-  if (/^\d{8}(?:@|$)/.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 9);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  if (/^(?:i?q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(suffix())) {
-    const next = trimmed.indexOf("@", delimiter + 1);
-    if (next < 0) {
-      return trimmed;
-    }
-    delimiter = next;
-  }
-  const model = trimmed.slice(0, delimiter).trim();
-  const profile = trimmed.slice(delimiter + 1).trim();
-  return model && profile ? model : trimmed;
-}
-
 function needsOllamaCatalogMetadata(entry: ProviderAugmentModelCatalogContext["entries"][number]) {
   const hasContextLimit = entry.contextWindow !== undefined || entry.contextTokens !== undefined;
   return (
     !hasContextLimit ||
     entry.reasoning === undefined ||
     entry.input === undefined ||
-    entry.compat === undefined
+    entry.compat === undefined ||
+    entry.parameterCount === undefined
   );
-}
-
-function readConfiguredOllamaApiKey(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (value && typeof value === "object" && "value" in value) {
-    const resolved = (value as { value?: unknown }).value;
-    if (typeof resolved === "string") {
-      const trimmed = resolved.trim();
-      return trimmed || undefined;
-    }
-  }
-  return undefined;
 }
 
 function readConcreteOllamaApiKey(value: unknown): string | undefined {
   if (coerceSecretRef(value)) {
     return undefined;
   }
-  const apiKey = readConfiguredOllamaApiKey(value);
+  const apiKey = readOllamaStringValue(value);
   return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;
 }
 
@@ -583,7 +326,7 @@ async function resolveAppGuidedOllamaApiKey(
   if (resolved.unresolvedRefReason) {
     return undefined;
   }
-  const value = readConfiguredOllamaApiKey(resolved.value);
+  const value = readOllamaStringValue(resolved.value);
   return value === "OLLAMA_API_KEY"
     ? readConcreteOllamaApiKey(ctx.env.OLLAMA_API_KEY)
     : readConcreteOllamaApiKey(value);
@@ -597,116 +340,6 @@ function readEnvBackedOllamaApiKey(value: unknown, env: NodeJS.ProcessEnv): stri
   return undefined;
 }
 
-function isAmbientOllamaApiKeyMarker(value: string | undefined): boolean {
-  return value === OLLAMA_DEFAULT_API_KEY || value === "OLLAMA_API_KEY";
-}
-
-function readUsableOllamaShowApiKey(params: {
-  env: NodeJS.ProcessEnv;
-  allowAmbientEnvFallback: boolean;
-  explicitApiKey?: unknown;
-  resolved?: { apiKey?: unknown; discoveryApiKey?: unknown };
-}): string | undefined {
-  const explicitEnvApiKey = readEnvBackedOllamaApiKey(params.explicitApiKey, params.env);
-  if (explicitEnvApiKey) {
-    return explicitEnvApiKey;
-  }
-  const explicitApiKey = readConcreteOllamaApiKey(params.explicitApiKey);
-  if (explicitApiKey) {
-    return explicitApiKey;
-  }
-  const resolvedApiKey = readConfiguredOllamaApiKey(params.resolved?.apiKey);
-  const canUseResolvedDiscovery =
-    params.allowAmbientEnvFallback || !isAmbientOllamaApiKeyMarker(resolvedApiKey);
-  const discoveryApiKey = readConcreteOllamaApiKey(params.resolved?.discoveryApiKey);
-  if (discoveryApiKey && canUseResolvedDiscovery) {
-    return discoveryApiKey;
-  }
-  const resolvedEnvApiKey = readEnvBackedOllamaApiKey(params.resolved?.apiKey, params.env);
-  if (resolvedEnvApiKey && canUseResolvedDiscovery) {
-    return resolvedEnvApiKey;
-  }
-  const apiKey = readConcreteOllamaApiKey(params.resolved?.apiKey);
-  if (apiKey) {
-    return apiKey;
-  }
-  return params.allowAmbientEnvFallback
-    ? readConcreteOllamaApiKey(params.env.OLLAMA_API_KEY)
-    : undefined;
-}
-
-function collectConfiguredOllamaModelIds(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  entries?: ProviderAugmentModelCatalogContext["entries"];
-}): Array<{
-  id: string;
-  api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
-  name?: string;
-}> {
-  const providerPrefix = `${params.provider.toLowerCase()}/`;
-  const models = new Map<
-    string,
-    {
-      id: string;
-      api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
-      name?: string;
-    }
-  >();
-  const addModelId = (
-    modelId: string,
-    api?: ProviderAugmentModelCatalogContext["entries"][number]["api"],
-    name?: string,
-  ) => {
-    const trimmed = modelId.trim();
-    if (!trimmed || trimmed === "*") {
-      return;
-    }
-    const trimmedName = typeof name === "string" ? name.trim() : "";
-    const existing = models.get(trimmed);
-    if (existing) {
-      if ((!existing.api && api) || (!existing.name && trimmedName)) {
-        models.set(trimmed, {
-          ...existing,
-          ...(api && !existing.api ? { api } : {}),
-          ...(trimmedName && !existing.name ? { name: trimmedName } : {}),
-        });
-      }
-      return;
-    }
-    models.set(trimmed, {
-      id: trimmed,
-      ...(api ? { api } : {}),
-      ...(trimmedName ? { name: trimmedName } : {}),
-    });
-  };
-  const addRef = (raw: unknown) => {
-    if (typeof raw !== "string") {
-      return;
-    }
-    const trimmed = stripTrailingAuthProfile(raw);
-    if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
-      return;
-    }
-    const modelId = trimmed.slice(providerPrefix.length).trim();
-    addModelId(modelId);
-  };
-
-  for (const ref of collectConfiguredModelRefValues(params.config)) {
-    addRef(ref);
-  }
-  for (const entry of params.entries ?? []) {
-    if (
-      entry.provider.toLowerCase() === params.provider.toLowerCase() &&
-      entry.id.trim() &&
-      needsOllamaCatalogMetadata(entry)
-    ) {
-      addModelId(entry.id.trim(), entry.api, entry.name);
-    }
-  }
-  return [...models.values()];
-}
-
 function buildStaticOllamaCloudProvider(): ModelProviderConfig {
   return {
     baseUrl: OLLAMA_CLOUD_BASE_URL,
@@ -718,12 +351,13 @@ function buildStaticOllamaCloudProvider(): ModelProviderConfig {
 async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderConfig> {
   const discovered = await buildOllamaProvider(OLLAMA_CLOUD_BASE_URL, {
     ...(apiKey ? { apiKey } : {}),
-    quiet: true,
+    discoveryMode: "strict",
   });
-  if (!discovered.models?.length) {
-    return buildStaticOllamaCloudProvider();
-  }
-  if (!apiKey || discovered.models.some((model) => model.id === OLLAMA_GLM52_CLOUD_MODEL_ID)) {
+  if (
+    !discovered.models.length ||
+    !apiKey ||
+    discovered.models.some((model) => model.id === OLLAMA_GLM52_CLOUD_MODEL_ID)
+  ) {
     return discovered;
   }
   const showInfo = await queryOllamaModelShowInfo(
@@ -731,7 +365,7 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
     OLLAMA_GLM52_CLOUD_MODEL_ID,
     { apiKey },
   );
-  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+  if (!hasOllamaModelShowInfo(showInfo)) {
     return discovered;
   }
   const defaultModel = OLLAMA_CLOUD_DEFAULT_MODELS.find(
@@ -742,7 +376,15 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
   }
   return {
     ...discovered,
-    models: [...discovered.models, buildDefaultOllamaCloudModelDefinition(defaultModel)],
+    models: [
+      ...discovered.models,
+      buildOllamaModelDefinition(
+        defaultModel.id,
+        showInfo.contextWindow ?? defaultModel.contextWindow,
+        showInfo.capabilities ?? [...defaultModel.capabilities],
+        { ...showInfo, remote: true },
+      ),
+    ],
   };
 }
 
@@ -757,15 +399,18 @@ async function resolveRequestedDynamicOllamaModel(params: {
   const showInfo = params.showApiKey
     ? await queryOllamaModelShowInfo(showBaseUrl, params.modelId, { apiKey: params.showApiKey })
     : await queryOllamaModelShowInfo(showBaseUrl, params.modelId);
-  if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
+  if (!hasOllamaModelShowInfo(showInfo)) {
     return undefined;
   }
   const definition = buildOllamaModelDefinition(
     params.modelId,
     showInfo.contextWindow,
     showInfo.capabilities,
+    { ...showInfo, remote: isHostedOllamaCloud(showBaseUrl) },
   );
-  const model = params.capContextTokens ? capLocalOllamaModelContext(definition) : definition;
+  const model = params.capContextTokens
+    ? capLocalOllamaModelContext(definition, showBaseUrl)
+    : definition;
   return toDynamicOllamaModel({
     provider: params.provider,
     providerConfig: params.providerConfig,
@@ -782,11 +427,62 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   resolveProviderApiKey: ProviderAugmentModelCatalogContext["resolveProviderApiKey"];
   capContextTokens?: boolean;
 }): Promise<ProviderAugmentModelCatalogContext["entries"]> {
-  const models = collectConfiguredOllamaModelIds({
-    config: params.config,
-    provider: params.provider,
-    entries: params.entries,
-  });
+  const providerPrefix = `${params.provider.toLowerCase()}/`;
+  const modelsById = new Map<
+    string,
+    {
+      id: string;
+      api?: ProviderAugmentModelCatalogContext["entries"][number]["api"];
+      name?: string;
+    }
+  >();
+  const addModelId = (
+    modelId: string,
+    api?: ProviderAugmentModelCatalogContext["entries"][number]["api"],
+    name?: string,
+  ) => {
+    const trimmed = modelId.trim();
+    if (!trimmed || trimmed === "*") {
+      return;
+    }
+    const trimmedName = name?.trim();
+    const existing = modelsById.get(trimmed);
+    if (existing) {
+      if (!existing.api && api) {
+        existing.api = api;
+      }
+      if (!existing.name && trimmedName) {
+        existing.name = trimmedName;
+      }
+      return;
+    }
+    modelsById.set(trimmed, {
+      id: trimmed,
+      ...(api ? { api } : {}),
+      ...(trimmedName ? { name: trimmedName } : {}),
+    });
+  };
+  for (const ref of collectConfiguredModelRefValues(params.config)) {
+    if (typeof ref !== "string") {
+      continue;
+    }
+    const trimmed = splitTrailingAuthProfile(ref).model;
+    if (!trimmed.toLowerCase().startsWith(providerPrefix)) {
+      continue;
+    }
+    const modelId = trimmed.slice(providerPrefix.length).trim();
+    addModelId(modelId);
+  }
+  for (const entry of params.entries ?? []) {
+    if (
+      entry.provider.toLowerCase() === params.provider.toLowerCase() &&
+      entry.id.trim() &&
+      needsOllamaCatalogMetadata(entry)
+    ) {
+      addModelId(entry.id.trim(), entry.api, entry.name);
+    }
+  }
+  const models = [...modelsById.values()];
   if (models.length === 0) {
     return [];
   }
@@ -796,12 +492,36 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   });
   const baseUrl = readProviderBaseUrl(configuredProvider) ?? params.defaultBaseUrl;
   const isLocalBaseUrl = isLocalOllamaBaseUrl(baseUrl);
-  const showApiKey = readUsableOllamaShowApiKey({
-    env: params.env,
-    allowAmbientEnvFallback: !isLocalBaseUrl,
-    explicitApiKey: configuredProvider?.apiKey,
-    resolved: params.resolveProviderApiKey?.(params.provider),
-  });
+  const env = params.env;
+  const allowAmbientEnvFallback = !isLocalBaseUrl;
+  const configuredApiKey = configuredProvider?.apiKey;
+  const resolved = params.resolveProviderApiKey?.(params.provider);
+  const showApiKey = (() => {
+    const explicitEnvApiKey = readEnvBackedOllamaApiKey(configuredApiKey, env);
+    if (explicitEnvApiKey) {
+      return explicitEnvApiKey;
+    }
+    const explicitApiKey = readConcreteOllamaApiKey(configuredApiKey);
+    if (explicitApiKey) {
+      return explicitApiKey;
+    }
+    const resolvedApiKey = readOllamaStringValue(resolved?.apiKey);
+    const canUseResolvedDiscovery =
+      allowAmbientEnvFallback || !isOllamaApiKeyMarker(resolvedApiKey);
+    const discoveryApiKey = readConcreteOllamaApiKey(resolved?.discoveryApiKey);
+    if (discoveryApiKey && canUseResolvedDiscovery) {
+      return discoveryApiKey;
+    }
+    const resolvedEnvApiKey = readEnvBackedOllamaApiKey(resolved?.apiKey, env);
+    if (resolvedEnvApiKey && canUseResolvedDiscovery) {
+      return resolvedEnvApiKey;
+    }
+    const apiKey = readConcreteOllamaApiKey(resolved?.apiKey);
+    if (apiKey) {
+      return apiKey;
+    }
+    return allowAmbientEnvFallback ? readConcreteOllamaApiKey(env.OLLAMA_API_KEY) : undefined;
+  })();
   if (!isLocalBaseUrl && !showApiKey) {
     return [];
   }
@@ -834,6 +554,8 @@ async function augmentConfiguredOllamaCatalogModels(params: {
               input: requested.input,
               contextWindow: requested.contextWindow,
               contextTokens: requested.contextTokens,
+              parameterCount: requested.parameterCount,
+              thinkingLevelMap: requested.thinkingLevelMap,
               compat: requested.compat,
             }
           : undefined;
@@ -849,42 +571,45 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 }
 
 // Local and cloud own distinct auth/catalog policy but share native transport and replay rules.
-const OLLAMA_SHARED_PROVIDER_HOOKS = {
-  ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
-  createStreamFn: ({ config, model, provider }) => {
-    if (model.api !== "ollama") {
-      return undefined;
-    }
-    return createLazyConfiguredOllamaStreamFn({
-      model,
-      providerBaseUrl:
-        readProviderBaseUrl(
-          resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
-        ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
-    });
-  },
-  buildReplayPolicy: ({ modelApi }) =>
-    modelApi === "ollama"
-      ? buildNativeOllamaReplayPolicy()
-      : buildOpenAICompatibleReplayPolicy(modelApi),
-  resolveReasoningOutputMode: () => "native",
-  resolveThinkingProfile: resolveOllamaThinkingProfile,
-  wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
-  matchesContextOverflowError: ({ errorMessage }) =>
-    matchesOllamaContextOverflowError(errorMessage),
-  classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
-} satisfies Pick<
-  ProviderPlugin,
-  | "createStreamFn"
-  | "normalizeToolSchemas"
-  | "inspectToolSchemas"
-  | "buildReplayPolicy"
-  | "resolveReasoningOutputMode"
-  | "resolveThinkingProfile"
-  | "wrapStreamFn"
-  | "matchesContextOverflowError"
-  | "classifyFailoverReason"
->;
+const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
+  ({
+    ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
+    supportsSystemPromptCacheBoundary: true,
+    createStreamFn: ({ config, model, provider }) => {
+      if (model.api !== "ollama") {
+        return undefined;
+      }
+      const { acquireLocalService } = api.runtime.llm;
+      const configuredProviderId =
+        findNormalizedProviderKey(config?.models?.providers, provider) ?? provider;
+      return createLazyConfiguredOllamaStreamFn({
+        model,
+        localService: { providerId: configuredProviderId, acquire: acquireLocalService },
+        providerBaseUrl:
+          readProviderBaseUrl(
+            resolveConfiguredOllamaProviderConfig({ config, providerId: configuredProviderId }),
+          ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
+      });
+    },
+    buildReplayPolicy: ({ modelApi }) =>
+      modelApi === "ollama"
+        ? {
+            ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+              sanitizeToolCallIds: false,
+              dropReasoningFromHistory: false,
+            }),
+            sanitizeToolCallIds: false,
+          }
+        : buildOpenAICompatibleReplayPolicy(modelApi),
+    resolveReasoningOutputMode: () => "native",
+    resolveThinkingProfile: resolveOllamaThinkingProfile,
+    normalizeResolvedModel,
+    wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+    matchesContextOverflowError: ({ errorMessage }) =>
+      matchesOllamaContextOverflowError(errorMessage),
+    classifyFailoverReason: ({ errorMessage }) =>
+      errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined,
+  }) satisfies Partial<ProviderPlugin>;
 
 export default definePluginEntry({
   id: "ollama",
@@ -892,11 +617,12 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    const providerHooks = createOllamaSharedProviderHooks(api);
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRiskLazily(api);
     }
-    api.registerMemoryEmbeddingProvider(lazyOllamaMemoryEmbeddingProviderAdapter);
-    api.registerMediaUnderstandingProvider(lazyOllamaMediaUnderstandingProvider);
+    api.registerEmbeddingProvider(lazyOllamaMemoryEmbeddingProviderAdapter);
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
     if (startupPluginConfig.nodeInference?.enabled !== false) {
       for (const command of createLazyOllamaNodeHostCommands()) {
         api.registerNodeHostCommand(command);
@@ -917,48 +643,30 @@ export default definePluginEntry({
       label: "Ollama Cloud",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: OLLAMA_CLOUD_PROVIDER_ID,
-          methodId: "api-key",
-          label: "Ollama Cloud API key",
-          hint: "Hosted models via ollama.com",
-          optionKey: "ollamaCloudApiKey",
-          flagName: "--ollama-cloud-api-key",
-          envVar: "OLLAMA_API_KEY",
-          promptMessage: "Enter Ollama Cloud API key",
-          defaultModel: OLLAMA_CLOUD_DEFAULT_MODEL_REF,
-          noteTitle: "Ollama Cloud",
-          noteMessage: "Manage API keys at https://ollama.com/settings/keys",
-          wizard: {
-            choiceId: "ollama-cloud",
-            choiceLabel: "Ollama Cloud",
-            choiceHint: "Hosted models via ollama.com",
-            groupId: "ollama",
-            groupLabel: "Ollama",
-            groupHint: "Cloud and local open models",
-          },
-        }),
-      ],
+      auth: [createOllamaCloudAuthMethod()],
       catalog: {
         order: "simple",
         run: async (ctx: ProviderCatalogContext) => {
-          const resolvedAuth = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID);
-          const apiKey = resolvedAuth.apiKey ?? resolvedAuth.discoveryApiKey;
-          if (!apiKey) {
+          if (ctx.providerIds && !ctx.providerIds.includes(OLLAMA_CLOUD_PROVIDER_ID)) {
             return null;
           }
-          const discoveryApiKey = readUsableOllamaShowApiKey({
-            env: ctx.env,
-            allowAmbientEnvFallback: true,
-            resolved: resolvedAuth,
+          const resolvedAuth = ctx.resolveProviderApiKey(OLLAMA_CLOUD_PROVIDER_ID);
+          const apiKey = resolvedAuth.apiKey ?? resolvedAuth.discoveryApiKey;
+          const discoveryApiKey =
+            resolvedAuth.discoveryApiKey ?? readConcreteOllamaApiKey(resolvedAuth.apiKey);
+          if (!apiKey || !discoveryApiKey) {
+            return null;
+          }
+          return await runLiveProviderCatalog({
+            providerId: OLLAMA_CLOUD_PROVIDER_ID,
+            profileId: resolvedAuth.profileId,
+            run: async () => ({
+              provider: {
+                ...(await buildOllamaCloudProvider(discoveryApiKey)),
+                apiKey,
+              },
+            }),
           });
-          return {
-            provider: {
-              ...(await buildOllamaCloudProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
         },
       },
       staticCatalog: {
@@ -967,7 +675,7 @@ export default definePluginEntry({
           provider: buildStaticOllamaCloudProvider(),
         }),
       },
-      ...OLLAMA_SHARED_PROVIDER_HOOKS,
+      ...providerHooks,
       resolveDynamicModel: ({ provider, modelId }) => {
         const cloudProvider = buildStaticOllamaCloudProvider();
         const model = cloudProvider.models?.find((entry) => entry.id === modelId);
@@ -994,6 +702,7 @@ export default definePluginEntry({
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
+      ...createOllamaUsageHooks(),
       auth: [
         {
           id: "local",
@@ -1026,8 +735,6 @@ export default definePluginEntry({
               }
               // Keep discovery ownership explicit so the live probe and persisted
               // route use the same local marker, env marker, or configured input.
-              const ownerValue = discovered.ownerValue;
-              const ownerAccess = { apiKey: ownerValue };
               return {
                 profiles: [],
                 defaultModel: ctx.modelRef,
@@ -1038,8 +745,10 @@ export default definePluginEntry({
                       [OLLAMA_PROVIDER_ID]: {
                         ...discovered.existing,
                         ...discovered.provider,
-                        ...ownerAccess,
-                        models: discovered.provider.models,
+                        ...(discovered.ownerValue ? { apiKey: discovered.ownerValue } : {}),
+                        models: discovered.provider.models.map(
+                          ({ parameterCount: _parameterCount, ...model }) => model,
+                        ),
                       },
                     },
                   },
@@ -1052,34 +761,17 @@ export default definePluginEntry({
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               env: ctx.env,
-              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
               ...(ctx.signal ? { signal: ctx.signal } : {}),
-              secretInputMode: ctx.secretInputMode,
-              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
-              profiles: [
-                {
-                  profileId: "ollama:default",
-                  credential: buildApiKeyCredential(
-                    OLLAMA_PROVIDER_ID,
-                    result.credential,
-                    undefined,
-                    result.credentialMode
-                      ? {
-                          secretInputMode: result.credentialMode,
-                          config: ctx.config,
-                        }
-                      : undefined,
-                  ),
-                },
-              ],
+              profiles: [],
               configPatch: result.config,
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };
           },
-          validateNonInteractive: validateOllamaNonInteractive,
+          validateNonInteractive: async (ctx) =>
+            await (await loadOllamaSetup()).validateOllamaNonInteractive(ctx),
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const { configureOllamaNonInteractive } = await loadOllamaSetup();
             return await configureOllamaNonInteractive({
@@ -1089,13 +781,13 @@ export default definePluginEntry({
                 customModelId: ctx.opts.customModelId as string | undefined,
               },
               runtime: ctx.runtime,
-              agentDir: ctx.agentDir,
             });
           },
         },
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,
@@ -1130,7 +822,7 @@ export default definePluginEntry({
         const { ensureOllamaModelPulled } = await loadOllamaSetup();
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-      ...OLLAMA_SHARED_PROVIDER_HOOKS,
+      ...providerHooks,
       augmentModelCatalog: async (ctx) =>
         await augmentConfiguredOllamaCatalogModels({
           config: ctx.config,
@@ -1141,29 +833,7 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
           capContextTokens: true,
         }),
-      createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
-        const { createOllamaEmbeddingProvider } = await loadOllamaEmbeddingProvider();
-        const { provider, client } = await createOllamaEmbeddingProvider({
-          config,
-          remote,
-          model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
-          provider: embeddingProvider || OLLAMA_PROVIDER_ID,
-        });
-        return {
-          ...provider,
-          client,
-        };
-      },
-      resolveSyntheticAuth: ({ provider, providerConfig }) => {
-        if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
-          return undefined;
-        }
-        return {
-          apiKey: OLLAMA_DEFAULT_API_KEY,
-          source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
-          mode: "api-key",
-        };
-      },
+      resolveSyntheticAuth: ollamaProviderDiscovery.resolveSyntheticAuth,
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === OLLAMA_DEFAULT_API_KEY,
       prepareDynamicModel: async (ctx) => {
@@ -1172,37 +842,22 @@ export default definePluginEntry({
           providerId: ctx.provider,
         });
         if (!hasOllamaDiscoverySignal(providerConfig)) {
-          return;
+          return undefined;
         }
         const baseUrl = readProviderBaseUrl(providerConfig);
-        const managedSecretScope = buildDynamicManagedSecretScope(
-          ctx.provider,
-          baseUrl,
-          providerConfig?.apiKey,
-        );
-        let dynamicCacheKey = buildDynamicCacheKey(
-          ctx.provider,
-          baseUrl,
-          providerConfig?.apiKey,
-          ctx.config,
-        );
         let discoveryApiKey: string | undefined;
         if (providerConfig?.apiKey !== undefined && providerConfig.apiKey !== null) {
           const resolved = await resolveConfiguredSecretInputString({
             config: ctx.config ?? {},
             env: process.env,
             value: providerConfig.apiKey,
-            path: `models.providers.${ctx.provider}.apiKey`,
+            path: `models.providers[${JSON.stringify(ctx.provider)}].apiKey`,
             unresolvedReasonStyle: "detailed",
           });
           if (resolved.unresolvedRefReason) {
-            dynamicModelCache.delete(dynamicCacheKey);
-            if (managedSecretScope && ctx.config) {
-              dynamicManagedCredentialFingerprints.get(ctx.config)?.delete(managedSecretScope);
-            }
-            return;
+            return undefined;
           }
-          const resolvedApiKey = readConfiguredOllamaApiKey(resolved.value);
+          const resolvedApiKey = readOllamaStringValue(resolved.value);
           const configuredSecretRef = coerceSecretRef(providerConfig.apiKey);
           discoveryApiKey = configuredSecretRef
             ? resolvedApiKey
@@ -1210,37 +865,10 @@ export default definePluginEntry({
               ? readConcreteOllamaApiKey(process.env.OLLAMA_API_KEY)
               : readConcreteOllamaApiKey(resolvedApiKey);
           if (configuredSecretRef && !discoveryApiKey) {
-            dynamicModelCache.delete(dynamicCacheKey);
-            if (managedSecretScope && ctx.config) {
-              dynamicManagedCredentialFingerprints.get(ctx.config)?.delete(managedSecretScope);
-            }
-            return;
+            return undefined;
           }
         } else if (!isLocalOllamaBaseUrl(baseUrl)) {
           discoveryApiKey = readConcreteOllamaApiKey(process.env.OLLAMA_API_KEY);
-        }
-        if (managedSecretScope && ctx.config && discoveryApiKey) {
-          let fingerprints = dynamicManagedCredentialFingerprints.get(ctx.config);
-          if (!fingerprints) {
-            fingerprints = new Map();
-            dynamicManagedCredentialFingerprints.set(ctx.config, fingerprints);
-          }
-          const resolvedCredentialFingerprint = createHash("sha256")
-            .update(discoveryApiKey)
-            .digest("hex");
-          if (
-            fingerprints.has(managedSecretScope) &&
-            fingerprints.get(managedSecretScope) !== resolvedCredentialFingerprint
-          ) {
-            dynamicModelCache.delete(dynamicCacheKey);
-          }
-          fingerprints.set(managedSecretScope, resolvedCredentialFingerprint);
-          dynamicCacheKey = buildDynamicCacheKey(
-            ctx.provider,
-            baseUrl,
-            providerConfig?.apiKey,
-            ctx.config,
-          );
         }
         const provider = await buildLocalOllamaProvider(baseUrl, {
           quiet: true,
@@ -1256,42 +884,21 @@ export default definePluginEntry({
           }),
           api: dynamicApi,
         };
-        const dynamicModels = (dynamicProvider.models ?? []).map((model) =>
-          toDynamicOllamaModel({
+        const discoveredModel = dynamicProvider.models?.find((model) => model.id === ctx.modelId);
+        if (discoveredModel) {
+          return toDynamicOllamaModel({
             provider: ctx.provider,
             providerConfig: dynamicProvider,
-            model,
-          }),
-        );
-        if (!dynamicModels.some((model) => model.id === ctx.modelId)) {
-          const requestedModel = await resolveRequestedDynamicOllamaModel({
-            provider: ctx.provider,
-            providerConfig: dynamicProvider,
-            modelId: ctx.modelId,
-            showApiKey: discoveryApiKey,
-            capContextTokens: true,
+            model: discoveredModel,
           });
-          if (requestedModel) {
-            dynamicModels.push(requestedModel);
-          }
         }
-        dynamicModelCache.set(dynamicCacheKey, dynamicModels);
-      },
-      resolveDynamicModel: (ctx) => {
-        const providerConfig = resolveConfiguredOllamaProviderConfig({
-          config: ctx.config,
-          providerId: ctx.provider,
+        return await resolveRequestedDynamicOllamaModel({
+          provider: ctx.provider,
+          providerConfig: dynamicProvider,
+          modelId: ctx.modelId,
+          showApiKey: discoveryApiKey,
+          capContextTokens: true,
         });
-        return dynamicModelCache
-          .get(
-            buildDynamicCacheKey(
-              ctx.provider,
-              readProviderBaseUrl(providerConfig),
-              providerConfig?.apiKey,
-              ctx.config,
-            ),
-          )
-          ?.find((model) => model.id === ctx.modelId);
       },
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +

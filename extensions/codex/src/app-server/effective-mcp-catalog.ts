@@ -3,24 +3,18 @@ import {
   assignMcpCatalogSafeServerNames,
   type McpToolCatalog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerClient } from "./client.js";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
+import { listCodexMcpServerStatuses } from "./mcp-server-status.js";
+import { projectCodexMcpServerMetadata, projectCodexMcpToolMetadata } from "./mcp-tool-metadata.js";
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 
-const MCP_STATUS_PAGE_SIZE = 100;
-const MCP_STATUS_MAX_PAGES = 100;
 type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function catalogTool(params: {
   serverName: string;
@@ -29,29 +23,36 @@ function catalogTool(params: {
   raw?: unknown;
   deniedBySession?: true;
 }): McpToolCatalog["tools"][number] {
-  const raw = asRecord(params.raw);
-  const description = readString(raw?.description);
+  const raw = asOptionalRecord(params.raw);
+  const description = normalizeOptionalString(raw?.description);
+  const { title, ...metadata } = projectCodexMcpToolMetadata(params.toolName, raw);
+  const ui = asOptionalRecord(asOptionalRecord(raw?._meta)?.ui);
   return {
     serverName: params.serverName,
     safeServerName: params.safeServerName,
     toolName: params.toolName,
-    ...(readString(raw?.title) ? { title: readString(raw?.title) } : {}),
+    ...(title ? { title } : {}),
     ...(description ? { description } : {}),
-    inputSchema: (asRecord(raw?.inputSchema) ?? { type: "object" }) as never,
-    fallbackDescription: description ?? params.toolName,
+    inputSchema: (asOptionalRecord(raw?.inputSchema) ?? { type: "object" }) as never,
+    ...metadata,
+    ...(Array.isArray(ui?.visibility)
+      ? {
+          uiVisibility: ui.visibility.filter(
+            (value): value is "app" | "model" => value === "app" || value === "model",
+          ),
+        }
+      : {}),
     ...(params.deniedBySession ? { deniedBySession: true } : {}),
   };
 }
 
-/** Converts Codex's thread-scoped status response into OpenClaw's MCP catalog shape. */
 function buildCodexEffectiveMcpCatalog(
   statuses: readonly CodexMcpServerStatus[],
   toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"],
 ): McpToolCatalog {
-  const statusByName = new Map(statuses.map((status) => [status.name, status] as const));
-  const orderedStatuses = [...statusByName.values()].toSorted((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  const orderedStatuses = [
+    ...new Map(statuses.map((status) => [status.name, status] as const)).values(),
+  ].toSorted((left, right) => left.name.localeCompare(right.name));
   const safeNames = assignMcpCatalogSafeServerNames(orderedStatuses.map((status) => status.name));
   const serverEntries: Array<[string, McpToolCatalog["servers"][string]]> = [];
   const tools: McpToolCatalog["tools"] = [];
@@ -63,11 +64,15 @@ function buildCodexEffectiveMcpCatalog(
     const deniedNames = new Set(
       denialMap && Object.hasOwn(denialMap, status.name) ? denialMap[status.name] : [],
     );
-    const observedNames = new Set<string>();
-    for (const [toolName, raw] of Object.entries(status.tools).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      observedNames.add(toolName);
+    const observedNames = new Set(Object.keys(status.tools));
+    const toolEntries = [
+      ...Object.entries(status.tools).toSorted(([left], [right]) => left.localeCompare(right)),
+      ...[...deniedNames]
+        .filter((name) => !observedNames.has(name))
+        .toSorted()
+        .map((name) => [name, undefined] as const),
+    ];
+    for (const [toolName, raw] of toolEntries) {
       const deniedBySession = deniedNames.has(toolName) ? true : undefined;
       const tool = catalogTool({
         serverName: status.name,
@@ -76,33 +81,14 @@ function buildCodexEffectiveMcpCatalog(
         raw,
         ...(deniedBySession ? { deniedBySession } : {}),
       });
-      if (deniedBySession) {
-        sessionDeniedTools.push(tool);
-      } else {
-        tools.push(tool);
-      }
-    }
-    for (const toolName of [...deniedNames].toSorted()) {
-      if (observedNames.has(toolName)) {
-        continue;
-      }
-      sessionDeniedTools.push(
-        catalogTool({
-          serverName: status.name,
-          safeServerName,
-          toolName,
-          deniedBySession: true,
-        }),
-      );
+      (deniedBySession ? sessionDeniedTools : tools).push(tool);
     }
     serverEntries.push([
       status.name,
       {
-        serverName: status.name,
+        ...projectCodexMcpServerMetadata(status),
         safeServerName,
-        launchSummary: "Codex native MCP connection",
-        toolCount:
-          observedNames.size + [...deniedNames].filter((name) => !observedNames.has(name)).length,
+        toolCount: toolEntries.length,
       },
     ]);
   }
@@ -116,39 +102,12 @@ function buildCodexEffectiveMcpCatalog(
   };
 }
 
-async function listCodexMcpServerStatuses(
-  client: Pick<CodexAppServerClient, "request">,
-  threadId: string,
-): Promise<CodexMcpServerStatus[]> {
-  const statuses: CodexMcpServerStatus[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null | undefined;
-  for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
-    const response = await client.request("mcpServerStatus/list", {
-      threadId,
-      detail: "toolsAndAuthOnly",
-      limit: MCP_STATUS_PAGE_SIZE,
-      ...(cursor ? { cursor } : {}),
-    });
-    statuses.push(...response.data);
-    cursor = response.nextCursor;
-    if (!cursor) {
-      return statuses;
-    }
-    if (seenCursors.has(cursor)) {
-      throw new Error("Codex mcpServerStatus/list repeated its pagination cursor");
-    }
-    seenCursors.add(cursor);
-  }
-  throw new Error("Codex mcpServerStatus/list exceeded the bounded page limit");
-}
-
-/** Loads MCP inventory only from the already-bound Codex process and thread. */
+/** Loads MCP inventory from the bound Codex client while retaining its lease through all pages. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<McpToolCatalog | undefined> {
-  const binding = await options.bindingStore.read(
+  const binding = await options.bindingStore.readAsync(
     sessionBindingIdentity({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -159,19 +118,126 @@ export async function loadCodexEffectiveMcpCatalog(
   if (!binding?.clientId) {
     return undefined;
   }
-  const retained = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!retained) {
     return undefined;
   }
   try {
     const allowedServerNames = new Set(params.mcpServerNames);
-    return buildCodexEffectiveMcpCatalog(
-      (await listCodexMcpServerStatuses(retained.client, binding.threadId)).filter((status) =>
-        allowedServerNames.has(status.name),
-      ),
-      params.toolOverrides,
-    );
+    const statuses = (
+      await listCodexMcpServerStatuses(
+        (cursor) =>
+          retained.client.request("mcpServerStatus/list", {
+            threadId: binding.threadId,
+            detail: "toolsAndAuthOnly",
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          }),
+        {
+          repeatedCursor: "Codex mcpServerStatus/list repeated its pagination cursor",
+          pageLimit: "Codex mcpServerStatus/list exceeded the bounded page limit",
+        },
+      )
+    ).filter((status) => allowedServerNames.has(status.name));
+    return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
   } finally {
-    retained.release();
+    await retained.release();
+  }
+}
+
+/** Explicit App requests retain the thread owner, never start a second MCP client. */
+export async function acquireCodexMcpAppRuntime(
+  params: Parameters<NonNullable<AgentHarness["acquireMcpAppRuntime"]>>[0],
+  options: { bindingStore: CodexAppServerBindingStore; pluginConfig?: unknown },
+) {
+  const identity = sessionBindingIdentity(params);
+  let binding = await options.bindingStore.readAsync(identity);
+  params.assertCurrent();
+  let retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
+  if (!retained && params.prepareSession) {
+    const preparation = await params.prepareSession();
+    params.assertCurrent();
+    const { prepareCodexMcpAppSession } = await import("./mcp-app-session-preparation.js");
+    await prepareCodexMcpAppSession({
+      preparation,
+      bindingStore: options.bindingStore,
+      pluginConfig: options.pluginConfig,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent();
+    binding = await options.bindingStore.readAsync(identity);
+    params.assertCurrent();
+    retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
+  }
+  if (!binding?.clientId || !retained) {
+    return undefined;
+  }
+  const acquired = retained;
+  const admittedBinding = binding;
+  try {
+    const assertBinding = () => {
+      const latest = options.bindingStore.read(identity);
+      if (
+        !latest ||
+        latest.clientId !== admittedBinding.clientId ||
+        latest.threadId !== admittedBinding.threadId
+      ) {
+        throw new Error("Native MCP session binding changed");
+      }
+    };
+    params.assertCurrent();
+    assertBinding();
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
+    params.assertCurrent();
+    const runtime = createNativeMcpRuntime({
+      client: retained.client,
+      threadId: binding.threadId,
+      attempt: params,
+      appRequester: params.appRequester,
+      originCallId: "",
+      assertCurrent: assertBinding,
+    });
+    // codex_apps requires a tool-origin connector binding; it cannot be adopted
+    // by a generic configured-server entrypoint.
+    const allowed = new Set(params.mcpServerNames.filter((name) => name !== "codex_apps"));
+    const getCatalog = runtime.getCatalog;
+    let catalog: McpToolCatalog | null = null;
+    runtime.getCatalog = async () => {
+      const loaded = await getCatalog();
+      for (const server of Object.values(loaded.servers)) {
+        if (server.serverName !== "codex_apps" && server.pluginId) {
+          allowed.add(server.serverName);
+        }
+      }
+      catalog = {
+        ...loaded,
+        servers: Object.fromEntries(
+          Object.entries(loaded.servers).filter(([name]) => allowed.has(name)),
+        ),
+        tools: loaded.tools.filter(
+          (tool) =>
+            allowed.has(tool.serverName) &&
+            !params.toolOverrides?.mcpToolsDeny?.[tool.serverName]?.includes(tool.toolName),
+        ),
+      };
+      return catalog;
+    };
+    runtime.peekCatalog = () => catalog;
+    const unprotect = protectCodexAppServerLiveThread(acquired.client, admittedBinding.threadId);
+    let cleanup: Promise<unknown> | undefined;
+    runtime.joinCleanup = async () => {
+      await cleanup;
+    };
+    return {
+      runtime,
+      releaseLease: () => {
+        unprotect();
+        cleanup = acquired.release();
+        void cleanup?.catch(() => undefined);
+      },
+    };
+  } catch (error) {
+    await retained.release();
+    throw error;
   }
 }

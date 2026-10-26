@@ -1,0 +1,153 @@
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import type { SessionsPatchResult } from "../../../src/gateway/session-utils.types.js";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { pollText, pollCount, pollAttribute } from "./new-session-page.test-support.ts";
+
+const suite = createControlUiE2eSuite({ name: "Model selection recovery" });
+
+const holdOptions = (page: Page) =>
+  holdModuleResponse(
+    page,
+    controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-model-picker-options.tsx"),
+  );
+const expectLoading = (picker: Locator) =>
+  pollText(picker.locator('[role="status"]')).toContain("Loading models");
+
+suite.define(() => {
+  it("retains a confirmed model selection when the roster refresh fails", () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const key = "agent:main:model-selection-proof";
+      const row = {
+        key,
+        sessionId: "synthetic-model-selection",
+        kind: "direct",
+        label: "Synthetic model selection",
+        model: "gpt-5.4",
+        modelProvider: "openai",
+        modelOverrideSource: "user",
+        updatedAt: 1,
+      };
+      const selected = { ...row, model: "gpt-5.5", updatedAt: 2 };
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.4",
+        sessionKey: key,
+        sessionInfo: row,
+        sessions: [row],
+        models: [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "openai", available: true },
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+        ],
+        deferredMethods: ["sessions.patch"],
+        methodResponses: {
+          "sessions.list": {
+            ts: 1,
+            path: "",
+            count: 1,
+            defaults: { model: "gpt-5.4", modelProvider: "openai", contextTokens: 128_000 },
+            sessions: [row],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      const picker = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
+      );
+      const trigger = picker.locator("[data-chat-model-select]");
+      await pollAttribute(trigger, "aria-disabled").toBe("false");
+      await trigger.click();
+      await revealChatModelOption(picker, "openai/gpt-5.5");
+      await picker.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      const patch = await gateway.waitForRequest("sessions.patch");
+      expect(patch.params).toMatchObject({ key, model: "openai/gpt-5.5" });
+      await pollAttribute(trigger, "aria-disabled").toBe("true");
+
+      await gateway.setMethodResponse("sessions.list", {
+        __mockError: { code: "UNAVAILABLE", message: "Synthetic roster refresh unavailable" },
+      });
+      const listCount = (await gateway.getRequests("sessions.list")).length;
+      // The fixture commits the successful patch to its canonical session owner.
+      // No lifecycle event is emitted; the receipt must survive a failed read.
+      await gateway.resolveDeferred("sessions.patch", {
+        ok: true,
+        key,
+        path: "",
+        entry: {
+          sessionId: row.sessionId,
+          updatedAt: selected.updatedAt,
+          providerOverride: "openai",
+          modelOverride: selected.model,
+          modelOverrideSource: "user",
+        },
+        resolved: { modelProvider: "openai", model: selected.model },
+      } satisfies SessionsPatchResult);
+      await gateway.waitForRequest("sessions.list", { after: listCount });
+      await pollAttribute(trigger, "aria-disabled").toBe("false");
+      await trigger.click();
+      await picker.locator(".chat-controls__model-menu").waitFor();
+      expect(await trigger.getAttribute("data-chat-select-value")).toBe("openai/gpt-5.5");
+      expect(await trigger.textContent()).toContain("GPT-5.5");
+    }));
+  it.each([
+    ["new", "open"],
+    ["chat", "closed"],
+    ["chat", "focus moved"],
+  ] as const)("keeps /%s usable while model choices load (%s)", (route, state) =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const held = await holdOptions(page);
+      const models = ["Alpha", "Beta"].map((name) => ({
+        id: name.toLowerCase(),
+        name,
+        provider: "example",
+        contextWindow: 128_000,
+      }));
+      await installMockGateway(page, {
+        models,
+        agentModel: "example/alpha",
+        sessionInfo: { model: "alpha", modelProvider: "example" },
+      });
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const picker = page.locator(".chat-controls__model-picker").first();
+      const trigger = picker.locator("[data-chat-model-select]");
+      const textarea = page.locator(".agent-chat__input textarea").first();
+      await pollAttribute(trigger, "aria-disabled").toBe("false");
+      expect(held.requests()).toBe(0);
+      await trigger.click();
+      await held.request;
+      await expectLoading(picker);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      if (state === "closed") {
+        await trigger.click();
+        expect(await picker.getAttribute("open")).toBeNull();
+      }
+      if (state !== "open") {
+        await textarea.focus();
+      }
+      held.release();
+      const search = picker.locator("[data-chat-model-search]");
+      await pollCount(search).toBe(1);
+      await expect
+        .poll(() =>
+          page.evaluate(() => document.activeElement?.hasAttribute("data-chat-model-search")),
+        )
+        .toBe(state === "open");
+      if (state !== "open") {
+        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await picker.getAttribute("open")).toBeNull();
+        await trigger.click();
+      }
+      await search.fill("Beta");
+      const choice = picker.locator('[data-chat-model-option="example/beta"]');
+      await expect.poll(() => choice.isVisible()).toBe(true);
+      await search.press("Enter");
+      await pollAttribute(picker, "open").toBeNull();
+      expect(held.requests()).toBe(1);
+    }),
+  );
+});

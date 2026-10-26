@@ -1,100 +1,333 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
+import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
+import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
+import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+const { resolveSandboxContext: resolveRealSandboxContext } = await vi.importActual<
+  typeof import("../../sandbox/context.js")
+>("../../sandbox/context.js");
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
+const resolveSandboxContext = vi.hoisted(() =>
+  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePluginHandle,
 }));
 
-import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
+vi.mock("../../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../../sandbox/context.js")>("../../sandbox/context.js")),
+  resolveSandboxContext,
+}));
+
+import {
+  installEmbeddedAttemptContextGuards,
+  prepareEmbeddedAttemptSetup,
+} from "./attempt-setup.js";
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const attemptModel = makeProviderModelFixture({
+  id: "gpt-5.4",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+});
+
+const attemptDefaults = {
+  model: attemptModel,
+  config: {},
+  modelId: "gpt-5.4",
+  provider: "openai",
+  runId: "run-setup",
+  sessionId: "session-setup",
+  thinkLevel: "high" as const,
+  timeoutMs: 30_000,
+};
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
+    resolveSandboxContext.mockClear();
   });
 
-  it("prepares the default and session agent identities together", async () => {
-    const setup = await prepareEmbeddedAttemptSetup({
-      config: {
-        agents: {
-          list: [{ id: "main", default: true }, { id: "marketing" }],
+  it.each([false, true])(
+    "attributes the baseline wait separately from sandbox preparation (failure=%s)",
+    async (failBaseline) => {
+      let now = 0;
+      using _ = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const info = vi.fn();
+      const diagnostics = startChatSendDiagnostics({ info });
+      diagnostics.acknowledge();
+      const failure = new Error("synthetic baseline failure");
+      resolveSandboxContext.mockImplementationOnce(async () => {
+        now += 25_000;
+        return null;
+      });
+      const preparation = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        prepareEmbeddedAttemptSetup({
+          ...attemptDefaults,
+          config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+          runId: "run-attribution",
+          sessionId: "session-attribution",
+          sessionKey: "agent:main:attribution",
+          timeoutMs: 120_000,
+          workspaceDir: tempDirs.make("openclaw-setup-attribution-"),
+          awaitSessionDiffBaseline: async () => {
+            now += 50_000;
+            if (failBaseline) {
+              throw failure;
+            }
+          },
+        } as EmbeddedRunAttemptParams),
+      );
+      if (failBaseline) {
+        await expect(preparation).rejects.toBe(failure);
+      } else {
+        using workspace = await preparation;
+        expect(workspace.sandbox).toBeNull();
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const message = info.mock.calls[0]?.[0] as string;
+      expect(message).toContain("detail.attempt.setup.workspace.baseline_wait=50000ms");
+      expect(message).toContain(
+        `detail.attempt.setup.workspace=${failBaseline ? 50_000 : 75_000}ms`,
+      );
+      if (!failBaseline) {
+        expect(message).toContain("detail.attempt.setup.workspace.sandbox=25000ms");
+      }
+      resolveSandboxContext.mockReset();
+    },
+  );
+
+  it.each([undefined, "agent:main:policy"])(
+    "prepares a detached global workspace with policy %s",
+    async (sandboxSessionKey) => {
+      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+      const workspaceDir = tempDirs.make("openclaw-global-attempt-");
+      const foreground = {
+        agentId: "marketing",
+        sessionId: "global-attempt",
+        sessionKey: "global",
+        sandboxSessionKey,
+        workspaceDir,
+      };
+      const setup = await resolveAttemptWorkspaceSandbox({
+        ...foreground,
+        ...buildEmbeddedForegroundPromptContext(foreground, workspaceDir),
+        sessionId: "detached-review",
+        sessionKey: "agent:marketing:review",
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sandbox: { mode: "off" } },
+            entries: { main: {}, marketing: {} },
+          },
         },
-      },
-      modelId: "gpt-5.4",
-      provider: "openai",
-      runId: "run-prepared-agent-identities",
-      sessionId: "session-prepared-agent-identities",
-      sessionKey: "agent:marketing:main",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
-      workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-agent-identities"),
-    } as unknown as EmbeddedRunAttemptParams);
+      });
+      expect(setup.sessionAgentId).toBe("marketing");
+      expect(setup.sandbox).toBeNull();
+      expect(setup.effectiveWorkspace).toBe(workspaceDir);
+    },
+  );
 
-    expect(setup.defaultAgentId).toBe("main");
-    expect(setup.sessionAgentId).toBe("marketing");
+  it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
+    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+    const workspaceDir = tempDirs.make("openclaw-policy-attempt-");
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "marketing",
+        config: {
+          agents: { ownership: "explicit", entries: { main: {}, marketing: {} } },
+        },
+        sessionId: "policy-attempt",
+        sessionKey: "agent:marketing:main",
+        sandboxSessionKey: "global",
+        workspaceDir,
+      }),
+    ).rejects.toThrow("Pass an agentId");
   });
 
-  it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
-    const metadataSnapshot = { plugins: [] } as never;
-    const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-prepared");
-    const providerRuntimeHandle: ProviderRuntimePluginHandle & { prepared: true } = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-      prepared: true,
-      workspaceDir,
-      plugin: {} as never,
+  it("hydrates recent history media from the prepared session agent workspace", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-history-");
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const agent = {} as {
+      transformContext?: (messages: unknown[], signal?: AbortSignal) => Promise<unknown[]>;
     };
+    const settingsManager = { getBlockImages: () => false };
+    const guards = installEmbeddedAttemptContextGuards({
+      activeSession: { agent, settingsManager } as never,
+      agentDir: workspaceDir,
+      attempt: {
+        config: { agents: { entries: { marketing: { workspace: workspaceDir } } } },
+        contextTokenBudget: 32_000,
+        model: { input: ["text", "image"] },
+        modelId: "gpt-5.4",
+        provider: "openai",
+      } as unknown as EmbeddedRunAttemptParams,
+      computerContextEpoch: { value: 0 },
+      dropThinkingBlocksForEstimate: false,
+      effectiveCwd: workspaceDir,
+      effectiveFsWorkspaceOnly: false,
+      effectiveWorkspace: workspaceDir,
+      getPrePromptMessageCount: () => 0,
+      getPromptCache: () => undefined,
+      getPromptCacheRetention: () => undefined,
+      getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      getSystemPrompt: () => "",
+      isOpenAIResponsesApi: false,
+      repairToolUseResultPairing: false,
+      sessionAgentId: "marketing",
+      sessionManager: {} as never,
+      settingsManager: settingsManager as never,
+    });
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "describe" }] }),
+      [{ path: imagePath, contentType: "image/png" }],
+    );
+
+    try {
+      if (!agent.transformContext) {
+        throw new Error("expected installed history transform");
+      }
+      const replay = await agent.transformContext([message]);
+      expect((replay[0] as { content?: unknown }).content).toEqual([
+        { type: "text", text: "describe" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      guards.remove();
+    }
+  });
+
+  it("prepares one closed session permission policy", async () => {
+    const root = path.join(os.tmpdir(), "openclaw-attempt-permission-root");
     const setup = await prepareEmbeddedAttemptSetup({
+      ...attemptDefaults,
       config: {},
-      modelId: "gpt-5.4",
-      provider: "openai",
-      runId: "run-prepared",
-      sessionId: "session-prepared",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
-      workspaceDir,
-      preparedModelRuntime: { metadataSnapshot } as never,
-      runtimePlan: { providerRuntimeHandle } as never,
+      permissionMode: "workspace",
+      runId: "run-prepared-permission",
+      sessionId: "session-prepared-permission",
+      sessionRoot: root,
+      workspaceDir: root,
     } as unknown as EmbeddedRunAttemptParams);
 
-    expect(setup.getCurrentAttemptPluginMetadataSnapshot()).toBe(metadataSnapshot);
-    expect(setup.getProviderRuntimeHandle()).toBe(providerRuntimeHandle);
-    expect(resolveProviderRuntimePluginHandle).not.toHaveBeenCalled();
+    expect(setup.sessionPermissionPolicy).toEqual({ root, mode: "workspace" });
   });
 
-  it("resolves partial handles without trusting scoped metadata", async () => {
-    const resolvedHandle: ProviderRuntimePluginHandle = {
-      provider: "openai",
-      modelId: "gpt-5.4",
-    };
+  it("keeps collection review in the Workshop workspace with read-write sandbox access", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-setup-collection-review-rw-");
+    resolveSandboxContext.mockResolvedValueOnce(
+      createSandboxTestContext({
+        overrides: {
+          workspaceDir: path.join(os.tmpdir(), "openclaw-sandbox-workspace"),
+          agentWorkspaceDir: path.join(os.tmpdir(), "openclaw-agent-workspace"),
+          tools: {},
+        },
+      }),
+    );
+
+    const setup = await resolveAttemptWorkspaceSandbox({
+      agentId: "main",
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+      sessionId: "session-collection-review-rw",
+      sessionKey: "agent:main:skill-collection-review",
+      workspaceDir,
+    });
+
+    expect(setup.effectiveWorkspace).toBe(workspaceDir);
+  });
+
+  it("resolves partial handles with the exact lifecycle metadata", async () => {
+    const resolvedHandle: ProviderRuntimePluginHandle = { provider: "openai", modelId: "gpt-5.4" };
     resolveProviderRuntimePluginHandle.mockReturnValue(resolvedHandle);
+    const metadataSnapshot = { pluginIds: ["other"] };
     const setup = await prepareEmbeddedAttemptSetup({
+      ...attemptDefaults,
       config: {},
-      modelId: "gpt-5.4",
-      provider: "openai",
       runId: "run-partial",
       sessionId: "session-partial",
-      thinkLevel: "high",
-      timeoutMs: 30_000,
       workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-partial"),
       preparedModelRuntime: {
-        metadataSnapshot: { pluginIds: ["other"] },
+        metadataSnapshot,
       } as never,
       runtimePlan: { providerRuntimeHandle: { provider: "openai" } } as never,
     } as unknown as EmbeddedRunAttemptParams);
 
     const preparedHandle = setup.getProviderRuntimeHandle();
     expect(preparedHandle).toMatchObject(resolvedHandle);
-    expect(preparedHandle.modelId).toBe("gpt-5.4");
     expect(setup.getProviderRuntimeHandle()).toBe(preparedHandle);
-    expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledOnce();
     const call = resolveProviderRuntimePluginHandle.mock.calls[0]?.[0];
     expect(call).toMatchObject({ provider: "openai", modelId: "gpt-5.4" });
-    expect(call).not.toHaveProperty("pluginMetadataSnapshot");
+    expect(call?.pluginMetadataSnapshot).toBe(metadataSnapshot);
+  });
+});
+
+describe("prepareEmbeddedSkills", () => {
+  it.each([
+    { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
+    { label: "read denied", toolExecutionAllow: ["skill_workshop"], readable: false },
+  ])("prepares readable skills with $label execution", async ({ toolExecutionAllow, readable }) => {
+    const agentWorkspace = await fs.realpath(tempDirs.make("openclaw-agent-skills-"));
+    const executionWorkspace = await fs.realpath(tempDirs.make("openclaw-execution-skills-"));
+    const writeSkill = async (workspaceDir: string, name: string) => {
+      const skillDir = path.join(workspaceDir, "skills", name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} description\n---\n\n# ${name}\n`,
+      );
+    };
+    await writeSkill(agentWorkspace, "agent-workspace-skill");
+    await writeSkill(executionWorkspace, "execution-workspace-skill");
+
+    const prepared = await prepareEmbeddedSkills({
+      includeCodeModeSkills: true,
+      attempt: {
+        bootstrapWorkspaceDir: agentWorkspace,
+        config: {},
+        toolExecutionAllow,
+      } as EmbeddedRunAttemptParams,
+      effectiveWorkspace: executionWorkspace,
+      sandbox: null,
+      sessionAgentId: "main",
+    });
+    try {
+      if (readable) {
+        expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
+        expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+        expect(prepared.codeModeSkills.map((skill) => skill.name)).toEqual(
+          expect.arrayContaining(["agent-workspace-skill", "execution-workspace-skill"]),
+        );
+      } else {
+        expect(prepared.skillsPrompt).toBe("");
+        expect(prepared.codeModeSkills).toEqual([]);
+        expect(prepared.skillsSnapshotForRun).toBeUndefined();
+        expect(prepared.skillUsagePaths).toBeUndefined();
+      }
+    } finally {
+      prepared.restoreSkillEnv();
+    }
   });
 });

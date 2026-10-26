@@ -1,9 +1,8 @@
-// Discord plugin module implements inbound event delivery behavior.
 import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
-  asOptionalRecord as readRecord,
-  normalizeOptionalString as readString,
+  asOptionalRecord,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DISCORD_INBOUND_EVENT_DELIVERY_KEY = "__openclawInboundEventDelivery";
@@ -32,8 +31,8 @@ export function withDiscordInboundEventDeliveryMetadata(
   if (!sessionKey || params.inboundEventKind !== "room_event") {
     return payload;
   }
-  const channelData = readRecord(payload.channelData) ?? {};
-  const discordData = readRecord(channelData.discord) ?? {};
+  const channelData = asOptionalRecord(payload.channelData) ?? {};
+  const discordData = asOptionalRecord(channelData.discord) ?? {};
   return {
     ...payload,
     channelData: {
@@ -54,15 +53,15 @@ export function notifyDiscordInboundEventOutboundPayloadSuccess(params: {
   to: string;
   accountId?: string | null;
 }): void {
-  const channelData = readRecord(params.payload.channelData);
-  const discordData = readRecord(channelData?.discord);
-  const metadata = readRecord(discordData?.[DISCORD_INBOUND_EVENT_DELIVERY_KEY]);
+  const channelData = asOptionalRecord(params.payload.channelData);
+  const discordData = asOptionalRecord(channelData?.discord);
+  const metadata = asOptionalRecord(discordData?.[DISCORD_INBOUND_EVENT_DELIVERY_KEY]);
   if (!metadata) {
     return;
   }
   discordInboundEventDelivery.notify({
-    sessionKey: readString(metadata.sessionKey),
-    inboundEventKind: readString(metadata.inboundEventKind),
+    sessionKey: normalizeOptionalString(metadata.sessionKey),
+    inboundEventKind: normalizeOptionalString(metadata.inboundEventKind),
     to: params.to,
     accountId: params.accountId,
   });

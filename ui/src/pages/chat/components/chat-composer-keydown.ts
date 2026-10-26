@@ -1,0 +1,213 @@
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
+import { steerableQueuedMessage } from "../chat-queue.ts";
+import { restoreHistoryCaret } from "./chat-composer-dom.ts";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
+import type { SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
+import { commitComposerDraft } from "./chat-composer-state.ts";
+import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+
+type ComposerKeyDownDeps = {
+  prediction?: { text: string | null; dismiss: () => void };
+  acceptPrediction?: () => void;
+  state: ChatComposerState;
+  props: ChatComposerProps;
+  skillMenuHost: SkillMenuHost;
+  slashMenuHost: SlashMenuHost;
+  mentionMenuHost: HumanMentionMenuHost;
+  sendShortcut: ChatSendShortcut;
+  canSubmitDraft: (draft: string) => boolean;
+  submitDraft: (
+    draft: string,
+    event: KeyboardEvent,
+    followUpModeOverride?: ChatFollowUpMode,
+  ) => void;
+  showAbortableUi: boolean;
+  alternateFollowUpMode?: ChatFollowUpMode;
+  goalComposer: GoalComposer;
+};
+
+export function createComposerKeyDownHandler({
+  prediction,
+  acceptPrediction,
+  state,
+  props,
+  skillMenuHost,
+  slashMenuHost,
+  mentionMenuHost,
+  sendShortcut,
+  canSubmitDraft,
+  submitDraft,
+  showAbortableUi,
+  alternateFollowUpMode,
+  goalComposer,
+}: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
+  return (event) => {
+    // The handler only ever binds to the composer textarea; narrowing here
+    // keeps the draft/selection reads below assertion-free.
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    if (keepMobileReturnNative(event)) {
+      return;
+    }
+    if (state.composerComposing || isComposingKeyboardEvent(event)) {
+      return;
+    }
+
+    if (state.emojiMenu.handleKeydown(event, props.paneId)) {
+      return;
+    }
+
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost)) {
+      return;
+    }
+
+    if (goalComposer.active) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        goalComposer.cancel();
+      } else if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        (sendShortcut === "enter" || event.metaKey || event.ctrlKey) &&
+        canSubmitDraft(target.value)
+      ) {
+        event.preventDefault();
+        submitDraft(target.value, event);
+      }
+      return;
+    }
+
+    if (
+      props.connected &&
+      (state.skillMenu.handleKeydown(event, skillMenuHost) ||
+        state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
+    ) {
+      return;
+    }
+
+    if (prediction?.text && !target.value) {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        acceptPrediction?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        prediction.dismiss();
+        return;
+      }
+    }
+
+    if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
+      commitComposerDraft(props, target.value);
+      const result = props.onHistoryKeydown({
+        key: event.key,
+        selectionStart: target.selectionStart,
+        selectionEnd: target.selectionEnd,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        isComposing: event.isComposing,
+        keyCode: event.keyCode,
+      });
+      if (result.handled) {
+        state.editRevision += 1;
+        if (result.preventDefault) {
+          event.preventDefault();
+        }
+        if (result.restoreCaret) {
+          restoreHistoryCaret(target, result.restoreCaret);
+        }
+        return;
+      }
+    }
+
+    if (
+      event.key === "Escape" &&
+      !state.skillMenu.state.skillMenuOpen &&
+      !state.slashMenu.state.slashMenuOpen &&
+      !state.mentionMenu.open &&
+      !props.replyTarget &&
+      !state.dictation?.active &&
+      showAbortableUi &&
+      props.onAbort
+    ) {
+      event.preventDefault();
+      props.onAbort();
+      return;
+    }
+
+    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
+      // Holding send is one action, even after the draft clears into the queue.
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
+      const attachments = props.getAttachments?.() ?? props.attachments ?? [];
+      const hasComposedContent = Boolean(target.value.trim() || attachments.length);
+      if (!hasComposedContent) {
+        // Mirror the queue chip's Steer availability exactly (visible surface,
+        // connected + composable gate), or offline Enter would swallow the key
+        // and invoke a lifecycle that returns with no visible outcome.
+        const queued =
+          showAbortableUi &&
+          props.connected &&
+          props.canSend &&
+          !props.submitDisabledReason &&
+          props.onQueueSteer
+            ? steerableQueuedMessage(props.displayQueue ?? props.queue)
+            : undefined;
+        if (queued) {
+          event.preventDefault();
+          props.onQueueSteer?.(queued.id);
+          return;
+        }
+        if (canSubmitDraft(target.value)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (!canSubmitDraft(target.value)) {
+        return;
+      }
+      event.preventDefault();
+      const followUpModeOverride =
+        (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
+      submitDraft(target.value, event, followUpModeOverride);
+    }
+  };
+}
+
+export function handleQueueEditKeydown(
+  event: KeyboardEvent,
+  edit: ChatComposerProps["queuedEdit"],
+): void {
+  if (keepMobileReturnNative(event)) {
+    return;
+  }
+  if (isComposingKeyboardEvent(event)) {
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    edit?.onCancel();
+  } else if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    edit?.onEditSubmit?.();
+  }
+}

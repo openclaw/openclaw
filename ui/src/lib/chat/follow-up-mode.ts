@@ -1,22 +1,10 @@
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../../src/utils/message-channel-constants.js";
 import { normalizeChatFollowUpModeOverride, type ChatFollowUpMode } from "../../app/settings.js";
 
 export type ControlUiFollowUpMode = ChatFollowUpMode | Exclude<QueueMode, "steer">;
-
-type ServerQueueModeSources = {
-  configNeedsApply?: boolean;
-  effectiveMode?: unknown;
-  sessionMetadataLoaded?: boolean;
-  sessionMode?: unknown;
-};
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function normalizedQueueMode(value: unknown): QueueMode | undefined {
   return typeof value === "string" ? normalizeQueueMode(value) : undefined;
@@ -25,7 +13,12 @@ function normalizedQueueMode(value: unknown): QueueMode | undefined {
 /** Matches resolveQueueSettings precedence for the current Control UI session. */
 export function resolveControlUiServerQueueMode(
   runtimeConfig: unknown,
-  sources: ServerQueueModeSources = {},
+  sources: {
+    configNeedsApply?: boolean;
+    effectiveMode?: unknown;
+    sessionMetadataLoaded?: boolean;
+    sessionMode?: unknown;
+  } = {},
 ): QueueMode | undefined {
   const config = record(runtimeConfig);
   const messages = record(config?.messages);
@@ -43,10 +36,7 @@ export function resolveControlUiServerQueueMode(
   if (sources.configNeedsApply) {
     return effectiveMode;
   }
-  if (sources.sessionMetadataLoaded === false && !effectiveMode) {
-    return undefined;
-  }
-  if (!config && !effectiveMode) {
+  if (!effectiveMode && (sources.sessionMetadataLoaded === false || !config)) {
     return undefined;
   }
   return configuredMode ?? effectiveMode ?? "steer";

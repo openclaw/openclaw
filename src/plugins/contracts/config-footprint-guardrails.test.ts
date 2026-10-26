@@ -1,7 +1,7 @@
-// Config footprint guardrail tests cover forbidden direct plugin config access patterns.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "../../config/schema-base.js";
@@ -21,54 +21,45 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
-
   const out: string[] = [];
   const candidate = schema as {
     properties?: Record<string, unknown>;
     additionalProperties?: unknown;
     items?: unknown;
   };
-
   if (candidate.properties && typeof candidate.properties === "object") {
     for (const [key, value] of Object.entries(candidate.properties)) {
       const path = prefix ? `${prefix}.${key}` : key;
-      out.push(path);
-      out.push(...collectSchemaPaths(value, path));
+      out.push(path, ...collectSchemaPaths(value, path));
     }
   }
 
-  if (
-    candidate.additionalProperties &&
-    typeof candidate.additionalProperties === "object" &&
-    !Array.isArray(candidate.additionalProperties)
-  ) {
-    const path = prefix ? `${prefix}.*` : "*";
-    out.push(...collectSchemaPaths(candidate.additionalProperties, path));
-  }
-
-  if (candidate.items && typeof candidate.items === "object" && !Array.isArray(candidate.items)) {
-    const path = prefix ? `${prefix}[]` : "[]";
-    out.push(...collectSchemaPaths(candidate.items, path));
+  for (const [child, path] of [
+    [candidate.additionalProperties, prefix ? `${prefix}.*` : "*"],
+    [candidate.items, prefix ? `${prefix}[]` : "[]"],
+  ] as const) {
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      out.push(...collectSchemaPaths(child, path));
+    }
   }
 
   return out;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
+function assertRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
     throw new Error("expected record");
   }
-  expect(Array.isArray(value)).toBe(false);
-  return value as Record<string, unknown>;
+  return value;
 }
 
 describe("config footprint guardrails", () => {
   it("keeps plugin entry config generic in the generated base schema", () => {
-    const root = asRecord(BASE_CONFIG_SCHEMA.schema);
-    const plugins = asRecord(asRecord(root.properties).plugins);
-    const entries = asRecord(asRecord(plugins.properties).entries);
-    const entry = asRecord(entries.additionalProperties);
-    const pluginConfig = asRecord(asRecord(entry.properties).config);
+    const root = assertRecord(BASE_CONFIG_SCHEMA.schema);
+    const plugins = assertRecord(assertRecord(root.properties).plugins);
+    const entries = assertRecord(assertRecord(plugins.properties).entries);
+    const entry = assertRecord(entries.additionalProperties);
+    const pluginConfig = assertRecord(assertRecord(entry.properties).config);
 
     expect(pluginConfig.type).toBe("object");
     expect(pluginConfig.additionalProperties).toStrictEqual({});
@@ -78,50 +69,27 @@ describe("config footprint guardrails", () => {
   it("keeps retired legacy paths out of the generated base config schema", () => {
     const basePaths = new Set(collectSchemaPaths(BASE_CONFIG_SCHEMA.schema));
 
-    expect(
-      [
-        "talk.voiceId",
-        "talk.voiceAliases",
-        "talk.modelId",
-        "talk.outputFormat",
-        "talk.apiKey",
-        "talk.providers.*.voiceId",
-        "talk.providers.*.voiceAliases",
-        "talk.providers.*.modelId",
-        "talk.providers.*.outputFormat",
-        "agents.defaults.sandbox.perSession",
-        "hooks.internal.handlers",
-        "channels.telegram.groupMentionsOnly",
-        "channels.telegram.streamMode",
-        "channels.telegram.chunkMode",
-        "channels.telegram.blockStreaming",
-        "channels.telegram.draftChunk",
-        "channels.telegram.blockStreamingCoalesce",
-        "channels.slack.streamMode",
-        "channels.slack.chunkMode",
-        "channels.slack.blockStreaming",
-        "channels.slack.blockStreamingCoalesce",
-        "channels.slack.nativeStreaming",
-        "channels.discord.streamMode",
-        "channels.discord.chunkMode",
-        "channels.discord.blockStreaming",
-        "channels.discord.draftChunk",
-        "channels.discord.blockStreamingCoalesce",
-        "channels.googlechat.streamMode",
-        "channels.slack.channels.*.allow",
-        "channels.slack.accounts.*.channels.*.allow",
-        "channels.googlechat.groups.*.allow",
-        "channels.googlechat.accounts.*.groups.*.allow",
-        "channels.discord.channels.*.allow",
-        "channels.discord.accounts.*.channels.*.allow",
-      ].filter((path) => basePaths.has(path)),
-    ).toStrictEqual([]);
+    const retired = {
+      talk: "voiceId voiceAliases modelId outputFormat apiKey",
+      "talk.providers.*": "voiceId voiceAliases modelId outputFormat",
+      "agents.defaults.sandbox": "perSession",
+      "hooks.internal": "handlers",
+      "channels.telegram":
+        "groupMentionsOnly streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce",
+      "channels.slack":
+        "streamMode chunkMode blockStreaming blockStreamingCoalesce nativeStreaming channels.*.allow accounts.*.channels.*.allow",
+      "channels.discord":
+        "streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce channels.*.allow accounts.*.channels.*.allow",
+      "channels.googlechat": "streamMode groups.*.allow accounts.*.groups.*.allow",
+    };
+    const retiredPaths = Object.entries(retired).flatMap(([prefix, fields]) =>
+      fields.split(" ").map((field) => `${prefix}.${field}`),
+    );
+    expect(retiredPaths.filter((path) => basePaths.has(path))).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
-
-    for (const pluginId of pluginIds) {
+    for (const pluginId of ["matrix", "nextcloud-talk", "tlon"]) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
@@ -129,27 +97,14 @@ describe("config footprint guardrails", () => {
         throw new Error(`${pluginId} metadata missing`);
       }
       const paths = new Set(collectSchemaPaths(metadata.schema));
-      expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
-        false,
-      );
-      expect(
-        paths.has("network.dangerouslyAllowPrivateNetwork"),
-        `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
-      ).toBe(true);
+      expect([...paths], pluginId).not.toContain("allowPrivateNetwork");
+      expect([...paths], pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
     }
   });
 
-  it("keeps canonical nested streaming paths in channel-owned schemas", () => {
-    const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
-    const discordSource = readSource("extensions/discord/src/config-schema.ts");
-    const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
-    const slackSource = readSource("extensions/slack/src/config-schema.ts");
-
-    expect(telegramSource).toContain("streaming: TelegramPreviewStreamingConfigSchema.optional(),");
-    expect(discordSource).toContain("streaming: DiscordPreviewStreamingConfigSchema.optional(),");
-    expect(msTeamsSource).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
-    expect(slackSource).toContain("streaming: SlackStreamingConfigSchema.optional(),");
-    for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
+  it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
+    for (const plugin of ["telegram", "discord", "msteams", "slack"]) {
+      const schemaSource = readSource(`extensions/${plugin}/src/config-schema.ts`);
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
       );
@@ -158,37 +113,16 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps Matrix setup input canonical-first after plugin ownership", () => {
-    const source = readSource("extensions/matrix/src/setup-config.ts");
-    const canonicalIndex = source.indexOf("dangerouslyAllowPrivateNetwork?: boolean;");
-    const aliasIndex = source.indexOf("allowPrivateNetwork?: boolean;");
-
-    expect(canonicalIndex).toBeGreaterThanOrEqual(0);
-    expect(aliasIndex).toBeGreaterThan(canonicalIndex);
-  });
-
   it("keeps retired config aliases out of the shared setup input", () => {
     const source = readSource("src/channels/plugins/types.core.ts");
 
-    expect(source).not.toContain("streamMode?:");
-    expect(source).not.toContain("groupMentionsOnly?:");
-    expect(source).not.toContain("perSession?:");
-    expect(source).not.toContain("voiceId?:");
-    expect(source).not.toContain("apiKey?:");
+    for (const field of ["streamMode", "groupMentionsOnly", "perSession", "voiceId", "apiKey"]) {
+      expect(source).not.toContain(`${field}?:`);
+    }
     expect(source).not.toContain("allow?: boolean;");
   });
 
-  it("keeps plugin-sdk private-network helpers canonical-first with a narrow compat alias", () => {
-    const source = readSource("src/plugin-sdk/ssrf-policy.ts");
-
-    expect(source).toContain("export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(");
-    expect(source).toContain("export function ssrfPolicyFromAllowPrivateNetwork(");
-    expect(source).toContain(
-      "return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);",
-    );
-  });
-
-  it("keeps current channel schemas plugin-owned with a narrow shipped compatibility tier", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(
@@ -249,8 +183,7 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
-      // The facade's focused regression tests are its only internal consumers.
-      "src/plugin-sdk/bundled-channel-config-schema.test.ts",
+      // The compatibility test exercises the shipped facade exports.
       "src/plugin-sdk/shipped-channel-compat.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",

@@ -1,35 +1,89 @@
-/**
- * Node invoke plugin-policy regression tests.
- */
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type TestContext,
+} from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-  type PluginApprovalRequest,
   type PluginApprovalRequestPayload,
 } from "../infra/plugin-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
-import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
-import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createTestApprovalFixture,
+  createTestApprovalManager,
+} from "./exec-approval-manager.test-support.js";
+import {
+  createApprovalRequestPolicy,
+  createContext,
+  createDemoPolicy,
+  createNodeSession,
+  createOperatorClient,
+  createPolicyApprovalFixture,
+  createRuntimeClient,
+  DEMO_COMMAND,
+  DEMO_PARAMS,
+  DEMO_PLUGIN_ID,
+  expectApprovalResolution,
+  expectSinglePendingApproval,
+  invokeDemoPolicy,
+  nodeCommandsConfig,
+  setDangerousDemoCommandRegistry,
+} from "./node-invoke-plugin-policy.test-helpers.js";
 import { listPendingOperatorApprovals } from "./operator-approval-store.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import {
+  createApprovalClient,
+  createApprovalClientLookup,
+} from "./server-methods/approval-request.test-support.js";
 
-const DEMO_PLUGIN_ID = "demo";
-const DEMO_COMMAND = "demo.read";
-const DEMO_PARAMS = { path: "/tmp/x" };
-const tempDirs: string[] = [];
+function deliveryFixture(test: TestContext, delegated = false) {
+  const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+    approvalKind: "plugin",
+    ...(delegated ? { validateAgentRuntimeDelegatedAuthority: () => true } : {}),
+  });
+  setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+  const { context } = createContext({
+    pluginApprovalManager: fixture.manager,
+    getApprovalClientConnIds: vi.fn(() => new Set<string>()),
+    hasExecApprovalClients: vi.fn(() => false),
+  });
+  const delivered = createDeferredCore();
+  const handleRequested = vi.fn<
+    NonNullable<NonNullable<typeof context.pluginApprovalIosPushDelivery>["handleRequested"]>
+  >(async () => {
+    delivered.resolve();
+    return true;
+  });
+  return {
+    ...fixture,
+    context,
+    handleRequested,
+    async request(start = () => invokeDemoPolicy(context, createOperatorClient())) {
+      const result = await expectSinglePendingApproval(fixture.manager, context, () =>
+        fixture.track(start()),
+      );
+      await awaitGateBeforeSettlement(
+        delivered.promise,
+        result.pending,
+        "Approval request ended before delivery",
+      );
+      return result;
+    },
+  };
+}
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
   vi.fn(
-    (params: { turnSourceChannel?: string | null; approvalKind?: "exec" | "plugin" }) =>
+    (params: { turnSourceChannel?: string | null; approvalKind?: ChannelApprovalKind }) =>
       params.approvalKind === "plugin" && params.turnSourceChannel === "tui",
   ),
 );
@@ -37,190 +91,6 @@ const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
 vi.mock("../infra/approval-turn-source.js", () => ({
   hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
 }));
-function createNodeSession(): NodeSession {
-  return {
-    nodeId: "node-1",
-    connId: "conn-1",
-    client: {} as NodeSession["client"],
-    declaredCaps: [],
-    caps: [],
-    declaredCommands: ["demo.read"],
-    commands: ["demo.read"],
-    declaredNodePluginTools: [],
-    nodePluginTools: [],
-    nodeSkills: [],
-    connectedAtMs: 0,
-  };
-}
-
-function createContext(opts?: {
-  pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
-  getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
-  getRuntimeConfig?: GatewayRequestContext["getRuntimeConfig"];
-  nodeSession?: NodeSession;
-  hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
-  forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
-  pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
-}) {
-  const nodeSession = opts?.nodeSession ?? createNodeSession();
-  const invoke = vi.fn(
-    async (params?: {
-      onDispatchReady?: (invokeId: string) => void;
-    }): Promise<NodeInvokeResult> => {
-      params?.onDispatchReady?.("invoke-1");
-      return {
-        ok: true,
-        payload: { ok: true, value: 1 },
-        payloadJSON: null,
-        error: null,
-      };
-    },
-  );
-  return {
-    context: {
-      getRuntimeConfig:
-        opts?.getRuntimeConfig ??
-        (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
-      nodeRegistry: { get: () => nodeSession, invoke },
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-      pluginApprovalManager: opts?.pluginApprovalManager,
-      getApprovalClientConnIds: opts?.getApprovalClientConnIds,
-      hasExecApprovalClients: opts?.hasExecApprovalClients,
-      forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
-      pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
-    } as unknown as GatewayRequestContext,
-    invoke,
-  };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: ["operator.approvals"],
-    },
-  } as GatewayClient;
-}
-
-function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
-}
-
-function createOperatorClient(): GatewayClient {
-  return createApprovalClient({
-    connId: "conn-requester",
-    clientId: "client-owner",
-    deviceId: "device-owner",
-  });
-}
-
-type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
-type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
-type PluginApprovalRecord = ReturnType<
-  ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
->[number];
-
-function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegistration {
-  return {
-    pluginId: DEMO_PLUGIN_ID,
-    policy: {
-      commands: [DEMO_COMMAND],
-      handle,
-    },
-    pluginConfig: { enabled: true },
-    source: "test",
-  };
-}
-
-function createApprovalRequestPolicy(params?: {
-  timeoutMs?: number;
-  title?: string;
-  description?: string;
-}): NodeInvokePolicyRegistration {
-  return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
-    const approval = await ctx.approvals?.request({
-      title: params?.title ?? "Sensitive action",
-      description: params?.description ?? "Needs approval",
-      ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
-    });
-    return { ok: true, payload: approval ?? null };
-  });
-}
-
-function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeHostCommands.push({
-    pluginId: DEMO_PLUGIN_ID,
-    command: {
-      command: DEMO_COMMAND,
-      dangerous: true,
-      handle: async () => "{}",
-    },
-    source: "test",
-  });
-  registry.nodeInvokePolicies.push(...policies);
-  setActivePluginRegistry(registry);
-}
-
-async function invokeDemoPolicy(
-  context: GatewayRequestContext,
-  client: GatewayClient | null = null,
-) {
-  return await applyPluginNodeInvokePolicy({
-    context,
-    client,
-    nodeSession: createNodeSession(),
-    command: DEMO_COMMAND,
-    params: DEMO_PARAMS,
-  });
-}
-
-async function expectSinglePendingApproval(
-  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-): Promise<PluginApprovalRecord> {
-  await vi.waitFor(() => {
-    expect(manager.listPendingRecords()).toHaveLength(1);
-  });
-  const [record] = manager.listPendingRecords();
-  if (!record) {
-    throw new Error("expected pending approval");
-  }
-  return record;
-}
-
-async function expectApprovalResolution(
-  resultPromise: ReturnType<typeof applyPluginNodeInvokePolicy>,
-  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  record: PluginApprovalRecord,
-) {
-  expect(manager.resolve(record.id, "allow-once")).toBe(true);
-  await expect(resultPromise).resolves.toStrictEqual({
-    ok: true,
-    payload: { id: record.id, decision: "allow-once" },
-  });
-  expect(manager.getSnapshot(record.id)?.consumedDecision).toBe("allow-once");
-  expect(manager.consumeAllowOnce(record.id)).toBe(false);
-}
 
 describe("applyPluginNodeInvokePolicy", () => {
   beforeEach(() => {
@@ -228,301 +98,274 @@ describe("applyPluginNodeInvokePolicy", () => {
     hasApprovalTurnSourceRouteMock.mockClear();
   });
 
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    closeOpenClawStateDatabaseForTest();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { force: true, recursive: true });
-    }
-  });
+  afterEach(() => resetPluginRuntimeStateForTest());
 
-  it("fails closed for dangerous plugin node commands without a policy", async () => {
-    setDangerousDemoCommandRegistry();
-    const { context, invoke } = createContext();
+  it("preserves one approval and session identity through streaming readiness recovery", async (testContext) => {
+    const nodeSession = createNodeSession({ pairingGeneration: "paired-generation-1" });
+    const fixture = createPolicyApprovalFixture(testContext, {}, { nodeSession });
+    const { manager, invoke } = fixture;
+    await fixture.run(async () => {
+      const handle = vi.fn<Parameters<typeof createDemoPolicy>[0]>(async (policyContext) => {
+        expect(policyContext.client?.scopes).toEqual(["operator.approvals"]);
+        const approval = await policyContext.approvals?.request({
+          title: "Open fixture duplex",
+          description: "Approve the declared node command",
+        });
+        if (approval?.decision !== "allow-once") {
+          return { ok: false, code: "APPROVAL_DENIED", message: "node command was not approved" };
+        }
+        return await policyContext.invokeNode();
+      });
+      setDangerousDemoCommandRegistry([createDemoPolicy(handle)]);
+      let runtimeCurrent = true;
+      const stream = {
+        onProgress: vi.fn(),
+        onDispatchReady: vi.fn(),
+        idleTimeoutMs: 5_000,
+        isRuntimeCurrent: () => runtimeCurrent,
+      };
+      invoke.mockImplementationOnce(async (params) => {
+        params?.onDispatchReady?.("rejected-duplex-invoke");
+        return {
+          ok: false,
+          error: { code: "NODE_NOT_READY", message: "Node lifecycle transition in progress" },
+        };
+      });
+      invoke.mockImplementationOnce(async (params) => {
+        params?.onDispatchReady?.("approved-duplex-invoke");
+        params?.onProgress?.("approved-duplex-progress");
+        return { ok: true, payload: { approved: true }, payloadJSON: null, error: null };
+      });
+      const { record: approval, pending: resultPromise } = await fixture.request(
+        {
+          ...createOperatorClient(),
+          internal: {
+            syntheticClient: true,
+            pluginRuntimeOwnerId: DEMO_PLUGIN_ID,
+            nodeInvokeApprovalSessionKey: "agent:main:paired",
+            nodeInvokeStream: stream,
+          },
+        },
+        { nodeSession, sessionKey: "agent:main:paired", nodeInvokeStream: stream },
+      );
+      expect(approval.request.sessionKey).toBe("agent:main:paired");
+      expect(invoke).not.toHaveBeenCalled();
+      expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
 
-    const result = await invokeDemoPolicy(context);
+      await expect(resultPromise).resolves.toMatchObject({ ok: true });
+      expect(stream.onDispatchReady.mock.calls).toEqual([
+        ["rejected-duplex-invoke"],
+        ["approved-duplex-invoke"],
+      ]);
+      expect(stream.onProgress.mock.calls).toEqual([["approved-duplex-progress"]]);
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(handle).toHaveBeenCalledOnce();
+      expect(await manager.listPendingRecords()).toHaveLength(0);
+      expect((await manager.getSnapshot(approval.id))?.consumedDecision).toBe("allow-once");
+      expect(invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedConnId: "conn-1",
+          expectedPairingGeneration: "paired-generation-1",
+          sessionKey: "agent:main:paired",
+          idleTimeoutMs: 5_000,
+        }),
+      );
 
-    if (result === null) {
-      throw new Error("expected plugin policy failure");
-    }
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected plugin policy failure");
-    }
-    expect(result.code).toBe("PLUGIN_POLICY_MISSING");
-    expect(result.details).toStrictEqual({ nodeCommandDispatched: false });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("uses a matching plugin policy when one is registered", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    const { context, invoke } = createContext();
-
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      expectedConnId: "conn-1",
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      timeoutMs: undefined,
-      idempotencyKey: undefined,
-      onDispatchReady: expect.any(Function),
+      runtimeCurrent = false;
+      expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
     });
   });
 
-  it.each([5_000, 0])(
-    "bounds plugin timeout override %i by the remaining invocation deadline",
-    async (overrideTimeoutMs) => {
+  it("does not trust a plugin-owned invocation session without host attestation", async (testContext) => {
+    const fixture = createPolicyApprovalFixture(testContext);
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+      const { record: approval, pending: resultPromise } = await fixture.request(
+        {
+          ...createOperatorClient(),
+          internal: {
+            syntheticClient: true,
+            pluginRuntimeOwnerId: DEMO_PLUGIN_ID,
+          },
+        },
+        {
+          sessionKey: "agent:main:plugin-asserted",
+        },
+      );
+      expect(approval.request.sessionKey).toBeNull();
+      expect(await manager.resolve(approval.id, "deny")).toBe(true);
+      await expect(resultPromise).resolves.toMatchObject({ ok: true });
+    });
+  });
+
+  it("fails closed when argument risk classification throws or returns invalid metadata", async () => {
+    for (const classifyRisk of [
+      () => {
+        throw new Error("hostile argument text");
+      },
+      () => ({ level: "high" as const, family: "contains spaces" }),
+    ]) {
+      const policy = createDemoPolicy((ctx) => ctx.invokeNode());
+      policy.policy.classifyRisk = classifyRisk;
+      setDangerousDemoCommandRegistry([policy]);
+      const { context, invoke } = createContext();
+
+      await expect(invokeDemoPolicy(context)).resolves.toEqual({
+        ok: false,
+        code: "PLUGIN_POLICY_RISK_CLASSIFICATION_FAILED",
+        message: `node.invoke ${DEMO_COMMAND} arguments could not be classified by plugin ${DEMO_PLUGIN_ID}`,
+        details: { nodeCommandDispatched: false },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it.each([
+    { overrideTimeoutMs: 0, expectedTimeoutMs: 250, expectedDeadlineAtMs: 1_250 },
+    { overrideTimeoutMs: 80, expectedTimeoutMs: 80, expectedDeadlineAtMs: 1_080 },
+  ])(
+    "bounds plugin timeout override $overrideTimeoutMs by the original or earlier deadline",
+    async ({ overrideTimeoutMs, expectedTimeoutMs, expectedDeadlineAtMs }) => {
+      const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
       setDangerousDemoCommandRegistry([
-        createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) =>
-          ctx.invokeNode({ timeoutMs: overrideTimeoutMs }),
-        ),
+        createDemoPolicy((ctx) => ctx.invokeNode({ timeoutMs: overrideTimeoutMs })),
       ]);
       const { context, invoke } = createContext();
       const controller = new AbortController();
 
-      const result = await applyPluginNodeInvokePolicy({
-        context,
-        client: null,
-        nodeSession: createNodeSession(),
-        command: DEMO_COMMAND,
-        params: DEMO_PARAMS,
-        timeoutMs: 1_000,
-        signal: controller.signal,
-        resolveRemainingTimeoutMs: () => 250,
-      });
+      try {
+        const result = await invokeDemoPolicy(context, null, {
+          timeoutMs: 1_000,
+          deadlineAtMs: 1_250,
+          signal: controller.signal,
+          resolveRemainingTimeoutMs: () => 250,
+        });
 
-      expect(result).toMatchObject({ ok: true });
-      expect(invoke).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutMs: 250, signal: controller.signal }),
-      );
+        expect(result).toMatchObject({ ok: true });
+        const request = invoke.mock.calls[0]?.[0];
+        expect(request?.signal).toBe(controller.signal);
+        expect(request?.timeoutMs).toBe(expectedTimeoutMs);
+        expect(request?.deadlineAtMs).toBe(expectedDeadlineAtMs);
+      } finally {
+        clock.mockRestore();
+      }
     },
   );
 
   it("marks plugin-owned work dispatched only after the node transport accepts it", async () => {
     setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+      createDemoPolicy((ctx) => {
+        expect(ctx.node?.caps).toEqual(["demo.allowed"]);
+        return ctx.invokeNode();
+      }),
     ]);
-    const { context, invoke } = createContext();
+    const nodeSession = createNodeSession({
+      declaredCaps: ["demo.allowed", "demo.unapproved"],
+      caps: ["demo.allowed"],
+    });
+    const { context, invoke } = createContext({ nodeSession });
     const dispatchOrder: string[] = [];
     invoke.mockImplementationOnce(async (params) => {
       dispatchOrder.push("node transport");
       params?.onDispatchReady?.("invoke-1");
-      return {
-        ok: true,
-        payload: { ok: true, value: 1 },
-        payloadJSON: null,
-        error: null,
-      };
+      return { ok: true, payload: { ok: true, value: 1 }, payloadJSON: null, error: null };
     });
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, null, {
+      nodeSession,
       onNodeCommandDispatched: () => dispatchOrder.push("dispatched"),
     });
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(dispatchOrder).toStrictEqual(["node transport", "dispatched"]);
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(true);
+    context.getRuntimeConfig = () => nodeCommandsConfig({ deny: [DEMO_COMMAND] });
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
-  it("keeps plugin-owned work pre-dispatch when the node transport rejects the send", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
+  it.each([
+    { code: "TIMEOUT", options: { timeoutMs: 1_000, resolveRemainingTimeoutMs: () => 0 } },
+    { code: "PAIRING_CHANGED", options: { isInvocationCurrent: async () => false } },
+  ])("rejects plugin dispatch with $code before transport", async ({ code, options }) => {
+    setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
     const { context, invoke } = createContext();
-    const onNodeCommandDispatched = vi.fn();
-    invoke.mockResolvedValueOnce({
+    expect(await invokeDemoPolicy(context, null, options)).toMatchObject({
       ok: false,
-      payload: null,
-      payloadJSON: null,
-      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-    });
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      onNodeCommandDispatched,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "UNAVAILABLE",
-      details: {
-        nodeError: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-        nodeCommandDispatched: false,
-      },
-    });
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ onDispatchReady: expect.any(Function) }),
-    );
-    expect(onNodeCommandDispatched).not.toHaveBeenCalled();
-  });
-
-  it("rejects expired plugin-owned work without dispatching it", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    const { context, invoke } = createContext();
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      timeoutMs: 1_000,
-      resolveRemainingTimeoutMs: () => 0,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "TIMEOUT",
+      code,
       details: { nodeCommandDispatched: false },
     });
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rechecks command authorization immediately before plugin transport dispatch", async () => {
-    let allowCommand = true;
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy(async (ctx) => {
-        allowCommand = false;
-        return await ctx.invokeNode();
-      }),
-    ]);
-    const { context, invoke } = createContext({
-      getRuntimeConfig: () => ({
-        gateway: {
-          nodes: {
-            commands: allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] },
-          },
+  it.each(["runtime", "bridged approval"] as const)(
+    "rejects plugin dispatch when %s authority closes during pairing recheck",
+    async (authority) => {
+      setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
+      let active = true;
+      const { promise: pairingCheck, resolve: releasePairingCheck } = createDeferred();
+      const { context, invoke } = createContext(
+        authority === "runtime" ? { validateAgentRuntimeApprovalAuthority: () => active } : {},
+      );
+      const client =
+        authority === "runtime"
+          ? createRuntimeClient("run-node-policy-race")
+          : createOperatorClient();
+      const resultPromise = invokeDemoPolicy(context, client, {
+        isInvocationCurrent: async () => {
+          await pairingCheck;
+          return true;
         },
-      }),
-    });
-
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "NODE_COMMAND_REVOKED",
-      details: {
-        command: DEMO_COMMAND,
-        reason: "command not allowlisted",
-        nodeCommandDispatched: false,
-      },
-    });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("rejects plugin transport dispatch after invocation ownership changes", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    const { context, invoke } = createContext();
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      isInvocationCurrent: async () => false,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PAIRING_CHANGED",
-      details: { nodeCommandDispatched: false },
-    });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("rejects plugin transport dispatch through an invalidated node session", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    const nodeSession = createNodeSession();
-    nodeSession.client.invalidated = true;
-    const { context, invoke } = createContext({ nodeSession });
-
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession,
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PAIRING_CHANGED",
-      details: { nodeCommandDispatched: false },
-    });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("overrides plugin dispatch claims with the actual pre-dispatch state", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy(async () => ({
+        ...(authority === "bridged approval" ? { isApprovalAuthorityActive: () => active } : {}),
+      });
+      await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
+      active = false;
+      releasePairingCheck?.();
+      await expect(resultPromise).resolves.toMatchObject({
         ok: false,
-        code: "POLICY_DENIED",
-        message: "policy denied before dispatch",
-        details: { nodeCommandDispatched: true, source: "policy" },
-      })),
-    ]);
-    const { context, invoke } = createContext();
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        details: { nodeCommandDispatched: false },
+      });
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
 
-    const result = await invokeDemoPolicy(context);
+  it.each([false, true])(
+    "reports actual dispatch state for a failed policy (dispatched=%s)",
+    async (dispatched) => {
+      setDangerousDemoCommandRegistry([
+        createDemoPolicy(async (ctx) => {
+          if (dispatched) {
+            await ctx.invokeNode();
+          }
+          return {
+            ok: false,
+            code: "POLICY_DENIED",
+            message: "policy denied",
+            ...(!dispatched && { details: { nodeCommandDispatched: true, source: "policy" } }),
+          };
+        }),
+      ]);
+      const { context, invoke } = createContext();
 
-    expect(result).toMatchObject({
-      ok: false,
-      details: { nodeCommandDispatched: false, source: "policy" },
-    });
-    expect(invoke).not.toHaveBeenCalled();
-  });
+      const result = await invokeDemoPolicy(context);
 
-  it("marks a policy failure after node dispatch as ambiguous", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy(async (ctx) => {
-        await ctx.invokeNode();
-        return {
-          ok: false,
-          code: "POST_DISPATCH_REJECTION",
-          message: "policy rejected after dispatch",
-        };
-      }),
-    ]);
-    const { context, invoke } = createContext();
+      expect(result).toMatchObject({
+        ok: false,
+        details: { nodeCommandDispatched: dispatched, ...(!dispatched && { source: "policy" }) },
+      });
+      expect(invoke).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+    },
+  );
 
-    const result = await invokeDemoPolicy(context);
-
-    expect(result).toMatchObject({
-      ok: false,
-      details: { nodeCommandDispatched: true },
-    });
-    expect(invoke).toHaveBeenCalledOnce();
-  });
-
-  it("binds plugin policy approval requests to the invoking client", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    const visibleConnIds = new Set(["conn-owner-approval"]);
+  it.for([true])("routes approvals for synthetic=%s", async (synthetic, testContext) => {
+    // The carried connection is turn provenance, never this approval's
+    // presenter, so it stays eligible as a reviewer for both provenance shapes.
+    const visibleConnIds = new Set(["conn-owner-approval", "conn-requester"]);
     const getApprovalClientConnIds = createApprovalClientLookup([
-      createApprovalClient({
-        connId: "conn-owner-approval",
-        clientId: "client-owner",
-        deviceId: "device-owner",
-      }),
+      createOperatorClient(),
+      createOperatorClient("conn-owner-approval"),
       createApprovalClient({
         connId: "conn-other-approval",
         clientId: "client-other",
@@ -530,156 +373,179 @@ describe("applyPluginNodeInvokePolicy", () => {
       }),
     ]);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds,
-    });
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
-
-    const record = await expectSinglePendingApproval(manager);
-    expect(record.requestedByConnId).toBe("conn-requester");
-    expect(record.requestedByDeviceId).toBe("device-owner");
-    expect(record.requestedByClientId).toBe("client-owner");
-    expect(context.broadcast).not.toHaveBeenCalled();
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "plugin.approval.requested",
-      expect.objectContaining({ id: record.id }),
-      visibleConnIds,
-      { dropIfSlow: true },
+    const fixture = createPolicyApprovalFixture(
+      testContext,
+      {},
+      {
+        getApprovalClientConnIds,
+      },
     );
+    const { context, manager } = fixture;
+    await fixture.run(async () => {
+      const requester = createOperatorClient();
+      requester.internal = synthetic ? { syntheticClient: true } : undefined;
+      const { record, pending: resultPromise } = await fixture.request(requester);
+      expect(record.requestedByConnId).toBe("conn-requester");
+      expect(record.requestedByDeviceId).toBe("device-owner");
+      expect(record.requestedByClientId).toBe("client-owner");
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "plugin.approval.requested",
+        expect.objectContaining({ id: record.id }),
+        visibleConnIds,
+        { dropIfSlow: true },
+      );
 
-    await expectApprovalResolution(resultPromise, manager, record);
+      await expectApprovalResolution(resultPromise, manager, record);
+    });
   });
 
-  it("forwards plugin policy approvals to the originating turn source", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    const getApprovalClientConnIds = vi.fn(() => new Set<string>());
-    const handlePluginApprovalRequested = vi.fn(async () => true);
-    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds,
-      hasExecApprovalClients: vi.fn(() => false),
-      forwardPluginApprovalRequest: handlePluginApprovalRequested,
+  it.for([
+    {
+      name: "sanitizes reviewer-spoofing characters like the RPC ingress",
+      input: {
+        title: "Deploy‮yolped",
+        description: "safe​text",
+        toolName: "tool‮run",
+        agentId: "agent​x",
+      },
+      expected: {
+        title: "Deploy\\u{202E}yolped",
+        description: "safe\\u{200B}text",
+        toolName: "tool\\u{202E}run",
+        agentId: "agent\\u{200B}x",
+      },
+    },
+    {
+      name: "keeps payload fields on UTF-16 boundaries",
+      input: { title: `${"a".repeat(79)}🚀tail`, description: `${"b".repeat(255)}🚀tail` },
+      expected: { title: "a".repeat(79), description: "b".repeat(255) },
+    },
+  ])("$name", async ({ input, expected }, testContext) => {
+    const fixture = createPolicyApprovalFixture(testContext);
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      setDangerousDemoCommandRegistry([createApprovalRequestPolicy(input)]);
+      const { record, pending: resultPromise } = await fixture.request();
+      expect(record.request).toMatchObject(expected);
+
+      await expectApprovalResolution(resultPromise, manager, record);
     });
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: {
-        ...createOperatorClient(),
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
+  });
+
+  it("limits explicitly one-shot node-policy approvals to allow-once or deny", async (testContext) => {
+    const fixture = createPolicyApprovalFixture(testContext, {
+      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    });
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      setDangerousDemoCommandRegistry([
+        createApprovalRequestPolicy({ allowedDecisions: ["allow-once"] }),
+      ]);
+      const { record, pending: resultPromise } = await fixture.request();
+      expect(record.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+      expect(await manager.resolve(record.id, "allow-always")).toBe(false);
+      expect(await manager.listPendingRecords()).toHaveLength(1);
+
+      await expectApprovalResolution(resultPromise, manager, record);
+    });
+  });
+
+  it("forwards plugin policy approvals to the originating turn source", async (testContext) => {
+    const fixture = deliveryFixture(testContext, true);
+    const { manager, context, handleRequested } = fixture;
+    await fixture.run(async () => {
+      context.forwardPluginApprovalRequest = handleRequested;
+      context.validateAgentRuntimeApprovalAuthority = () => true;
+      const { record, pending: resultPromise } = await fixture.request(() =>
+        invokeDemoPolicy(
+          context,
+          createRuntimeClient("run-node-policy", "agent:main:telegram:direct:alice", {
+            lifecycleGeneration: "test-generation",
+            claimId: "test-claim",
+          }),
+          {
+            sessionKey: "agent:main:spoofed",
+            turnSource: { channel: "tui", to: "terminal", accountId: "default", threadId: 7 },
+          },
+        ),
+      );
+      expect(record.request).toMatchObject({
+        turnSourceChannel: "tui",
+        turnSourceTo: "terminal",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: 7,
+      });
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "plugin.approval.requested",
+        expect.objectContaining({ id: record.id }),
+        new Set<string>(),
+        { dropIfSlow: true },
+      );
+      expect(handleRequested).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: record.id,
+          request: expect.objectContaining({
+            turnSourceChannel: "tui",
+            turnSourceTo: "terminal",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: 7,
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
-          },
-        },
-      },
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      turnSource: {
-        channel: "tui",
-        to: "terminal",
-        accountId: "default",
-        threadId: 7,
-      },
-    });
-
-    const record = await expectSinglePendingApproval(manager);
-    expect(record.request.turnSourceChannel).toBe("tui");
-    expect(record.request.turnSourceTo).toBe("terminal");
-    expect(record.request.turnSourceAccountId).toBe("default");
-    expect(record.request.turnSourceThreadId).toBe(7);
-    expect(context.broadcast).not.toHaveBeenCalled();
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "plugin.approval.requested",
-      expect.objectContaining({ id: record.id }),
-      new Set<string>(),
-      { dropIfSlow: true },
-    );
-    expect(handlePluginApprovalRequested).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: record.id,
-        request: expect.objectContaining({
-          turnSourceChannel: "tui",
-          turnSourceTo: "terminal",
-          turnSourceAccountId: "default",
-          turnSourceThreadId: 7,
-          agentId: "main",
-          sessionKey: "agent:main:telegram:direct:alice",
+          }),
         }),
-      }),
-    );
+      );
 
-    await expectApprovalResolution(resultPromise, manager, record);
+      await expectApprovalResolution(resultPromise, manager, record);
+    });
   });
 
-  it("delivers plugin policy approvals to visible iOS reviewers", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    const handleRequested = vi.fn(
-      async (
-        _request: PluginApprovalRequest,
-        _opts?: {
-          isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-        },
-      ) => true,
-    );
-    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: vi.fn(() => new Set<string>()),
-      hasExecApprovalClients: vi.fn(() => false),
-      pluginApprovalIosPushDelivery: { handleRequested },
+  it("delivers plugin policy approvals to visible iOS reviewers", async (testContext) => {
+    const fixture = deliveryFixture(testContext);
+    const { manager, context, handleRequested } = fixture;
+    await fixture.run(async () => {
+      context.pluginApprovalIosPushDelivery = { handleRequested };
+      const { record, pending: resultPromise } = await fixture.request();
+
+      expect(handleRequested).toHaveBeenCalledTimes(1);
+      const deliveryOptions = handleRequested.mock.calls[0]?.[1];
+      const visible = (deviceId: string) =>
+        deliveryOptions?.isTargetVisible?.({
+          deviceId,
+          scopes: ["operator.approvals", "operator.read"],
+        });
+      expect([visible("device-owner"), visible("device-other")]).toEqual([true, false]);
+
+      await expectApprovalResolution(resultPromise, manager, record);
     });
-
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
-    const record = await expectSinglePendingApproval(manager);
-
-    expect(handleRequested).toHaveBeenCalledTimes(1);
-    const deliveryOptions = handleRequested.mock.calls[0]?.[1];
-    expect(
-      deliveryOptions?.isTargetVisible?.({
-        deviceId: "device-owner",
-        scopes: ["operator.approvals", "operator.read"],
-      }),
-    ).toBe(true);
-    expect(
-      deliveryOptions?.isTargetVisible?.({
-        deviceId: "device-other",
-        scopes: ["operator.approvals", "operator.read"],
-      }),
-    ).toBe(false);
-
-    await expectApprovalResolution(resultPromise, manager, record);
   });
 
-  it("sends an iOS cleanup wake when a plugin policy approval expires", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    const handleExpired = vi.fn(async () => {});
-    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: vi.fn(() => new Set<string>()),
-      hasExecApprovalClients: vi.fn(() => false),
-      pluginApprovalIosPushDelivery: {
-        handleRequested: vi.fn(async () => true),
-        handleExpired,
-      },
-    });
+  it("sends an iOS cleanup wake through the current delivery owner", async (testContext) => {
+    const fixture = deliveryFixture(testContext);
+    const { manager, context, handleRequested } = fixture;
+    await fixture.run(async () => {
+      const handleExpired = vi.fn(async () => {});
+      context.pluginApprovalIosPushDelivery = { handleRequested, handleExpired };
+      const { record, pending: resultPromise } = await fixture.request();
+      const replacementExpired = vi.fn(async () => {});
+      context.pluginApprovalIosPushDelivery = { handleExpired: replacementExpired };
+      await manager.expire(record.id, "timeout");
 
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
-    const record = await expectSinglePendingApproval(manager);
-    manager.expire(record.id, "timeout");
-
-    await expect(resultPromise).resolves.toStrictEqual({
-      ok: true,
-      payload: { id: record.id, decision: null },
+      await expect(resultPromise).resolves.toStrictEqual({
+        ok: true,
+        payload: { id: record.id, decision: null },
+      });
+      expect(handleExpired).not.toHaveBeenCalled();
+      expect(replacementExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
+      expect(replacementExpired.mock.contexts).toEqual([context.pluginApprovalIosPushDelivery]);
     });
-    expect(handleExpired).toHaveBeenCalledWith(expect.objectContaining({ id: record.id }));
   });
 
-  it("ignores approval routes from unsigned node.invoke clients", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  it("ignores approval routes from unsigned node.invoke clients", async (testContext) => {
+    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+      approvalKind: "plugin",
+    });
     const forwardPluginApprovalRequest = vi.fn(async () => false);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
@@ -689,12 +555,8 @@ describe("applyPluginNodeInvokePolicy", () => {
       forwardPluginApprovalRequest,
     });
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: createOperatorClient(),
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
+    const result = await invokeDemoPolicy(context, createOperatorClient(), {
+      sessionKey: "agent:main:spoofed",
       turnSource: {
         channel: "telegram",
         to: "chat:other",
@@ -718,82 +580,59 @@ describe("applyPluginNodeInvokePolicy", () => {
     );
   });
 
-  it("caps plugin policy approval timeouts through the shared approval policy", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    setDangerousDemoCommandRegistry([
-      createApprovalRequestPolicy({ timeoutMs: Number.MAX_SAFE_INTEGER }),
-    ]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
-      ]),
-    });
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+  it("caps plugin policy approval timeouts through the shared approval policy", async (testContext) => {
+    const fixture = createPolicyApprovalFixture(testContext);
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      setDangerousDemoCommandRegistry([
+        createApprovalRequestPolicy({ timeoutMs: Number.MAX_SAFE_INTEGER }),
+      ]);
+      const { record, pending: resultPromise } = await fixture.request();
+      expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 
-    const record = await expectSinglePendingApproval(manager);
-    expect(record.expiresAtMs - record.createdAtMs).toBe(MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
-
-    await expectApprovalResolution(resultPromise, manager, record);
-  });
-
-  it("fails closed when the allow-once claim cannot be consumed", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    vi.spyOn(manager, "consumeAllowOnce").mockReturnValue(false);
-    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
-      ]),
-    });
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
-
-    const record = await expectSinglePendingApproval(manager);
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
-
-    await expect(resultPromise).resolves.toStrictEqual({
-      ok: true,
-      payload: { id: record.id, decision: null },
+      await expectApprovalResolution(resultPromise, manager, record);
     });
   });
 
-  it("fails closed before routing an unrenderable persistent policy approval", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-policy-approval-"));
-    tempDirs.push(stateDir);
-    const databaseOptions = { path: path.join(stateDir, "state.sqlite") };
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      approvalKind: "plugin",
-      persistence: { runtimeEpoch: "node-policy-test", databaseOptions },
-      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+  it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
+    const fixture = createPolicyApprovalFixture(testContext);
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      vi.spyOn(manager, "consumeAllowOnce").mockResolvedValue(false);
+      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+      const { record, pending: resultPromise } = await fixture.request();
+      expect(await manager.resolve(record.id, "allow-once")).toBe(true);
+
+      await expect(resultPromise).resolves.toStrictEqual({
+        ok: true,
+        payload: { id: record.id, decision: null },
+      });
     });
+  });
+
+  it("fails closed before routing an unrenderable persistent policy approval", async (test) => {
+    const { manager, databaseOptions } = createTestApprovalFixture<PluginApprovalRequestPayload>(
+      test,
+      {
+        approvalKind: "plugin",
+        resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+      },
+    );
     setDangerousDemoCommandRegistry([
       createApprovalRequestPolicy({ title: " \t ", description: "Needs approval" }),
     ]);
     const { context, invoke } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
+        createOperatorClient("conn-owner-approval"),
       ]),
     });
 
     await expect(invokeDemoPolicy(context, createOperatorClient())).rejects.toThrow(
       "approval cannot be persisted without a valid reviewer presentation",
     );
-    expect(manager.listPendingRecords()).toEqual([]);
-    expect(listPendingOperatorApprovals({ databaseOptions })).toEqual([]);
+    expect(await manager.listPendingRecords()).toEqual([]);
+    expect(await listPendingOperatorApprovals({ databaseOptions })).toEqual([]);
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
@@ -803,41 +642,54 @@ describe("applyPluginNodeInvokePolicy", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const { context } = createContext();
 
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: null,
-      nodeSession: createNodeSession(),
+    const result = await invokeDemoPolicy(context, null, {
       command: "safe.echo",
       params: { value: "hello" },
     });
 
     expect(result).toBeNull();
   });
+});
 
-  it("keeps approval payload fields on UTF-16 boundaries", async () => {
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+it.each([true, false])(
+  "plugin dispatch snapshots only bound turn source (bound=%s)",
+  async (bound) => {
+    onTestFinished(() => resetPluginRuntimeStateForTest());
+    const source = {
+      channel: "telegram",
+      to: "-100123:topic:42",
+      accountId: "work",
+      threadId: "42",
+    };
     setDangerousDemoCommandRegistry([
-      createApprovalRequestPolicy({
-        title: `${"a".repeat(79)}🚀tail`,
-        description: `${"b".repeat(255)}🚀tail`,
+      createDemoPolicy(async (ctx) => {
+        source.to = "mutated-owner";
+        return ctx.invokeNode({
+          params: { ...DEMO_PARAMS, turnSourceTo: "payload-selected-owner" },
+        });
       }),
     ]);
-    const { context } = createContext({
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
-      ]),
+    const { context, invoke } = createContext({
+      validateAgentRuntimeApprovalAuthority: () => true,
     });
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
-
-    const record = await expectSinglePendingApproval(manager);
-    expect(record.request.title).toBe("a".repeat(79));
-    expect(record.request.description).toBe("b".repeat(255));
-
-    await expectApprovalResolution(resultPromise, manager, record);
-  });
-});
+    const client = bound
+      ? createRuntimeClient("source-policy-run", "agent:main:main")
+      : createOperatorClient();
+    const result = await invokeDemoPolicy(context, client, {
+      turnSource: source,
+    });
+    expect(result?.ok).toBe(true);
+    expect(invoke).toHaveBeenCalledOnce();
+    if (bound) {
+      expect(invoke.mock.calls[0]?.[0]?.turnSource).toEqual({
+        channel: "telegram",
+        to: "-100123:topic:42",
+        accountId: "work",
+        threadId: "42",
+      });
+    } else {
+      expect(invoke.mock.calls[0]?.[0]?.turnSource).toBeUndefined();
+    }
+    resetPluginRuntimeStateForTest();
+  },
+);

@@ -1,0 +1,162 @@
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import {
+  beginUserPreferenceMutation,
+  captureUserPreferenceRead,
+} from "./user-preferences-publication.js";
+import { updatesGitCoauthorPreference } from "./user-preferences.store.js";
+import type {
+  CanonicalUserPreferences,
+  UserPreferenceCoauthorMutation,
+  UserPreferenceError,
+} from "./user-preferences.types.js";
+import { prepareUserPreferenceUpdate } from "./user-preferences.validation.js";
+import { fenceUserProfileMutationAuthority } from "./user-profile-events.js";
+
+/** Read one preference for a canonical profile batch without opening SQLite on the caller. */
+export async function getUserPreferenceValues(
+  profileIds: readonly string[],
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{ values: Map<string, unknown>; isCurrent: () => boolean }> {
+  if (profileIds.length === 0) {
+    return { values: new Map(), isCurrent: () => true };
+  }
+  const ids = [...new Set(profileIds)];
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const isCurrent = await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.values", profileIds: ids, key },
+    { context, current: true },
+  );
+  return { values: reply?.values ?? new Map(), isCurrent };
+}
+
+export async function getCanonicalUserPreferences(
+  profileId: string,
+  keys?: readonly string[],
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<CanonicalUserPreferences | undefined> {
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.read", profileId, keys },
+    { context, current: true },
+  );
+  return reply?.preferences;
+}
+
+export async function setCanonicalUserPreferences(
+  profileId: string,
+  entries: Record<string, unknown>,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+    assertCurrent?: () => void;
+    expectedEntries?: Record<string, unknown>;
+  } = {},
+): Promise<Result<{ profileId: string }, UserPreferenceError> | undefined> {
+  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const context = captureOpenClawStateWorkerContext(options);
+  const finishMutation = beginUserPreferenceMutation(context.admission);
+  let publicationSettled: Promise<void> | undefined;
+  try {
+    return await runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "userPreferences.write",
+          input: { profileId, update: prepared.value },
+        }),
+      {
+        assertCurrent: options.assertCurrent,
+        createAdmission: (operation) => {
+          let pending:
+            | {
+                facts: UserPreferenceCoauthorMutation;
+                fence: ReturnType<typeof fenceUserProfileMutationAuthority>;
+                granted: boolean;
+              }
+            | undefined;
+          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            context.admission.assertCurrent();
+            options.assertCurrent?.();
+            if (request.stage === "transaction") {
+              grant();
+              return;
+            }
+            if (request.stage !== "commit") {
+              throw new Error("Profile preference mutation requires transaction admission");
+            }
+            if (request.facts === undefined) {
+              grant();
+              return;
+            }
+            if (
+              !updatesGitCoauthorPreference(prepared.value) ||
+              !isRecord(request.facts) ||
+              request.facts.kind !== "user-preference-coauthor" ||
+              typeof request.facts.profileId !== "string" ||
+              request.facts.profileId.length === 0
+            ) {
+              throw new Error("Profile preference mutation returned invalid authority facts");
+            }
+            const facts: UserPreferenceCoauthorMutation = {
+              kind: "user-preference-coauthor",
+              profileId: request.facts.profileId,
+            };
+            pending = {
+              facts,
+              fence: fenceUserProfileMutationAuthority(context.admission, {
+                profiles: [facts.profileId],
+                identities: [],
+                channels: [],
+              }),
+              granted: false,
+            };
+            pending.granted = grant();
+          });
+          publicationSettled = operation.settled.then((settlement) => {
+            let committed = false;
+            let receiptValid = false;
+            try {
+              const receipt = admission.committed;
+              // Ordinary writes may publish an engine receipt without coauthor authority facts.
+              if (receipt && pending) {
+                if (!isDeepStrictEqual(receipt.facts, pending.facts)) {
+                  throw new Error("Profile preference receipt changed its prepared mutation");
+                }
+                committed = true;
+              }
+              receiptValid = true;
+            } finally {
+              pending?.fence.settle(
+                !pending.granted || committed || (receiptValid && settlement.kind === "completed"),
+              );
+            }
+          });
+          void publicationSettled.catch(() => undefined);
+          return { admission, nativeLocations: [context.admission.databasePath] };
+        },
+      },
+    );
+  } finally {
+    // Caller revocation cannot discard a committed preference change or its authority fence.
+    try {
+      await publicationSettled;
+    } finally {
+      finishMutation();
+    }
+  }
+}

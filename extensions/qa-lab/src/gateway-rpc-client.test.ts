@@ -1,249 +1,134 @@
-// Qa Lab tests cover gateway rpc client plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const gatewayRpcMock = vi.hoisted(() => {
-  const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
-  return {
-    callGatewayFromCli,
-    reset() {
-      callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
+const rpc = vi.hoisted(() => {
+  const hello = { protocol: 3, server: { version: "fixture-version" } };
+  const request = vi.fn(async () => ({ ok: true }));
+  const stop = vi.fn(async () => {});
+  const Client = vi.fn(
+    class {
+      request = request;
+      stopAndWait = stop;
+      constructor(public options: Record<string, unknown>) {}
     },
-  };
+  );
+  const start = vi.fn(async (client: InstanceType<typeof Client>) => {
+    (client.options.onHelloOk as (hello: unknown) => void)(hello);
+    return { ready: true, aborted: false };
+  });
+  return { Client, hello, request, start, stop };
 });
 
+// mock-isolation: Exercise reconnect ownership with a deterministic client instead of live sockets.
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
-  callGatewayFromCli: gatewayRpcMock.callGatewayFromCli,
+  GatewayClient: rpc.Client,
+  startGatewayClientWhenEventLoopReady: rpc.start,
 }));
 
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 
-function expectRequestResolver(
-  callback: ((value: { ok: boolean }) => void) | null,
-): (value: { ok: boolean }) => void {
-  if (callback === null) {
-    throw new Error("Expected first request resolver callback to be captured");
-  }
-  return callback;
+function startClient(options: Partial<Parameters<typeof startQaGatewayRpcClient>[0]> = {}) {
+  return startQaGatewayRpcClient({
+    wsUrl: "ws://127.0.0.1:18789",
+    token: "qa-token",
+    logs: () => "qa logs",
+    ...options,
+  });
 }
 
-function expectReleaseCallback(callback: (() => void) | null): () => void {
-  if (callback === null) {
-    throw new Error("Expected first request release callback to be captured");
+function emit(name: "onClose" | "onHelloOk" | "onReconnectPaused", info: unknown = rpc.hello) {
+  const callback = rpc.Client.mock.calls[0]?.[0][name];
+  if (typeof callback !== "function") {
+    throw new Error(`expected Gateway client ${name} callback`);
   }
-  return callback;
+  callback(info);
 }
 
-describe("startQaGatewayRpcClient", () => {
-  beforeEach(() => {
-    gatewayRpcMock.reset();
+beforeEach(() => [rpc.Client, rpc.request, rpc.start, rpc.stop].forEach((m) => m.mockReset()));
+afterEach(() => vi.useRealTimers());
+
+it("retains only observed hello identity and clears it across disconnect and stop", async () => {
+  const deviceIdentity = { deviceId: "device", publicKeyPem: "public", privateKeyPem: "private" };
+  const client = await startClient({ deviceIdentity, scopes: [], logs: () => "" });
+  expect(rpc.Client.mock.calls[0]?.[0]).toMatchObject({
+    deviceIdentity,
+    scopes: [],
+    sharedStateMode: "read-only",
   });
-
-  it("calls the in-process gateway cli helper without mutating process.env", async () => {
-    const originalHome = process.env.OPENCLAW_HOME;
-    delete process.env.OPENCLAW_HOME;
-
-    try {
-      gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(async () => {
-        expect(process.env.OPENCLAW_HOME).toBeUndefined();
-        return { ok: true };
-      });
-
-      const client = await startQaGatewayRpcClient({
-        wsUrl: "ws://127.0.0.1:18789",
-        token: "qa-token",
-        logs: () => "qa logs",
-      });
-
-      await expect(
-        client.request("agent.run", { prompt: "hi" }, { expectFinal: true, timeoutMs: 45_000 }),
-      ).resolves.toEqual({ ok: true });
-
-      expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledWith(
-        "agent.run",
-        {
-          url: "ws://127.0.0.1:18789",
-          token: "qa-token",
-          timeout: "45000",
-          expectFinal: true,
-          json: true,
-        },
-        { prompt: "hi" },
-        {
-          clientName: "gateway-client",
-          deviceIdentity: null,
-          expectFinal: true,
-          mode: "backend",
-          progress: false,
-          scopes: ["operator.admin"],
-        },
-      );
-    } finally {
-      if (originalHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = originalHome;
-      }
-    }
-
-    expect(process.env.OPENCLAW_HOME).toBe(originalHome);
-  });
-
-  it("wraps request failures with gateway logs", async () => {
-    gatewayRpcMock.callGatewayFromCli.mockRejectedValueOnce(new Error("gateway not connected"));
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token\nAuthorization: Bearer secret+/token=123456",
-    });
-
-    await expect(client.request("health")).rejects.toThrow(
-      "gateway not connected\nGateway logs:\nOPENCLAW_GATEWAY_TOKEN=<redacted>\nAuthorization: Bearer <redacted>",
-    );
-  });
-
-  it("rejects new requests after stop", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "url=http://127.0.0.1:18789/#token=abc123",
-    });
-
-    await client.stop();
-
-    await expect(client.request("health")).rejects.toThrow(
-      "gateway rpc client already stopped\nGateway logs:\nurl=http://127.0.0.1:18789/#token=<redacted>",
-    );
-  });
-
-  it("does not serialize requests across different gateway clients", async () => {
-    let resolveFirst: ((value: { ok: boolean }) => void) | null = null;
-    gatewayRpcMock.callGatewayFromCli
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<{ ok: boolean }>((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockResolvedValueOnce({ ok: true });
-
-    const firstClient = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token-a",
-      logs: () => "qa logs a",
-    });
-    const secondClient = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:28789",
-      token: "qa-token-b",
-      logs: () => "qa logs b",
-    });
-
-    const firstRequest = firstClient.request("health");
-    await Promise.resolve();
-
-    await expect(secondClient.request("status")).resolves.toEqual({ ok: true });
-    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenNthCalledWith(
-      2,
-      "status",
-      {
-        url: "ws://127.0.0.1:28789",
-        token: "qa-token-b",
-        timeout: "20000",
-        expectFinal: undefined,
-        json: true,
-      },
-      {},
-      {
-        clientName: "gateway-client",
-        deviceIdentity: null,
-        expectFinal: undefined,
-        mode: "backend",
-        progress: false,
-        scopes: ["operator.admin"],
-      },
-    );
-
-    expectRequestResolver(resolveFirst)({ ok: true });
-    await expect(firstRequest).resolves.toEqual({ ok: true });
-  });
-
-  it("still serializes requests within the same gateway client", async () => {
-    let releaseFirst: (() => void) | null = null;
-    gatewayRpcMock.callGatewayFromCli
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<{ ok: boolean }>((resolve) => {
-            releaseFirst = () => resolve({ ok: true });
-          }),
-      )
-      .mockResolvedValueOnce({ ok: true });
-
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    const firstRequest = client.request("health");
-    await Promise.resolve();
-    const secondRequest = client.request("status");
-    await Promise.resolve();
-
-    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
-
-    expectReleaseCallback(releaseFirst)();
-
-    await expect(firstRequest).resolves.toEqual({ ok: true });
-    await expect(secondRequest).resolves.toEqual({ ok: true });
-    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects queued requests that have not started before stop", async () => {
-    let releaseFirst: (() => void) | null = null;
-    gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(
-      async () =>
-        await new Promise<{ ok: boolean }>((resolve) => {
-          releaseFirst = () => resolve({ ok: true });
-        }),
-    );
-
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    const firstRequest = client.request("health");
-    await Promise.resolve();
-    const secondRequest = client.request("status");
-    await Promise.resolve();
-
-    await client.stop();
-    expectReleaseCallback(releaseFirst)();
-
-    await expect(firstRequest).resolves.toEqual({ ok: true });
-    await expect(secondRequest).rejects.toThrow(
-      "gateway rpc client already stopped\nGateway logs:\nqa logs",
-    );
-    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves the structured gateway request failure as the cause", async () => {
-    const gatewayError = Object.assign(new Error("history temporarily unavailable"), {
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { method: "chat.history" },
-    });
-    gatewayRpcMock.callGatewayFromCli.mockRejectedValueOnce(gatewayError);
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "fixture",
-      logs: () => "qa gateway diagnostics",
-    });
-
-    await expect(client.request("chat.history")).rejects.toMatchObject({
-      message: "history temporarily unavailable\nGateway logs:\nqa gateway diagnostics",
-      cause: gatewayError,
-    });
-  });
+  expect(client.evidenceIdentity).toEqual({ protocol: 3, version: "fixture-version" });
+  client.evidenceIdentity!.version = "caller-mutation";
+  expect(client.evidenceIdentity?.version).toBe("fixture-version");
+  emit("onClose");
+  expect(client.evidenceIdentity).toBeNull();
+  emit("onHelloOk", { protocol: 4, server: { version: "new" }, auth: { token: "secret" } });
+  expect(client.evidenceIdentity).toEqual({ protocol: 4, version: "new" });
+  await client.stop();
+  expect(client.evidenceIdentity).toBeNull();
 });
+
+it("gates concurrent requests on reconnect without serializing their dispatch", async () => {
+  const held = Promise.withResolvers<{ ok: boolean }>();
+  rpc.request.mockImplementationOnce(() => held.promise).mockResolvedValueOnce({ ok: true });
+  const client = await startClient();
+  emit("onClose");
+  const firstRequest = client.request("health");
+  const secondRequest = client.request("status");
+  await Promise.resolve();
+  expect(rpc.request).not.toHaveBeenCalled();
+  emit("onHelloOk");
+  await expect(secondRequest).resolves.toEqual({ ok: true });
+  held.resolve({ ok: true });
+  await expect(firstRequest).resolves.toEqual({ ok: true });
+});
+
+it.each([
+  ["startup", "gateway request deadline exceeded"],
+  ["deadline", "gateway request deadline exceeded"],
+  ["terminal", "gateway reconnect paused (1008): denied [AUTH_FAILED]"],
+  ["stop", "gateway rpc client stopped"],
+] as const)("rejects %s without dispatching a request", async (phase, error) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  if (phase === "startup") {
+    rpc.start.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+    });
+  }
+  const starting = startClient();
+  const client = phase === "startup" ? undefined : await starting;
+  if (phase === "terminal") {
+    emit("onReconnectPaused", { code: 1008, detailCode: "AUTH_FAILED", reason: "denied" });
+    expect(client?.evidenceIdentity).toBeNull();
+  }
+  if (client) {
+    emit("onClose");
+  }
+  const pending = client
+    ? client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 })
+    : starting;
+  const rejected = expect(pending).rejects.toThrow(`${error}\nGateway logs:\nqa logs`);
+  if (phase === "stop") {
+    await client?.stop();
+  } else if (phase === "startup" || phase === "deadline") {
+    await vi.advanceTimersByTimeAsync(phase === "startup" ? 20_000 : 250);
+  }
+  await rejected;
+  expect(rpc.request).not.toHaveBeenCalled();
+  if (phase === "startup") {
+    expect(rpc.stop).toHaveBeenCalledOnce();
+  }
+});
+
+it.each([new Error("gateway not connected"), "gateway rejected request"])(
+  "does not replay %s and redacts logs when wrapping the failure",
+  async (error) => {
+    rpc.request.mockRejectedValueOnce(error);
+    const client = await startClient({ logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token" });
+    const message = error instanceof Error ? error.message : error;
+    await expect(client.request("agent.run")).rejects.toMatchObject({
+      cause: expect.objectContaining({ message }),
+      message: `${message}\nGateway logs:\nOPENCLAW_GATEWAY_TOKEN=<redacted>`,
+    });
+    expect(rpc.request).toHaveBeenCalledOnce();
+  },
+);

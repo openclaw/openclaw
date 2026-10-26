@@ -1,11 +1,8 @@
-// Memory Core plugin module implements time behavior.
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-
-export function resolveMemoryCoreNowMs(nowMs: unknown): number {
-  return timestampMsToIsoString(nowMs) === undefined ? Date.now() : (nowMs as number);
+export function resolveMemoryCoreNowMs(nowMs?: number): number {
+  const candidate = nowMs ?? Number.NaN;
+  return new Date(candidate).toJSON() === null ? Date.now() : candidate;
 }
 
-export function resolveMemoryCoreTimestamp(nowMs: unknown): string {
-  const timestampMs = resolveMemoryCoreNowMs(nowMs);
-  return timestampMsToIsoString(timestampMs) ?? new Date().toISOString();
+export function resolveMemoryCoreTimestamp(nowMs?: number): string {
+  return new Date(resolveMemoryCoreNowMs(nowMs)).toISOString();
 }

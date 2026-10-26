@@ -1,5 +1,7 @@
-// Gateway daemon runtime option definitions used by install/configure flows.
-export type GatewayDaemonRuntime = "node";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
+
+export type GatewayDaemonRuntime = "bun" | "node" | "standalone";
 
 export const DEFAULT_GATEWAY_DAEMON_RUNTIME: GatewayDaemonRuntime = "node";
 
@@ -11,11 +13,26 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   {
     value: "node",
     label: "Node",
-    hint: "Required for OpenClaw's SQLite-backed runtime state.",
+    hint: "Primary and recommended runtime for managed services.",
+  },
+  {
+    value: "bun",
+    label: "Bun 1.4.3+",
+    hint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
   },
 ];
 
-/** Narrow arbitrary input to a supported Gateway daemon runtime id. */
 export function isGatewayDaemonRuntime(value: string | undefined): value is GatewayDaemonRuntime {
-  return value === "node";
+  return value === "bun" || value === "node" || value === "standalone";
+}
+
+/** Detects the runtime selected by an installed daemon command. */
+export function resolveGatewayDaemonRuntime(
+  programArguments: string[] | undefined,
+): GatewayDaemonRuntime {
+  const executable = programArguments?.[0] ?? "";
+  if (isStandaloneRuntimeExecutable(executable)) {
+    return "standalone";
+  }
+  return isBunRuntime(executable) ? "bun" : DEFAULT_GATEWAY_DAEMON_RUNTIME;
 }

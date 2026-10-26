@@ -1,14 +1,10 @@
-// Gateway Protocol schema module defines session discussion validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const SessionDiscussionStateSchema = Type.Union([
-  Type.Literal("none"),
-  Type.Literal("available"),
-  Type.Literal("open"),
-]);
+export const SessionDiscussionStateSchema = stringLiteralUnion(["none", "available", "open"]);
 
 export const SessionDiscussionInfoSchema = closedObject({
   state: SessionDiscussionStateSchema,
@@ -18,10 +14,12 @@ export const SessionDiscussionInfoSchema = closedObject({
 
 export const SessionDiscussionInfoParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 export const SessionDiscussionOpenParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 export const SessionDiscussionInfoResultSchema = SessionDiscussionInfoSchema;

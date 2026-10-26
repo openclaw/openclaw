@@ -1,0 +1,199 @@
+// @vitest-environment node
+import { createRouter } from "@openclaw/uirouter";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import {
+  createGatewayStoreTestStore,
+  GATEWAY_STORE_TEST_HELLO,
+  stubGatewayStoreTestGlobals,
+} from "../../app/gateway-store.test-support.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { page } from "./route.tsx";
+import type { UsageRouteData } from "./types.ts";
+import { usageTotals } from "./view.test-support.ts";
+
+const totals = usageTotals(100, 1);
+const payload = {
+  updatedAt: 1,
+  startDate: "2026-07-09",
+  endDate: "2026-08-07",
+  sessions: [],
+  totals,
+  aggregates: { costDaily: [{ date: "2026-08-07", ...totals }] },
+  cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
+  providers: [],
+};
+const cleanups: Array<() => void> = [];
+
+function createUsageRouter() {
+  const store = createGatewayStoreTestStore();
+  store.gateway.start();
+  const request = vi.spyOn(store.gateway.snapshot.client!, "request").mockResolvedValue(payload);
+  store.current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  const selection = createAgentSelectionCapability(store.gateway, {
+    state: { agentsList: null },
+    subscribe: () => () => {},
+  });
+  selection.set("main");
+  const context = {
+    gateway: store.gateway,
+    agentSelection: selection,
+  } satisfies Parameters<NonNullable<typeof page.loader>>[0];
+  const router = createRouter<"usage" | "other", typeof context, null, UsageRouteData>({
+    routes: [
+      { ...page, component: () => null },
+      { id: "other", path: "/other", component: () => null },
+    ],
+  });
+  cleanups.push(() => {
+    router.stop();
+    selection.dispose();
+    store.gateway.stop();
+  });
+  return {
+    ...store,
+    context,
+    selection,
+    router,
+    request,
+    usageCalls: () =>
+      request.mock.calls.filter(
+        ([method]) => method === "sessions.usage" || method.startsWith("usage."),
+      ),
+  };
+}
+
+describe("usage route", () => {
+  beforeEach(stubGatewayStoreTestGlobals);
+
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) {
+      cleanup();
+    }
+    setAvatarGatewayOrigin(null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["navigation", "disconnect", "reconnect", "client", "set", "setScope"] as const)(
+    "retires the lazy load after %s and loads the current route",
+    async (change) => {
+      const { router, context, gateway, current, selection, usageCalls } = createUsageRouter();
+      const admitted = gateway.snapshot;
+      const loading = router.navigate("usage", context);
+      // These real producers run while the loader is suspended at import(), even when cached.
+      if (change === "navigation") {
+        await router.navigate("other", context);
+      } else if (change === "disconnect" || change === "reconnect") {
+        current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true });
+        if (change === "reconnect") {
+          current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+          expect(gateway.snapshot.client).toBe(admitted.client);
+          expect(gateway.snapshot.hello).not.toBe(admitted.hello);
+        }
+      } else if (change === "client") {
+        gateway.connect();
+        current().request.mockResolvedValue(payload);
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+      } else if (change === "set") {
+        selection.set("research");
+      } else {
+        selection.setScope(null);
+      }
+      await loading;
+      expect(usageCalls()).toEqual([]);
+
+      if (gateway.snapshot.phase !== "connected") {
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+      }
+      await router.revalidate(context, "usage");
+      const active = router.getState().matches[0];
+      expect(active?.status).toBe("success");
+      expect(active?.data).toMatchObject({
+        gateway,
+        gatewaySnapshot: gateway.snapshot,
+        query: { agentId: selection.state.scopeId },
+        result: payload,
+        error: null,
+        loadedAtMs: expect.any(Number),
+      });
+    },
+  );
+
+  it.each(["navigation", "preload"] as const)(
+    "preserves query and %s cancellation ownership for the session usage request",
+    async (kind) => {
+      const { router, context, request, usageCalls } = createUsageRouter();
+      const started = createDeferred();
+      const response = createDeferred<typeof payload>();
+      let requests = 0;
+      request.mockImplementation(async (method) => {
+        if (method !== "sessions.usage") {
+          return {};
+        }
+        if (++requests === 1) {
+          started.resolve();
+        }
+        return response.promise;
+      });
+      const loading =
+        kind === "navigation"
+          ? router.navigate("usage", context)
+          : router.preloadRoute("usage", context);
+      await started.promise;
+      const state = router.getState();
+      const match = [...state.matches, ...state.pendingMatches, ...state.cachedMatches].find(
+        (entry) => entry.routeId === "usage",
+      )!;
+      const calls = usageCalls();
+      await router.navigate("other", context);
+      response.resolve(payload);
+      await loading;
+
+      // Provider plans load on the page, never in the route loader.
+      expect(calls.map(([method]) => method)).toEqual(["sessions.usage"]);
+      for (const call of calls) {
+        expect(call[2]?.signal).toBe(match.abortController.signal);
+        expect(call[2]?.signal?.aborted).toBe(kind === "navigation");
+      }
+      await router.navigate("usage", context);
+      const data = router.getState().matches[0]?.data;
+      expect(data?.query).toEqual({
+        startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        scope: "family",
+        timeZone: "local",
+        agentId: "main",
+      });
+      expect(
+        (Date.parse(data!.query.endDate) - Date.parse(data!.query.startDate)) / 86_400_000,
+      ).toBe(29);
+      expect(data?.result).toEqual(payload);
+      expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
+        startDate: data?.query.startDate,
+        endDate: data?.query.endDate,
+        agentId: "main",
+        groupBy: "family",
+        mode: "specific",
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
+      });
+    },
+  );
+
+  it("reports a session usage failure without exposing secrets", async () => {
+    const { router, context, request } = createUsageRouter();
+    request.mockImplementation(async (method) => {
+      if (method === "sessions.usage") {
+        throw new Error("OPENAI_API_KEY=sk-1234567890abcdef");
+      }
+      return {};
+    });
+    await router.navigate("usage", context);
+    const result = router.getState().matches[0]?.data;
+    expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
+  });
+});

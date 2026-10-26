@@ -1,4 +1,3 @@
-// SSH-verified node pairing auto-approval.
 // Proves a pending first-time node pairing by reading the device identity back
 // over SSH from the connecting host and comparing key material. Approval binds
 // to machine ownership (host key + authorized key + on-disk device identity),
@@ -15,11 +14,7 @@ import {
   isEligibleFreshNodePairingRequest,
   type FreshNodePairingEligibilityParams,
 } from "./node-pairing-auto-approve.js";
-import {
-  runNodeIdentityProbe,
-  type NodeIdentityProbeParams,
-  type NodeIdentityProbeResult,
-} from "./node-pairing-ssh-verify.runtime.js";
+import { runNodeIdentityProbe } from "./node-pairing-ssh-verify.runtime.js";
 
 // Object form of the sshVerify config, derived from the config field so this
 // module adds no new public config export to the plugin-SDK surface.
@@ -41,8 +36,6 @@ type NodePairingSshVerifyPlan = {
 type NodePairingSshVerifyOutcome =
   | { ok: true; user: string; host: string }
   | { ok: false; reason: "probe-failed" | "identity-unreadable" | "identity-mismatch" };
-
-type NodeIdentityProbe = (params: NodeIdentityProbeParams) => Promise<NodeIdentityProbeResult>;
 
 const DEFAULT_TIMEOUT_MS = 7_000;
 const FAILURE_COOLDOWN_MS = 60_000;
@@ -77,7 +70,10 @@ function resolveNodePairingSshVerifyPolicy(
   if (!user) {
     return null;
   }
-  const cidrs = cfg.cidrs?.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const cidrs = cfg.cidrs
+    ?.map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .toSorted();
   return {
     user,
     identity: cfg.identity?.trim() || undefined,
@@ -156,14 +152,23 @@ function parseRemoteIdentity(stdout: string): ParsedRemoteIdentity | null {
 }
 
 // Probe bookkeeping is process-local and bounded: single-flight per
-// host+device, short cooldown after failures so reconnect loops do not
+// verification plan+device, short cooldown after failures so reconnect loops do not
 // re-probe every few seconds, and a small global concurrency cap so a token
 // holder cannot fan out SSH probes through the gateway.
 const inFlightByKey = new Map<string, Promise<NodePairingSshVerifyOutcome>>();
 const cooldownExpiryByKey = new Map<string, number>();
 
-function probeKey(host: string, deviceId: string): string {
-  return `${host}\0${deviceId}`;
+function probeKey(plan: NodePairingSshVerifyPlan, deviceId: string, publicKey: string): string {
+  // Policy reloads must not reuse old credentials' proofs or failure cooldowns.
+  return JSON.stringify([
+    plan.host,
+    deviceId,
+    publicKey,
+    plan.policy.user,
+    plan.policy.identity,
+    plan.policy.timeoutMs,
+    plan.policy.cidrs,
+  ]);
 }
 
 function pruneCooldowns(nowMs: number) {
@@ -187,12 +192,10 @@ export function startNodePairingSshVerify(params: {
   plan: NodePairingSshVerifyPlan;
   expectedDeviceId: string;
   expectedPublicKey: string;
-  probe?: NodeIdentityProbe;
-  nowMs?: number;
 }): { done: Promise<NodePairingSshVerifyOutcome>; alreadyInFlight: boolean } | null {
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   pruneCooldowns(nowMs);
-  const key = probeKey(params.plan.host, params.expectedDeviceId);
+  const key = probeKey(params.plan, params.expectedDeviceId, params.expectedPublicKey);
   const inFlight = inFlightByKey.get(key);
   if (inFlight) {
     return { done: inFlight, alreadyInFlight: true };
@@ -204,9 +207,8 @@ export function startNodePairingSshVerify(params: {
     return null;
   }
 
-  const probe = params.probe ?? runNodeIdentityProbe;
   const done = (async (): Promise<NodePairingSshVerifyOutcome> => {
-    const result = await probe({
+    const result = await runNodeIdentityProbe({
       user: params.plan.policy.user,
       host: params.plan.host,
       identity: params.plan.policy.identity,

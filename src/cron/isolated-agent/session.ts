@@ -1,20 +1,27 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
-  resolveSessionLifecycleTimestamps,
+  type resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-accessor.js";
+import {
+  preserveSessionInheritedToolPolicy,
+  preserveSqliteSameKeySessionRolloverLineage,
+} from "../../config/sessions/session-entry-lineage.js";
+import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -28,11 +35,25 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "ttsAuto",
   "responseUsage",
   "pinnedAt",
+  "sidebarRoot",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 const AMBIENT_SESSION_CONTEXT_FIELDS = [
+  // A persistent workspace keeps its containment and inherited child restrictions.
+  "spawnedBy",
+  "spawnDepth",
+  "subagentRole",
+  "subagentControlScope",
+  "permissionMode",
+  "sandboxMode",
+  "sessionRoot",
+  "spawnedWorkspaceDir",
+  "spawnedCwd",
+  "worktree",
+  "projectId",
+  "repositoryWorkspaceId",
   "elevatedLevel",
   "groupActivation",
   "groupActivationNeedsSystemIntro",
@@ -48,23 +69,23 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
-function cloneSessionField<T>(value: T): T {
-  return globalThis.structuredClone(value);
-}
-
-function copySessionFields(
-  target: SessionEntry,
-  entry: SessionEntry,
-  fields: readonly (keyof SessionEntry)[],
+function copySessionFields<K extends keyof SessionEntry>(
+  target: Partial<Pick<SessionEntry, K>>,
+  entry: Pick<SessionEntry, K>,
+  fields: readonly K[],
 ): void {
   for (const field of fields) {
     if (entry[field] !== undefined) {
-      target[field] = cloneSessionField(entry[field]) as never;
+      target[field] = globalThis.structuredClone(entry[field]);
     }
   }
 }
 
-function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
+function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
+  if (entry.modelOverrideSource === "default") {
+    target.modelOverrideSource = "default";
+    return;
+  }
   const recoveredAutoFallbackOverride =
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
@@ -90,12 +111,13 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
   }
 }
 
-function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
-  if (entry.authProfileOverrideSource === "user") {
+function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
+  const source = resolveSessionAuthProfileOverrideSource(entry);
+  if (source === "user" || source === "user-link") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
-    target.authProfileOverrideSource = entry.authProfileOverrideSource;
+    target.authProfileOverrideSource = source;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       target.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }
@@ -105,12 +127,18 @@ function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): vo
 function sanitizeFreshCronSessionEntry(
   entry: SessionEntry,
   options: { preserveAmbientContext: boolean },
-): SessionEntry {
-  const next = {} as SessionEntry;
+): Partial<SessionEntry> {
+  const next: Partial<SessionEntry> = {};
 
   copySessionFields(next, entry, FRESH_CRON_CARRIED_PREFERENCE_FIELDS);
+  if (entry.skillLibrarySelections) {
+    next.skillLibrarySelections = entry.skillLibrarySelections.map((selection) => ({
+      ...selection,
+    }));
+  }
   if (options.preserveAmbientContext) {
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
+    Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
   preserveNonAutoModelOverride(next, entry);
   preserveUserAuthOverride(next, entry);
@@ -119,58 +147,84 @@ function sanitizeFreshCronSessionEntry(
 }
 
 /**
- * Reads the current cron session row without an in-process cache snapshot.
+ * Reads the current cron session row through the canonical agent worker.
  * Lifecycle admission guards compare this against the run's initial entry, so
- * the read must bypass cached store snapshots (accessor readConsistency
- * "latest"). Cron keys are canonicalized before use, so accessor key
- * resolution selects the same row the cron persist path writes.
+ * the read must bypass cached store snapshots. Canonical key resolution selects
+ * the same row the cron persist path writes.
  */
 export function loadCronSessionEntryLatest(
   storePath: string,
   sessionKey: string,
-): SessionEntry | undefined {
-  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+): Promise<SessionEntry | undefined> {
+  return readSessionEntryInWorker({ sessionKey, storePath, readConsistency: "latest" });
 }
 
-/** Resolves or rolls over the cron session entry for one isolated-agent run. */
-export function resolveCronSession(params: {
+type CronSessionParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   sourceSessionKey?: string;
+  skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  /**
+   * The run executes in a hidden `:run:` row, so the base row's revision names
+   * this run's generation for continuation ownership and must be minted per run.
+   */
+  exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
-  store?: Record<string, SessionEntry>;
-}) {
-  const sessionCfg = params.cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store, {
+};
+
+export async function prepareCronSession(params: CronSessionParams) {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const store =
-    params.store ??
-    Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
-    );
+  const sourceSessionKey = params.sourceSessionKey?.trim();
+  const prepared = await readSessionEntriesFromStoreInWorker({
+    agentId: params.agentId,
+    storePath,
+    sessionKeys: [params.sessionKey, ...(sourceSessionKey ? [sourceSessionKey] : [])].filter(
+      (sessionKey) => !isInternalSessionEffectsKey(sessionKey),
+    ),
+    lifecycleSessionKey: params.forceNew ? undefined : sourceSessionKey || params.sessionKey,
+  });
+  return resolveCronSession({
+    ...params,
+    store: Object.fromEntries(prepared.entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+    lifecycleTimestamps: prepared.lifecycleTimestamps,
+    storePath,
+  });
+}
+
+/** Resolves prepared rows for ordinary cron execution. */
+export function resolveCronSession(
+  params: CronSessionParams & {
+    store: Record<string, SessionEntry>;
+    lifecycleTimestamps: ReturnType<typeof resolveSessionLifecycleTimestamps>;
+    storePath?: string;
+  },
+) {
+  const sessionCfg = params.cfg.session;
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePathCore(sessionCfg?.store, {
+      agentId: params.agentId,
+    });
+  const store = params.store;
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row: archived sessions stay read-only even when a
-  // differing source session seeds the carried preferences.
-  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (archivedSessionError) {
-    throw new Error(archivedSessionError);
+  // Guard the target row even when a differing source seeds its preferences.
+  const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
+  if (sessionWorkStartError) {
+    throw new Error(sessionWorkStartError);
   }
 
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
   let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
-  let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -184,12 +238,7 @@ export function resolveCronSession(params: {
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({
           updatedAt: entry.updatedAt,
-          ...resolveSessionLifecycleTimestamps({
-            entry,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            storePath,
-          }),
+          ...params.lifecycleTimestamps,
           now: params.nowMs,
           policy: resetPolicy,
         });
@@ -203,7 +252,6 @@ export function resolveCronSession(params: {
       isNewSession = true;
       systemSent = false;
       if (!sourceSessionDiffers) {
-        staleBoundaryReset = true;
         resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
       }
     }
@@ -214,11 +262,7 @@ export function resolveCronSession(params: {
   }
 
   const previousSessionId =
-    isNewSession && !sourceSessionDiffers && !staleBoundaryReset ? entry?.sessionId : undefined;
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey: params.sessionKey,
-    previousSessionId,
-  });
+    isNewSession && !sourceSessionDiffers && !resetBoundaryPending ? entry?.sessionId : undefined;
 
   const baseEntry = entry
     ? isNewSession
@@ -226,23 +270,30 @@ export function resolveCronSession(params: {
       : entry
     : undefined;
 
-  const lifecycleRevision = crypto.randomUUID();
+  // Reusing an incarnation in place keeps its revision: spawned children and
+  // memory-audience leases bind to it and treat any change as a new incarnation.
+  const reusedLifecycleRevision =
+    !isNewSession && !sourceSessionDiffers && !params.exactRunSession
+      ? entry?.lifecycleRevision
+      : undefined;
+  const lifecycleRevision = reusedLifecycleRevision ?? crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
+    skillLibrarySelections: structuredClone(
+      targetEntry?.skillLibrarySelections ??
+        params.skillLibrarySelections ??
+        baseEntry?.skillLibrarySelections,
+    ),
     sessionId,
     lifecycleRevision,
-    updatedAt: params.nowMs,
+    // Preparing a scheduled check is not conversation activity. New rows still
+    // need an initial timestamp; visible results advance existing rows later.
+    updatedAt: targetEntry?.updatedAt ?? params.nowMs,
     sessionStartedAt: isNewSession
       ? params.nowMs
-      : (baseEntry?.sessionStartedAt ??
-        resolveSessionLifecycleTimestamps({
-          entry,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          storePath,
-        }).sessionStartedAt),
+      : (baseEntry?.sessionStartedAt ?? params.lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     ...(params.hookExternalContentSource
       ? { hookExternalContentSource: params.hookExternalContentSource }
@@ -254,10 +305,26 @@ export function resolveCronSession(params: {
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
   }
+  if (sourceSessionDiffers) {
+    delete sessionEntry.usageFamilyKey;
+    delete sessionEntry.usageFamilySessionIds;
+  }
+  if (targetEntry) {
+    copySessionFields(sessionEntry, targetEntry, ["usageFamilyKey", "usageFamilySessionIds"]);
+  }
   return {
     storePath,
     store,
-    sessionEntry,
+    sessionEntry: preserveCreationStamp(
+      targetEntry?.sessionId
+        ? preserveSqliteSameKeySessionRolloverLineage({
+            next: sessionEntry,
+            previous: targetEntry,
+            sessionKey: params.sessionKey,
+          })
+        : sessionEntry,
+      targetEntry,
+    ),
     lifecycleRevision,
     systemSent,
     isNewSession,

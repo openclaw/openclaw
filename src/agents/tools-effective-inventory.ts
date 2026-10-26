@@ -3,34 +3,40 @@
  *
  * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
+import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentId,
-} from "./agent-scope.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
-import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  acquireReadOnlyPreparedModelRuntime,
-} from "./prepared-model-runtime.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
+import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
 import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import type {
@@ -44,8 +50,8 @@ function listIncludesTool(list: string[] | undefined, toolName: string): boolean
   if (!Array.isArray(list)) {
     return false;
   }
-  const normalizedToolName = normalizeToolName(toolName);
-  return list.some((entry) => normalizeToolName(entry) === normalizedToolName);
+  const normalizedToolName = normalizeToolPolicyName(toolName);
+  return list.some((entry) => normalizeToolPolicyName(entry) === normalizedToolName);
 }
 
 function policyDeniesTool(policy: { deny?: string[] } | undefined, toolName: string): boolean {
@@ -64,9 +70,11 @@ function buildToolInventoryNotices(params: {
   cfg: OpenClawConfig;
   profile: string;
   entries: EffectiveToolInventoryEntry[];
-  effectivePolicy: ReturnType<typeof resolveEffectiveToolPolicy>;
+  effectivePolicy: Awaited<ReturnType<typeof prepareConversationCapabilityProfile>>["policy"];
 }): EffectiveToolInventoryNotice[] | undefined {
-  const hasBrowserTool = params.entries.some((entry) => normalizeToolName(entry.id) === "browser");
+  const hasBrowserTool = params.entries.some(
+    (entry) => normalizeToolPolicyName(entry.id) === "browser",
+  );
   if (hasBrowserTool || !hasExplicitBrowserIntent(params.cfg)) {
     return undefined;
   }
@@ -117,71 +125,8 @@ function buildToolInventoryNotices(params: {
   return undefined;
 }
 
-function applyProviderTransportNormalization(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  workspaceDir?: string;
-  runtimeModel: ProviderRuntimeModel;
-}): ProviderRuntimeModel {
-  const normalized = normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    modelId: params.runtimeModel.id,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: params.runtimeModel.id,
-      api: params.runtimeModel.api,
-      baseUrl: params.runtimeModel.baseUrl,
-    },
-  });
-  if (!normalized) {
-    return params.runtimeModel;
-  }
-  return {
-    ...params.runtimeModel,
-    api: normalized.api ?? params.runtimeModel.api,
-    baseUrl: normalized.baseUrl ?? params.runtimeModel.baseUrl,
-  } as ProviderRuntimeModel;
-}
-
-function resolveConfiguredFallbackApi(
-  providerConfig: { api?: string; baseUrl?: string } | undefined,
-): string {
-  const explicitApi = normalizeOptionalString(providerConfig?.api);
-  if (explicitApi) {
-    return explicitApi;
-  }
-  return normalizeOptionalString(providerConfig?.baseUrl)
-    ? "openai-completions"
-    : "openai-responses";
-}
-
-function resolveDynamicRuntimeModelContext(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
-}): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
-  const runtimeModel = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-    agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-  }).model as ProviderRuntimeModel | undefined;
-  if (!runtimeModel) {
-    return {};
-  }
-  return {
-    modelApi: runtimeModel.api,
-    runtimeModel,
-  };
-}
-
-/** Resolves the runtime model metadata needed to filter model-compatible tools. */
-function resolveEffectiveToolInventoryRuntimeModelContext(params: {
+/** Resolves configured or bundled metadata without starting provider discovery. */
+function resolveStaticToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
@@ -196,106 +141,148 @@ function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
-  const configuredModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
-  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
-  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
-  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
-    `${provider}/${normalizedModelId}`,
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
+    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );
-  const configuredModel = configuredModels.find((model) => {
-    const id = normalizeStaticProviderModelId(provider, model.id);
-    const key = normalizeLowercaseStringOrEmpty(id);
-    return key === normalizedModelKey || key === providerPrefixedModelKey;
-  });
   const bundledStaticModel = resolveBundledStaticCatalogModel({
     provider,
     modelId,
     cfg: params.cfg,
     workspaceDir,
   });
+  let runtimeModel: ProviderRuntimeModel;
   if (configuredModel) {
     // Configured model entries override the bundled catalog but inherit missing transport details.
     const configuredApi =
       normalizeOptionalString(configuredModel.api) ??
       normalizeOptionalString(providerConfig?.api) ??
       normalizeOptionalString(bundledStaticModel?.api) ??
-      resolveConfiguredFallbackApi(providerConfig);
-    const runtimeModel = applyProviderTransportNormalization({
-      cfg: params.cfg,
+      (normalizeOptionalString(providerConfig?.baseUrl)
+        ? "openai-completions"
+        : "openai-responses");
+    runtimeModel = {
+      ...bundledStaticModel,
+      ...configuredModel,
+      id: modelId,
+      name: configuredModel.name ?? bundledStaticModel?.name ?? configuredModel.id,
       provider,
-      workspaceDir,
-      runtimeModel: {
-        ...bundledStaticModel,
-        ...configuredModel,
-        id: configuredModel.id,
-        name: configuredModel.name ?? bundledStaticModel?.name ?? configuredModel.id,
-        provider,
-        api: configuredApi,
-        baseUrl:
-          normalizeOptionalString(configuredModel.baseUrl) ??
-          normalizeOptionalString(providerConfig?.baseUrl) ??
-          normalizeOptionalString(bundledStaticModel?.baseUrl),
-      } as ProviderRuntimeModel,
-    });
-    return {
-      modelApi: runtimeModel.api,
-      runtimeModel,
-    };
-  }
-  if (!bundledStaticModel) {
-    return resolveDynamicRuntimeModelContext({
-      cfg: params.cfg,
-      agentId,
-      agentDir: params.agentDir,
-      workspaceDir,
-      provider,
-      modelId,
-    });
-  }
-  const runtimeModel = applyProviderTransportNormalization({
-    cfg: params.cfg,
-    provider,
-    workspaceDir,
-    runtimeModel: {
+      api: configuredApi,
+      baseUrl:
+        normalizeOptionalString(configuredModel.baseUrl) ??
+        normalizeOptionalString(providerConfig?.baseUrl) ??
+        normalizeOptionalString(bundledStaticModel?.baseUrl),
+    } as ProviderRuntimeModel;
+  } else if (bundledStaticModel) {
+    runtimeModel = {
       ...bundledStaticModel,
       api: normalizeOptionalString(providerConfig?.api) ?? bundledStaticModel.api,
       baseUrl: normalizeOptionalString(providerConfig?.baseUrl) ?? bundledStaticModel.baseUrl,
-    } as ProviderRuntimeModel,
+    } as ProviderRuntimeModel;
+  } else {
+    return {};
+  }
+  const normalized = normalizeProviderTransportWithPlugin({
+    provider,
+    modelId: runtimeModel.id,
+    config: params.cfg,
+    workspaceDir,
+    context: {
+      config: params.cfg,
+      workspaceDir,
+      provider,
+      modelId: runtimeModel.id,
+      api: runtimeModel.api,
+      baseUrl: runtimeModel.baseUrl,
+    },
   });
+  if (normalized) {
+    runtimeModel = {
+      ...runtimeModel,
+      api: normalized.api ?? runtimeModel.api,
+      baseUrl: normalized.baseUrl ?? runtimeModel.baseUrl,
+    } as ProviderRuntimeModel;
+  }
   return {
     modelApi: runtimeModel.api,
     runtimeModel,
   };
 }
 
-/** Resolves dynamic model metadata after publishing a request-owned read snapshot when needed. */
-export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
-  params: Parameters<typeof resolveEffectiveToolInventoryRuntimeModelContext>[0],
-): Promise<ReturnType<typeof resolveEffectiveToolInventoryRuntimeModelContext>> {
+type ToolInventoryRuntimeModelContext = ReturnType<
+  typeof resolveStaticToolInventoryRuntimeModelContext
+>;
+
+async function withGatewayToolInventoryScope<T>(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
+  const context = getPluginRuntimeLoadContext(registry);
+  const metadata = getGatewayPluginMetadataSnapshot();
+  if (
+    !registry ||
+    !context ||
+    !metadata ||
+    metadata.manifestRegistry !== context.manifestRegistry ||
+    context.controlPlaneFingerprint !==
+      resolvePluginControlPlaneFingerprint({ config, env: context.env, workspaceDir })
+  ) {
+    return run();
+  }
+  // Full tool facts need their own custody; the selected model lease stays narrow.
+  const releaseWork = retainRuntimePluginWork([registry]);
   try {
-    return resolveEffectiveToolInventoryRuntimeModelContext(params);
-  } catch (error) {
-    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-      throw error;
-    }
+    return await withPluginRuntimeRegistryScope(registry, () =>
+      withPluginMetadataSnapshotScope(metadata, run, {
+        config: context.config,
+        env: context.env,
+        workspaceDir: context.workspaceDir,
+        trustConfigIdentity: true,
+      }),
+    );
+  } finally {
+    releaseWork();
+  }
+}
+
+/** Keeps dynamic model hooks owned and scoped until inventory projection finishes. */
+export async function acquireEffectiveToolInventoryRuntimeModelContext(
+  params: Parameters<typeof resolveStaticToolInventoryRuntimeModelContext>[0],
+): Promise<
+  { run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T) => T } & AsyncDisposable
+> {
+  const staticContext = resolveStaticToolInventoryRuntimeModelContext(params);
+  if (staticContext.runtimeModel) {
+    return { run: (project) => project(staticContext), [Symbol.asyncDispose]: async () => {} };
   }
 
   const provider = normalizeProviderId(params.modelProvider ?? "");
   const modelId = params.modelId?.trim() ?? "";
   if (!provider || !modelId) {
-    return {};
+    return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
   }
   const agentId = params.agentId?.trim() || resolveSessionAgentId({ config: params.cfg });
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
-  const lease = await acquireReadOnlyPreparedModelRuntime({
-    agentId,
-    agentDir,
-    config: params.cfg,
-    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
-    workspaceDir,
-  });
+  const lease = await acquireReadOnlyPreparedModelRuntime(
+    {
+      agentId,
+      agentDir,
+      config: params.cfg,
+      workspaceDir,
+      // The selected provider owner must join the generation before dynamic hooks resolve.
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider, modelId, agentId }],
+      // Gateway-hosted reads borrow the admitting Gateway's live plugin instances
+      // instead of synchronously loading another copy on every cold refresh.
+      allowGatewaySubagentBinding: true,
+    },
+    { catalogMode: "static" },
+  );
+  let transferred = false;
   try {
     const stores = lease.snapshot.createStores();
     const resolved = await resolveModelAsync(provider, modelId, agentDir, params.cfg, {
@@ -306,9 +293,30 @@ export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
       preparedModelRuntime: lease.snapshot,
     });
     const runtimeModel = resolved.model as ProviderRuntimeModel | undefined;
-    return runtimeModel ? { modelApi: runtimeModel.api, runtimeModel } : {};
+    if (!runtimeModel) {
+      return { run: (project) => project({}), [Symbol.asyncDispose]: async () => {} };
+    }
+    const context = { modelApi: runtimeModel.api, runtimeModel };
+    let released = false;
+    let disposal: Promise<void> | undefined;
+    const acquired = {
+      run: <T>(project: (context: ToolInventoryRuntimeModelContext) => T): T => {
+        if (released) {
+          throw new Error("Tool inventory model context has been released");
+        }
+        return withPluginRuntimeGenerationScope(lease.snapshot, () => project(context));
+      },
+      [Symbol.asyncDispose]() {
+        released = true;
+        return (disposal ??= lease[Symbol.asyncDispose]());
+      },
+    };
+    transferred = true;
+    return acquired;
   } finally {
-    lease.release();
+    if (!transferred) {
+      await lease[Symbol.asyncDispose]();
+    }
   }
 }
 
@@ -323,40 +331,30 @@ export function resolveConfiguredModelCompat(params: {
   if (!provider || !modelId) {
     return undefined;
   }
-  const providerConfig = findNormalizedProviderValue(params.cfg.models?.providers, provider);
-  const models = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
-  if (models.length === 0) {
-    return undefined;
-  }
-  const normalizedModelId = normalizeStaticProviderModelId(provider, modelId);
-  const normalizedModelKey = normalizeLowercaseStringOrEmpty(normalizedModelId);
-  const providerPrefixedModelKey = normalizeLowercaseStringOrEmpty(
-    `${provider}/${normalizedModelId}`,
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
+  const match = findConfiguredProviderModel(providerConfig, provider, modelId, (id) =>
+    normalizeLowercaseStringOrEmpty(normalizeStaticProviderModelId(provider, id)),
   );
-  const match = models.find((model) => {
-    const id = normalizeStaticProviderModelId(provider, model.id);
-    const key = normalizeLowercaseStringOrEmpty(id);
-    return key === normalizedModelKey || key === providerPrefixedModelKey;
-  });
   return extractModelCompat(match);
 }
 
 /** Resolves the grouped effective tool inventory and user-visible filtering notices. */
-export function resolveEffectiveToolInventory(
+export async function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
-): EffectiveToolInventoryResult {
+): Promise<EffectiveToolInventoryResult> {
   const agentId =
     params.agentId?.trim() ||
     resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
   const runtimeModelContext =
     Object.hasOwn(params, "modelApi") || Object.hasOwn(params, "runtimeModel")
       ? {
           modelApi: params.modelApi ?? params.runtimeModel?.api,
           runtimeModel: params.runtimeModel,
         }
-      : resolveEffectiveToolInventoryRuntimeModelContext({
+      : resolveStaticToolInventoryRuntimeModelContext({
           cfg: params.cfg,
           agentId,
           agentDir,
@@ -364,40 +362,43 @@ export function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
-  const modelCompat = resolveConfiguredModelCompat({
-    cfg: params.cfg,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  const modelCompat = resolveConfiguredModelCompat(params);
 
-  const effectiveTools = createOpenClawCodingTools({
-    agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir,
-    agentDir,
-    config: params.cfg,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    modelCompat,
-    messageProvider: params.messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName ?? undefined,
-    senderUsername: params.senderUsername ?? undefined,
-    senderE164: params.senderE164 ?? undefined,
-    agentAccountId: params.accountId ?? undefined,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    groupId: params.groupId ?? undefined,
-    groupChannel: params.groupChannel ?? undefined,
-    groupSpace: params.groupSpace ?? undefined,
-    replyToMode: params.replyToMode,
-    allowGatewaySubagentBinding: true,
-    modelHasVision: params.modelHasVision,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    disableMessageTool: params.disableMessageTool,
-  });
+  const capabilityProfile =
+    params.conversationCapabilityProfile ??
+    (await prepareConversationCapabilityProfile({
+      ...params,
+      config: params.cfg,
+      agentId,
+      agentAccountId: params.accountId,
+    }));
+  const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
+  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, () =>
+    createOpenClawCodingToolsInternalAsync(
+      {
+        ...params,
+        conversationCapabilityProfile: capabilityProfile,
+        authProfileStoreSource,
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: params.cfg,
+        modelApi: runtimeModelContext.modelApi,
+        modelBaseUrl: runtimeModelContext.runtimeModel?.baseUrl,
+        modelCompat,
+        senderName: params.senderName ?? undefined,
+        senderUsername: params.senderUsername ?? undefined,
+        senderE164: params.senderE164 ?? undefined,
+        agentAccountId: params.accountId ?? undefined,
+        groupId: params.groupId ?? undefined,
+        groupChannel: params.groupChannel ?? undefined,
+        groupSpace: params.groupSpace ?? undefined,
+        allowGatewaySubagentBinding: true,
+      },
+      undefined,
+      diagnostics.onFilter,
+    ),
+  );
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
     cfg: params.cfg,
@@ -407,13 +408,7 @@ export function resolveEffectiveToolInventory(
     modelApi: runtimeModelContext.modelApi,
     runtimeModel: runtimeModelContext.runtimeModel,
   });
-  const effectivePolicy = resolveEffectiveToolPolicy({
-    config: params.cfg,
-    agentId,
-    sessionKey: params.sessionKey,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
+  const effectivePolicy = capabilityProfile.policy;
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
   const entries = projectedInventory.entries;
   const notices = [
@@ -422,5 +417,11 @@ export function resolveEffectiveToolInventory(
   ];
   const groups = buildEffectiveToolInventoryGroups(entries);
 
-  return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
+  return {
+    agentId,
+    profile,
+    groups,
+    toolAccess: diagnostics.finish(entries.map((entry) => entry.id)),
+    ...(notices.length > 0 ? { notices } : {}),
+  };
 }

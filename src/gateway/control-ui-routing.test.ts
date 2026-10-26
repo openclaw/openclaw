@@ -1,408 +1,166 @@
-/**
- * Control UI gateway routing tests.
- */
 import { describe, expect, it } from "vitest";
-import {
-  classifyControlUiRequest,
-  isControlUiApprovalDocumentPath,
-  isControlUiPluginManagerRequest,
-} from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 
-describe("isControlUiPluginManagerRequest", () => {
-  it.each([
-    { basePath: "", pathname: "/settings/plugins", method: "GET", expected: true },
-    { basePath: "", pathname: "/settings/plugins/", method: "HEAD", expected: true },
-    {
-      basePath: "/openclaw",
-      pathname: "/openclaw/settings/plugins",
-      method: "GET",
-      expected: true,
-    },
-    { basePath: "", pathname: "/settings/plugins", method: "POST", expected: false },
-    { basePath: "", pathname: "/plugins", method: "GET", expected: false },
-  ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
-    expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
-  });
-});
+const serve = { kind: "serve", spaFallback: true } as const;
+const outside = { kind: "not-control-ui" } as const;
+const notFound = { kind: "not-found" } as const;
 
 describe("isControlUiApprovalDocumentPath", () => {
-  it.each([
-    { basePath: "", pathname: "/approve" },
-    { basePath: "", pathname: "/approve/" },
-    { basePath: "", pathname: "/approve/plugin%3Arequest.json" },
-    { basePath: "/openclaw", pathname: "/openclaw/approve/exec%3Aa%2Fb" },
-  ])("reserves $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(true);
-  });
-
-  it.each([
-    { basePath: "", pathname: "/approvals/id" },
-    { basePath: "", pathname: "/approve/id/extra" },
-    { basePath: "/openclaw", pathname: "/approve/id" },
-  ])("does not reserve $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
+  it.each<[string, string, boolean]>([
+    ["", "/approve", true],
+    ["", "/approve/", true],
+    ["", "/approve/plugin%3Arequest.json", true],
+    ["/openclaw", "/openclaw/approve/exec%3Aa%2Fb", true],
+    ["", "/approvals/id", false],
+    ["", "/approve/id/extra", false],
+    ["/openclaw", "/approve/id", false],
+  ])("reserves %s %s: %s", (basePath, pathname, expected) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(expected);
   });
 });
 
+const mountedChat = { basePath: "/openclaw", pathname: "/openclaw/chat", method: "HEAD" };
+type Route = Partial<Parameters<typeof classifyControlUiRequest>[0]>;
+const classify = (route: Route) =>
+  classifyControlUiRequest({
+    basePath: "",
+    pathname: "/chat",
+    search: "",
+    method: "GET",
+    ...route,
+  });
+
 describe("Control UI SPA fallback Accept routing", () => {
-  it.each([
-    {
-      name: "missing Accept header",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: undefined,
-      expected: true,
-    },
-    {
-      name: "empty Accept header",
-      basePath: "/openclaw",
-      pathname: "/openclaw/chat",
-      method: "HEAD",
-      accept: "  ",
-      expected: true,
-    },
-    {
-      name: "browser Accept header",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html, application/xhtml+xml;q=0.9, application/xml;q=0.8",
-      expected: true,
-    },
-    {
-      name: "text wildcard at root",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/*",
-      expected: true,
-    },
-    {
-      name: "nonzero text wildcard under a base path",
-      basePath: "/openclaw",
-      pathname: "/openclaw/chat",
-      method: "HEAD",
-      accept: "application/json, text/*;q=0.5",
-      expected: true,
-    },
-    {
-      name: "zero-quality text wildcard rejection",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/*;q=0",
-      expected: false,
-    },
-    {
-      name: "zero-quality HTML rejection",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html;q=0",
-      expected: false,
-    },
-    {
-      name: "rejected HTML entry with an accepting wildcard",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html;q=0, */*",
-      expected: true,
-    },
-    {
-      name: "nonzero HTML quality",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html;q=0.5",
-      expected: true,
-    },
-    {
-      name: "mixed-case zero-quality parameter",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html; Q = 0",
-      expected: false,
-    },
-    {
-      name: "trailing-dot zero quality",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html; q=0.",
-      expected: false,
-    },
-    {
-      name: "one-decimal zero quality",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "text/html;q=0.0",
-      expected: false,
-    },
-    {
-      name: "mixed-case XHTML three-decimal rejection",
-      basePath: "/openclaw",
-      pathname: "/openclaw/chat",
-      method: "HEAD",
-      accept: "application/json, Application/XHTML+XML ; q=0.000",
-      expected: false,
-    },
-    {
-      name: "zero-quality wildcard rejection",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "application/json, */*;q=0",
-      expected: false,
-    },
-    {
-      name: "JSON-only Accept header",
-      basePath: "",
-      pathname: "/chat",
-      method: "GET",
-      accept: "application/json",
-      expected: false,
-    },
-    {
-      name: "event-stream Accept header under a base path",
-      basePath: "/openclaw",
-      pathname: "/openclaw/chat",
-      method: "HEAD",
-      accept: "text/event-stream",
-      expected: false,
-    },
-    {
-      name: "plugin manager recovery at root",
-      basePath: "",
-      pathname: "/settings/plugins",
-      method: "GET",
-      accept: "application/json",
-      expected: true,
-    },
-    {
-      name: "plugin manager recovery under a base path",
-      basePath: "/openclaw",
-      pathname: "/openclaw/settings/plugins/",
-      method: "HEAD",
-      accept: "text/event-stream",
-      expected: true,
-    },
-  ])("classifies $name", ({ basePath, pathname, method, accept, expected }) => {
-    expect(classifyControlUiRequest({ basePath, pathname, search: "", method, accept })).toEqual({
-      kind: "serve",
-      spaFallback: expected,
-    });
+  it.each<[string, string | undefined, boolean, Route?]>([
+    ["missing Accept header", undefined, true],
+    ["plugin tab slug at root", "text/html", true, { pathname: "/reports" }],
+    ["empty Accept header", "  ", true, mountedChat],
+    [
+      "browser Accept header",
+      "text/html, application/xhtml+xml;q=0.9, application/xml;q=0.8",
+      true,
+    ],
+    [
+      "nonzero text wildcard under a base path",
+      "application/json, text/*;q=0.5",
+      true,
+      mountedChat,
+    ],
+    ["zero-quality text wildcard rejection", "text/*;q=0", false],
+    ["zero-quality HTML rejection", "text/html;q=0", false],
+    ["specific HTML rejection overrides an accepting wildcard", "text/html;q=0, */*", false],
+    ...(
+      [
+        ["text/html;q=0, text/*;charset=utf-8", false],
+        ["text/html;charset=utf-8;q=0, text/html;q=1", false],
+        ["text/html;q=0;charset=utf-8, */*", false],
+        ["text/html;q=1;charset=utf-16, */*;q=0", false],
+        ["text/html;profile=other;q=0, */*", true],
+        ['text/html;note="a,b;c", */*', true],
+        ["application/xhtml+xml", true],
+      ] satisfies [string, boolean][]
+    ).map(([accept, expected]): [string, string, boolean, Route] => [
+      `representation precedence: ${accept}`,
+      accept,
+      expected,
+      mountedChat,
+    ]),
+    ["nonzero HTML quality", "text/html;q=0.5", true],
+    ["mixed-case zero-quality parameter", "text/html; Q = 0", false],
+    ["trailing-dot zero quality", "text/html; q=0.", false],
+    [
+      "mixed-case XHTML three-decimal rejection",
+      "application/json, Application/XHTML+XML ; q=0.000",
+      false,
+      mountedChat,
+    ],
+    ["zero-quality wildcard rejection", "application/json, */*;q=0", false],
+    ["JSON-only Accept header", "application/json", false],
+    [
+      "plugin manager recovery at root",
+      "application/json",
+      true,
+      { pathname: "/settings/plugins" },
+    ],
+  ])("classifies %s", (_name, accept, expected, route) => {
+    expect(classify({ accept, ...route })).toEqual({ kind: "serve", spaFallback: expected });
   });
 });
 
 describe("classifyControlUiRequest", () => {
   describe("root-mounted control ui", () => {
     it.each([
-      {
-        name: "serves the root entrypoint",
-        pathname: "/",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "serves other read-only SPA routes",
-        pathname: "/chat",
-        method: "HEAD",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "serves the plugin manager without claiming plugin HTTP routes",
-        pathname: "/settings/plugins",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "keeps health probes outside the SPA catch-all",
-        pathname: "/healthz",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps readiness probes outside the SPA catch-all",
-        pathname: "/ready",
-        method: "HEAD",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps plugin routes outside the SPA catch-all",
-        pathname: "/plugins/webhook",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps the plugin HTTP root outside the SPA catch-all",
-        pathname: "/plugins",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps API routes outside the SPA catch-all",
-        pathname: "/api/sessions",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps the OpenAI-compatible API root outside the SPA catch-all",
-        pathname: "/v1",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps the OpenAI-compatible API root slash outside the SPA catch-all",
-        pathname: "/v1/",
-        method: "HEAD",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps OpenAI-compatible model discovery outside the SPA catch-all",
-        pathname: "/v1/models",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps OpenAI-compatible model details outside the SPA catch-all",
-        pathname: "/v1/models/openclaw",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps OpenAI-compatible responses outside the SPA catch-all",
-        pathname: "/v1/responses",
-        method: "HEAD",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps the standalone MCP App shell outside the SPA catch-all",
-        pathname: "/__openclaw__/mcp-app",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps the standalone MCP App view outside the SPA catch-all",
-        pathname: "/__openclaw__/mcp-app/view",
-        method: "HEAD",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "preserves SPA routes that only resemble the standalone MCP App namespace",
-        pathname: "/__openclaw__/mcp-apps",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "keeps MCP App descendants outside the SPA catch-all",
-        pathname: "/__openclaw__/mcp-app/other",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps health probe descendants outside the SPA catch-all",
-        pathname: "/healthz/details",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "keeps readiness probe trailing slashes outside the SPA catch-all",
-        pathname: "/readyz/",
-        method: "HEAD",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "preserves SPA routes that only resemble probe paths",
-        pathname: "/healthcheck",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "preserves the SPA root that only resembles the OpenAI-compatible API",
-        pathname: "/v12",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "preserves SPA routes that only resemble the OpenAI-compatible API",
-        pathname: "/v12/models",
-        method: "GET",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "returns not-found for legacy ui routes",
-        pathname: "/ui/settings",
-        method: "GET",
-        expected: { kind: "not-found" as const },
-      },
-      {
-        name: "falls through non-read requests",
-        pathname: "/imessage-webhook",
-        method: "POST",
-        expected: { kind: "not-control-ui" as const },
-      },
-    ])("$name", ({ pathname, method, expected }) => {
-      expect(
-        classifyControlUiRequest({
-          basePath: "",
-          pathname,
-          search: "",
-          method,
-        }),
-      ).toEqual(expected);
+      ["serves the root entrypoint", "/", "GET", serve],
+      ["serves other read-only SPA routes", "/chat", "HEAD", serve],
+      ["plugin manager", "/settings/plugins", "GET", serve],
+      ["health probes", "/healthz", "GET", outside],
+      ["readiness probes", "/ready", "HEAD", outside],
+      ["plugin routes", "/plugins/webhook", "GET", outside],
+      ["marketplace root", "/plugins", "GET", serve],
+      ["marketplace root slash", "/plugins/", "GET", serve],
+      ["API routes", "/api/sessions", "GET", outside],
+      ["the device join root", "/j", "GET", outside],
+      ["device join codes", `/j/${"a".repeat(22)}`, "GET", outside],
+      ["the OpenAI-compatible API root", "/v1", "GET", outside],
+      ["the OpenAI-compatible API root slash", "/v1/", "HEAD", outside],
+      ["model discovery", "/v1/models", "GET", outside],
+      ["model details", "/v1/models/openclaw", "GET", outside],
+      ["responses", "/v1/responses", "HEAD", outside],
+      ["the standalone MCP App shell", "/__openclaw__/mcp-app", "GET", outside],
+      ["the standalone MCP App view", "/__openclaw__/mcp-app/view", "HEAD", outside],
+      ["MCP App lookalike", "/__openclaw__/mcp-apps", "GET", serve],
+      ["MCP App descendants", "/__openclaw__/mcp-app/other", "GET", outside],
+      ["worker admission", "/__openclaw__/worker", "GET", outside],
+      ["worker admission descendants", "/__openclaw__/worker/other", "GET", outside],
+      ["worker lookalike", "/__openclaw__/workers", "GET", serve],
+      [
+        "workspace transfers",
+        "/__openclaw__/worker-transfer/v1/environments/worker%3A1/blobs/abc",
+        "GET",
+        outside,
+      ],
+      ["malformed workspace transfer", "/__openclaw__/worker-transfer/other", "GET", outside],
+      ["transfer lookalike", "/__openclaw__/worker-transfers", "GET", serve],
+      ["health probe descendants", "/healthz/details", "GET", outside],
+      ["readiness probe trailing slashes", "/readyz/", "HEAD", outside],
+      ["SPA lookalike: probe paths", "/healthcheck", "GET", serve],
+      ["API root lookalike", "/v12", "GET", serve],
+      ["API lookalike", "/v12/models", "GET", serve],
+      ["returns not-found for legacy ui routes", "/ui/settings", "GET", notFound],
+      ["falls through non-read requests", "/imessage-webhook", "POST", outside],
+    ])("%s", (_name, pathname, method, expected) => {
+      expect(classify({ pathname, method })).toEqual(expected);
+    });
+  });
+
+  describe("plugin catalogue documents vs plugin HTTP", () => {
+    it.each([
+      ["HTML catalogue root slash", "/plugins/", "text/html", serve],
+      ["JSON catalogue", "/plugins", "application/json", outside],
+      ["JSON catalogue slash", "/plugins/", "application/json", outside],
+    ] as const)("%s", (_name, pathname, accept, expected) => {
+      expect(classify({ pathname, accept })).toEqual(expected);
     });
   });
 
   describe("basePath-mounted control ui", () => {
-    it.each([
-      {
-        name: "redirects the basePath entrypoint",
-        pathname: "/openclaw",
-        search: "?foo=1",
-        method: "GET",
-        expected: { kind: "redirect" as const, location: "/openclaw/?foo=1" },
-      },
-      {
-        name: "serves nested read-only routes",
-        pathname: "/openclaw/chat",
-        search: "",
-        method: "HEAD",
-        expected: { kind: "serve" as const, spaFallback: true },
-      },
-      {
-        name: "falls through unmatched paths",
-        pathname: "/elsewhere/chat",
-        search: "",
-        method: "GET",
-        expected: { kind: "not-control-ui" as const },
-      },
-      {
-        name: "falls through write requests to the basePath entrypoint",
-        pathname: "/openclaw",
-        search: "",
-        method: "POST",
-        expected: { kind: "not-control-ui" as const },
-      },
-      ...["PUT", "DELETE", "PATCH", "OPTIONS"].map((method) => ({
-        name: `falls through ${method} subroute requests`,
-        pathname: "/openclaw/webhook",
-        search: "",
-        method,
-        expected: { kind: "not-control-ui" as const },
-      })),
-    ])("$name", ({ pathname, search, method, expected }) => {
-      expect(
-        classifyControlUiRequest({
-          basePath: "/openclaw",
-          pathname,
-          search,
-          method,
-        }),
-      ).toEqual(expected);
+    it.each<[string, string, string, string, ReturnType<typeof classifyControlUiRequest>]>([
+      [
+        "redirects the basePath entrypoint",
+        "/openclaw",
+        "?foo=1",
+        "GET",
+        { kind: "redirect" as const, location: "/openclaw/?foo=1" },
+      ],
+      ["serves nested read-only routes", "/openclaw/chat", "", "HEAD", serve],
+      ["catalogue", "/openclaw/plugins", "", "GET", serve],
+      ["catalogue slash", "/openclaw/plugins/", "", "GET", serve],
+      ["plugin manager", "/openclaw/settings/plugins", "", "GET", serve],
+      ["falls through unmatched paths", "/elsewhere/chat", "", "GET", outside],
+      ["write entrypoint", "/openclaw", "", "POST", outside],
+      ["write subroute", "/openclaw/webhook", "", "PATCH", outside],
+    ])("%s", (_name, pathname, search, method, expected) => {
+      expect(classify({ basePath: "/openclaw", pathname, search, method })).toEqual(expected);
     });
   });
 });

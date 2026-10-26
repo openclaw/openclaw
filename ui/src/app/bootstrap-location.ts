@@ -1,53 +1,57 @@
-import type { RouteLocation } from "@openclaw/uirouter";
-import { pathForRoute } from "../app-route-paths.ts";
-import { routeIdFromPath } from "../app-routes.ts";
-import { pathForSession } from "../app-session-path-builder.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
+import type {
+  ModelCatalogTarget,
+  SessionsResolveResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentsListResult } from "../api/types.ts";
 import {
+  isSessionRouteId,
+  locationForRoute,
+  pathForRoute,
+  sameRouteLocation,
+  type RouteId,
+} from "../app-route-paths.ts";
+import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
+import { pathForSession } from "../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
   parseAgentSessionKey,
+  resolveUiConversationIdentity,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
-  type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
-import type { ApplicationGateway } from "./context.ts";
+import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationNavigationOptions,
+} from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
+import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
+import { loadGatewaySessionSelection } from "./settings.ts";
 
-type ReleasedSessionQuery = {
-  face: BoardFace;
-  sessionKey: string;
-};
-
-function releasedSessionQuery(
-  location: RouteLocation,
-  basePath: string,
-): ReleasedSessionQuery | null {
-  const params = new URLSearchParams(location.search);
-  if (!params.has("session")) {
-    return null;
-  }
-  const chatRoot = pathForRoute("chat", basePath);
-  const dashboardRoot = pathForRoute("dashboard", basePath);
-  const pathFace =
-    location.pathname === chatRoot || location.pathname === `${chatRoot}/`
-      ? "chat"
-      : location.pathname === dashboardRoot || location.pathname === `${dashboardRoot}/`
-        ? "dashboard"
-        : null;
-  if (!pathFace) {
-    return null;
-  }
-  return {
-    face: params.get("face") === "dashboard" ? "dashboard" : pathFace,
-    sessionKey: params.get("session")?.trim() ?? "",
-  };
+// Saved selection only fills an implicit landing. Agent paths and plugin slug
+// candidates remain explicit, even before Gateway hello registers plugin tabs.
+function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
+  return (
+    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
+  );
 }
 
 async function normalizeReleasedSessionQueryLocation(params: {
   location: RouteLocation;
   basePath: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation | null> {
   const released = releasedSessionQuery(params.location, params.basePath);
@@ -66,7 +70,10 @@ async function normalizeReleasedSessionQueryLocation(params: {
     agentsList: params.agentsList(),
     hello: params.gateway.snapshot.hello,
   };
-  const agentId = parsed?.agentId ?? resolveUiDefaultAgentId(defaults);
+  const agentId =
+    parsed?.agentId ??
+    (resolvePersistedAgentId(params.selectedAgentId, defaults.agentsList) ||
+      resolveUiDefaultAgentId(defaults));
   const mainKey = resolveUiConfiguredMainKey(defaults);
   const pathname = released.sessionKey
     ? pathForSession(released.face, agentId, released.sessionKey, params.basePath, {
@@ -91,15 +98,130 @@ export function normalizeInitialApplicationLocation(
   fallbackAgentId: string,
   mainKey?: string | null,
 ) {
-  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
+  if (!isPersistedSessionLanding(location, basePath) || !sessionKey.trim()) {
     return location;
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId.trim();
   if (!agentId) {
     return location;
   }
-  const pathname = pathForSession("chat", agentId, sessionKey, basePath, { mainKey });
-  return pathname ? { ...location, pathname } : location;
+  const { options } = sessionNavigationTarget({
+    face: "chat",
+    sessionKey,
+    fallbackAgentId: agentId,
+    basePath,
+    mainKey,
+    exactKey: true,
+  });
+  if (options.pathname === pathForRoute("chat", basePath)) {
+    return location;
+  }
+  const search = new URLSearchParams(location.search);
+  new URLSearchParams(options.search).forEach((value, key) => search.set(key, value));
+  return { ...location, pathname: options.pathname, search: search.size ? `?${search}` : "" };
+}
+
+export function resolveBootstrapModelCatalogTarget(
+  location: RouteLocation,
+  basePath: string,
+  gatewayUrl: string,
+): ModelCatalogTarget | undefined {
+  if (routeIdFromPath(location.pathname, basePath) === "new-session") {
+    const agentId = newSessionLocationFromSearch(location.search).agentId;
+    return agentId ? { agentId } : {};
+  }
+  const selection = loadGatewaySessionSelection(gatewayUrl);
+  if (routeIdFromPath(location.pathname, basePath) === "model-providers") {
+    return selection.selectedAgentId ? { agentId: selection.selectedAgentId } : {};
+  }
+  const initial = normalizeInitialApplicationLocation(
+    location,
+    basePath,
+    selection.sessionKey,
+    selection.selectedAgentId ?? "",
+  );
+  const target = sessionRefFromPath(initial.pathname, basePath);
+  if (target?.kind === "literal") {
+    return { agentId: target.agentId, sessionKey: target.sessionKey };
+  }
+  if (target?.kind === "main") {
+    return {
+      agentId: target.agentId,
+      sessionKey: buildAgentMainSessionKey({ agentId: target.agentId }),
+    };
+  }
+  if (target?.kind === "short") {
+    return {
+      agentId: target.agentId,
+      shortId: target.shortId,
+      ...(target.slugHint ? { slugHint: target.slugHint } : {}),
+    };
+  }
+  if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
+    const agentId =
+      parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
+    return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
+  }
+  return undefined;
+}
+
+/** Explicit location parts replace a route's default; Workboard keeps its active board path. */
+export function applicationRouteLocation(
+  router: Pick<ApplicationRouter, "getState">,
+  basePath: string,
+  routeId: RouteId,
+  options?: ApplicationNavigationOptions,
+): RouteLocation {
+  const location = locationForRoute(routeId, basePath);
+  const activeMatch = router.getState().matches[0];
+  const activeDynamicPath =
+    activeMatch?.routeId === routeId && routeId === "workboard"
+      ? activeMatch.location.pathname
+      : null;
+  if (
+    options?.pathname !== undefined ||
+    options?.search !== undefined ||
+    options?.hash !== undefined
+  ) {
+    return {
+      ...location,
+      pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
+      search: options?.search ?? "",
+      hash: options?.hash ?? "",
+    };
+  }
+  return location;
+}
+
+/**
+ * Whether the browser still shows the default landing, or the session startup
+ * restored for it, once that resolution settles. Navigation meanwhile wins.
+ */
+export async function isResolvedDefaultLanding(
+  resolved: Promise<RouteLocation>,
+  history: Pick<RouterHistory, "location">,
+  basePath: string,
+): Promise<boolean> {
+  const landing = await resolved;
+  const current = history.location();
+  return (
+    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, landing)
+  );
+}
+
+export function createInitialApplicationLocationResolver(params: {
+  fallback: RouteLocation;
+  signal: AbortSignal;
+  resolve: () => Promise<RouteLocation>;
+}): () => Promise<RouteLocation> {
+  let ready: Promise<RouteLocation> | null = null;
+  return () =>
+    (ready ??= params.resolve().catch((error: unknown) => {
+      if (params.signal.aborted) {
+        return params.fallback;
+      }
+      throw error;
+    }));
 }
 
 export async function resolveInitialApplicationLocation(params: {
@@ -107,30 +229,146 @@ export async function resolveInitialApplicationLocation(params: {
   basePath: string;
   sessionKey: string;
   gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">;
-  agentsList: () => UiSessionDefaultsHost["agentsList"];
+  agentsList: () => AgentsListResult | null;
+  ensureAgentsList?: () => Promise<AgentsListResult | null>;
+  selectedAgentId?: string | null;
   signal: AbortSignal;
 }): Promise<RouteLocation> {
   const releasedLocation = await normalizeReleasedSessionQueryLocation(params);
   if (releasedLocation) {
     return releasedLocation;
   }
-  if (!isDefaultChatLanding(params.location, params.basePath, routeIdFromPath)) {
+  if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;
   }
-  // Explicit routes must start immediately; only the implicit persisted-session
-  // landing needs gateway defaults before its agent can be made authoritative.
-  if (params.sessionKey.trim() && !parseAgentSessionKey(params.sessionKey)) {
-    await waitForGatewayClient(params.gateway, params.signal);
+  const client = await waitForGatewayClient(params.gateway, params.signal);
+  const hello = params.gateway.snapshot.hello;
+  const agentsList = (await params.ensureAgentsList?.()) ?? params.agentsList();
+  params.signal.throwIfAborted();
+  if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+    return resolveInitialApplicationLocation(params);
   }
-  const defaults = {
-    agentsList: params.agentsList(),
-    hello: params.gateway.snapshot.hello,
-  };
+  const defaults = { agentsList, hello };
+  const mainKey = resolveUiConfiguredMainKey(defaults);
+  const defaultAgentId = resolveUiDefaultAgentId(defaults);
+  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
+  let agentId =
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
+    defaultAgentId;
+  if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
+    agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  }
+
+  const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
+  sessionKey = identity.sessionKey;
+  agentId = identity.agentId ?? agentId;
+  const parsed = parseAgentSessionKey(sessionKey);
+  const isMain =
+    isUiGlobalSessionKey(sessionKey) ||
+    (parsed?.rest ?? sessionKey).toLowerCase() === mainKey.toLowerCase();
+  let resolved: SessionsResolveResult | null = null;
+  if (!isMain && !parseCatalogSessionKey(sessionKey)) {
+    try {
+      resolved = await client.request<SessionsResolveResult>(
+        "sessions.resolve",
+        {
+          key: sessionKey,
+          agentId,
+          allowMissing: true,
+        },
+        { signal: params.signal },
+      );
+    } catch {
+      params.signal.throwIfAborted();
+      // Validation is optional during a connection failure. The exact route below
+      // preserves the saved identity without guessing from a shortened key.
+    }
+    params.signal.throwIfAborted();
+    if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+      // The response belongs to the captured Gateway generation. Re-entering
+      // prevents a reconnect from installing state the replacement never confirmed.
+      return resolveInitialApplicationLocation(params);
+    }
+    if (resolved && !resolved.ok) {
+      sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+    }
+  }
+
+  const row = resolved?.ok ? resolved : undefined;
   return normalizeInitialApplicationLocation(
     params.location,
     params.basePath,
-    params.sessionKey,
-    resolveUiDefaultAgentId(defaults),
-    resolveUiConfiguredMainKey(defaults),
+    row?.key ?? sessionKey,
+    row?.agentId ?? agentId,
+    mainKey,
   );
+}
+
+/** Bind route and selection facts to the connection scheduler before roster hydration subscribes. */
+export function subscribeForegroundChatBootstrap({
+  router,
+  gateway,
+  agents,
+  agentSelection,
+  connectionBootstrap,
+  initialChatRoute,
+  chatSubmissions,
+}: Pick<
+  ApplicationContext,
+  "gateway" | "agents" | "agentSelection" | "connectionBootstrap" | "chatSubmissions"
+> & {
+  router: ApplicationRouter;
+  initialChatRoute: boolean;
+}): () => void {
+  connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
+  const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
+    const match = state.pendingMatches[0] ?? state.matches[0];
+    if (!match && state.status === "idle") {
+      return;
+    }
+    const data = asOptionalRecord(match?.data);
+    const key =
+      data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // Admission previews have no transcript controller and cannot claim its
+    // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
+    connectionBootstrap.setForegroundRoute(
+      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
+        ? null
+        : match.status === "pending"
+          ? undefined
+          : match.status === "success" && key && !parseCatalogSessionKey(key)
+            ? resolveChatSnapshotKey(
+                {
+                  settings: gateway.connection,
+                  client: gateway.snapshot.client,
+                  agentsList: agents.state.agentsList,
+                  hello: gateway.snapshot.hello,
+                  assistantAgentId: agentSelection.state.selectedId,
+                },
+                {
+                  sessionKey: key,
+                  agentId: typeof data?.agentId === "string" ? data.agentId : undefined,
+                },
+              )
+            : null,
+    );
+  };
+  const synchronize = () => synchronizeRoute(router.getState());
+  const stopConnection = gateway.subscribe((snapshot) => {
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+    // Literal routes can settle before hello assigns their storage scope.
+    synchronize();
+  });
+  const stops = [
+    stopConnection,
+    router.subscribe(synchronizeRoute),
+    agentSelection.subscribe(synchronize),
+    chatSubmissions.subscribeCreate(synchronize),
+  ];
+  return () => stops.forEach((stop) => stop());
 }

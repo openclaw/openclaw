@@ -1,6 +1,8 @@
-// Xai plugin module implements x search behavior.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   jsonResult,
+  normalizeToIsoDate,
   readCache,
   readStringArrayParam,
   readStringParam,
@@ -9,19 +11,21 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveXaiResponsesEndpoint } from "./src/responses-tool-shared.js";
 import {
   isXaiToolEnabled,
   resolveXaiToolApiKeyWithAuth,
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
+import {
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./src/tool-config-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
-  resolveXaiXSearchEndpoint,
-  resolveXaiXSearchInlineCitations,
-  resolveXaiXSearchMaxTurns,
-  resolveXaiXSearchModel,
+  XAI_DEFAULT_X_SEARCH_MODEL,
   type XaiXSearchOptions,
 } from "./src/x-search-shared.js";
 import {
@@ -45,44 +49,7 @@ type XSearchCacheEntry = {
   value: Record<string, unknown>;
 };
 
-function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[X_SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, XSearchCacheEntry>;
-  }
-  const next = new Map<string, XSearchCacheEntry>();
-  root[X_SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-const X_SEARCH_CACHE = getSharedXSearchCache();
-
-function resolveXSearchConfig(cfg?: unknown): Record<string, unknown> | undefined {
-  return resolveEffectiveXSearchConfig(cfg as never);
-}
-
-function resolveXSearchEnabled(params: {
-  cfg?: unknown;
-  config?: Record<string, unknown>;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): boolean {
-  return isXaiToolEnabled({
-    enabled: params.config?.enabled as boolean | undefined,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.cfg as never,
-    auth: params.auth,
-  });
-}
-
-async function resolveXSearchApiKey(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): Promise<string | undefined> {
-  return await resolveXaiToolApiKeyWithAuth(params as never);
-}
+const X_SEARCH_CACHE = resolveGlobalMap<string, XSearchCacheEntry>(X_SEARCH_CACHE_KEY);
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
   if (!value) {
@@ -95,67 +62,10 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
   }
-  const [yearText, monthText, dayText] = trimmed.split("-");
-  if (yearText === undefined || monthText === undefined || dayText === undefined) {
-    throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
-  }
-  const year = Number.parseInt(yearText, 10);
-  const month = Number.parseInt(monthText, 10);
-  const day = Number.parseInt(dayText, 10);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
+  if (!normalizeToIsoDate(trimmed)) {
     throw new PluginToolInputError(`${label} must be a valid calendar date`);
   }
   return trimmed;
-}
-
-function validateXSearchHandleFilters(params: {
-  allowedXHandles?: string[];
-  excludedXHandles?: string[];
-}): void {
-  if (params.allowedXHandles && params.excludedXHandles) {
-    throw new PluginToolInputError(
-      "allowed_x_handles and excluded_x_handles cannot be used together",
-    );
-  }
-  for (const [label, handles] of [
-    ["allowed_x_handles", params.allowedXHandles],
-    ["excluded_x_handles", params.excludedXHandles],
-  ] as const) {
-    if (handles && handles.length > X_SEARCH_HANDLE_LIMIT) {
-      throw new PluginToolInputError(
-        `${label} cannot contain more than ${X_SEARCH_HANDLE_LIMIT} handles`,
-      );
-    }
-  }
-}
-
-function buildXSearchCacheKey(params: {
-  query: string;
-  model: string;
-  endpoint: string;
-  inlineCitations: boolean;
-  maxTurns?: number;
-  options: Omit<XaiXSearchOptions, "query">;
-}) {
-  return JSON.stringify([
-    "x_search",
-    params.model,
-    params.endpoint,
-    params.query,
-    params.inlineCitations,
-    params.maxTurns ?? null,
-    params.options.allowedXHandles ?? null,
-    params.options.excludedXHandles ?? null,
-    params.options.fromDate ?? null,
-    params.options.toDate ?? null,
-    params.options.enableImageUnderstanding ?? false,
-    params.options.enableVideoUnderstanding ?? false,
-  ]);
 }
 
 export function createXSearchTool(options?: {
@@ -163,13 +73,13 @@ export function createXSearchTool(options?: {
   runtimeConfig?: Record<string, unknown> | null;
   auth?: XaiToolAuthContext;
 }) {
-  const xSearchConfig = resolveXSearchConfig(options?.config);
+  const xSearchConfig = resolveEffectiveXSearchConfig(options?.config as never);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   if (
-    !resolveXSearchEnabled({
-      cfg: options?.config,
-      config: xSearchConfig,
-      runtimeConfig: runtimeConfig ?? undefined,
+    !isXaiToolEnabled({
+      enabled: typeof xSearchConfig?.enabled === "boolean" ? xSearchConfig.enabled : undefined,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
+      sourceConfig: options?.config as never,
       auth: options?.auth,
     })
   ) {
@@ -178,9 +88,9 @@ export function createXSearchTool(options?: {
 
   return createXSearchToolDefinition(async (_toolCallId, args, signal) => {
     signal?.throwIfAborted();
-    const apiKey = await resolveXSearchApiKey({
-      sourceConfig: options?.config,
-      runtimeConfig: runtimeConfig ?? undefined,
+    const apiKey = await resolveXaiToolApiKeyWithAuth({
+      sourceConfig: options?.config as never,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
       auth: options?.auth,
     });
     if (!apiKey) {
@@ -190,7 +100,21 @@ export function createXSearchTool(options?: {
     const query = readStringParam(args, "query", { required: true });
     const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
     const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
-    validateXSearchHandleFilters({ allowedXHandles, excludedXHandles });
+    if (allowedXHandles && excludedXHandles) {
+      throw new PluginToolInputError(
+        "allowed_x_handles and excluded_x_handles cannot be used together",
+      );
+    }
+    for (const [label, handles] of [
+      ["allowed_x_handles", allowedXHandles],
+      ["excluded_x_handles", excludedXHandles],
+    ] as const) {
+      if (handles && handles.length > X_SEARCH_HANDLE_LIMIT) {
+        throw new PluginToolInputError(
+          `${label} cannot contain more than ${X_SEARCH_HANDLE_LIMIT} handles`,
+        );
+      }
+    }
     const fromDate = normalizeOptionalIsoDate(readStringParam(args, "from_date"), "from_date");
     const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
     if (fromDate && toDate && fromDate > toDate) {
@@ -206,27 +130,30 @@ export function createXSearchTool(options?: {
       enableImageUnderstanding: args.enable_image_understanding === true,
       enableVideoUnderstanding: args.enable_video_understanding === true,
     };
-    const xSearchConfigRecord = xSearchConfig;
-    const model = resolveXaiXSearchModel(xSearchConfigRecord);
-    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
-    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
-    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
-    const cacheKey = buildXSearchCacheKey({
-      query,
+    const model = resolveNormalizedXaiToolModel({
+      config: xSearchConfig,
+      defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
+    });
+    const endpoint = resolveXaiResponsesEndpoint(xSearchConfig?.baseUrl);
+    const inlineCitations = xSearchConfig?.inlineCitations === true;
+    const maxTurns = resolvePositiveIntegerToolConfig(xSearchConfig, "maxTurns");
+    const cacheKey = JSON.stringify([
+      "x_search",
+      sha256Hex(apiKey),
       model,
       endpoint,
+      query,
       inlineCitations,
-      maxTurns,
-      options: {
-        allowedXHandles,
-        excludedXHandles,
-        fromDate,
-        toDate,
-        enableImageUnderstanding: xSearchOptions.enableImageUnderstanding,
-        enableVideoUnderstanding: xSearchOptions.enableVideoUnderstanding,
-      },
-    });
-    const cached = readCache(X_SEARCH_CACHE, cacheKey);
+      maxTurns ?? null,
+      xSearchOptions.allowedXHandles ?? null,
+      xSearchOptions.excludedXHandles ?? null,
+      xSearchOptions.fromDate ?? null,
+      xSearchOptions.toDate ?? null,
+      xSearchOptions.enableImageUnderstanding ?? false,
+      xSearchOptions.enableVideoUnderstanding ?? false,
+    ]);
+    const cacheTtlMs = resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15);
+    const cached = readCache(X_SEARCH_CACHE, cacheKey, cacheTtlMs);
     if (cached) {
       return jsonResult({ ...cached.value, cached: true });
     }
@@ -242,22 +169,15 @@ export function createXSearchTool(options?: {
       options: xSearchOptions,
       ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     const payload = buildXaiXSearchPayload({
       query,
       model,
       tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
+      ...result,
       options: xSearchOptions,
     });
-    writeCache(
-      X_SEARCH_CACHE,
-      cacheKey,
-      payload,
-      resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15),
-    );
+    writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
     return jsonResult(payload);
   });
 }

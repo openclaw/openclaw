@@ -18,12 +18,7 @@ export function resolveThreadBindingLifecycle(params: {
   defaultIdleTimeoutMs: number;
   /** Fallback max-age timeout in milliseconds when the record has no override. */
   defaultMaxAgeMs: number;
-}): {
-  /** Earliest expiration timestamp, omitted when both limits are disabled. */
-  expiresAt?: number;
-  /** Expiration source corresponding to `expiresAt`. */
-  reason?: "idle-expired" | "max-age-expired";
-} {
+}) {
   const idleTimeoutMs =
     typeof params.record.idleTimeoutMs === "number"
       ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
@@ -40,6 +35,17 @@ export function resolveThreadBindingLifecycle(params: {
       : undefined;
   const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
 
+  return resolveThreadBindingExpiry({ inactivityExpiresAt, maxAgeExpiresAt });
+}
+
+/** Selects prepared expiry candidates; the caller owns timestamp and duration normalization. */
+export function resolveThreadBindingExpiry({
+  inactivityExpiresAt,
+  maxAgeExpiresAt,
+}: {
+  inactivityExpiresAt?: number;
+  maxAgeExpiresAt?: number;
+}): { expiresAt?: number; reason?: "idle-expired" | "max-age-expired" } {
   // The lifecycle reports the first real reason so callers can prune or surface it accurately.
   if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
     return inactivityExpiresAt <= maxAgeExpiresAt

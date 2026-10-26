@@ -1,114 +1,123 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
-  canRunPlaywrightChromium,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
+  waitForControlUiRoute,
+  waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { expectCount, setVisibility, showText } from "./activity-assertions.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/control-ui-activity-summaries");
+const suite = createControlUiE2eSuite({
+  name: "Control UI Activity summaries mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
-
-describeControlUiE2e("Control UI Activity summaries mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+suite.define(() => {
+  it("collects only while Live activity is visible and releases its roster on navigation", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:research:work";
+      const gateway = await installMockGateway(page, {
+        sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
+      });
+      const emitTool = (id: string) =>
+        gateway.emitGatewayEvent("session.tool", {
+          stream: "tool",
+          runId: `run-${id}`,
+          sessionKey,
+          data: { phase: "result", name: "read", toolCallId: id, result: { text: `${id} output` } },
+        });
+      const navigate = (route: "activity" | "config") =>
+        evaluateControlUiContext(
+          page,
+          (context, routeId) => {
+            context.navigate(routeId, routeId === "activity" ? { search: "?view=live" } : {});
+          },
+          route,
+        );
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("connect");
+      await emitTool("before-open");
+      await navigate("activity");
+      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
+      await page.locator(".activity-empty").waitFor();
+      expect(await page.locator(".activity-entry").count()).toBe(0);
+      await emitTool("visible");
+      await page.locator(".activity-entry").waitFor();
+      await setVisibility(page, "hidden");
+      await gateway.waitForRequest("sessions.messages.unsubscribe", { match: { key: sessionKey } });
+      await emitTool("hidden");
+      await setVisibility(page, "visible");
+      await expect
+        .poll(() => gateway.getRequests("sessions.messages.subscribe", { key: sessionKey }))
+        .toHaveLength(2);
+      await emitTool("visible-again");
+      await expectCount(page.locator(".activity-entry")).toBe(2);
+      await page.getByRole("button", { name: "Expand all", exact: true }).click();
+      await showText(page, "visible-again output");
+      expect(await page.getByText("hidden output", { exact: true }).count()).toBe(0);
+      await navigate("config");
+      await waitForControlUiSettingsTakeover(page);
+      await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
+      await expect
+        .poll(() => gateway.getRequests("sessions.messages.unsubscribe", { key: sessionKey }))
+        .toHaveLength(2);
+      await emitTool("while-away");
+      await navigate("activity");
+      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+      await page.locator(".activity-empty").waitFor();
+      expect(await page.locator(".activity-entry").count()).toBe(0);
+      expect(await gateway.getSocketCount()).toBe(1);
+    });
   });
 
   it("updates one visible tool summary from running to completed output", async () => {
-    if (captureUiProof) {
-      await mkdir(path.join(proofDir, "video"), { recursive: true });
-    }
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(captureUiProof
-        ? { recordVideo: { dir: path.join(proofDir, "video"), size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, { sessionKey: "main" });
-    const startedAt = Date.now();
-
-    try {
-      await page.goto(`${server.baseUrl}activity`);
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
-
-      await gateway.emitGatewayEvent("agent", {
-        runId: "run-diagnostics",
-        seq: 1,
-        stream: "tool",
-        ts: startedAt,
-        sessionKey: "main",
-        data: {
-          phase: "start",
-          name: "web_search",
-          toolCallId: "tool-diagnostics",
-          args: { query: "operator diagnostics" },
-        },
-      });
-
-      const entry = page.locator(".activity-entry").filter({ hasText: "web_search" });
-      await entry.waitFor();
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
-      await entry.getByText("Running", { exact: true }).waitFor();
-      await entry
-        .locator(".activity-entry__summary .activity-entry__text")
-        .getByText("1 argument hidden", { exact: true })
-        .waitFor();
-
-      await gateway.emitGatewayEvent("agent", {
-        runId: "run-diagnostics",
-        seq: 2,
-        stream: "tool",
-        ts: startedAt + 250,
-        sessionKey: "main",
-        data: {
-          phase: "result",
-          name: "web_search",
-          toolCallId: "tool-diagnostics",
-          result: {
-            content: [{ type: "text", text: "Indexed 3 diagnostic sources." }],
-          },
-        },
-      });
-
-      await entry.getByText("Done", { exact: true }).waitFor();
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
-      await page.getByText("1 of 1", { exact: true }).waitFor();
-      await entry.locator("summary").click();
-      await entry.getByText("Indexed 3 diagnostic sources.", { exact: true }).waitFor();
-      await entry.getByText("Run: run-diagnostics", { exact: true }).waitFor();
-
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "completed-tool-summary.png"),
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          sessions: [
+            { key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" },
+          ],
         });
-      }
-    } finally {
-      await context.close();
-    }
+        const startedAt = Date.now();
+        const tool = { runId: "run-diagnostics", stream: "tool", sessionKey: "agent:main:main" };
+        const call = { name: "web_search", toolCallId: "tool-diagnostics" };
+        const output = "Indexed 3 diagnostic sources.";
+
+        await page.goto(`${suite.server.baseUrl}activity?view=live`);
+        await page.locator(".activity-empty").waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe", {
+          match: { key: "agent:main:main" },
+        });
+
+        const entry = page.locator(".activity-entry").filter({ hasText: "web_search" });
+        const summary = entry.locator(".activity-entry__summary .activity-entry__text");
+        for (const [index, data] of [
+          { phase: "start", args: { query: "operator diagnostics" } },
+          { phase: "result", result: { content: [{ type: "text", text: output }] } },
+        ].entries()) {
+          await gateway.emitGatewayEvent("agent", {
+            ...tool,
+            seq: index + 1,
+            ts: startedAt + index * 250,
+            data: { ...call, ...data },
+          });
+          await showText(entry, index === 0 ? "Running" : "Done");
+          await expectCount(page.locator(".activity-entry")).toBe(1);
+          if (index === 0) {
+            await showText(summary, "1 argument hidden");
+          }
+        }
+        await showText(page, "1 of 1");
+        await entry.locator("summary").click();
+        await showText(entry, output);
+        await showText(entry, "Run: run-diagnostics");
+      },
+    );
   });
 });

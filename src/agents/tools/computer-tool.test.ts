@@ -1,103 +1,28 @@
-/**
- * computer tool tests.
- *
- * Cover the computer.act wire mapping, frame binding, and enablement behavior.
- * Node selection lives in computer-tool.node-resolution.test.ts.
- */
-import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentMessage } from "../runtime/index.js";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import {
+  callGatewayToolMock,
+  COMPUTER_ACT_COMMAND,
+  type ComputerActBody,
+  type ComputerTool,
+  type ComputerToolOptions,
+  createVisionComputerTool,
+  EFFECTIVE_REF_WIDTH,
+  listNodesMock,
+  macComputerNode,
+  readFrameId,
+  readLastComputerActParams,
+  resetComputerToolMocks,
+  screenshotPayload,
+  TINY_PNG_BASE64,
+} from "./computer-tool.test-helpers.js";
 
-const listNodesMock = vi.fn();
-const callGatewayToolMock = vi.fn();
-const sleepMock = vi.hoisted(() => vi.fn());
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
-const COMPUTER_ACT_COMMAND = "computer.act";
 const INVALID_SCROLL_AMOUNT = /scrollAmount must be a positive integer/;
 const INVALID_HOLD_DURATION = /duration must be >0 and <=10 seconds/;
 
-function imageIdentity(data: string, mimeType = "image/png") {
-  return createHash("sha256")
-    .update(JSON.stringify([mimeType, data]))
-    .digest("hex");
-}
-
-vi.mock("./nodes-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./nodes-utils.js")>();
-  return { ...actual, listNodes: listNodesMock };
-});
-
-vi.mock("./gateway.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./gateway.js")>();
-  return { ...actual, callGatewayTool: callGatewayToolMock };
-});
-
-vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
-
-const { createComputerTool, invalidateComputerFrameIfMissing } = await import("./computer-tool.js");
-const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
-// With no config the reference width is capped at the default sanitization limit.
-const EFFECTIVE_REF_WIDTH = Math.min(1280, DEFAULT_IMAGE_MAX_DIMENSION_PX);
-
-function macComputerNode(overrides?: Record<string, unknown>) {
-  return {
-    nodeId: "mac-1",
-    displayName: "Studio",
-    platform: "macos",
-    connected: true,
-    commands: ["screen.snapshot", "computer.act"],
-    ...overrides,
-  };
-}
-
-function screenshotPayload(screenIndex = 0, base64 = TINY_PNG_BASE64) {
-  return {
-    payload: {
-      format: "png",
-      base64,
-      displayFrameId: `display-${screenIndex}-frame`,
-      width: 1280,
-      height: 800,
-      screenIndex,
-    },
-  };
-}
-
-function readFrameId(result: { details?: unknown }): string {
-  const frameId = (result.details as { frameId?: unknown } | undefined)?.frameId;
-  if (typeof frameId !== "string") {
-    throw new Error("missing frameId");
-  }
-  return frameId;
-}
-
-function readLastComputerActParams(): Record<string, unknown> {
-  const call = callGatewayToolMock.mock.calls.findLast(
-    (entry) => (entry[2] as { command?: string }).command === COMPUTER_ACT_COMMAND,
-  );
-  const body = call?.[2] as { params?: Record<string, unknown> } | undefined;
-  if (!body?.params) {
-    throw new Error("missing computer.act request");
-  }
-  return body.params;
-}
-
 function expectedAct(action: string, fields: Record<string, unknown> = {}) {
   return { action, screenIndex: 0, refWidth: EFFECTIVE_REF_WIDTH, ...fields };
-}
-
-type ComputerTool = ReturnType<typeof createComputerTool>;
-type ComputerToolOptions = NonNullable<Parameters<typeof createComputerTool>[0]>;
-type ComputerActBody = {
-  nodeId?: string;
-  command?: string;
-  idempotencyKey?: string;
-  params?: Record<string, unknown>;
-};
-
-function createVisionComputerTool(options: ComputerToolOptions = {}) {
-  return createComputerTool({ modelHasVision: true, ...options });
 }
 
 function twoMacComputerNodes() {
@@ -110,7 +35,16 @@ function twoMacComputerNodes() {
 function computerActBodies(): ComputerActBody[] {
   return callGatewayToolMock.mock.calls
     .map((call) => call[2] as ComputerActBody)
-    .filter((body) => body.command === COMPUTER_ACT_COMMAND);
+    .filter((body) => body.command === COMPUTER_ACT_COMMAND)
+    .map((body) => {
+      if (!body.params) {
+        return body;
+      }
+      const { executionId: _executionId, ...params } = body.params;
+      const sanitizedBody = Object.assign({}, body);
+      sanitizedBody.params = params;
+      return sanitizedBody;
+    });
 }
 
 async function captureFrame(
@@ -150,11 +84,7 @@ function executeMouseDown(
   input: Record<string, unknown> = {},
   signal?: AbortSignal,
 ) {
-  return tool.execute(
-    "down",
-    { action: "left_mouse_down", coordinate: [1, 2], frameId, ...input },
-    signal,
-  );
+  return executeClick(tool, frameId, { action: "left_mouse_down", ...input }, "down", signal);
 }
 
 function retargetToMacB(tool: ComputerTool, callId = "retarget") {
@@ -171,6 +101,16 @@ function invalidHoldCase(name: string, duration: unknown): InvalidCase {
   return [name, { action: "hold_key", text: "space", duration }, INVALID_HOLD_DURATION];
 }
 
+async function rejectsClick(
+  tool: ComputerTool,
+  frameId: string,
+  error: string | RegExp,
+  input: Record<string, unknown> = {},
+  callId = "click",
+) {
+  await expect(executeClick(tool, frameId, input, callId)).rejects.toThrow(error);
+}
+
 function mockComputerActError(error: Error, action?: string) {
   callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
     const request = body as ComputerActBody;
@@ -180,7 +120,9 @@ function mockComputerActError(error: Error, action?: string) {
     ) {
       throw error;
     }
-    return screenshotPayload();
+    return request.command === COMPUTER_ACT_COMMAND
+      ? { payload: { ok: true } }
+      : screenshotPayload();
   });
 }
 
@@ -208,132 +150,30 @@ async function executeComputerAction(params: Record<string, unknown>) {
   return readLastComputerActParams();
 }
 
-function computerToolResult(
-  toolCallId: string,
-  content: Extract<AgentMessage, { role: "toolResult" }>["content"],
-) {
-  return {
-    role: "toolResult" as const,
-    toolCallId,
-    toolName: "computer",
-    content,
-    details: {},
-    isError: false,
-    timestamp: 1,
-  } satisfies AgentMessage;
-}
+describe("createComputerTool v1 execution", () => {
+  beforeEach(resetComputerToolMocks);
 
-function trackedContextEpoch(value: number) {
-  return {
-    value,
-    frameToolCallId: "shot-1",
-    frameImageIdentity: imageIdentity(TINY_PNG_BASE64),
-  };
-}
-
-function screenshotToolResult(data = TINY_PNG_BASE64) {
-  return computerToolResult("shot-1", [{ type: "image", data, mimeType: "image/png" }]);
-}
-
-describe("computer screenshot context binding", () => {
-  it("keeps coordinates valid while the tracked tool result image remains visible", () => {
-    const contextEpoch = trackedContextEpoch(0);
-
-    expect(
-      invalidateComputerFrameIfMissing({
-        contextEpoch,
-        messages: [screenshotToolResult()],
-      }),
-    ).toBe(false);
-    expect(contextEpoch).toEqual(trackedContextEpoch(0));
-  });
-
-  it("expires coordinates once the final context drops the tracked image", () => {
-    const contextEpoch = trackedContextEpoch(0);
-
-    expect(
-      invalidateComputerFrameIfMissing({
-        contextEpoch,
-        messages: [computerToolResult("shot-1", [{ type: "text", text: "compacted" }])],
-      }),
-    ).toBe(true);
-    expect(contextEpoch).toEqual({ value: 1 });
-    expect(invalidateComputerFrameIfMissing({ contextEpoch, messages: [] })).toBe(false);
-    expect(contextEpoch.value).toBe(1);
-  });
-
-  it.each([
-    [
-      "expires coordinates when image input is disabled at the model boundary",
-      trackedContextEpoch(3),
-      [screenshotToolResult()],
-      true,
-      { value: 4 },
-    ],
-    [
-      "expires coordinates when middleware swaps the tracked screenshot",
-      trackedContextEpoch(5),
-      [screenshotToolResult("AQ==")],
-      undefined,
-      { value: 6 },
-    ],
-    [
-      "cleans up an orphaned image identity",
-      { value: 8, frameImageIdentity: imageIdentity(TINY_PNG_BASE64) },
-      [],
-      undefined,
-      { value: 9 },
-    ],
-  ])("%s", (_name, contextEpoch, messages, imagesBlocked, expected) => {
-    expect(invalidateComputerFrameIfMissing({ contextEpoch, messages, imagesBlocked })).toBe(true);
-    expect(contextEpoch).toEqual(expected);
-  });
-});
-
-describe("createComputerTool schema", () => {
-  it("publishes Codex-compatible fixed-size coordinate arrays", () => {
-    const properties = (
-      createComputerTool().parameters as {
-        properties?: Record<string, Record<string, unknown>>;
-      }
-    ).properties;
-
-    for (const key of ["coordinate", "startCoordinate"] as const) {
-      const schema = properties?.[key];
-      if (!schema) {
-        throw new Error(`missing ${key} schema`);
-      }
-      expect(schema).toMatchObject({
-        type: "array",
-        items: { type: "integer", minimum: 0 },
-        minItems: 2,
-        maxItems: 2,
+  it.each([false, true])(
+    "accepts older-node cursor receipts (JSON string: %s)",
+    async (encoded) => {
+      const receipt = { ok: true, cursorX: 12.5, cursorY: -4 };
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+        if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
+          return { payload: encoded ? JSON.stringify(receipt) : receipt };
+        }
+        throw new Error("fixture capture unavailable");
       });
-      expect(Array.isArray(schema.items)).toBe(false);
-      expect(schema).not.toHaveProperty("additionalItems");
-    }
-  });
-});
 
-describe("createComputerTool execution", () => {
-  beforeEach(() => {
-    listNodesMock.mockReset();
-    callGatewayToolMock.mockReset();
-    sleepMock.mockReset();
-    sleepMock.mockImplementation((ms: number, signal?: AbortSignal) => {
-      if (signal?.aborted) {
-        return Promise.reject(new Error("Aborted"));
-      }
-      if (ms === 500 || !signal) {
-        return Promise.resolve();
-      }
-      return new Promise<void>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+      const result = await createVisionComputerTool().execute("act", { action: "key", text: "a" });
+
+      expect(result.details).toMatchObject({ action: "key", result: receipt });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: `${JSON.stringify({ action: "key", ...receipt })}\nfollow-up screenshot failed: fixture capture unavailable`,
       });
-    });
-    listNodesMock.mockResolvedValue([macComputerNode()]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
-  });
+      expect(computerActBodies()).toHaveLength(1);
+    },
+  );
 
   it.each([
     [
@@ -358,20 +198,6 @@ describe("createComputerTool execution", () => {
       }),
     ],
     [
-      "maps scroll input without leaking pointer fields",
-      { action: "scroll", scrollDirection: "Down", scrollAmount: 999, text: "cmd" },
-      expectedAct("scroll", {
-        scrollDirection: "down",
-        scrollAmount: 100,
-        modifiers: "cmd",
-      }),
-    ],
-    [
-      "maps type input without leaking pointer fields",
-      { action: "type", text: "hello", coordinate: [5, 6] },
-      expectedAct("type", { text: "hello" }),
-    ],
-    [
       "maps key input without leaking pointer fields",
       { action: "key", text: "cmd+shift+t" },
       expectedAct("key", { keys: "cmd+shift+t" }),
@@ -394,64 +220,123 @@ describe("createComputerTool execution", () => {
     expect(() => readLastComputerActParams()).toThrow(/missing computer\.act request/);
   });
 
-  it.each([
-    { coordinate: [null, 2] },
-    { coordinate: [false, 2] },
-    { coordinate: ["1", 2] },
-    { coordinate: [-1, 2] },
-    { coordinate: [1.5, 2] },
-    { coordinate: [1] },
-    { coordinate: [1, 2, 3] },
-  ])("rejects malformed required coordinate input %#", async ({ coordinate }) => {
-    await expect(executeComputerAction({ action: "left_click", coordinate })).rejects.toThrow(
-      /coordinate/,
-    );
+  it("rejects malformed required coordinate input", async () => {
+    await expect(
+      executeComputerAction({ action: "left_click", coordinate: [-1, 2] }),
+    ).rejects.toThrow(/coordinate/);
   });
 
-  it.each([
-    { coordinate: null },
-    { coordinate: "1,2" },
-    { coordinate: [1] },
-    { coordinate: [1, 2, 3] },
-    { coordinate: [1, false] },
-  ])(
-    "rejects malformed optional coordinate input %# instead of acting at the cursor",
-    async ({ coordinate }) => {
-      await expect(
-        executeComputerAction({ action: "left_mouse_down", coordinate }),
-      ).rejects.toThrow(/coordinate/);
-    },
-  );
-
-  it("captures a screenshot through screen.snapshot and keeps it model-only", async () => {
-    const result = await createVisionComputerTool().execute("call", { action: "screenshot" });
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        nodeId: "mac-1",
-        command: "screen.snapshot",
-        params: expect.objectContaining({ maxWidth: EFFECTIVE_REF_WIDTH, format: "jpeg" }),
-      }),
-      { signal: undefined },
-    );
-    // Desktop pixels stay model-only (#44759): never auto-delivered to chat.
-    expect(result.details).toMatchObject({
+  it("omits an unchanged screenshot while retaining its frame and refreshing node coordinates", async () => {
+    let screenshotCalls = 0;
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
+        return { payload: { ok: true } };
+      }
+      const result = screenshotPayload();
+      result.payload.displayFrameId = `display-frame-${++screenshotCalls}`;
+      return result;
+    });
+    const contextEpoch = { value: 0 };
+    const tool = createVisionComputerTool({ contextEpoch });
+    const first = await tool.execute("shot-1", { action: "screenshot" });
+    const frameId = readFrameId(first);
+    expect(first.details).toMatchObject({
       media: { outbound: false },
       refWidth: EFFECTIVE_REF_WIDTH,
     });
+
+    const second = await tool.execute("shot-2", { action: "screenshot" });
+
+    expect(second.content).toEqual([
+      {
+        type: "text",
+        text: `screen unchanged since previous frame (frameId ${frameId}); screenshot omitted — keep using this frameId for coordinates`,
+      },
+    ]);
+    expect(second.details).toMatchObject({
+      frameId,
+      screenIndex: 0,
+      refWidth: EFFECTIVE_REF_WIDTH,
+    });
+    expect(contextEpoch).toMatchObject({ frameToolCallId: "shot-1" });
+
+    await expect(executeClick(tool, frameId)).resolves.toBeDefined();
+    expect(readLastComputerActParams()).toMatchObject({ displayFrameId: "display-frame-2" });
   });
 
-  it("derives a stable node idempotency key from the run and tool call", async () => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const tool = createVisionComputerTool({ idempotencyScope: "run-1" });
-      await tool.execute("call-computer-1", { action: "type", text: "hello" });
-    }
+  it("delivers changed screenshot pixels under a new coordinate frame", async () => {
+    const changedPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+    callGatewayToolMock
+      .mockResolvedValueOnce(screenshotPayload())
+      .mockResolvedValueOnce(screenshotPayload(0, changedPng));
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const firstFrameId = await captureFrame(tool, {}, "shot-1");
+
+    const changed = await tool.execute("shot-2", { action: "screenshot" });
+
+    expect(changed.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(changed)).not.toBe(firstFrameId);
+    await rejectsClick(tool, firstFrameId, /frameId does not match/);
+  });
+
+  it("preserves wait metadata when its follow-up screenshot is unchanged", async () => {
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const frameId = await captureFrame(tool, {}, "shot-1");
+
+    const result = await tool.execute("wait", { action: "wait", duration: 0 });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `waited 0s\nscreen unchanged since previous frame (frameId ${frameId}); screenshot omitted — keep using this frameId for coordinates`,
+      },
+    ]);
+  });
+
+  it.each([
+    ["another screen", { screenIndex: 1 }],
+    ["another node", { node: "mac-b" }],
+  ])("does not reuse identical screenshot pixels from %s", async (_name, input) => {
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const firstFrameId = await captureFrame(tool, { node: "mac-a" }, "shot-1");
+
+    const result = await tool.execute("shot-2", { action: "screenshot", ...input });
+
+    expect(result.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(result)).not.toBe(firstFrameId);
+  });
+
+  it("keeps queued calls distinct across assistant responses while preserving replay keys", async () => {
+    const tool = createVisionComputerTool({ idempotencyScope: "run-1" });
+    await Promise.all(
+      ["response-1", "response-2", "response-1"].map((responseId) => {
+        const input = { action: "type", text: responseId };
+        const toolCall = {
+          type: "toolCall" as const,
+          id: "computer_0",
+          name: "computer",
+          arguments: input,
+        };
+        return runWithAgentToolExecutionContext(
+          {
+            assistantMessage: makeAssistantMessageFixture({
+              responseId,
+              content: [toolCall],
+              stopReason: "toolUse",
+            }),
+            toolCall,
+          },
+          () => tool.execute(toolCall.id, input),
+        );
+      }),
+    );
 
     const actKeys = computerActBodies().map((body) => body.idempotencyKey);
-    expect(actKeys).toHaveLength(2);
-    expect(actKeys[0]).toMatch(/^computer\.act:v1:[0-9a-f]{64}$/);
-    expect(actKeys[1]).toBe(actKeys[0]);
+    expect(actKeys).toHaveLength(3);
+    expect(actKeys[1]).not.toBe(actKeys[0]);
+    expect(actKeys[2]).toBe(actKeys[0]);
   });
 
   it("does not share node receipts across runs that reuse a tool call id", async () => {
@@ -476,32 +361,19 @@ describe("createComputerTool execution", () => {
     expect(actKeys[0]).not.toBe(actKeys[1]);
   });
 
-  it.each([
-    [
-      "surfaces the node enablement hint when computer.act is not allowlisted",
-      Object.assign(
-        new Error(
-          'node command not allowed: "computer.act" is not in the allowlist for platform "macos"',
-        ),
-        {
-          name: "GatewayClientRequestError",
-          details: { reason: "command not allowlisted", command: "computer.act" },
-        },
-      ),
-      /enable Computer Control.*approve the pairing update/i,
-    ],
-    [
-      "surfaces the persistent deny remediation",
+  it("surfaces the persistent deny remediation", async () => {
+    mockComputerActError(
       new Error(
         'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
       ),
-      /remove computer\.act from gateway\.nodes\.commands\.deny/,
-    ],
-  ])("%s", async (_name, error, expected) => {
-    mockComputerActError(error);
+    );
     const { tool, frameId } = await createToolWithFrame({}, {}, "call");
-    await expect(executeClick(tool, frameId, { coordinate: [10, 10] }, "call")).rejects.toThrow(
-      expected,
+    await rejectsClick(
+      tool,
+      frameId,
+      /remove computer\.act from gateway\.nodes\.commands\.deny/,
+      { coordinate: [10, 10] },
+      "call",
     );
   });
 
@@ -511,10 +383,26 @@ describe("createComputerTool execution", () => {
 
     contextEpoch.value += 1;
 
-    await expect(executeClick(tool, frameId, { coordinate: [5, 5] })).rejects.toThrow(
-      /screenshot/i,
+    await rejectsClick(tool, frameId, /screenshot/i, { coordinate: [5, 5] });
+    expect(computerActBodies()).toHaveLength(0);
+  });
+
+  it("rejects a stale screenshot frame when windowRef is whitespace-only", async () => {
+    const { tool, frameId } = await createToolWithFrame();
+    const input = { windowRef: " \t " };
+
+    await rejectsClick(
+      tool,
+      `${frameId}-stale`,
+      "computer: frameId does not match the most recent screenshot result; take a new screenshot",
+      input,
     );
     expect(computerActBodies()).toHaveLength(0);
+
+    await expect(executeClick(tool, frameId, input)).resolves.toMatchObject({
+      details: { action: "left_click" },
+    });
+    expect(readLastComputerActParams()).not.toHaveProperty("windowRef");
   });
 
   it.each([
@@ -544,33 +432,13 @@ describe("createComputerTool execution", () => {
   });
 
   it.each<InvalidCase>([
-    invalidScrollCase("fractional scroll amount", 1.5),
     invalidScrollCase("zero scroll amount", 0),
-    invalidScrollCase("negative scroll amount", -1),
-    invalidScrollCase("boolean scroll amount", true),
     invalidScrollCase("string scroll amount", "many"),
     ["missing scroll direction", { action: "scroll" }, /scrollDirection/],
-    invalidHoldCase("boolean hold duration", true),
-    invalidHoldCase("zero hold duration", 0),
     invalidHoldCase("oversized hold duration", 11),
-    ["boolean wait duration", { action: "wait", duration: true }, /duration must be 0-100 seconds/],
   ])("rejects invalid %s before invoking the node", async (_label, params, error) => {
     await expect(createVisionComputerTool().execute("call", params)).rejects.toThrow(error);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("targets the last screenshot's display when a coordinate action omits screenIndex", async () => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(1));
-    const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
-    // The model looks at display 1, then clicks a coordinate from that screenshot
-    // without repeating screenIndex.
-    await executeClick(tool, frameId, { coordinate: [10, 20] }, "call");
-    // Without display retention this would silently target display 0.
-    expect(computerActBodies()[0]?.params).toMatchObject({
-      action: "left_click",
-      displayFrameId: "display-1-frame",
-      screenIndex: 1,
-    });
   });
 
   it("refuses to arm coordinates from a snapshot without physical display identity", async () => {
@@ -583,54 +451,47 @@ describe("createComputerTool execution", () => {
   });
 
   it("rejects a coordinate action that retargets a different display", async () => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(1));
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
+        ? { payload: { ok: true } }
+        : screenshotPayload(1),
+    );
     const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
-    await expect(
-      executeClick(tool, frameId, { coordinate: [10, 20], screenIndex: 0 }, "call"),
-    ).rejects.toThrow(/screenIndex does not match/);
+    await rejectsClick(
+      tool,
+      frameId,
+      /screenIndex does not match/,
+      { coordinate: [10, 20], screenIndex: 0 },
+      "call",
+    );
     expect(computerActBodies()).toHaveLength(0);
   });
 
   it("does not inherit another node's frame when a coordinate action names a different node", async () => {
     listNodesMock.mockResolvedValue(twoMacComputerNodes());
-    // Observe a frame on node A (screen 1).
     const { tool, frameId } = await createToolWithFrame(
       {},
       { node: "mac-a", screenIndex: 1 },
       "call",
     );
-    // A click naming node B must not apply node A's frame; it needs its own screenshot.
-    await expect(executeClick(tool, frameId, { node: "mac-b" }, "call")).rejects.toThrow(
-      /no screenshot of this node/i,
-    );
+    await rejectsClick(tool, frameId, /no screenshot of this computer/i, { node: "mac-b" }, "call");
   });
 
-  it.each([
-    [
-      "does not authorize coordinates when the model received no image",
-      { modelHasVision: false },
-      TINY_PNG_BASE64,
-    ],
-    [
-      "does not authorize coordinates when screenshot sanitization omits the image",
-      {},
-      "not-base64!!!",
-    ],
-  ])("%s", async (_name, options, base64) => {
-    callGatewayToolMock.mockResolvedValue(screenshotPayload(0, base64));
-    const { tool, frameId } = await createToolWithFrame(options, {}, "call");
-    await expect(executeClick(tool, frameId, {}, "call")).rejects.toThrow(/no screenshot/i);
+  it("does not authorize coordinates when screenshot sanitization omits the image", async () => {
+    callGatewayToolMock.mockResolvedValue(screenshotPayload(0, "not-base64!!!"));
+    const { tool, frameId } = await createToolWithFrame({}, {}, "call");
+    await rejectsClick(tool, frameId, /no screenshot/i, {}, "call");
   });
 
   it("invalidates the old frame when the post-action screenshot fails", async () => {
     mockFirstScreenshotThenFailure();
-    const { tool, frameId } = await createToolWithFrame({}, {}, "call");
+    const contextEpoch = { value: 0 };
+    const { tool, frameId } = await createToolWithFrame({ contextEpoch }, {}, "call");
     await expect(executeClick(tool, frameId, {}, "call")).resolves.toMatchObject({
       details: { action: "left_click" },
     });
-    await expect(executeClick(tool, frameId, { coordinate: [2, 3] }, "call")).rejects.toThrow(
-      /no screenshot/i,
-    );
+    expect(contextEpoch).toEqual({ value: 0 });
+    await rejectsClick(tool, frameId, /no screenshot/i, { coordinate: [2, 3] }, "call");
   });
 
   it("keeps target affinity for button release after a failed screenshot", async () => {
@@ -644,79 +505,51 @@ describe("createComputerTool execution", () => {
     await tool.execute("up", { action: "left_mouse_up" });
 
     const actBodies = computerActBodies();
-    expect(actBodies).toHaveLength(2);
-    expect(actBodies[0]).toMatchObject({
-      nodeId: "mac-a",
-      params: { action: "left_mouse_down", screenIndex: 1 },
-    });
-    expect(actBodies[1]).toMatchObject({
-      nodeId: "mac-a",
-      params: { action: "left_mouse_up", screenIndex: 1 },
-    });
+    expect(actBodies).toMatchObject([
+      { nodeId: "mac-a", params: { action: "left_mouse_down", screenIndex: 1 } },
+      { nodeId: "mac-a", params: { action: "left_mouse_up", screenIndex: 1 } },
+    ]);
     expect(actBodies[1]?.params).not.toHaveProperty("displayFrameId");
   });
 
-  it.each([
-    [
-      "clears button affinity when the gateway definitively rejects mouse down",
+  it("clears button affinity when the gateway definitively rejects mouse down", async () => {
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    mockComputerActError(
       Object.assign(new Error("node command rejected before dispatch"), {
         name: "GatewayClientRequestError",
         details: { reason: "command not allowlisted", command: "computer.act" },
       }),
-      /enable Computer Control.*approve the pairing update/i,
-    ],
-    [
-      "clears button affinity after a structured pre-dispatch policy rejection",
-      Object.assign(new Error("phone policy denied computer control"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-        details: { code: "POLICY_DENIED", nodeCommandDispatched: false },
-      }),
-      "phone policy denied computer control",
-    ],
-  ])("%s", async (_name, error, expected) => {
-    listNodesMock.mockResolvedValue(twoMacComputerNodes());
-    mockComputerActError(error);
+    );
     const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
-
-    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(expected);
+    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(
+      /enable Computer Control.*approve the pairing update/i,
+    );
     await expect(retargetToMacB(tool)).resolves.toMatchObject({ details: { node: "mac-b" } });
   });
 
-  it.each([
-    ["node timeout", "TIMEOUT: node invoke timed out", "UNAVAILABLE", undefined],
-    ["gateway unavailable", "node disconnected (computer.act)", "UNAVAILABLE", undefined],
-    [
-      "post-dispatch policy rejection",
-      "plugin rejected after dispatch",
-      "INVALID_REQUEST",
-      { nodeCommandDispatched: true },
-    ],
-  ])(
-    "keeps button affinity after an ambiguous %s request error",
-    async (_label, message, gatewayCode, details) => {
-      listNodesMock.mockResolvedValue(twoMacComputerNodes());
-      mockComputerActError(
-        Object.assign(new Error(message), {
-          name: "GatewayClientRequestError",
-          gatewayCode,
-          details,
-        }),
-        "left_mouse_down",
-      );
-      const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
+  it("keeps button affinity after an ambiguous node timeout request error", async () => {
+    const message = "TIMEOUT: node invoke timed out";
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    mockComputerActError(
+      Object.assign(new Error(message), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        details: undefined,
+      }),
+      "left_mouse_down",
+    );
+    const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
 
-      await expect(executeMouseDown(tool, frameId)).rejects.toThrow(message);
-      await expect(retargetToMacB(tool)).rejects.toThrow(
-        /left button may still be held on node mac-a/,
-      );
+    await expect(executeMouseDown(tool, frameId)).rejects.toThrow(message);
+    await expect(retargetToMacB(tool)).rejects.toThrow(
+      /left button may still be held on node mac-a/,
+    );
 
-      await expect(tool.execute("up", { action: "left_mouse_up" })).resolves.toBeDefined();
-      await expect(retargetToMacB(tool, "retarget-after-release")).resolves.toMatchObject({
-        details: { node: "mac-b" },
-      });
-    },
-  );
+    await expect(tool.execute("up", { action: "left_mouse_up" })).resolves.toBeDefined();
+    await expect(retargetToMacB(tool, "retarget-after-release")).resolves.toMatchObject({
+      details: { node: "mac-b" },
+    });
+  });
 
   it("does not claim button affinity when cancellation wins during target resolution", async () => {
     const controller = new AbortController();

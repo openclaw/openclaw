@@ -1,11 +1,13 @@
-export * from "./clawhub-trust-error-details.js";
-export * from "./system-agent-error-details.js";
-export {
-  isMcpAppViewExpiredError,
-  readMissingScopeError,
-  readMissingScopeErrorDetails,
-} from "./gateway-error-details.js";
-export * from "./session-icon.js";
+export * from "./error-details.js";
+export * from "./node-permissions.js";
+export * from "./github-publication-api.js";
+export * from "./session-agent-status.js";
+export * from "./session-row-deltas.js";
+export type {
+  ModelCatalogScope,
+  ModelCatalogTarget,
+  ModelsSnapshotEvent,
+} from "./model-catalog-publication.js";
 export * from "./terminal-validators.js";
 export {
   validateApprovalGetResult,
@@ -15,40 +17,87 @@ export {
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
-export * from "./schema/skill-history.js";
+export * from "./schema/worker-gateway-tool.js";
+export * from "./schema/worker-computer.js";
+export * from "./schema/computer.js";
+export * from "./schema/skill-library.js";
+export * from "./schema/plugin-credentials.js";
+export * from "./schema/web-search.js";
+export * from "./schema/plugin-skills.js";
 export * from "./schema/ui-command.js";
-export type {
-  GatewayErrorDetails,
-  McpAppViewExpiredErrorDetails,
-  MissingScopeErrorDetails,
-  WizardNotFoundErrorDetails,
-} from "./schema/error-codes.js";
+export * from "./schema/themes.js";
+export * from "./theme.js";
+export { TALK_VOICE_CHANGE_TIMEOUT_MS } from "./schema/talk-voice.js";
 export * from "./schema/board.js";
+export * from "./schema/canvas.js";
+export * from "./schema/progress-card.js";
+export * from "./schema/transcripts.js";
 export {
   SessionCreatedActorSchema,
+  SessionEntryArchiveReasonSchema,
+  SessionPermissionModeSchema,
+  SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionEntryArchiveReason,
+  type SessionOwner,
+  type SessionPermissionMode,
   type SessionRow,
+  type SessionRunStatus,
   type SessionToolOverrides,
 } from "./schema/sessions-row.js";
+export * from "./schema/session-classification.js";
+export * from "./schema/native-subagents.js";
+export * from "./schema/session-participant.js";
+export {
+  SessionOwnerSessionCountSchema,
+  type SessionOwnerSessionCount,
+} from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-reactions.js";
+export * from "./schema/sessions-activity-summary.js";
+export * from "./schema/sessions-delete.js";
+export * from "./schema/sessions-goal.js";
+export {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_MAX_BYTES,
+  SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES,
+} from "./schema/sessions.js";
+export * from "./schema/sessions-provider-review.js";
+export {
+  SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
+  SESSION_CREATE_RETRY_WINDOW_MS,
+} from "./schema/sessions-create.js";
+export * from "./schema/projects.js";
 export * from "./migration-api.js";
+export * from "./schema/storage.js";
+export * from "./schema/backup.js";
+export * from "./restart-unavailable.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
-export * from "./schema-export-registry.js";
+export type {
+  SecretStoreEntry,
+  SecretsStoreDeleteParams,
+  SecretsStoreListResult,
+  SecretsStoreMutationResult,
+  SecretsStoreSetParams,
+} from "./schema/secrets.js";
+export * from "./schema/portals.js";
+export * from "./public-schema.js";
+export {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "./version.js";
 export type * from "./schema-types.js";
+export type { GatewayCoreRequestParams } from "./core-request-params.js";
+export type { SessionsPatchResult } from "./sessions-patch-result.js";
 
-// Local structural result keeps this package independent of core session types.
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: Record<string, unknown>;
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: import("./schema/agents-models-skills.js").GatewayAgentRuntime;
-    thinkingLevel?: string;
-    thinkingLevels?: Array<{ id: string; label: string }>;
-  };
-};
+export * from "./schema/session-processes.js";
+export type {
+  DoctorMemoryStatusPayload,
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryDreamingConfig,
+  DoctorMemoryDreamingPayload,
+} from "./doctor-memory.js";

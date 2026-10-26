@@ -1,4 +1,3 @@
-// Bridges OpenAI ChatGPT OAuth credentials into provider plugin auth.
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -62,7 +61,6 @@ export async function loginOpenAICodexOAuth(
   const provider = resolveProviderRuntimePlugin({
     provider: OPENAI_CODEX_PROVIDER_ID,
     config: {},
-    bundledProviderVitestCompat: true,
   });
   const oauth = provider?.auth?.find((method) => method.id === OPENAI_CODEX_OAUTH_METHOD_ID);
   if (!oauth) {

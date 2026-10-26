@@ -1,6 +1,15 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { html, nothing, svg } from "lit";
+import { createMemo, createSignal, onSettled } from "solid-js";
+import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
+import {
+  uploadsEnabled as policyAllowsUploads,
+  uploadsDisabledMessage,
+} from "../../lib/uploads.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   encodeTerminalUpload,
@@ -8,10 +17,7 @@ import {
   uploadTerminalFile,
 } from "./terminal-file-upload.ts";
 
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
-const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 10h12" /></svg>`;
-const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
-const UPLOAD_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 8.1 9.8 3.5a2.5 2.5 0 0 1 3.5 3.5l-6 6a3.5 3.5 0 0 1-5-5l5.8-5.8" /><path d="m4.4 9 5.2-5.2a1.4 1.4 0 0 1 2 2l-5.3 5.3a2.3 2.3 0 0 1-3.2-3.2l4.6-4.6" /></svg>`;
+registerTerminalEnglish();
 
 type TerminalUploadTab = {
   gatewaySessionId: string;
@@ -20,34 +26,16 @@ type TerminalUploadTab = {
   controller: GhosttyTerminalController;
 };
 
-type TerminalPanelUploadHost = {
-  activeTab: () => TerminalUploadTab | undefined;
-  client: () => TerminalGatewayClient | null;
-  isCurrent: (tab: TerminalUploadTab) => boolean;
-  fileInput: () => HTMLInputElement | null;
-  setError: (message: string | null) => void;
-  requestUpdate: () => void;
-};
-
 type TerminalUploadBatch = {
   tab: TerminalUploadTab;
   files: File[];
   paths: string[];
+  expiresAtMs: number | null;
   nextIndex: number;
   state: "uploading" | "failed";
   error: string | null;
   retryable: boolean;
   abortController: AbortController;
-};
-
-type TerminalUploadProgress = {
-  completed: number;
-  current: number;
-  error: string | null;
-  fileName: string;
-  retryable: boolean;
-  state: TerminalUploadBatch["state"];
-  total: number;
 };
 
 function isRetryableUploadError(error: unknown): boolean {
@@ -61,23 +49,64 @@ function isRetryableUploadError(error: unknown): boolean {
   return true;
 }
 
-export class TerminalPanelUploadController {
-  dragActive = false;
-  private batch: TerminalUploadBatch | null = null;
-  private dragDepth = 0;
+export function createTerminalPanelUpload(host: {
+  config?: () => ApplicationConfigCapability | undefined;
+  activeTab: () => TerminalUploadTab | undefined;
+  client: () => TerminalGatewayClient | null;
+  isCurrent: (tab: TerminalUploadTab) => boolean;
+  fileInput: () => HTMLInputElement | null;
+  setError: (message: string | null) => void;
+  /** An embedded composer may retain editable arguments; never submit them here. */
+  stagePaths?: (
+    tab: TerminalUploadTab,
+    paths: readonly string[],
+    files: readonly File[],
+  ) => boolean;
+}) {
+  const [dragActive, setDragActive] = createSignal(false);
+  let activeBatch: TerminalUploadBatch | null = null;
+  let dragDepth = 0;
+  let notifyBatch = () => {};
+  // Transport admission and cancellation remain synchronous; Solid reads that owner.
+  const currentBatch = projectSource(() => activeBatch, {
+    read: (read) => read(),
+    subscribe: (_read, notify) => {
+      notifyBatch = notify;
+      return () => {
+        notifyBatch = () => {};
+      };
+    },
+    equality: "revision",
+  });
 
-  constructor(private readonly host: TerminalPanelUploadHost) {}
+  const uploadsEnabled = () => policyAllowsUploads(host.config?.());
 
-  hasActiveTab(): boolean {
-    return Boolean(this.host.activeTab());
+  function syncPolicy(): void {
+    if (!uploadsEnabled()) {
+      cancel();
+      setDragActive(false);
+      dragDepth = 0;
+    }
   }
 
-  hasPendingBatch(): boolean {
-    return this.batch !== null;
+  function admitUpload(): boolean {
+    if (!host.client()) {
+      return false;
+    }
+    if (uploadsEnabled()) {
+      return true;
+    }
+    host.setError(uploadsDisabledMessage());
+    syncPolicy();
+    return false;
   }
 
-  get progress(): TerminalUploadProgress | null {
-    const batch = this.batch;
+  const hasActiveTab = () => Boolean(host.activeTab());
+
+  const hasPendingBatch = () => currentBatch.read() !== null;
+
+  const progress = createMemo(() => {
+    const batch = currentBatch.read();
     if (!batch) {
       return null;
     }
@@ -85,6 +114,8 @@ export class TerminalPanelUploadController {
     const currentIndex = Math.min(batch.nextIndex, total - 1);
     return {
       completed: batch.nextIndex,
+      canInsert:
+        batch.paths.length > 0 && (batch.expiresAtMs === null || Date.now() < batch.expiresAtMs),
       current: currentIndex + 1,
       error: batch.error,
       fileName: batch.files[currentIndex]?.name ?? "",
@@ -92,352 +123,304 @@ export class TerminalPanelUploadController {
       state: batch.state,
       total,
     };
-  }
+  });
 
-  chooseFiles = (): void => {
-    this.host.fileInput()?.click();
-  };
-
-  handleFileSelection = (event: Event): void => {
-    const input = event.currentTarget as HTMLInputElement;
-    const files = Array.from(input.files ?? []);
-    input.value = "";
-    this.uploadFiles(files);
-  };
-
-  private hasDraggedFiles(event: DragEvent): boolean {
+  function hasDraggedFiles(event: DragEvent): boolean {
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
-  handleDragEnter = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
-      return;
+  function admitDraggedFiles(event: DragEvent): boolean {
+    if (!hasDraggedFiles(event)) {
+      return false;
     }
-    event.preventDefault();
-    this.dragDepth += 1;
-    this.dragActive = true;
-    this.host.requestUpdate();
-  };
+    if (!uploadsEnabled() || !host.client()) {
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "none";
+      }
+      return false;
+    }
+    return hasActiveTab() && !hasPendingBatch();
+  }
 
-  handleDragOver = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
+  function uploadFiles(files: File[]): void {
+    if (!admitUpload()) {
       return;
     }
-    event.preventDefault();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "copy";
-    }
-  };
-
-  handleDragLeave = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event)) {
+    const tab = host.activeTab();
+    if (files.length === 0 || !tab || !host.client() || hasPendingBatch()) {
       return;
     }
-    this.dragDepth = Math.max(0, this.dragDepth - 1);
-    if (this.dragDepth === 0) {
-      this.dragActive = false;
-      this.host.requestUpdate();
-    }
-  };
-
-  handleDrop = (event: DragEvent): void => {
-    if (!this.hasDraggedFiles(event)) {
-      return;
-    }
-    event.preventDefault();
-    this.dragDepth = 0;
-    this.dragActive = false;
-    this.host.requestUpdate();
-    if (this.hasPendingBatch()) {
-      return;
-    }
-    this.uploadFiles(Array.from(event.dataTransfer?.files ?? []));
-  };
-
-  private uploadFiles(files: File[]): void {
-    const tab = this.host.activeTab();
-    if (files.length === 0 || !tab || !this.host.client() || this.hasPendingBatch()) {
-      return;
-    }
-    this.host.setError(null);
+    host.setError(null);
     const batch: TerminalUploadBatch = {
       tab,
       files,
       paths: [],
+      expiresAtMs: null,
       nextIndex: 0,
       state: "uploading",
       error: null,
       retryable: false,
       abortController: new AbortController(),
     };
-    this.batch = batch;
-    this.host.requestUpdate();
-    void this.runBatch(batch);
+    activeBatch = batch;
+    notifyBatch();
+    void runBatch(batch);
   }
 
-  private isActive(batch: TerminalUploadBatch): boolean {
-    return this.batch === batch && !batch.abortController.signal.aborted;
-  }
-
-  private ensureCurrent(batch: TerminalUploadBatch): boolean {
-    if (!this.isActive(batch)) {
+  function ensureCurrent(batch: TerminalUploadBatch): boolean {
+    if (activeBatch !== batch) {
       return false;
     }
-    if (!this.host.isCurrent(batch.tab)) {
-      this.cancelBatch(batch);
+    if (!uploadsEnabled()) {
+      host.setError(uploadsDisabledMessage());
+      cancelBatch(batch);
+      return false;
+    }
+    if (!host.isCurrent(batch.tab)) {
+      cancelBatch(batch);
       return false;
     }
     return true;
   }
 
-  private failBatch(batch: TerminalUploadBatch, error: unknown, retryable: boolean): void {
-    if (!this.ensureCurrent(batch)) {
+  function failBatch(batch: TerminalUploadBatch, error: unknown, retryable: boolean): void {
+    if (!ensureCurrent(batch)) {
       return;
     }
     batch.state = "failed";
-    batch.error = error instanceof Error ? error.message : String(error);
+    batch.error = formatUiError(error);
     batch.retryable = retryable;
-    this.host.requestUpdate();
+    notifyBatch();
   }
 
-  private async runBatch(batch: TerminalUploadBatch): Promise<void> {
-    const client = this.host.client();
-    if (!client || !this.ensureCurrent(batch)) {
-      this.cancelBatch(batch);
+  function ensureUploadsRetained(batch: TerminalUploadBatch): boolean {
+    if (batch.expiresAtMs !== null && Date.now() >= batch.expiresAtMs) {
+      failBatch(batch, new Error(t("terminal.uploadExpired")), false);
+      return false;
+    }
+    return true;
+  }
+
+  async function runBatch(batch: TerminalUploadBatch): Promise<void> {
+    const client = host.client();
+    const signal = batch.abortController.signal;
+    if (!client || !ensureCurrent(batch)) {
+      cancelBatch(batch);
       return;
     }
     while (batch.nextIndex < batch.files.length) {
       const file = batch.files[batch.nextIndex];
-      if (!file || !this.ensureCurrent(batch)) {
+      if (!file || !ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
         return;
       }
-      this.host.requestUpdate();
-
       let contentBase64: string;
       try {
         contentBase64 = await encodeTerminalUpload(file);
       } catch (error) {
-        this.failBatch(batch, error, false);
+        if (signal.aborted) {
+          return;
+        }
+        failBatch(batch, error, false);
         return;
       }
-      if (!this.ensureCurrent(batch)) {
+      if (signal.aborted || !ensureCurrent(batch)) {
         return;
       }
 
-      let uploadedPath: string;
+      let uploaded: Awaited<ReturnType<typeof uploadTerminalFile>>;
+      const uploadStartedAtMs = Date.now();
       try {
-        const result = await uploadTerminalFile(
+        uploaded = await uploadTerminalFile(
           client,
           batch.tab.gatewaySessionId,
           { name: file.name, contentBase64 },
-          batch.abortController.signal,
+          signal,
         );
-        if (!this.ensureCurrent(batch)) {
+        if (signal.aborted || !ensureCurrent(batch)) {
           return;
         }
-        uploadedPath = result.path;
       } catch (error) {
-        this.failBatch(batch, error, isRetryableUploadError(error));
+        if (signal.aborted) {
+          return;
+        }
+        failBatch(batch, error, isRetryableUploadError(error));
         return;
       }
+      let uploadedPath: string;
       try {
-        uploadedPath = quoteTerminalUploadPath(uploadedPath, batch.tab.shell);
+        uploadedPath = quoteTerminalUploadPath(
+          uploaded.path,
+          batch.tab.shell,
+          uploaded.uploadPathStyle,
+        );
       } catch (error) {
-        this.failBatch(batch, error, false);
+        failBatch(batch, error, false);
         return;
       }
 
       batch.paths.push(uploadedPath);
+      // Start conservatively before staging: a retained batch must never paste
+      // its early paths after the host's cleanup deadline may have passed.
+      batch.expiresAtMs ??= uploadStartedAtMs + TERMINAL_UPLOAD_RETENTION_MS;
       batch.nextIndex += 1;
-      this.host.requestUpdate();
+      notifyBatch();
     }
 
-    if (!this.ensureCurrent(batch)) {
+    insertPaths(batch);
+  }
+
+  function insertPaths(batch: TerminalUploadBatch): void {
+    if (!host.client() || !ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
       return;
     }
     // Ghostty preserves bracketed-paste mode. This produces editable input,
     // never Enter, so adding a file cannot execute a shell command.
-    batch.tab.controller.terminal.paste(batch.paths.join(" "));
-    batch.tab.controller.terminal.focus();
-    this.batch = null;
-    this.host.requestUpdate();
+    if (!host.stagePaths?.(batch.tab, batch.paths, batch.files)) {
+      batch.tab.controller.terminal.paste(batch.paths.join(" "));
+      batch.tab.controller.terminal.focus();
+    }
+    activeBatch = null;
+    notifyBatch();
   }
 
-  retry = (): void => {
-    const batch = this.batch;
-    if (!batch || batch.state !== "failed" || !batch.retryable) {
-      return;
-    }
-    if (!this.host.isCurrent(batch.tab) || !this.host.client()) {
-      this.cancelBatch(batch);
-      return;
-    }
-    batch.state = "uploading";
-    batch.error = null;
-    batch.retryable = false;
-    batch.abortController = new AbortController();
-    this.host.requestUpdate();
-    void this.runBatch(batch);
-  };
-
-  cancel = (): void => {
-    const batch = this.batch;
-    if (batch) {
-      this.cancelBatch(batch);
+  const cancel = (): void => {
+    if (activeBatch) {
+      cancelBatch(activeBatch);
     }
   };
 
-  cancelForTab(tab: TerminalUploadTab): void {
-    const batch = this.batch;
+  function cancelForTab(tab: TerminalUploadTab): void {
+    const batch = activeBatch;
     if (batch?.tab === tab) {
-      this.cancelBatch(batch);
+      cancelBatch(batch);
     }
   }
 
-  private cancelBatch(batch: TerminalUploadBatch): void {
-    if (this.batch !== batch) {
-      return;
+  function cancelBatch(batch: TerminalUploadBatch): void {
+    if (activeBatch === batch) {
+      dispose();
     }
-    batch.abortController.abort();
-    this.batch = null;
-    this.dragActive = false;
-    this.dragDepth = 0;
-    this.host.requestUpdate();
   }
 
-  dispose(): void {
-    this.batch?.abortController.abort();
-    this.batch = null;
-    this.dragActive = false;
-    this.dragDepth = 0;
+  function dispose(): void {
+    activeBatch?.abortController.abort();
+    activeBatch = null;
+    setDragActive(false);
+    dragDepth = 0;
+    notifyBatch();
   }
+  onSettled(() => () => {
+    activeBatch?.abortController.abort();
+    activeBatch = null;
+  });
+  return {
+    dragActive,
+    progress,
+    uploadsEnabled,
+    syncPolicy,
+    hasActiveTab,
+    hasPendingBatch,
+    chooseFiles(this: void): void {
+      if (admitUpload()) {
+        host.fileInput()?.click();
+      }
+    },
+    handleFileSelection(event: Event): void {
+      const input = event.currentTarget as HTMLInputElement;
+      if (!admitUpload()) {
+        input.value = "";
+        return;
+      }
+      const files = Array.from(input.files ?? []);
+      input.value = "";
+      uploadFiles(files);
+    },
+    handleDragEnter(event: DragEvent): void {
+      if (!admitDraggedFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      dragDepth += 1;
+      setDragActive(true);
+    },
+    handleDragOver(event: DragEvent): void {
+      if (!admitDraggedFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+    },
+    handleDragLeave(event: DragEvent): void {
+      if (!hasDraggedFiles(event)) {
+        return;
+      }
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) {
+        setDragActive(false);
+      }
+    },
+    handleDrop(event: DragEvent): void {
+      if (!hasDraggedFiles(event)) {
+        return;
+      }
+      event.preventDefault();
+      dragDepth = 0;
+      setDragActive(false);
+      if (hasPendingBatch()) {
+        return;
+      }
+      uploadFiles(Array.from(event.dataTransfer?.files ?? []));
+    },
+    insertCompleted(this: void): void {
+      const batch = activeBatch;
+      if (batch?.state === "failed" && batch.paths.length > 0) {
+        insertPaths(batch);
+      }
+    },
+    retry(this: void): void {
+      if (!admitUpload()) {
+        return;
+      }
+      const batch = activeBatch;
+      if (!batch || batch.state !== "failed" || !batch.retryable) {
+        return;
+      }
+      if (!host.client()) {
+        return;
+      }
+      if (!host.isCurrent(batch.tab)) {
+        cancelBatch(batch);
+        return;
+      }
+      if (!ensureUploadsRetained(batch)) {
+        return;
+      }
+      batch.state = "uploading";
+      batch.error = null;
+      batch.retryable = false;
+      batch.abortController = new AbortController();
+      notifyBatch();
+      void runBatch(batch);
+    },
+    cancel,
+    cancelForTab,
+    suspend(): void {
+      const batch = activeBatch;
+      if (batch?.state === "uploading") {
+        batch.abortController.abort();
+        batch.state = "failed";
+        batch.error = t("terminal.deliveryFailed");
+        batch.retryable = true;
+        notifyBatch();
+      }
+      setDragActive(false);
+      dragDepth = 0;
+    },
+    dispose,
+  };
 }
 
-export function renderTerminalPanelActions(params: {
-  fullscreen: boolean;
-  dock: "bottom" | "right";
-  upload: TerminalPanelUploadController;
-  sessionPicker: unknown;
-  onDock: (dock: "bottom" | "right") => void;
-  onHide: () => void;
-}) {
-  return html`<div class="tp-actions">
-    <input
-      class="tp-file-input"
-      type="file"
-      multiple
-      aria-hidden="true"
-      tabindex="-1"
-      @change=${params.upload.handleFileSelection}
-    />
-    <button
-      class="tp-icon tp-upload"
-      type="button"
-      title=${t("terminal.addFiles")}
-      aria-label=${t("terminal.addFiles")}
-      ?disabled=${params.upload.hasPendingBatch() || !params.upload.hasActiveTab()}
-      @click=${params.upload.chooseFiles}
-    >
-      ${UPLOAD_GLYPH}
-    </button>
-    ${params.fullscreen
-      ? nothing
-      : html`${params.sessionPicker}<button
-            class="tp-icon ${params.dock === "bottom" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockBottom")}
-            aria-label=${t("terminal.dockBottom")}
-            @click=${() => params.onDock("bottom")}
-          >
-            ${DOCK_BOTTOM_GLYPH}
-          </button>
-          <button
-            class="tp-icon ${params.dock === "right" ? "is-active" : ""}"
-            type="button"
-            title=${t("terminal.dockRight")}
-            aria-label=${t("terminal.dockRight")}
-            @click=${() => params.onDock("right")}
-          >
-            ${DOCK_RIGHT_GLYPH}
-          </button>
-          <button
-            class="tp-icon"
-            type="button"
-            title=${t("terminal.hide")}
-            aria-label=${t("terminal.hide")}
-            @click=${params.onHide}
-          >
-            ${CLOSE_GLYPH}
-          </button>`}
-  </div>`;
-}
-
-export function renderTerminalUploadLayer(upload: TerminalPanelUploadController) {
-  const progress = upload.progress;
-  return html`${upload.dragActive
-    ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
-    : nothing}
-  ${progress
-    ? html`<div
-        class="tp-upload-card ${progress.state === "failed" ? "tp-upload-card--failed" : ""}"
-        role=${progress.state === "failed" ? "alert" : "status"}
-        aria-live=${progress.state === "failed" ? "assertive" : "polite"}
-      >
-        <div class="tp-upload-card__header">
-          <div class="tp-upload-card__copy">
-            <div class="tp-upload-card__title">
-              ${progress.state === "failed"
-                ? t("terminal.uploadFailed")
-                : t("terminal.uploadProgress", {
-                    current: String(progress.current),
-                    total: String(progress.total),
-                  })}
-            </div>
-            <div class="tp-upload-card__file">${progress.fileName}</div>
-          </div>
-          <div class="tp-upload-card__actions">
-            ${progress.state === "failed" && progress.retryable
-              ? html`<button
-                  class="tp-upload-card__action tp-upload-retry"
-                  type="button"
-                  @click=${upload.retry}
-                >
-                  ${t("terminal.retryUpload")}
-                </button>`
-              : nothing}
-            <button
-              class="tp-upload-card__action tp-upload-cancel"
-              type="button"
-              @click=${upload.cancel}
-            >
-              ${t("common.cancel")}
-            </button>
-          </div>
-        </div>
-        <div
-          class="tp-upload-progress"
-          role="progressbar"
-          aria-label=${progress.state === "failed"
-            ? t("terminal.uploadFailed")
-            : t("terminal.uploadProgress", {
-                current: String(progress.current),
-                total: String(progress.total),
-              })}
-          aria-valuemin="0"
-          aria-valuemax=${String(progress.total)}
-          aria-valuenow=${String(progress.completed)}
-        >
-          <span
-            class="tp-upload-progress__fill"
-            style=${`width:${(progress.completed / progress.total) * 100}%`}
-          ></span>
-          ${progress.state === "uploading"
-            ? html`<span class="tp-upload-progress__activity"></span>`
-            : nothing}
-        </div>
-        ${progress.error
-          ? html`<div class="tp-upload-card__error">${progress.error}</div>`
-          : nothing}
-      </div>`
-    : nothing}`;
-}
+export type TerminalPanelUpload = ReturnType<typeof createTerminalPanelUpload>;

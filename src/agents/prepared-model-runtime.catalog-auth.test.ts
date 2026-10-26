@@ -1,0 +1,273 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
+
+const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+const account = {
+  profileId: "openai:account",
+  credential,
+  selectedCredential: {
+    source: "profile" as const,
+    profileId: "openai:account",
+    identityKey: "profile:openai:account",
+  },
+};
+const route = {
+  identityKey: account.selectedCredential.identityKey,
+  modelId: "fixture-model",
+  runtimeId: "openclaw",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
+const tiers = { requestedTier: "ultrafast", responseTier: "priority" };
+const observation = { ...route, ...tiers };
+
+function deferredDiscovery() {
+  const entered = createDeferred();
+  const release = createDeferred<[]>();
+  const load = vi.fn(() => {
+    entered.resolve();
+    return release.promise;
+  });
+  return { entered, release, load };
+}
+
+describe("prepared account catalog observations", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
+    const tokenCredential = { type: "token", provider: "openai", token: "first" } as const;
+    const load = vi.fn(async () => [
+      { provider: "openai", profileId: "account", status: "ready" as const },
+    ]);
+    const request = {
+      profileId: "account",
+      credential: tokenCredential,
+      load,
+      allowDiscovery: true,
+    };
+    const cold = await owner.acquire({ ...request, allowDiscovery: false });
+    expect(cold.outcomes).toEqual([]);
+    expect(cold.hasPublishedCatalog).toBe(false);
+    expect(load).not.toHaveBeenCalled();
+    const first = await owner.acquire(request);
+    expect(first.hasPublishedCatalog).toBe(true);
+    await owner.acquire({ ...request, credential: { ...tokenCredential } });
+    await owner.acquire({ ...request, allowDiscovery: false });
+    expect(load).toHaveBeenCalledOnce();
+    const refreshed = await owner.acquire({ ...request, refresh: true });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(first.isCurrent()).toBe(false);
+    const failure = new Error("Discovery unavailable");
+    load.mockRejectedValueOnce(failure);
+    await expect(owner.acquire({ ...request, refresh: true })).rejects.toBe(failure);
+    expect((await owner.acquire(request)).outcomes).toEqual(refreshed.outcomes);
+    expect(refreshed.isCurrent()).toBe(true);
+    expect(load).toHaveBeenCalledTimes(3);
+    const { entered, release, load: discover } = deferredDiscovery();
+    load.mockImplementationOnce(discover);
+    const superseded = owner.acquire({ ...request, refresh: true });
+    await entered.promise;
+    const replacement = await owner.acquire({
+      ...request,
+      credential: { ...tokenCredential, token: "replacement" },
+    });
+    expect(refreshed.isCurrent()).toBe(false);
+    release.resolve([]);
+    await expect(superseded).rejects.toThrow("changed");
+    expect(replacement.isCurrent()).toBe(true);
+    expect(load).toHaveBeenCalledTimes(5);
+    retirement.abort();
+    await expect(owner.acquire(request)).rejects.toThrow("changed");
+    expect(load).toHaveBeenCalledTimes(5);
+  });
+
+  it("publishes changed account programs without a response-tier observation", async () => {
+    const onChanged = vi.fn();
+    const owner = createPreparedAccountCatalogAccess(() => true, undefined, {}, onChanged);
+    let programs: Array<"standard" | "daybreak_blue" | "daybreak_red"> = [
+      "standard",
+      "daybreak_blue",
+    ];
+    const load = async () => [
+      {
+        provider: "openai",
+        profileId: account.profileId,
+        status: "ready" as const,
+        modelAccessPrograms: [
+          { modelId: route.modelId, runtimeId: route.runtimeId, cyber: [...programs] },
+        ],
+      },
+    ];
+    const request = { ...account, load, allowDiscovery: true };
+    const first = await owner.acquire(request);
+    onChanged.mockClear();
+    programs = ["standard", "daybreak_red"];
+    const refreshed = await owner.acquire({ ...request, refresh: true });
+    expect(first.isCurrent()).toBe(false);
+    expect(refreshed.outcomes[0]?.modelAccessPrograms?.[0]?.cyber).toEqual(programs);
+    expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  it.for(["during discovery", "after publication"] as const)(
+    "retires response observers when explicit refresh arrives %s",
+    async (timing) => {
+      const owner = createPreparedAccountCatalogAccess(() => true);
+      const record = owner.prepareServiceTierObserver(account);
+      record(observation);
+      const { entered, release, load } = deferredDiscovery();
+      const request = { ...account, load, allowDiscovery: true };
+      const cold = owner.acquire(request);
+      await entered.promise;
+      if (timing === "after publication") {
+        release.resolve([]);
+        await release.promise;
+      }
+      const refresh = owner.acquire({ ...request, refresh: true });
+      release.resolve([]);
+      await Promise.all([
+        timing === "after publication"
+          ? expect(cold).rejects.toThrow("Selected account catalog changed")
+          : expect(cold).resolves.toMatchObject({ outcomes: [] }),
+        expect(refresh).resolves.toMatchObject({ outcomes: [] }),
+      ]);
+      expect(load).toHaveBeenCalledTimes(timing === "during discovery" ? 1 : 2);
+      expect(owner.readServiceTierObservations(route)).toEqual([]);
+      expect(record(observation)).toBe(false);
+    },
+  );
+
+  it("keeps response tier observations account-bound without completing discovery and revokes stale observers", async () => {
+    const retirement = new AbortController();
+    const onChanged = vi.fn();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
+    const record = owner.prepareServiceTierObserver(account);
+    expect(record({ ...observation, baseUrl: `${route.baseUrl}/` })).toBe(true);
+    expect(record(observation)).toBe(false);
+    expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
+    for (const mismatch of [
+      { identityKey: "profile:openai:other" },
+      { modelId: "other-model" },
+      { runtimeId: "codex" },
+      { api: "openai-chatgpt-responses" },
+      { baseUrl: "https://other.example/v1" },
+    ]) {
+      expect(owner.readServiceTierObservations({ ...route, ...mismatch })).toEqual([]);
+    }
+    const outcomes = [
+      { provider: "openai", profileId: account.profileId, status: "ready" as const },
+    ];
+    const load = vi.fn(async () => outcomes);
+    const request = { ...account, load, allowDiscovery: true };
+    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+    const catalogFailure = new Error("catalog unavailable");
+    load.mockRejectedValueOnce(catalogFailure);
+    await expect(owner.acquire(request)).rejects.toBe(catalogFailure);
+    expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
+    expect((await owner.acquire(request)).outcomes).toEqual(outcomes);
+    expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    onChanged.mockClear();
+    await owner.acquire({ ...request, refresh: true });
+    expect(owner.readServiceTierObservations(route)).toEqual([]);
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(record(observation)).toBe(false);
+    const refreshed = owner.prepareServiceTierObserver(account);
+    expect(refreshed(observation)).toBe(true);
+    onChanged.mockClear();
+    const replaced = owner.prepareServiceTierObserver({
+      ...account,
+      credential: { ...credential, key: "synthetic-replacement-key" },
+    });
+    expect(owner.readServiceTierObservations(route)).toEqual([]);
+    expect(refreshed(observation)).toBe(false);
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(replaced(observation)).toBe(true);
+    retirement.abort();
+    expect(owner.readServiceTierObservations(route)).toEqual([]);
+    expect(replaced(observation)).toBe(false);
+    expect(owner.prepareServiceTierObserver(account)(observation)).toBe(false);
+  });
+
+  it("notifies downgrade, recovery, and expiry while refreshing repeats and canceling retired timers", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const onChanged = vi.fn();
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
+    const record = owner.prepareServiceTierObserver(account);
+    expect(record(observation)).toBe(true);
+    record({ ...observation, modelId: "other-model" });
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(240_000);
+    expect(record(observation)).toBe(false);
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(60_000);
+    expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(owner.readServiceTierObservations({ ...route, modelId: "other-model" })).toEqual([]);
+    vi.advanceTimersByTime(239_999);
+    expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
+    expect(onChanged).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(1);
+    expect(owner.readServiceTierObservations(route)).toEqual([]);
+    expect(onChanged).toHaveBeenCalledTimes(4);
+    expect(record(observation)).toBe(true);
+    expect(record({ ...observation, responseTier: "ultrafast" })).toBe(true);
+    expect(owner.readServiceTierObservations(route)).toEqual([]);
+    expect(record({ ...observation, responseTier: "ultrafast" })).toBe(false);
+    expect(onChanged).toHaveBeenCalledTimes(6);
+    expect(vi.getTimerCount()).toBe(0);
+    record(observation);
+    expect(vi.getTimerCount()).toBe(1);
+    retirement.abort();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(300_000);
+    expect(onChanged).toHaveBeenCalledTimes(7);
+  });
+
+  it("keeps requested tiers independent across repeated responses, recovery, and expiry", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const onChanged = vi.fn();
+    const owner = createPreparedAccountCatalogAccess(() => true, undefined, {}, onChanged);
+    const record = owner.prepareServiceTierObserver(account);
+    const ultrafast = { ...observation, responseTier: "fast" };
+    const priority = { ...ultrafast, requestedTier: "priority" };
+    for (const response of [ultrafast, priority, ultrafast, priority]) {
+      record(response);
+    }
+    expect(onChanged).toHaveBeenCalledTimes(2);
+
+    expect(record({ ...priority, responseTier: "priority" })).toBe(true);
+    expect(record(ultrafast)).toBe(false);
+    expect(record({ ...priority, responseTier: "priority" })).toBe(false);
+    expect(onChanged).toHaveBeenCalledTimes(3);
+
+    record(priority);
+    vi.advanceTimersByTime(240_000);
+    expect(record(ultrafast)).toBe(false);
+    vi.advanceTimersByTime(60_000);
+    expect(onChanged).toHaveBeenCalledTimes(5);
+    expect(record(ultrafast)).toBe(false);
+    expect(record(priority)).toBe(true);
+    expect(onChanged).toHaveBeenCalledTimes(6);
+  });
+
+  it("bounds response tier observations per account and rejects a superseded owner", () => {
+    let current = true;
+    const owner = createPreparedAccountCatalogAccess(() => current);
+    const firstRoute = { ...route, modelId: "model-0" };
+    const record = owner.prepareServiceTierObserver(account);
+    for (let index = 0; index <= 128; index++) {
+      record({ ...observation, modelId: `model-${index}` });
+    }
+    expect(owner.readServiceTierObservations(firstRoute)).toEqual([]);
+    expect(owner.readServiceTierObservations({ ...route, modelId: "model-128" })).toEqual([tiers]);
+    current = false;
+    expect(owner.readServiceTierObservations({ ...route, modelId: "model-128" })).toEqual([]);
+    expect(record({ ...firstRoute, ...tiers })).toBe(false);
+  });
+});

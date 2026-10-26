@@ -1,15 +1,16 @@
-// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
 import { withEnv } from "../test-utils/env.js";
 import { getCompactionProvider } from "./compaction-provider.js";
-import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Imported by loader.test.ts to keep its mocked suite in one Vitest module graph.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { channelFixtureSource } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   useNoBundledPlugins,
   writePlugin,
@@ -32,11 +33,14 @@ import {
   expectCacheMissThenHit,
   globalAfterEach0,
   globalAfterAll1,
+  channelPluginSource,
+  updatePluginManifest,
+  writeFixtureJson,
+  writeFixtureText,
+  pluginManifest,
 } from "./loader.test-harness.js";
-import {
-  listMemoryPromptPreparations,
-  listMemoryPromptSupplements,
-} from "./memory-state.test-fixtures.js";
+import { listMemoryPromptPreparations } from "./memory-state.test-fixtures.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -46,11 +50,11 @@ describe("loadOpenClawPlugins", () => {
   it.each([
     {
       name: "does not reuse cached registries when env-resolved install paths change",
-      setup: () => {
+      setup: async () => {
         useNoBundledPlugins();
-        const openclawHome = makeTempDir();
-        const ignoredHome = makeTempDir();
-        const stateDir = makeTempDir();
+        const openclawHome = makePluginLoaderTempDir();
+        const ignoredHome = makePluginLoaderTempDir();
+        const stateDir = makePluginLoaderTempDir();
         const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
         mkdirSafe(pluginDir);
         const plugin = writePlugin({
@@ -60,16 +64,17 @@ describe("loadOpenClawPlugins", () => {
           body: `module.exports = { id: "tracked-install-cache", register() {} };`,
         });
 
-        writePersistedInstalledPluginIndexInstallRecordsSync(
-          {
+        await refreshPersistedInstalledPluginIndex({
+          stateDir,
+          reason: "source-changed",
+          installRecords: {
             "tracked-install-cache": {
               source: "path" as const,
               installPath: "~/plugins/tracked-install-cache",
               sourcePath: "~/plugins/tracked-install-cache",
             },
           },
-          { stateDir },
-        );
+        });
 
         const options = {
           config: {
@@ -80,7 +85,7 @@ describe("loadOpenClawPlugins", () => {
           },
         };
 
-        const secondHome = makeTempDir();
+        const secondHome = makePluginLoaderTempDir();
         return {
           loadFirst: () =>
             loadOpenClawPlugins({
@@ -173,12 +178,12 @@ describe("loadOpenClawPlugins", () => {
         };
       },
     },
-  ])("$name", ({ setup }) => {
-    expectCacheMissThenHit(setup());
+  ])("$name", async ({ setup }) => {
+    expectCacheMissThenHit(await setup());
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const homeDir = path.dirname(bundledDir);
     const override = `~/${path.basename(bundledDir)}`;
     const plugin = writePlugin({
@@ -211,10 +216,10 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("prefers OPENCLAW_HOME over HOME for env-expanded load paths", () => {
-    const ignoredHome = makeTempDir();
-    const openclawHome = makeTempDir();
-    const stateDir = makeTempDir();
-    const bundledDir = makeTempDir();
+    const ignoredHome = makePluginLoaderTempDir();
+    const openclawHome = makePluginLoaderTempDir();
+    const stateDir = makePluginLoaderTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "openclaw-home-demo",
       dir: path.join(openclawHome, "plugins", "openclaw-home-demo"),
@@ -326,22 +331,20 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "channel-meta-repair",
       filename: "channel-meta-repair.cjs",
-      body: `module.exports = { id: "channel-meta-repair", register(api) {
-    api.registerChannel({
-      plugin: {
-        id: "telegram",
-        meta: {
-          id: "telegram"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
-    });
-  } };`,
+      registration: `api.registerChannel({
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram"
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: {
+            listAccountIds: () => [],
+            resolveAccount: () => ({ accountId: "default" })
+          },
+          outbound: { deliveryMode: "direct" }
+        }
+      });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -420,12 +423,24 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
-  it("can include plugin export shape when register is missing", () => {
+  it("reports plugin export shape without registering activation metadata when register is missing", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "missing-register-shape",
       filename: "missing-register-shape.cjs",
-      body: `module.exports = { default: { default: { id: "missing-register-shape" } } };`,
+      body: `module.exports = {
+        default: {
+          default: {
+            id: "missing-register-shape",
+            reload: { restartPrefixes: ["plugins.entries.missing-register-shape"] },
+            nodeHostCommands: [{
+              command: "missing-register-shape.command",
+              handle: async () => "ok",
+            }],
+            securityAuditCollectors: [async () => []],
+          },
+        },
+      };`,
     });
 
     const registry = withEnv({ OPENCLAW_PLUGIN_LOAD_DEBUG: "1" }, () =>
@@ -443,6 +458,15 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.error).toContain("module shape:");
     expect(loaded?.error).toContain("export:object keys=default");
     expect(loaded?.error).toContain("export.default:object keys=default");
+    expect({
+      reloads: registry.reloads.map((entry) => entry.pluginId),
+      nodeHostCommands: registry.nodeHostCommands.map((entry) => entry.pluginId),
+      securityAuditCollectors: registry.securityAuditCollectors.map((entry) => entry.pluginId),
+    }).toStrictEqual({
+      reloads: [],
+      nodeHostCommands: [],
+      securityAuditCollectors: [],
+    });
   });
 
   it.each([
@@ -480,7 +504,7 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.error).toBe(error);
     expectRegistryErrorDiagnostic({ registry, pluginId: id, message: error });
     expect(errors).toEqual([
-      `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+      `[plugins] ${id} ${error}; check that plugin is loaded via bundled channel discovery, not legacy plugin loader`,
     ]);
   });
 
@@ -492,22 +516,11 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "channel-demo",
         body: `module.exports = { id: "channel-demo", register(api) {
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo",
-          selectionLabel: "Demo",
-          docsPath: "/channels/demo",
-          blurb: "demo channel"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo",
+        docsPath: "/channels/demo",
+        blurb: "demo channel",
+      })}
     });
   } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -520,40 +533,18 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "channel-dup",
         body: `module.exports = { id: "channel-dup", register(api) {
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo Override",
-          selectionLabel: "Demo Override",
-          docsPath: "/channels/demo-override",
-          blurb: "override"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo Override",
+        docsPath: "/channels/demo-override",
+        blurb: "override",
+      })}
     });
     api.registerChannel({
-      plugin: {
-        id: "demo",
-        meta: {
-          id: "demo",
-          label: "Demo Duplicate",
-          selectionLabel: "Demo Duplicate",
-          docsPath: "/channels/demo-duplicate",
-          blurb: "duplicate"
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" })
-        },
-        outbound: { deliveryMode: "direct" }
-      }
+      plugin: ${channelFixtureSource("demo", {
+        label: "Demo Duplicate",
+        docsPath: "/channels/demo-duplicate",
+        blurb: "duplicate",
+      })}
     });
   } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -619,7 +610,7 @@ describe("loadOpenClawPlugins", () => {
             pluginId: "memory-prompt-supplement-malformed",
             message: "memory prompt supplement registration missing builder",
           });
-          expect(listMemoryPromptSupplements()).toStrictEqual([]);
+          expect(requireActivePluginRegistry().memoryPromptSupplements).toStrictEqual([]);
         },
       },
       {
@@ -823,10 +814,8 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "service-owner-self",
       filename: "service-owner-self.cjs",
-      body: `module.exports = { id: "service-owner-self", register(api) {
-    api.registerService({ id: "shared-service", start() {} });
-    api.registerService({ id: "shared-service", start() {} });
-  } };`,
+      registration: `api.registerService({ id: "shared-service", start() {} });
+      api.registerService({ id: "shared-service", start() {} });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -850,10 +839,8 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "split-service-owner",
       filename: "split-service-owner.cjs",
-      body: `module.exports = { id: "split-service-owner", register(api) {
-    api.registerService({ id: "shared-service", start() {} });
-    api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });
-  } };`,
+      registration: `api.registerService({ id: "shared-service", start() {} });
+      api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });`,
     });
 
     const registry = loadRegistryFromSinglePlugin({
@@ -876,9 +863,7 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "http-handler-legacy",
       filename: "http-handler-legacy.cjs",
-      body: `module.exports = { id: "http-handler-legacy", register(api) {
-    api.registerHttpHandler({ path: "/legacy", handler: async () => true });
-  } };`,
+      registration: `api.registerHttpHandler({ path: "/legacy", handler: async () => true });`,
     });
 
     const errors: string[] = [];
@@ -938,9 +923,7 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-missing-auth",
             filename: "http-route-missing-auth.cjs",
-            body: `module.exports = { id: "http-route-missing-auth", register(api) {
-    api.registerHttpRoute({ path: "/demo", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/demo", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -959,10 +942,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-replace-self",
             filename: "http-route-replace-self.cjs",
-            body: `module.exports = { id: "http-route-replace-self", register(api) {
-    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
+            api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -980,10 +961,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-replace-prefix",
             filename: "http-route-replace-prefix.cjs",
-            body: `module.exports = { id: "http-route-replace-prefix", register(api) {
-    api.registerHttpRoute({ path: "/Webhooks//SMS/", auth: "plugin", match: "prefix", handler: async () => false });
-    api.registerHttpRoute({ path: "/webhooks/sms", auth: "plugin", match: "prefix", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Webhooks//SMS/", auth: "plugin", match: "prefix", handler: async () => false });
+            api.registerHttpRoute({ path: "/webhooks/sms", auth: "plugin", match: "prefix", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1004,16 +983,12 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-owner-a",
             filename: "http-route-owner-a.cjs",
-            body: `module.exports = { id: "http-route-owner-a", register(api) {
-    api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/Demo//", auth: "plugin", handler: async () => false });`,
           }),
           writePlugin({
             id: "http-route-owner-b",
             filename: "http-route-owner-b.cjs",
-            body: `module.exports = { id: "http-route-owner-b", register(api) {
-    api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1034,10 +1009,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-overlap",
             filename: "http-route-overlap.cjs",
-            body: `module.exports = { id: "http-route-overlap", register(api) {
-    api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
-    api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
+            api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1058,10 +1031,8 @@ describe("loadOpenClawPlugins", () => {
           writePlugin({
             id: "http-route-overlap-same-auth",
             filename: "http-route-overlap-same-auth.cjs",
-            body: `module.exports = { id: "http-route-overlap-same-auth", register(api) {
-    api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
-    api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });
-  } };`,
+            registration: `api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
+            api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });`,
           }),
         ],
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
@@ -1104,36 +1075,20 @@ describe("loadOpenClawPlugins", () => {
 
   it("loads bundled channel entries through nested default export wrappers", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/nested-default-channel",
-          openclaw: {
-            extensions: ["./index.cjs"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "nested-default-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["nested-default-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(pluginDir, "package.json", {
+      name: "@openclaw/nested-default-channel",
+      openclaw: {
+        extensions: ["./index.cjs"],
+      },
+    });
+    writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+      id: "nested-default-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["nested-default-channel"],
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -1146,22 +1101,12 @@ describe("loadOpenClawPlugins", () => {
         register(api) {
           require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
           api.registerChannel({
-            plugin: {
-              id: "nested-default-channel",
-              meta: {
-                id: "nested-default-channel",
-                label: "Nested Default Channel",
-                selectionLabel: "Nested Default Channel",
-                docsPath: "/channels/nested-default-channel",
-                blurb: "interop-wrapped bundled channel entry",
-              },
-              capabilities: { chatTypes: ["direct"] },
-              config: {
-                listAccountIds: () => ["default"],
-                resolveAccount: () => ({ accountId: "default", token: "configured" }),
-              },
-              outbound: { deliveryMode: "direct" },
-            },
+            plugin: ${channelFixtureSource("nested-default-channel", {
+              label: "Nested Default Channel",
+              docsPath: "/channels/nested-default-channel",
+              blurb: "interop-wrapped bundled channel entry",
+              configured: true,
+            })},
           });
         },
       },
@@ -1205,19 +1150,7 @@ describe("loadOpenClawPlugins", () => {
       filename: "unrelated-plugin.cjs",
       body: `module.exports = { id: "unrelated-plugin", register() { throw new Error("unrelated plugin should not load"); } };`,
     });
-    fs.writeFileSync(
-      path.join(unrelated.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "unrelated-plugin",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["target-plugin"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest(unrelated, { channels: ["target-plugin"] });
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1239,48 +1172,20 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an explicitly disabled channel plugin even when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "lazy-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "lazy-channel-imported.txt");
     const plugin = writePlugin({
       id: "lazy-channel-plugin",
       filename: "lazy-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "lazy-channel-plugin",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "lazy-channel",
-          meta: {
-            id: "lazy-channel",
-            label: "Lazy Channel",
-            selectionLabel: "Lazy Channel",
-            docsPath: "/channels/lazy-channel",
-            blurb: "lazy test channel",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "lazy-channel-plugin",
+  channelId: "lazy-channel",
+  label: "Lazy Channel",
+  docsPath: "/channels/lazy-channel",
+  blurb: "lazy test channel",
+})}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "lazy-channel-plugin",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["lazy-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest(plugin, { channels: ["lazy-channel"] });
     const config = {
       plugins: {
         load: { paths: [plugin.file] },
@@ -1332,47 +1237,19 @@ describe("loadOpenClawPlugins", () => {
 
   it("blocks untrusted setup-only workspace channel plugins when explicitly scoped", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "workspace-setup-only-loaded.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "workspace-setup-only-loaded.txt");
     const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
       id: "workspace-shadow",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "workspace-shadow",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "workspace-shadow",
-          meta: {
-            id: "workspace-shadow",
-            label: "Workspace Shadow",
-            selectionLabel: "Workspace Shadow",
-            docsPath: "/channels/workspace-shadow",
-            blurb: "workspace shadow",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => undefined,
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "workspace-shadow",
+  label: "Workspace Shadow",
+  docsPath: "/channels/workspace-shadow",
+  blurb: "workspace shadow",
+  resolveAccount: false,
+})}`,
     });
-    fs.writeFileSync(
-      path.join(workspacePluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "workspace-shadow",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["workspace-shadow"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest({ dir: workspacePluginDir }, { channels: ["workspace-shadow"] });
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1398,47 +1275,19 @@ describe("loadOpenClawPlugins", () => {
 
   it("keeps trusted setup-only workspace channel plugins available when explicitly scoped", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "trusted-workspace-setup-only-loaded.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "trusted-workspace-setup-only-loaded.txt");
     const { workspaceDir, workspacePluginDir } = writeWorkspacePlugin({
       id: "trusted-workspace-shadow",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "trusted-workspace-shadow",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Trusted Workspace Telegram",
-            selectionLabel: "Trusted Workspace Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "trusted workspace telegram",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "trusted-workspace-shadow",
+  channelId: "telegram",
+  label: "Trusted Workspace Telegram",
+  docsPath: "/channels/telegram",
+  blurb: "trusted workspace telegram",
+})}`,
     });
-    fs.writeFileSync(
-      path.join(workspacePluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "trusted-workspace-shadow",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["telegram"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest({ dir: workspacePluginDir }, { channels: ["telegram"] });
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1466,48 +1315,19 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an untrusted config-origin channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "untrusted-load-path-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "untrusted-load-path-channel-imported.txt");
     const plugin = writePlugin({
       id: "untrusted-load-path-channel",
       filename: "untrusted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "untrusted-load-path-channel",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "untrusted-load-path-channel",
-          meta: {
-            id: "untrusted-load-path-channel",
-            label: "Untrusted Load Path Channel",
-            selectionLabel: "Untrusted Load Path Channel",
-            docsPath: "/channels/untrusted-load-path-channel",
-            blurb: "untrusted load-path setup gate",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "untrusted-load-path-channel",
+  label: "Untrusted Load Path Channel",
+  docsPath: "/channels/untrusted-load-path-channel",
+  blurb: "untrusted load-path setup gate",
+})}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "untrusted-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["untrusted-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest(plugin, { channels: ["untrusted-load-path-channel"] });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,
@@ -1531,48 +1351,22 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load a denylisted config-origin channel plugin even when explicitly allowed", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "denylisted-load-path-channel-imported.txt");
+    const marker = path.join(
+      makePluginLoaderTempDir(),
+      "denylisted-load-path-channel-imported.txt",
+    );
     const plugin = writePlugin({
       id: "denylisted-load-path-channel",
       filename: "denylisted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "denylisted-load-path-channel",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "denylisted-load-path-channel",
-          meta: {
-            id: "denylisted-load-path-channel",
-            label: "Denylisted Load Path Channel",
-            selectionLabel: "Denylisted Load Path Channel",
-            docsPath: "/channels/denylisted-load-path-channel",
-            blurb: "denylisted load-path setup gate",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
-      });
-    },
-  };`,
+${channelPluginSource({
+  pluginId: "denylisted-load-path-channel",
+  label: "Denylisted Load Path Channel",
+  docsPath: "/channels/denylisted-load-path-channel",
+  blurb: "denylisted load-path setup gate",
+})}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "denylisted-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["denylisted-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    updatePluginManifest(plugin, { channels: ["denylisted-load-path-channel"] });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,
@@ -1598,67 +1392,32 @@ describe("loadOpenClawPlugins", () => {
 
   it("does not setup-load an untrusted global channel plugin when the caller scopes to it", () => {
     useNoBundledPlugins();
-    const marker = path.join(makeTempDir(), "untrusted-global-channel-imported.txt");
+    const marker = path.join(makePluginLoaderTempDir(), "untrusted-global-channel-imported.txt");
     withStateDir((stateDir) => {
       const globalDir = path.join(stateDir, "extensions", "untrusted-global-channel");
       mkdirSafe(globalDir);
-      fs.writeFileSync(
-        path.join(globalDir, "index.cjs"),
+      writeFixtureText(
+        globalDir,
+        "index.cjs",
         `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
-  module.exports = {
-    id: "untrusted-global-channel",
-    register(api) {
-      api.registerChannel({
-        plugin: {
-          id: "untrusted-global-channel",
-          meta: {
-            id: "untrusted-global-channel",
-            label: "Untrusted Global Channel",
-            selectionLabel: "Untrusted Global Channel",
-            docsPath: "/channels/untrusted-global-channel",
-            blurb: "untrusted global setup gate",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: {
-            listAccountIds: () => [],
-            resolveAccount: () => ({ accountId: "default" }),
-          },
-          outbound: { deliveryMode: "direct" },
-        },
+${channelPluginSource({
+  pluginId: "untrusted-global-channel",
+  label: "Untrusted Global Channel",
+  docsPath: "/channels/untrusted-global-channel",
+  blurb: "untrusted global setup gate",
+})}`,
+      );
+      writeFixtureJson(
+        globalDir,
+        "openclaw.plugin.json",
+        pluginManifest("untrusted-global-channel", ["untrusted-global-channel"]),
+      );
+      writeFixtureJson(globalDir, "package.json", {
+        name: "@openclaw/untrusted-global-channel",
+        version: "0.0.0-test",
+        main: "./index.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
       });
-    },
-  };`,
-        "utf-8",
-      );
-      fs.writeFileSync(
-        path.join(globalDir, "openclaw.plugin.json"),
-        JSON.stringify(
-          {
-            id: "untrusted-global-channel",
-            configSchema: EMPTY_PLUGIN_SCHEMA,
-            channels: ["untrusted-global-channel"],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-      fs.writeFileSync(
-        path.join(globalDir, "package.json"),
-        JSON.stringify(
-          {
-            name: "@openclaw/untrusted-global-channel",
-            version: "0.0.0-test",
-            main: "./index.cjs",
-            openclaw: {
-              extensions: ["./index.cjs"],
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
 
       const scopedSetupRegistry = loadOpenClawPlugins({
         cache: false,

@@ -4,10 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { resolveAgentCredentialMapFromStore } from "./agent-auth-credentials.js";
-import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
-import { discoverAuthStorage } from "./agent-model-discovery.js";
+import {
+  resolveAgentCredentialMapFromStore,
+  resolveUsableAgentCredentialModes,
+} from "./agent-auth-credentials.js";
+import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
+import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -65,16 +72,11 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
   writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
-describe("discoverAuthStorage", () => {
+describe("discoverAuthStorageFacts auth storage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-v1-runtime",
-        },
+    const credentials = resolveAgentCredentialMapFromStore(
+      createAuthProfileStoreFixture({
+        "openrouter:default": createApiKeyCredential("openrouter", "sk-or-v1-runtime"),
         "anthropic:default": {
           type: "token",
           provider: "anthropic",
@@ -87,8 +89,8 @@ describe("discoverAuthStorage", () => {
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
         },
-      },
-    });
+      }),
+    );
 
     expect(credentials.openrouter).toEqual({
       type: "api_key",
@@ -104,6 +106,17 @@ describe("discoverAuthStorage", () => {
     expect(codexCredential?.type).toBe("oauth");
     expect(codexCredential?.access).toBe("oauth-access");
     expect(codexCredential?.refresh).toBe("oauth-refresh");
+    expect(resolveUsableAgentCredentialModes(credentials)).toEqual({
+      anthropic: "api_key",
+      openai: "oauth",
+      openrouter: "api_key",
+    });
+    expect(
+      resolveUsableAgentCredentialModes({
+        bearer: { type: "token", token: "runtime-token", expires: Date.now() + 60_000 },
+        expired: { type: "token", token: "expired-token", expires: Date.now() - 1 },
+      }),
+    ).toEqual({ bearer: "token" });
   });
 
   it("drops runtime auth profiles with out-of-range expiry values", () => {
@@ -130,37 +143,10 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
-  it("keeps expired OAuth when it is the sole profile for a provider", () => {
-    const resolved = resolveAgentCredentialMapFromStore({
-      version: 1,
-      profiles: {
-        "openai:sole-expired": {
-          type: "oauth",
-          provider: "openai",
-          access: "fake",
-          refresh: "sample",
-          expires: Date.now() - 3600_000,
-        },
-      },
-    });
-
-    expect(resolved.openai).toEqual({
-      type: "oauth",
-      access: "fake",
-      refresh: "sample",
-      expires: expect.any(Number),
-    });
-  });
-
   it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
-    const resolved = resolveAgentCredentialMapFromStore({
-      version: 1,
-      profiles: {
-        "openai:key": {
-          type: "api_key",
-          provider: "openai",
-          key: "test-key",
-        },
+    const resolved = resolveAgentCredentialMapFromStore(
+      createAuthProfileStoreFixture({
+        "openai:key": createApiKeyCredential("openai", "test-key"),
         "openai:expired": {
           type: "oauth",
           provider: "openai",
@@ -175,8 +161,8 @@ describe("discoverAuthStorage", () => {
           refresh: "sample",
           expires: Date.now() + 3600_000,
         },
-      },
-    });
+      }),
+    );
 
     expect(resolved.openai).toEqual({
       type: "oauth",
@@ -188,9 +174,9 @@ describe("discoverAuthStorage", () => {
 
   it("passes configured auth order through discovery selection", async () => {
     await withAgentDir(async (agentDir) => {
-      writeAuthProfilesSqlite(agentDir, {
-        version: 1,
-        profiles: {
+      writeAuthProfilesSqlite(
+        agentDir,
+        createAuthProfileStoreFixture({
           "openai:oauth": {
             type: "oauth",
             provider: "openai",
@@ -198,14 +184,10 @@ describe("discoverAuthStorage", () => {
             refresh: "sample",
             expires: Date.now() + 3600_000,
           },
-          "openai:key": {
-            type: "api_key",
-            provider: "openai",
-            key: "test-key",
-          },
-        },
-      });
-      const authStorage = discoverAuthStorage(agentDir, {
+          "openai:key": createApiKeyCredential("openai", "test-key"),
+        }),
+      );
+      const { authStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -221,78 +203,56 @@ describe("discoverAuthStorage", () => {
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
-    const credentials = resolveAgentCredentialMapFromStore({
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-        },
-        "expired:default": {
-          type: "token",
-          provider: "expired",
-          tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
-          expires: Date.now() - 1_000,
-        },
+    const store = createAuthProfileStoreFixture<AuthProfileStore["profiles"]>({
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+      },
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+      },
+      "expired:default": {
+        type: "token",
+        provider: "expired",
+        tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+        expires: Date.now() - 1_000,
       },
     });
-    const discoveryCredentials = resolveAgentCredentialMapFromStore(
-      {
-        version: 1,
-        profiles: {
-          "openrouter:default": {
-            type: "api_key",
-            provider: "openrouter",
-            keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
-          },
-          "anthropic:default": {
-            type: "token",
-            provider: "anthropic",
-            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-          },
-          "expired:default": {
-            type: "token",
-            provider: "expired",
-            tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
-            expires: Date.now() - 1_000,
-          },
-        },
-      },
-      { includeSecretRefPlaceholders: true },
-    );
+    const credentials = resolveAgentCredentialMapFromStore(store);
+    const discoveryCredentials = resolveAgentCredentialMapFromStore(store, {
+      includeSecretRefPlaceholders: true,
+    });
 
     expect(credentials.openrouter).toBeUndefined();
     expect(credentials.anthropic).toBeUndefined();
     expect(discoveryCredentials.openrouter?.type).toBe("api_key");
     expect(discoveryCredentials.anthropic?.type).toBe("api_key");
     expect(discoveryCredentials.expired).toBeUndefined();
+    expect(resolveUsableAgentCredentialModes(discoveryCredentials)).toEqual({});
   });
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      writeAuthProfilesSqlite(agentDir, {
-        version: 1,
-        profiles: {
+      writeAuthProfilesSqlite(
+        agentDir,
+        createAuthProfileStoreFixture({
           "fixture-ref-provider:default": {
             type: "api_key",
             provider: "fixture-ref-provider",
             keyRef: { source: "exec", provider: "keychain", id: "FIXTURE_API_KEY" },
           },
-        },
-      });
+        }),
+      );
 
-      const readOnlyStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: readOnlyStorage } = await discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
-      const runtimeStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: runtimeStorage } = await discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -305,33 +265,27 @@ describe("discoverAuthStorage", () => {
   it("uses the lifecycle owner's explicit inherited auth directory", async () => {
     await withAgentDir(async (inheritedAuthDir) => {
       await withAgentDir(async (agentDir) => {
-        writeAuthProfilesSqlite(inheritedAuthDir, {
-          version: 1,
-          profiles: {
-            "inherited-provider:default": {
-              type: "api_key",
-              provider: "inherited-provider",
-              key: "inherited-key",
-            },
-            "shared-provider:inherited": {
-              type: "api_key",
-              provider: "shared-provider",
-              key: "inherited-shared-key",
-            },
-          },
-        });
-        writeAuthProfilesSqlite(agentDir, {
-          version: 1,
-          profiles: {
-            "shared-provider:local": {
-              type: "api_key",
-              provider: "shared-provider",
-              key: "local-shared-key",
-            },
-          },
-        });
+        writeAuthProfilesSqlite(
+          inheritedAuthDir,
+          createAuthProfileStoreFixture({
+            "inherited-provider:default": createApiKeyCredential(
+              "inherited-provider",
+              "inherited-key",
+            ),
+            "shared-provider:inherited": createApiKeyCredential(
+              "shared-provider",
+              "inherited-shared-key",
+            ),
+          }),
+        );
+        writeAuthProfilesSqlite(
+          agentDir,
+          createAuthProfileStoreFixture({
+            "shared-provider:local": createApiKeyCredential("shared-provider", "local-shared-key"),
+          }),
+        );
 
-        const storage = discoverAuthStorage(agentDir, {
+        const { authStorage: storage } = await discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},
@@ -349,47 +303,12 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("includes env-backed provider auth when no auth profile exists", () => {
-    const previousMistral = process.env.MISTRAL_API_KEY;
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    process.env.MISTRAL_API_KEY = "mistral-env-test-key";
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    try {
-      const credentials = addEnvBackedAgentCredentials({}, { env: process.env });
-
-      expect(credentials.mistral).toEqual({
-        type: "api_key",
-        key: "mistral-env-test-key",
-      });
-    } finally {
-      if (previousMistral === undefined) {
-        delete process.env.MISTRAL_API_KEY;
-      } else {
-        process.env.MISTRAL_API_KEY = previousMistral;
-      }
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
-      if (previousDisableBundledPlugins === undefined) {
-        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-      } else {
-        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
-      }
-    }
-  });
-
   it("includes workspace-scoped auth evidence in agent discovery credentials", () => {
-    const credentials = addEnvBackedAgentCredentials(
-      {},
-      {
-        env: {},
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const credentials = resolveAmbientAgentCredentialsForDiscovery({
+      env: {},
+      workspaceDir: "/tmp/workspace",
+      syntheticAuthProviderRefs: [],
+    });
 
     expect(credentials["workspace-cloud"]).toEqual({
       type: "api_key",

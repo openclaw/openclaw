@@ -1,137 +1,76 @@
-// Registers plugin-related CLI commands.
 import type { Command } from "commander";
-import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
+import { setCommandJsonMode } from "../cli/program/json-mode.js";
+import {
+  findCommandGroupEntry,
+  getCommandGroupNames,
+  registerLazyCommandGroup,
+  removeCommandGroupNames,
+} from "../cli/program/register-command-groups.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createPluginCliLogger,
-  loadPluginCliDescriptors,
+  createPluginCliLoadSession,
+  type PluginCliCommandGroupEntry,
+  type PluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
-import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
+import { getPluginCache } from "./plugin-cache.js";
+import { pluginRuntimeLoaderLogger as logger } from "./runtime/load-context.js";
+import type { OpenClawPluginCliRootCommandDescriptor } from "./types.js";
 
-type PluginCliRegistrationMode = "eager" | "lazy";
+type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
 type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
   skipPluginValidation?: boolean;
+  session?: PluginCliLoadSession;
 };
 
-type PluginCliRegistrationEntries = Awaited<
-  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
->;
-
-const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
-
-interface ProgramWithEntriesCache {
-  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
-    primary: string | undefined;
-    inputKey: string;
-    entries: PluginCliRegistrationEntries;
-  };
+function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
+  if (entry.placeholders.length === 0) {
+    return false;
+  }
+  const descriptorNames = new Set(entry.placeholders.map((descriptor) => descriptor.name));
+  return getCommandGroupNames(entry).every((command) => descriptorNames.has(command));
 }
 
-const logger = createPluginCliLogger();
-const loaderOptionIds = new WeakMap<object, number>();
-let nextLoaderOptionId = 1;
-
-const quietDescriptorLogger = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-} satisfies PluginLogger;
-
-function stableJsonKey(value: unknown): string {
-  if (value === undefined) {
-    return "undefined";
+function findCommandByPath(program: Command, path: readonly string[]): Command | null {
+  let current = program;
+  for (const segment of path) {
+    const next = current.commands.find(
+      (command) => command.name() === segment || command.aliases().includes(segment),
+    );
+    if (!next) {
+      return null;
+    }
+    current = next;
   }
-  try {
-    return JSON.stringify(value, (_key, entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return entry;
-      }
-      return Object.fromEntries(
-        Object.entries(entry).toSorted(([left], [right]) => left.localeCompare(right)),
-      );
-    });
-  } catch {
-    return "unserializable";
-  }
+  return current;
 }
 
-function loaderOptionsKey(loaderOptions: PluginCliLoaderOptions | undefined): string {
-  if (!loaderOptions) {
-    return "undefined";
-  }
-  const existing = loaderOptionIds.get(loaderOptions);
-  if (existing) {
-    return String(existing);
-  }
-  const id = nextLoaderOptionId;
-  nextLoaderOptionId += 1;
-  loaderOptionIds.set(loaderOptions, id);
-  return String(id);
-}
-
-export const loadValidatedConfigForPluginRegistration = async (options?: {
-  skipPluginValidation?: boolean;
-}): Promise<OpenClawConfig | null> => {
-  const snapshot = await readConfigFileSnapshot({
-    skipPluginValidation: options?.skipPluginValidation,
-  });
-  if (!snapshot.valid) {
-    return null;
-  }
-  return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
-};
-
-export async function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
-  return loadPluginCliDescriptors({ cfg, env, loaderOptions, logger: quietDescriptorLogger });
-}
-
-export async function registerPluginCliCommands(
+function applyMachineOutputMode(
   program: Command,
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: PluginCliLoaderOptions,
-  options?: RegisterPluginCliOptions,
-) {
-  const mode = options?.mode ?? "eager";
-  const primary = options?.primary ?? undefined;
-  const inputKey = [stableJsonKey(cfg), stableJsonKey(env), loaderOptionsKey(loaderOptions)].join(
-    "\0",
-  );
-
-  const programWithCache = program as Command & ProgramWithEntriesCache;
-  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
-  let entries: PluginCliRegistrationEntries;
-  if (cached && cached.primary === primary && cached.inputKey === inputKey) {
-    entries = cached.entries;
-  } else {
-    entries = await loadPluginCliRegistrationEntriesWithDefaults({
-      cfg,
-      env,
-      loaderOptions,
-      primaryCommand: primary,
-    });
-    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, inputKey, entries };
+  descriptor: OpenClawPluginCliRootCommandDescriptor,
+): void {
+  if (!descriptor.machineOutput) {
+    return;
   }
-
-  await registerPluginCliCommandGroups(program, entries, {
-    mode,
-    primary,
-    // Include aliases: alias-only root names (cron|automations, tui|terminal)
-    // are owned commands too; a plugin claiming one would crash registration.
-    existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),
-    logger,
-  });
+  const command = program.commands.find((candidate) => candidate.name() === descriptor.name);
+  if (!command) {
+    return;
+  }
+  setCommandJsonMode(
+    command,
+    "output",
+    ({ argv, stdoutIsTTY }) => descriptor.machineOutput?.({ argv, stdoutIsTTY }) === true,
+  );
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(
@@ -139,13 +78,162 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
-): Promise<OpenClawConfig | null> {
-  const config = await loadValidatedConfigForPluginRegistration({
-    skipPluginValidation: options?.skipPluginValidation,
-  });
-  if (!config) {
-    return null;
+): Promise<OpenClawConfig> {
+  const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
+  try {
+    const snapshot = await session.readConfig(() =>
+      readConfigFileSnapshot({
+        observe: false,
+        skipPluginValidation: options?.skipPluginValidation,
+      }),
+    );
+    if (!snapshot.valid) {
+      throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    }
+    const cfg = await loadPinnedRuntimeConfigAsync(async () => ({
+      config: snapshot.runtimeConfig,
+    }));
+    const mode = options?.mode ?? "eager";
+    const primary = options?.primary ?? undefined;
+    const entries = await loadPluginCliRegistrationEntriesWithDefaults(
+      {
+        cfg,
+        env,
+        loaderOptions,
+        primaryCommand: primary,
+        session,
+      },
+      mode === "metadata" ? "metadata" : "runtime",
+    );
+
+    const groups = entries.map((entry) => {
+      if (
+        mode === "eager" ||
+        (mode === "lazy" &&
+          primary &&
+          (entry.parentPath[0] === primary ||
+            entry.names.includes(primary) ||
+            entry.placeholders.some((descriptor) => descriptor.name === primary)))
+      ) {
+        return entry;
+      }
+      // Deferred expansion gets fresh preparation in the parsing generation. Never retain
+      // startup registrars past close, including help/completion on a prepared program.
+      return Object.assign({}, entry, {
+        register: async (target: Command) => {
+          const deferred = createPluginCliLoadSession(getPluginCache(), {
+            resources: session.resources,
+          });
+          try {
+            const fresh = await loadPluginCliRegistrationEntriesWithDefaults({
+              cfg,
+              env,
+              loaderOptions,
+              primaryCommand: mode === "metadata" ? primary : undefined,
+              session: deferred,
+            });
+            const match = fresh.find(
+              (candidate) =>
+                candidate.pluginId === entry.pluginId &&
+                candidate.parentPath.join("\0") === entry.parentPath.join("\0") &&
+                candidate.names.join("\0") === entry.names.join("\0"),
+            );
+            if (!match) {
+              throw new Error(
+                `Plugin CLI registration is no longer available (${entry.pluginId}).`,
+              );
+            }
+            await match.register(target);
+          } finally {
+            deferred.close();
+          }
+        },
+      });
+    });
+    const registrationMode = mode === "metadata" ? "lazy" : mode;
+    // Parent help needs descriptors; actual expansion retains the fresh loader above.
+    const registrationPrimary = mode === "metadata" ? undefined : primary;
+    // Include aliases: alias-only root names (cron|automations, tui|terminal)
+    // are owned commands too; a plugin claiming one would crash registration.
+    const registeredRoots = new Set(
+      program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()]),
+    );
+    for (const entry of groups) {
+      const parentPath = entry.parentPath ?? [];
+      const targetProgram = findCommandByPath(program, parentPath);
+      if (!targetProgram) {
+        logger.debug?.(
+          `plugin CLI register skipped (${entry.pluginId}): parent command missing (${parentPath.join(
+            " ",
+          )})`,
+        );
+        continue;
+      }
+      const existingCommands =
+        parentPath.length === 0
+          ? registeredRoots
+          : new Set(
+              targetProgram.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+            );
+      const registerEntry = async () => {
+        await entry.register(targetProgram);
+        for (const descriptor of entry.placeholders) {
+          applyMachineOutputMode(targetProgram, descriptor);
+        }
+        for (const command of getCommandGroupNames(entry)) {
+          existingCommands.add(command);
+        }
+      };
+
+      if (
+        registrationPrimary &&
+        (parentPath[0] === registrationPrimary ||
+          findCommandGroupEntry([entry], registrationPrimary))
+      ) {
+        removeCommandGroupNames(targetProgram, entry);
+        await registerEntry();
+        continue;
+      }
+
+      const overlaps = getCommandGroupNames(entry).filter((command) =>
+        existingCommands.has(command),
+      );
+      if (overlaps.length > 0) {
+        logger.debug?.(
+          `plugin CLI register skipped (${entry.pluginId}): command already registered (${overlaps.join(
+            ", ",
+          )})`,
+        );
+        continue;
+      }
+
+      try {
+        if (registrationMode === "lazy" && canRegisterPluginCliLazily(entry)) {
+          for (const placeholder of entry.placeholders) {
+            registerLazyCommandGroup(
+              targetProgram,
+              { ...entry, register: registerEntry },
+              placeholder,
+            );
+            applyMachineOutputMode(targetProgram, placeholder);
+          }
+          continue;
+        }
+
+        if (registrationMode === "lazy" && entry.placeholders.length > 0) {
+          logger.debug?.(
+            `plugin CLI lazy register fallback to eager (${entry.pluginId}): descriptors do not cover all command roots`,
+          );
+        }
+        await registerEntry();
+      } catch (error) {
+        logger.warn(`plugin CLI register failed (${entry.pluginId}): ${String(error)}`);
+      }
+    }
+    return cfg;
+  } finally {
+    if (!options?.session) {
+      session.close();
+    }
   }
-  await registerPluginCliCommands(program, config, env, loaderOptions, options);
-  return config;
 }

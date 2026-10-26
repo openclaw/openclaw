@@ -1,2 +1,2 @@
-/** Resolves the repository root by walking upward from the caller module. */
-export function resolveRepoRoot(importMetaUrl: string): string;
+export function findRepoRoot(startDir: string): string | undefined;
+export function resolveRepoRoot(importMetaUrl: string | URL): string;

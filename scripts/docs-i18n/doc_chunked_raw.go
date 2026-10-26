@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -55,34 +56,32 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	if strings.TrimSpace(body) == "" {
 		return body, nil
 	}
-	placeholderState := NewPlaceholderState(body)
-	placeholders := make([]string, 0, 8)
-	mapping := map[string]string{}
-	maskedBody := maskMarkdownFencedLiterals(body, placeholderState.Next, &placeholders, mapping)
-	maskedBody = maskMarkdownDocSyntax(maskedBody, placeholderState.Next, &placeholders, mapping)
-	listPlaceholders := maskedListMarkerPlaceholders(mapping)
+	state := NewPlaceholderState(body)
+	maskedBody := maskMarkdownFencedLiterals(body, state)
+	maskedBody = maskMarkdownDocSyntax(maskedBody, state)
+	listPlaceholders := maskedListMarkerPlaceholders(state.mapping)
 	blocks := splitDocBodyIntoBlocks(maskedBody)
 	groups := groupDocBlocks(blocks, docsI18nDocChunkMaxBytes())
 	logDocChunkPlan(relPath, blocks, groups)
 	out := strings.Builder{}
 	for index, group := range groups {
 		chunkID := fmt.Sprintf("%s.chunk-%03d", relPath, index+1)
-		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, placeholders, listPlaceholders, srcLang, tgtLang)
+		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, state.placeholders, listPlaceholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
-	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, state.mapping)
 	translatedBody = normalizeMaskedListMarkerSpacing(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedListItemBodyMarkers(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedMarkdownListMarkers(translatedBody, listPlaceholders)
-	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
+	if err := validatePlaceholders(translatedBody, state.placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
 	maskedListMarkers := extractMarkdownListMarkerPrefixes(translatedBody)
-	translatedBody = unmaskMarkdown(translatedBody, placeholders, mapping)
+	translatedBody = unmaskMarkdown(translatedBody, state.placeholders, state.mapping)
 	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
 		log.Printf(
 			"docs-i18n: final list diagnostics %s source=%q masked=%q translated=%q",
@@ -111,34 +110,7 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	if sourceStructure.fenceCount != translatedStructure.fenceCount {
 		return fmt.Errorf("code fence mismatch: source=%d translated=%d", sourceStructure.fenceCount, translatedStructure.fenceCount)
 	}
-	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
-		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
-	}
-	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
-		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
-	}
-	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
-		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
-	}
-	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
-		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
-	}
-	if !slices.Equal(sourceStructure.fencedProtocolTokens, translatedStructure.fencedProtocolTokens) {
-		return fmt.Errorf("fenced protocol marker mismatch: source=%d translated=%d", len(sourceStructure.fencedProtocolTokens), len(translatedStructure.fencedProtocolTokens))
-	}
-	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
-		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
-	}
-	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
-		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
-	}
-	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
-		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
-	}
-	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
-		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
-	}
-	return nil
+	return validateDocChunkLiterals(sourceStructure, translatedStructure)
 }
 
 func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
@@ -156,15 +128,12 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if err == nil {
 		err = validatePlaceholders(translated, placeholdersInText(normalizedSource, protectedPlaceholders))
 	}
+	if err != nil && os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+		// Capture the rejected translator boundary before normalization or leaf fallback loses it.
+		log.Printf("docs-i18n: rejected raw chunk %s input=%q output=%q err=%v", chunkID, normalizedSource, translated, err)
+	}
 	if err == nil {
-		translated = sanitizeDocChunkProtocolWrappers(source, translated)
-		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
-		translated = reapplyCommonIndent(translated, commonIndent)
-		translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
-		translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
-		translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
-		translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
-		translated = unwrapUnexpectedInlineCodeSpans(source, translated)
+		translated = normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent, listPlaceholders)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
 			return translated, nil
@@ -175,8 +144,10 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if len(blocks) <= 1 {
 		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, protectedPlaceholders, listPlaceholders, srcLang, tgtLang); fallbackErr == nil {
 			return fallback, nil
+		} else if os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
+			log.Printf("docs-i18n: chunk leaf-fallback failed %s err=%v", chunkID, fallbackErr)
 		}
-		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
+		if plan, ok := planSingletonDocChunkWithMode(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget(), true); ok {
 			logDocChunkPlanSplit(chunkID, plan, source)
 			return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 		}
@@ -186,7 +157,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		logDocChunkSplit(chunkID, len(blocks), err)
 		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 	}
-	if plan, ok := splitDocChunkBlocksMidpointSimple(blocks); ok {
+	if plan, ok := splitDocChunkBlocksMidpoint(blocks, "retry-midpoint"); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
 		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 	}
@@ -211,6 +182,15 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	if err != nil {
 		return "", err
 	}
+	translated = normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent, listPlaceholders)
+	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
+		return "", validationErr
+	}
+	log.Printf("docs-i18n: chunk leaf-fallback done %s out_bytes=%d", chunkID, len(translated))
+	return translated, nil
+}
+
+func normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent string, listPlaceholders map[string]string) string {
 	translated = sanitizeDocChunkProtocolWrappers(source, translated)
 	translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
@@ -219,11 +199,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 	translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
 	translated = unwrapUnexpectedInlineCodeSpans(source, translated)
-	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
-		return "", validationErr
-	}
-	log.Printf("docs-i18n: chunk leaf-fallback done %s out_bytes=%d", chunkID, len(translated))
-	return translated, nil
+	return translated
 }
 
 func splitDocBodyIntoBlocks(body string) []string {
@@ -246,43 +222,24 @@ func splitDocBodyIntoBlocks(body string) []string {
 	if current.Len() > 0 {
 		blocks = append(blocks, current.String())
 	}
-	if len(blocks) == 0 {
-		return []string{body}
-	}
 	return blocks
 }
 
 func groupDocBlocks(blocks []string, maxBytes int) [][]string {
-	if len(blocks) == 0 {
-		return nil
-	}
 	if maxBytes <= 0 {
 		maxBytes = defaultDocChunkMaxBytes
 	}
-	groups := make([][]string, 0, len(blocks))
-	current := make([]string, 0, 8)
+	var groups [][]string
 	currentBytes := 0
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		groups = append(groups, current)
-		current = make([]string, 0, 8)
-		currentBytes = 0
-	}
 	for _, block := range blocks {
-		blockBytes := len(block)
-		if len(current) > 0 && currentBytes+blockBytes > maxBytes {
-			flush()
+		if len(groups) == 0 || currentBytes+len(block) > maxBytes {
+			groups = append(groups, []string{})
+			currentBytes = 0
 		}
-		if blockBytes > maxBytes {
-			groups = append(groups, []string{block})
-			continue
-		}
-		current = append(current, block)
-		currentBytes += blockBytes
+		last := len(groups) - 1
+		groups[last] = append(groups[last], block)
+		currentBytes += len(block)
 	}
-	flush()
 	return groups
 }
 
@@ -318,6 +275,22 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
 		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
 	}
+	if err := validateDocChunkLiterals(sourceStructure, translatedStructure); err != nil {
+		return err
+	}
+	keys := slices.Sorted(maps.Keys(sourceStructure.tagCounts))
+	if !slices.Equal(keys, slices.Sorted(maps.Keys(translatedStructure.tagCounts))) {
+		return fmt.Errorf("component tag set mismatch")
+	}
+	for _, key := range keys {
+		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
+			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
+		}
+	}
+	return nil
+}
+
+func validateDocChunkLiterals(sourceStructure, translatedStructure docChunkStructure) error {
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
@@ -344,14 +317,6 @@ func validateDocChunkTranslation(source, translated string) error {
 	}
 	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
 		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
-	}
-	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
-		return fmt.Errorf("component tag set mismatch")
-	}
-	for _, key := range sortedKeys(sourceStructure.tagCounts) {
-		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
-			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
-		}
 	}
 	return nil
 }
@@ -404,29 +369,9 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 }
 
 func preserveDocChunkBoundaryWhitespace(source, translated string) string {
-	prefixEnd := 0
-	for prefixEnd < len(source) && isDocChunkBoundaryWhitespace(source[prefixEnd]) {
-		prefixEnd++
-	}
-	suffixStart := len(source)
-	for suffixStart > prefixEnd && isDocChunkBoundaryWhitespace(source[suffixStart-1]) {
-		suffixStart--
-	}
-
-	translatedStart := 0
-	for translatedStart < len(translated) && isDocChunkBoundaryWhitespace(translated[translatedStart]) {
-		translatedStart++
-	}
-	translatedEnd := len(translated)
-	for translatedEnd > translatedStart && isDocChunkBoundaryWhitespace(translated[translatedEnd-1]) {
-		translatedEnd--
-	}
-
-	return source[:prefixEnd] + translated[translatedStart:translatedEnd] + source[suffixStart:]
-}
-
-func isDocChunkBoundaryWhitespace(value byte) bool {
-	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+	prefix, _, suffix := splitWhitespace(source)
+	_, core, _ := splitWhitespace(translated)
+	return prefix + core + suffix
 }
 
 func stripBodyOnlyWrapper(source, text string) (string, bool) {
@@ -500,18 +445,16 @@ func logDocChunkPlanSplit(chunkID string, plan docChunkSplitPlan, source string)
 
 func summarizeDocChunkStructure(text string) docChunkStructure {
 	counts := map[string]int{}
+	fenceCount := 0
 	lines := strings.Split(text, "\n")
 	fenceDelimiter := ""
 	for _, line := range lines {
 		var toggled bool
 		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
 		if toggled {
-			counts["__fence_toggle__"]++
+			fenceCount++
 		}
 		for _, match := range docsComponentTagRE.FindAllStringSubmatch(line, -1) {
-			if len(match) < 3 {
-				continue
-			}
 			fullToken := match[0]
 			tagName := match[2]
 			direction := "open"
@@ -526,8 +469,8 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 	}
 	fencedPlaceholders, fencedProtocolTokens, fencedDirectiveTokens := extractMarkdownFencedLiteralValues(text)
 	return docChunkStructure{
-		fenceCount:            counts["__fence_toggle__"],
-		tagCounts:             countsWithoutFence(counts),
+		fenceCount:            fenceCount,
+		tagCounts:             counts,
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
 		listMarkerPrefixes:    extractMarkdownListMarkerPrefixes(text),
@@ -547,10 +490,7 @@ func extractMarkdownLinkDestinations(text string) []string {
 	source := []byte(normalizeDocComponentsForMarkdownParse(text))
 	doc := parseDocsMarkdown(source)
 	destinations := make([]string, 0)
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		switch link := node.(type) {
 		case *ast.Link:
 			if link.Reference == nil {
@@ -561,7 +501,6 @@ func extractMarkdownLinkDestinations(text string) []string {
 				destinations = append(destinations, "image:"+string(link.Destination))
 			}
 		}
-		return ast.WalkContinue, nil
 	})
 	return destinations
 }
@@ -570,10 +509,7 @@ func extractProtectedMarkdownLinkLabels(text string) []string {
 	source := []byte(normalizeDocComponentsForMarkdownParse(text))
 	doc := parseDocsMarkdown(source)
 	labels := make([]string, 0)
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		kind := ""
 		destination := ""
 		switch link := node.(type) {
@@ -584,23 +520,19 @@ func extractProtectedMarkdownLinkLabels(text string) []string {
 			kind = "image"
 			destination = string(link.Destination)
 		default:
-			return ast.WalkContinue, nil
+			return
 		}
 		label := strings.TrimSpace(string(node.Text(source)))
 		if isProtectedProductLinkLabel(label, destination) {
 			labels = append(labels, kind+":"+destination+":"+label)
 		}
-		return ast.WalkContinue, nil
 	})
 	return labels
 }
 
 func isProtectedProductLinkLabel(label, destination string) bool {
-	if isAlwaysProtectedProductName(label) {
-		return true
-	}
-	name, ok := contextualProtectedProductName(label)
-	return ok && destinationMentionsProductName(destination, name)
+	return slices.Contains(alwaysProtectedProductNames, label) ||
+		(slices.Contains(contextualProtectedProductNames, label) && destinationMentionsProductName(destination, label))
 }
 
 type contextualProductDestinationRule struct {
@@ -616,7 +548,6 @@ var contextualProductDestinations = map[string]contextualProductDestinationRule{
 	"fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
 	"Fireworks":   {hosts: []string{"fireworks.ai"}, routes: []string{"/providers/fireworks", "/plugins/reference/fireworks"}},
-	"Inferrs":     {routes: []string{"/providers/inferrs", "/ericcurtin/inferrs"}},
 	"Meta":        {hosts: []string{"meta.ai", "meta.com"}, routes: []string{"/providers/meta", "/plugins/reference/meta"}},
 	"Runway":      {hosts: []string{"runwayml.com"}, routes: []string{"/providers/runway", "/plugins/reference/runway"}},
 	"Synthetic":   {hosts: []string{"synthetic.new"}, routes: []string{"/providers/synthetic"}},
@@ -670,26 +601,6 @@ func parseDocsMarkdown(source []byte) ast.Node {
 	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
 }
 
-func countsWithoutFence(counts map[string]int) map[string]int {
-	filtered := map[string]int{}
-	for key, value := range counts {
-		if key == "__fence_toggle__" {
-			continue
-		}
-		filtered[key] = value
-	}
-	return filtered
-}
-
-func sortedKeys(counts map[string]int) []string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 func updateFenceDelimiter(current, line string) (string, bool) {
 	delimiter := leadingFenceDelimiter(line)
 	if delimiter == "" {
@@ -736,17 +647,13 @@ func isClosingFenceLine(line, delimiter string) bool {
 func hasUnexpectedTopLevelProtocolWrapper(source, translated string) bool {
 	sourceTrimmed := strings.ToLower(strings.TrimSpace(source))
 	translatedTrimmed := strings.ToLower(strings.TrimSpace(translated))
-	checks := []struct {
-		token string
-		match func(string) bool
-	}{
-		{token: frontmatterTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(frontmatterTagStart)) }},
-		{token: bodyTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(bodyTagStart)) }},
-		{token: frontmatterTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(frontmatterTagEnd)) }},
-		{token: bodyTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(bodyTagEnd)) }},
+	for _, token := range []string{frontmatterTagStart, bodyTagStart} {
+		if strings.HasPrefix(translatedTrimmed, token) && !strings.HasPrefix(sourceTrimmed, token) {
+			return true
+		}
 	}
-	for _, check := range checks {
-		if check.match(translatedTrimmed) && !check.match(sourceTrimmed) {
+	for _, token := range []string{frontmatterTagEnd, bodyTagEnd} {
+		if strings.HasSuffix(translatedTrimmed, token) && !strings.HasSuffix(sourceTrimmed, token) {
 			return true
 		}
 	}
@@ -759,7 +666,6 @@ func containsProtocolWrapperToken(text string) bool {
 }
 
 func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID, source string, groups [][]string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
-	var out strings.Builder
 	translatedGroups := make([]string, 0, len(groups))
 	for index, group := range groups {
 		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
@@ -767,9 +673,8 @@ func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslat
 			return "", err
 		}
 		translatedGroups = append(translatedGroups, translated)
-		out.WriteString(translated)
 	}
-	translated := out.String()
+	translated := strings.Join(translatedGroups, "")
 	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
 		translated = merged
 	}
@@ -803,12 +708,14 @@ func mergeSplitPureFencedDocTranslations(source string, translatedGroups []strin
 
 func splitPureFencedDocSection(text string) (prefix, opening, inner, closing, suffix string, ok bool) {
 	lines := strings.SplitAfter(text, "\n")
-	if len(lines) < 2 {
-		return "", "", "", "", "", false
+	openingIndex, closingIndex := 0, len(lines)-1
+	for openingIndex <= closingIndex && strings.TrimSpace(lines[openingIndex]) == "" {
+		openingIndex++
 	}
-	openingIndex := firstNonEmptyLineIndex(lines)
-	closingIndex := lastNonEmptyLineIndex(lines)
-	if openingIndex == -1 || closingIndex <= openingIndex {
+	for closingIndex > openingIndex && strings.TrimSpace(lines[closingIndex]) == "" {
+		closingIndex--
+	}
+	if closingIndex <= openingIndex {
 		return "", "", "", "", "", false
 	}
 	opening = lines[openingIndex]
@@ -818,9 +725,6 @@ func splitPureFencedDocSection(text string) (prefix, opening, inner, closing, su
 	}
 	prefix = strings.Join(lines[:openingIndex], "")
 	suffix = strings.Join(lines[closingIndex+1:], "")
-	if strings.TrimSpace(prefix) != "" || strings.TrimSpace(suffix) != "" {
-		return "", "", "", "", "", false
-	}
 	inner = strings.Join(lines[openingIndex+1:closingIndex], "")
 	closing = lines[closingIndex]
 	return prefix, opening, inner, closing, suffix, true
@@ -836,140 +740,72 @@ func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSpl
 	}
 	normalizedSource, _ := stripCommonIndent(source)
 	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
-	if len(blocks) > 1 && promptBudget > 0 && estimatedPromptCost > promptBudget {
-		return splitDocChunkBlocksMidpoint(blocks, estimatedPromptCost, promptBudget)
+	overBytes := maxBytes > 0 && len(source) > maxBytes
+	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
+	if len(blocks) > 1 && overPrompt {
+		return splitDocChunkBlocksMidpoint(blocks, fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget))
 	}
-	if len(blocks) == 1 {
-		return planSingletonDocChunk(blocks[0], maxBytes, promptBudget)
+	if len(blocks) == 1 && (overBytes || overPrompt) {
+		return planSingletonDocChunkWithMode(blocks[0], maxBytes, promptBudget, false)
 	}
 	return docChunkSplitPlan{}, false
 }
 
-func splitDocChunkBlocksMidpoint(blocks []string, estimatedPromptCost, promptBudget int) (docChunkSplitPlan, bool) {
+func splitDocChunkBlocksMidpoint(blocks []string, reason string) (docChunkSplitPlan, bool) {
 	if len(blocks) <= 1 {
 		return docChunkSplitPlan{}, false
 	}
 	mid := len(blocks) / 2
-	if mid <= 0 || mid >= len(blocks) {
-		return docChunkSplitPlan{}, false
-	}
-	return docChunkSplitPlan{
-		groups: [][]string{blocks[:mid], blocks[mid:]},
-		reason: fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget),
-	}, true
-}
-
-func splitDocChunkBlocksMidpointSimple(blocks []string) (docChunkSplitPlan, bool) {
-	if len(blocks) <= 1 {
-		return docChunkSplitPlan{}, false
-	}
-	mid := len(blocks) / 2
-	if mid <= 0 || mid >= len(blocks) {
-		return docChunkSplitPlan{}, false
-	}
-	return docChunkSplitPlan{
-		groups: [][]string{blocks[:mid], blocks[mid:]},
-		reason: "retry-midpoint",
-	}, true
-}
-
-func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
-	normalizedBlock, _ := stripCommonIndent(block)
-	estimatedPromptCost := estimateDocPromptCost(normalizedBlock)
-	overBytes := maxBytes > 0 && len(block) > maxBytes
-	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
-	if !overBytes && !overPrompt {
-		return docChunkSplitPlan{}, false
-	}
-
-	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, false)
-}
-
-func planSingletonDocChunkRetry(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
-	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, true)
+	return docChunkSplitPlan{groups: [][]string{blocks[:mid], blocks[mid:]}, reason: reason}, true
 }
 
 func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, force bool) (docChunkSplitPlan, bool) {
-	if sections := splitDocBlockSections(block); len(sections) > 1 {
-		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
-			reason := "singleton-structural"
-			if force {
-				reason = "singleton-retry-structural"
-			}
-			return docChunkSplitPlan{
-				groups: groups,
-				reason: reason,
-			}, true
+	prefix := "singleton-"
+	if force {
+		prefix = "singleton-retry-"
+	}
+	groups := [][]string{}
+	for _, section := range splitDocBlockSections(block) {
+		if strings.TrimSpace(section) != "" {
+			groups = append(groups, []string{section})
 		}
+	}
+	if len(groups) > 1 {
+		return docChunkSplitPlan{groups: groups, reason: prefix + "structural"}, true
 	}
 
 	if groups, ok := splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
-		reason := "singleton-fence"
-		if force {
-			reason = "singleton-retry-fence"
-		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: reason,
+			reason: prefix + "fence",
 		}, true
 	}
 
 	if groups, ok := splitPlainDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
-		reason := "singleton-lines"
-		if force {
-			reason = "singleton-retry-lines"
-		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: reason,
+			reason: prefix + "lines",
 		}, true
 	}
 
 	return docChunkSplitPlan{}, false
 }
 
-func wrapDocChunkSections(sections []string) [][]string {
-	groups := make([][]string, 0, len(sections))
-	for _, section := range sections {
-		if strings.TrimSpace(section) == "" {
-			continue
-		}
-		groups = append(groups, []string{section})
-	}
-	return groups
-}
-
 func splitDocBlockSections(block string) []string {
 	lines := strings.SplitAfter(block, "\n")
-	if len(lines) == 0 {
-		return nil
-	}
 	sections := make([]string, 0, len(lines))
 	var current strings.Builder
 	fenceDelimiter := ""
 	for _, line := range lines {
-		lineDelimiter := leadingFenceDelimiter(line)
-		if fenceDelimiter == "" && lineDelimiter != "" {
-			if current.Len() > 0 {
-				sections = append(sections, current.String())
-				current.Reset()
-			}
-			current.WriteString(line)
-			fenceDelimiter = lineDelimiter
-			continue
+		wasInFence := fenceDelimiter != ""
+		var toggled bool
+		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
+		if !wasInFence && toggled && current.Len() > 0 {
+			sections = append(sections, current.String())
+			current.Reset()
 		}
-
 		current.WriteString(line)
-		if fenceDelimiter != "" {
-			if lineDelimiter != "" && lineDelimiter[0] == fenceDelimiter[0] && len(lineDelimiter) >= len(fenceDelimiter) && isClosingFenceLine(line, fenceDelimiter) {
-				sections = append(sections, current.String())
-				current.Reset()
-				fenceDelimiter = ""
-			}
-			continue
-		}
-
-		if strings.TrimSpace(line) == "" {
+		if (wasInFence && toggled) || (fenceDelimiter == "" && strings.TrimSpace(line) == "") {
 			sections = append(sections, current.String())
 			current.Reset()
 		}
@@ -1032,23 +868,13 @@ func splitPlainDocSectionWithMode(text string, maxBytes, promptBudget int, force
 	if current.Len() > 0 {
 		groups = append(groups, []string{current.String()})
 	}
-	if len(groups) <= 1 {
-		if !force {
-			return nil, false
-		}
-		return splitPlainDocSectionMidpoint(lines)
+	if len(groups) > 1 {
+		return groups, true
 	}
-	return groups, true
-}
-
-func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
-	if len(lines) <= 1 {
+	if !force {
 		return nil, false
 	}
 	mid := len(lines) / 2
-	if mid <= 0 || mid >= len(lines) {
-		return nil, false
-	}
 	left := strings.Join(lines[:mid], "")
 	right := strings.Join(lines[mid:], "")
 	if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
@@ -1057,44 +883,18 @@ func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
 	return [][]string{{left}, {right}}, true
 }
 
-func firstNonEmptyLineIndex(lines []string) int {
-	for index, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			return index
-		}
-	}
-	return -1
-}
-
-func lastNonEmptyLineIndex(lines []string) int {
-	for index := len(lines) - 1; index >= 0; index-- {
-		if strings.TrimSpace(lines[index]) != "" {
-			return index
-		}
-	}
-	return -1
-}
-
 func docsI18nDocChunkMaxBytes() int {
-	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES"))
-	if value == "" {
-		return defaultDocChunkMaxBytes
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return defaultDocChunkMaxBytes
-	}
-	return parsed
+	return docsI18nPositiveInt("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", defaultDocChunkMaxBytes)
 }
 
 func docsI18nDocChunkPromptBudget() int {
-	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET"))
-	if value == "" {
-		return defaultDocChunkPromptBudget
-	}
-	parsed, err := strconv.Atoi(value)
+	return docsI18nPositiveInt("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", defaultDocChunkPromptBudget)
+}
+
+func docsI18nPositiveInt(name string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if err != nil || parsed <= 0 {
-		return defaultDocChunkPromptBudget
+		return fallback
 	}
 	return parsed
 }
@@ -1121,12 +921,12 @@ func stripCommonIndent(text string) (string, string) {
 		if strings.TrimSpace(trimmed) == "" {
 			continue
 		}
-		indent := leadingIndent(trimmed)
+		indent := leadingWhitespace(trimmed)
 		if common == "" {
 			common = indent
-			continue
+		} else {
+			common = commonIndentPrefix(common, indent)
 		}
-		common = commonIndentPrefix(common, indent)
 		if common == "" {
 			return text, ""
 		}
@@ -1141,11 +941,7 @@ func stripCommonIndent(text string) (string, string) {
 			out.WriteString(line)
 			continue
 		}
-		if strings.HasPrefix(line, common) {
-			out.WriteString(strings.TrimPrefix(line, common))
-			continue
-		}
-		out.WriteString(line)
+		out.WriteString(strings.TrimPrefix(line, common))
 	}
 	return out.String(), common
 }
@@ -1168,22 +964,8 @@ func reapplyCommonIndent(text, indent string) string {
 	return out.String()
 }
 
-func leadingIndent(line string) string {
-	index := 0
-	for index < len(line) {
-		if line[index] != ' ' && line[index] != '\t' {
-			break
-		}
-		index++
-	}
-	return line[:index]
-}
-
 func commonIndentPrefix(a, b string) string {
-	limit := len(a)
-	if len(b) < limit {
-		limit = len(b)
-	}
+	limit := min(len(a), len(b))
 	index := 0
 	for index < limit && a[index] == b[index] {
 		index++

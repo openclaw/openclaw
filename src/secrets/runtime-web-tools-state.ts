@@ -11,16 +11,16 @@ export function clearActiveRuntimeWebToolsMetadata(): void {
 }
 
 /**
- * Stores web-tool metadata with clone isolation from caller-owned objects.
+ * Stores metadata owned by the active secrets runtime snapshot.
  */
 export function setActiveRuntimeWebToolsMetadata(metadata: RuntimeWebToolsMetadata): void {
-  activeRuntimeWebToolsMetadata = structuredClone(metadata);
+  activeRuntimeWebToolsMetadata = metadata;
 }
 
 /**
  * Returns active web-tool metadata without exposing mutable runtime state.
  */
-export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
+export function getActiveRuntimeWebToolsMetadataFromState(): RuntimeWebToolsMetadata | null {
   if (!activeRuntimeWebToolsMetadata) {
     return null;
   }

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { FetchLike } from "../../../docker-runtime.js";
+import { setTimeout as sleep } from "node:timers/promises";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { fetchHealthUrl } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
-  "ghcr.io/matrix-construct/tuwunel:v1.8.2@sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78";
+  "ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
@@ -16,33 +18,25 @@ export type MatrixQaHarnessFiles = {
   composeFile: string;
   image: string;
   serverName: string;
-  homeserverPort: number;
   registrationToken: string;
 };
 
-export function buildVersionsUrl(baseUrl: string) {
+function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
 
 export async function isMatrixVersionsReachable(
   baseUrl: string,
-  fetchImpl: FetchLike,
-  timeoutMs = MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS,
+  timeoutSignal = AbortSignal.timeout(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS),
   signal?: AbortSignal,
 ) {
-  let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
-    response = await fetchImpl(buildVersionsUrl(baseUrl), {
+    const response = await fetchHealthUrl(buildVersionsUrl(baseUrl), {
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
     return response.ok;
   } catch {
     return false;
-  } finally {
-    try {
-      await response?.body?.cancel?.();
-    } catch {}
   }
 }
 
@@ -51,36 +45,18 @@ export async function withMatrixQaHarnessTimeout<T>(
   timeoutMs: number,
   task: Promise<T>,
 ): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return await raceWithTimeout(task, timeoutMs, () => {
+    throw new Error(`${label} timed out after ${timeoutMs}ms`);
+  });
 }
 
 export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
-  fetchImpl: FetchLike;
   hostBaseUrl: string;
-  sleepImpl: (ms: number) => Promise<unknown>;
-  timeoutMs?: number;
-  pollMs?: number;
 }) {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
+  const deadline = startedAt + 60_000;
   const candidateBaseUrls = params.containerBaseUrl
     ? [params.hostBaseUrl, params.containerBaseUrl]
     : [params.hostBaseUrl];
@@ -92,30 +68,24 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
+    const requestTimeoutMs = Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs);
     try {
-      // Race both network paths so neither stalled probe can starve or delay
-      // a healthy peer. The outer deadline also bounds injected fetch fakes.
-      reachableCandidate = await withMatrixQaHarnessTimeout(
-        "Matrix health probes",
-        remainingMs,
-        Promise.any(
-          candidateBaseUrls.map(async (baseUrl) => {
-            if (
-              await isMatrixVersionsReachable(
-                baseUrl,
-                params.fetchImpl,
-                Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
-                probeController.signal,
-              )
-            ) {
-              return baseUrl;
-            }
-            throw new Error("Matrix versions endpoint unreachable");
-          }),
-        ),
+      // Probe both paths in parallel so a stalled peer cannot delay a healthy one.
+      reachableCandidate = await Promise.any(
+        candidateBaseUrls.map(async (baseUrl) => {
+          if (
+            await isMatrixVersionsReachable(
+              baseUrl,
+              AbortSignal.timeout(Math.max(1, requestTimeoutMs)),
+              probeController.signal,
+            )
+          ) {
+            return baseUrl;
+          }
+          throw new Error("Matrix versions endpoint unreachable");
+        }),
       );
     } catch {
-      // Poll again after every candidate fails or the discovery deadline expires.
     } finally {
       probeController.abort();
     }
@@ -124,7 +94,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await params.sleepImpl(Math.min(pollMs, remainingSleepMs));
+      await sleep(Math.min(1_000, remainingSleepMs));
     }
   }
 
@@ -133,36 +103,33 @@ export async function waitForReachableMatrixBaseUrl(params: {
     : params.hostBaseUrl;
   throw new Error(
     [
-      `Matrix homeserver did not become healthy within ${Math.round(timeoutMs / 1000)}s.`,
+      "Matrix homeserver did not become healthy within 60s.",
       `Last checked: ${candidateLabel}`,
       `Hint: check container logs with \`docker compose -f ${params.composeFile} logs ${MATRIX_QA_SERVICE}\`.`,
     ].join("\n"),
   );
 }
 
-function resolveMatrixQaHarnessImage(image?: string) {
-  return (
-    image?.trim() || process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE
-  );
-}
+export async function writeMatrixQaHarnessFiles(params: {
+  outputDir: string;
+}): Promise<MatrixQaHarnessFiles> {
+  const image = process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE;
+  const registrationToken = `matrix-qa-${randomUUID()}`;
+  const serverName = MATRIX_QA_DEFAULT_SERVER_NAME;
+  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
+  const dataDir = path.join(params.outputDir, "data");
 
-function renderMatrixQaCompose(params: {
-  homeserverPort: number;
-  image: string;
-  registrationToken: string;
-  serverName: string;
-}) {
+  await fs.mkdir(dataDir, { recursive: true });
   // Omitting `published` lets Docker atomically choose and bind the host port;
   // probing a free numeric port before Compose starts races parallel harnesses.
-  const portMapping =
-    params.homeserverPort === 0
-      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
-      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
-  return `services:
+  await fs.writeFile(
+    composeFile,
+    `services:
   ${MATRIX_QA_SERVICE}:
-    image: ${params.image}
+    image: ${image}
     ports:
-${portMapping}
+      - target: ${MATRIX_QA_INTERNAL_PORT}
+        host_ip: 127.0.0.1
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -170,35 +137,11 @@ ${portMapping}
       TUWUNEL_ALLOW_REGISTRATION: "true"
       TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
       TUWUNEL_PORT: "${MATRIX_QA_INTERNAL_PORT}"
-      TUWUNEL_REGISTRATION_TOKEN: "${params.registrationToken}"
-      TUWUNEL_SERVER_NAME: "${params.serverName}"
+      TUWUNEL_REGISTRATION_TOKEN: "${registrationToken}"
+      TUWUNEL_SERVER_NAME: "${serverName}"
     volumes:
       - ./data:/var/lib/tuwunel
-`;
-}
-
-export async function writeMatrixQaHarnessFiles(params: {
-  outputDir: string;
-  image?: string;
-  homeserverPort: number;
-  registrationToken?: string;
-  serverName?: string;
-}): Promise<MatrixQaHarnessFiles> {
-  const image = resolveMatrixQaHarnessImage(params.image);
-  const registrationToken = params.registrationToken?.trim() || `matrix-qa-${randomUUID()}`;
-  const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
-  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
-  const dataDir = path.join(params.outputDir, "data");
-
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(
-    composeFile,
-    `${renderMatrixQaCompose({
-      homeserverPort: params.homeserverPort,
-      image,
-      registrationToken,
-      serverName,
-    })}\n`,
+\n`,
     { encoding: "utf8", mode: 0o600 },
   );
   return {
@@ -206,7 +149,6 @@ export async function writeMatrixQaHarnessFiles(params: {
     composeFile,
     image,
     serverName,
-    homeserverPort: params.homeserverPort,
     registrationToken,
   };
 }

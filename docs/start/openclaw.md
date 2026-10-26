@@ -6,19 +6,20 @@ read_when:
 title: "Personal assistant setup"
 ---
 
-OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
+OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant. Setting up a shared gateway for several people instead? See [Team setup](/start/teams).
 
-## Safety first
+## Good defaults first
 
-Giving an agent a channel puts it in a position to run commands on your machine (depending on your tool policy), read/write files in your workspace, and send messages back out via any connected channel. Start conservative:
+A connected agent is a capable one: depending on your tool policy it can run commands, work with files in its workspace, and message people on your behalf. The defaults keep that power scoped to you; a few settings are worth confirming up front:
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Heartbeats default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
+- Review the jobs in `openclaw automations list --all`. Setup creates an ordinary proactive-check job once for the ambient owner; disable it with `openclaw automations disable <job-id>` while you evaluate the setup. Immediate event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
 
 ## Prerequisites
 
 - OpenClaw installed and onboarded - see [Getting Started](/start/getting-started) if you haven't done this yet
+- The WhatsApp plugin installed, or WhatsApp chosen during onboarding. WhatsApp is an official plugin that installs on demand. See [WhatsApp](/channels/whatsapp)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ## The two-phone setup (recommended)
@@ -111,7 +112,7 @@ OpenClaw defaults to a good assistant setup, but you'll usually want to tune:
 
 - persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
-- heartbeats (once you trust it)
+- proactive automation jobs (once you trust it)
 
 Example:
 
@@ -120,22 +121,17 @@ Example:
   logging: { level: "info" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-5" },
       workspace: "~/.openclaw/workspace",
       thinkingDefault: "high",
       timeoutSeconds: 1800,
-      // Start with 0; enable later.
-      heartbeat: { every: "0m" },
     },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },
       },
-    ],
+    },
   },
   channels: {
     whatsapp: {
@@ -165,27 +161,44 @@ Example:
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `session.resetTriggers`). If sent alone, OpenClaw acknowledges the reset without invoking the model.
 - `/compact [instructions]` compacts the session context and reports the remaining context budget.
 
-## Heartbeats (proactive mode)
+<a id="heartbeats-proactive-mode" />
 
-By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
+## Proactive automations
 
-- If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
-- If no scratch exists, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK`, optionally with at most 300 characters of remaining text, OpenClaw suppresses outbound delivery for that heartbeat. The 300-character budget is fixed.
-- By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
-- Heartbeats run full agent turns - shorter intervals burn more tokens.
+Proactive checks are ordinary editable [Automations](/automation/cron-jobs).
+Explicit setup provisions a default check once for the ambient owner, normally
+every 30 minutes. When that agent uses Anthropic OAuth/token authentication,
+including Claude CLI reuse, the provider's setup default is one hour. Later
+provider changes do not rewrite an existing job's schedule.
 
-```json5
-{
-  agents: {
-    defaults: {
-      heartbeat: { every: "30m" },
-    },
-  },
-}
+The default check uses the owner's main conversation, gives foreground work
+priority, and delivers to a positively identified owner DM. Its instructions
+ask it to follow its scratch checklist and relevant context, avoid repeating old
+tasks, and return `NO_REPLY` when nothing needs attention. Edit its schedule,
+prompt, active hours, or delivery on the **Automations** page or through the CLI:
+
+```bash
+openclaw automations list --all
+openclaw automations show <job-id>
+openclaw automations edit <job-id> --every 30m
+openclaw automations scratch <job-id> --set "Check only for newly blocked work."
+openclaw automations disable <job-id>
 ```
+
+The default job sets `skipIfScratchEmpty`: explicitly empty scratch (blank lines,
+comments, headings, fence markers, or empty checklist stubs) skips a run. Missing
+scratch still runs. Use `--direct-policy block` to block DM delivery, or
+`--no-deliver` to disable runner fallback delivery. These policies are stored on
+the job, not under agent heartbeat configuration.
+
+Run `openclaw doctor --fix` to migrate supported July 2026 and later heartbeat
+configuration and checklists. After migration, edit or remove the job itself;
+restarts, config reloads, and later Doctor runs do not recreate a deleted job.
+See [Heartbeat migration](/gateway/heartbeat).
+
+Checks run full agent turns, so shorter intervals use more tokens. Immediate
+events such as background exec completion use normal session execution and do
+not depend on a periodic job being enabled.
 
 ## Media in and out
 
@@ -220,19 +233,24 @@ text. Markdown wrappers, code fences, and inline prose such as
 
 Local-path behavior follows the same file-read trust model as the agent:
 
-- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `true`, outbound local media paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and files generated in the active session sandbox. Files in sibling sandboxes remain inaccessible.
 - If `tools.fs.workspaceOnly` is `false`, outbound local media can use host-local files the agent is already allowed to read.
 - Local paths can be absolute, workspace-relative, or home-relative with `~/`.
-- Host-local sends still only allow media and safe document types (images, audio, video, PDF, Office documents, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is an extension of the existing host-read trust boundary, not a secret scanner: if the agent can read a host-local `secret.txt` or `config.json`, it can attach that file when the extension and content validation match.
+- Host-local sends still only allow media and supported document types (images, audio, video, PDF, Office documents including macro-enabled Excel `.xlsm`, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is an extension of the existing host-read trust boundary, not a secret scanner: if the agent can read a host-local `secret.txt` or `config.json`, it can attach that file when the extension and content validation match. File-type validation does not establish that an attached workbook's macros are safe to run.
 
 Keep sensitive files outside the agent-readable filesystem, or keep `tools.fs.workspaceOnly: true` for stricter local-path sends.
+
+When the message tool cannot stage an attachment for the current conversation,
+its error identifies the file and the reported reason, such as a missing file or
+an unsupported local format. Being inside the workspace does not make every
+file type eligible for host-local attachment reads.
 
 ## Operations checklist
 
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)
+openclaw status --deep   # check channels (WhatsApp Web + Telegram + Discord + Slack + Signal)
 openclaw health --json   # gateway health snapshot over the WS connection
 ```
 

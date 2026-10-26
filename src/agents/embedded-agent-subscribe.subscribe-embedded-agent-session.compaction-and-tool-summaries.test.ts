@@ -1,520 +1,252 @@
-// Compaction retry state, fenced retry output, and tool summaries.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
-import { onAgentEvent } from "../infra/agent-events.js";
-import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { EmbeddedContextAccountingEvent } from "./embedded-agent-runner/run/internal-params.js";
+import {
+  createStubSessionHarness,
+  createSubscribedSessionHarness,
+} from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-type SessionEventHandler = (evt: unknown) => void;
-
-describe("fenced output and compaction retries", () => {
-  it("waits for auto-compaction retry and clears buffered text", async () => {
-    // A retrying compaction invalidates any assistant text buffered from the
-    // failed attempt; waiters resolve only after the retry path reaches agent_end.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {
-          const index = listeners.indexOf(listener);
-          if (index !== -1) {
-            listeners.splice(index, 1);
-          }
-        };
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-1",
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "oops" }],
-    } as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
-
-    expect(subscription.assistantTexts.length).toBe(1);
-
-    for (const listener of listeners) {
-      listener({
-        type: "compaction_end",
-        willRetry: true,
-      });
-    }
-
-    expect(subscription.isCompacting()).toBe(true);
-    expect(subscription.assistantTexts.length).toBe(0);
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    for (const listener of listeners) {
-      listener({ type: "agent_end" });
-    }
-
-    await waitPromise;
-    expect(resolved).toBe(true);
+function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
+  const observed: EmbeddedContextAccountingEvent[] = [];
+  const result = createSubscribedSessionHarness({
+    runId: "compaction",
+    onContextAccountingEvent: (event) => observed.push(event),
+    ...params,
   });
-
-  it("clears the exact usage snapshot when compaction starts a new attempt", () => {
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-usage-reset" });
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "before compaction" }],
-      usage: {
-        input: 100,
-        output: 20,
-        cacheRead: 300,
-        cacheWrite: 0,
-        totalTokens: 420,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-    } as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
-    expect(subscription.getLastAssistantUsage()).toMatchObject({
-      input: 100,
-      output: 20,
-      cacheRead: 300,
-      total: 420,
-    });
-
-    for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: true });
-    }
-    expect(subscription.getLastAssistantUsage()).toBeUndefined();
-  });
-  it("resolves after compaction ends without retry", async () => {
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-2",
-    });
-
-    for (const listener of listeners) {
-      listener({ type: "compaction_start" });
-    }
-
-    expect(subscription.isCompacting()).toBe(true);
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
-    }
-
-    await waitPromise;
-    expect(resolved).toBe(true);
-    expect(subscription.isCompacting()).toBe(false);
-  });
-
-  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
-    // When compaction ends the active assistant message is synthetic, so usage
-    // should reset to a zero snapshot instead of carrying stale token totals.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "old" }],
-          usage: {
-            input: 120,
-            output: 30,
-            cacheRead: 5,
-            cacheWrite: 0,
-            totalTokens: 155,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
-          },
-        },
-      ],
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {};
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-3",
-    });
-
-    for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
-    }
-
-    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
-    expect(usage).toEqual(makeZeroUsageSnapshot());
-  });
+  onTestFinished(() => result.subscription.unsubscribe());
+  return {
+    ...result,
+    observed,
+    attempt: () => [
+      result.subscription.getCurrentAttemptAssistant(),
+      result.subscription.assistantTexts,
+      result.subscription.getLastAssistantUsage(),
+    ],
+    startTool: (toolName: string, args: Record<string, unknown>, toolCallId = toolName) =>
+      result.emit({ type: "tool_execution_start", toolName, toolCallId, args }),
+    endTool: (toolName: string, text: string) =>
+      result.emit({
+        type: "tool_execution_end",
+        toolName,
+        toolCallId: toolName,
+        isError: false,
+        result: { content: [{ type: "text", text }] },
+      }),
+  };
+}
+function completed(willRetry = true, tokensBefore = 100, tokensAfter = 50) {
+  return {
+    type: "compaction_end",
+    reason: willRetry ? "overflow" : "threshold",
+    outcome: { status: "completed", tokensBefore, tokensAfter, willRetry },
+  } as const;
+}
+const skipped = {
+  type: "compaction_end",
+  reason: "threshold",
+  outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
+} as const;
+const usage = (input: number, output = 0, cacheRead = 0) => ({
+  ...makeZeroUsageSnapshot(),
+  input,
+  output,
+  cacheRead,
+  totalTokens: input + output + cacheRead,
 });
-
-describe("canvas tool summaries", () => {
-  it("includes canvas action metadata in tool summaries", async () => {
-    // Canvas actions need their JSONL path in summaries so users can inspect the
-    // generated artifact without verbose tool output.
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-canvas-tool",
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "canvas",
-      toolCallId: "tool-canvas-1",
-      args: { action: "a2ui_push", jsonlPath: "/tmp/a2ui.jsonl" },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls.at(0)?.[0];
-    expect(payload.text).toContain("🖼️");
-    expect(payload.text).toContain("Canvas");
-    expect(payload.text).toContain("/tmp/a2ui.jsonl");
+function assistant(input: number, overrides: Partial<AssistantMessage> = {}) {
+  return makeAgentAssistantMessage({
+    content: [{ type: "text", text: "model reply" }],
+    usage: usage(input),
+    ...overrides,
   });
-  it("skips tool summaries when shouldEmitToolResult is false", () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool-off",
-      shouldEmitToolResult: () => false,
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-2",
-      args: { path: "/tmp/b.txt" },
-    });
-
-    expect(onToolResult).not.toHaveBeenCalled();
-  });
-  it("emits tool summaries when shouldEmitToolResult overrides verbose", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool-override",
-      verboseLevel: "off",
-      shouldEmitToolResult: () => true,
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-3",
-      args: { path: "/tmp/c.txt" },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-  });
-});
-
-function toolResultPayloadAt(
-  onToolResult: ReturnType<typeof vi.fn>,
-  index: number,
-): {
-  text?: string;
-} {
-  // Tool summary assertions only need text payloads from onToolResult calls.
-  const [payload] = onToolResult.mock.calls[index] ?? [];
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`expected tool result payload for call ${index + 1}`);
-  }
-  return payload as { text?: string };
+}
+type Emit = ReturnType<typeof harness>["emit"];
+function message(emit: Emit, value: AssistantMessage) {
+  emit({ type: "message_start", message: value });
+  emit({ type: "message_end", message: value });
 }
 
-describe("subscribeEmbeddedAgentSession", () => {
-  it("waits for multiple compaction retries before resolving", async () => {
-    // Each retrying compaction requires a matching agent_end before waiters are
-    // released, preventing early continuation during repeated overflow repairs.
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-3",
-    });
+it.each([false, true])(
+  "records unavailable context without old usage backfill (failed retry=%s)",
+  (failedRetry) => {
+    const { emit, observed } = harness({ sessionPersistence: "detached" });
+    if (failedRetry) {
+      message(emit, assistant(90_000));
+    }
+    emit(completed(failedRetry, 90_000, 12_000));
+    message(
+      emit,
+      failedRetry
+        ? assistant(0, { stopReason: "error" })
+        : assistant(90_000, {
+            usage: { ...usage(90_000), contextUsage: { state: "unavailable" } },
+          }),
+    );
+    expect(observed).toEqual(
+      (failedRetry ? [90_000, undefined] : [undefined]).map((contextTokens) => ({
+        kind: "model",
+        contextTokens,
+        successful: false,
+      })),
+    );
+  },
+);
 
-    emit({ type: "compaction_end", willRetry: true });
-    emit({ type: "compaction_end", willRetry: true });
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    emit({ type: "agent_end" });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    emit({ type: "agent_end" });
-
-    await waitPromise;
-    expect(resolved).toBe(true);
+it("captures repaired model usage before queued delivery and throwing cleanup", async () => {
+  const deliveryStarted = createDeferred();
+  const releaseDelivery = createDeferred();
+  const cleanupError = new Error("subscription cleanup failed");
+  const observed: EmbeddedContextAccountingEvent[] = [];
+  const { session, emit } = createStubSessionHarness();
+  const subscribe = session.subscribe.bind(session);
+  session.subscribe = (listener) => {
+    const unsubscribe = subscribe(listener);
+    return () => {
+      unsubscribe();
+      throw cleanupError;
+    };
+  };
+  let aborted = false;
+  const subscription = subscribeEmbeddedAgentSession({
+    session,
+    runId: "held-accounting",
+    sessionPersistence: "detached",
+    isTerminalAborted: () => aborted,
+    blockReplyBreak: "message_end",
+    onBlockReply: () => {},
+    onBlockReplyFlush: () => {
+      deliveryStarted.resolve();
+      return releaseDelivery.promise;
+    },
+    onContextAccountingEvent: (event) => observed.push(event),
   });
-
-  it("does not count compaction until end event", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-count",
-    });
-
-    emit({ type: "compaction_start" });
-    expect(subscription.getCompactionCount()).toBe(0);
-
-    // willRetry with result — counter IS incremented (overflow compaction succeeded)
+  const expected: EmbeddedContextAccountingEvent[] = [
+    { kind: "model", contextTokens: 90_000, successful: false },
+    { kind: "model", contextTokens: 20_000, successful: false },
+  ];
+  try {
+    message(emit, assistant(90_000));
+    await deliveryStarted.promise;
+    emit(completed(false, 90_000, 12_000));
+    const after = assistant(0);
+    emit({ type: "message_start", message: after });
+    const partial = { ...after, usage: usage(18_000, 0, 2_000) };
     emit({
-      type: "compaction_end",
-      willRetry: true,
-      result: { summary: "s", tokensAfter: 12_345 },
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_end",
+        contentIndex: 0,
+        content: "model reply",
+        partial,
+      },
     });
+    emit({ type: "message_end", message: after });
+    for (const model of ["delivery-mirror", "gateway-injected"]) {
+      message(emit, { ...assistant(99_000), provider: "openclaw", model });
+      const withoutUsage = { role: "assistant", provider: "openclaw", model };
+      emit({ type: "message_end", message: withoutUsage });
+      expect(withoutUsage).not.toHaveProperty("usage");
+    }
+    expect(observed).toEqual(expected);
+    expect(after.usage.input).toBe(18_000);
+    aborted = true;
+  } finally {
+    try {
+      expect(() => subscription.unsubscribe()).toThrow(cleanupError);
+    } finally {
+      releaseDelivery.resolve();
+      await subscription.waitForPendingEvents();
+    }
+  }
+  expect(observed).toEqual(expected);
+});
+
+it.each([false, true])("waits for compaction and every retry (retry=%s)", async (retry) => {
+  const { emit, subscription, attempt } = harness();
+  emit({ type: "compaction_start" });
+  expect(subscription.isCompacting()).toBe(true);
+  expect(subscription.getCompactionCount()).toBe(0);
+  if (retry) {
+    const reply = assistant(100, { usage: usage(100, 20, 300) });
+    emit({ type: "message_end", message: reply });
+    expect(attempt()).toEqual([
+      reply,
+      ["model reply"],
+      expect.objectContaining({ input: 100, output: 20, cacheRead: 300, total: 420 }),
+    ]);
+    emit(completed(true, 20_000, 12_345));
+    expect(attempt()).toEqual([undefined, [], undefined]);
     expect(subscription.getCompactionCount()).toBe(1);
     expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
-
-    // willRetry=false with result — counter incremented again
-    emit({
-      type: "compaction_end",
-      willRetry: false,
-      result: { summary: "s2", tokensAfter: 6_789 },
-    });
+    emit(completed());
     expect(subscription.getCompactionCount()).toBe(2);
-    expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
-  });
-
-  it("clears the completed assistant when compaction schedules a retry", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-assistant",
-    });
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "Reply before compaction" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistant });
-    expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);
-    expect(subscription.assistantTexts).toEqual(["Reply before compaction"]);
-
-    emit({ type: "compaction_end", willRetry: true });
-    expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
-    expect(subscription.assistantTexts).toEqual([]);
-  });
-
-  it("does not count compaction when result is absent", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-compaction-no-result",
-    });
-
-    // No result (e.g. aborted or cancelled) — counter stays at 0
-    emit({ type: "compaction_end", willRetry: false, result: undefined });
-    expect(subscription.getCompactionCount()).toBe(0);
-
-    emit({ type: "compaction_end", willRetry: false, aborted: true });
-    expect(subscription.getCompactionCount()).toBe(0);
-  });
-
-  it("emits compaction events on the agent event bus", () => {
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-compaction",
-    });
-    const events: Array<{ phase: string; willRetry?: boolean }> = [];
-    const stop = onAgentEvent((evt) => {
-      if (evt.runId !== "run-compaction") {
-        return;
-      }
-      if (evt.stream !== "compaction") {
-        return;
-      }
-      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      events.push({
-        phase,
-        willRetry: typeof evt.data?.willRetry === "boolean" ? evt.data.willRetry : undefined,
-      });
-    });
-
-    emit({ type: "compaction_start" });
-    emit({ type: "compaction_end", willRetry: true });
-    emit({ type: "compaction_end", willRetry: false });
-
-    stop();
-
-    expect(events).toEqual([
-      { phase: "start" },
-      { phase: "end", willRetry: true },
-      { phase: "end", willRetry: false },
-    ]);
-  });
-
-  it("rejects compaction wait with AbortError when unsubscribed", async () => {
-    const abortCompaction = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-abort-on-unsubscribe",
-      sessionExtras: { isCompacting: true, abortCompaction },
-    });
-
-    emit({ type: "compaction_start" });
-
-    const waitPromise = subscription.waitForCompactionRetry();
-    subscription.unsubscribe();
-
-    const firstAbort = await waitPromise.catch((error: unknown) => error);
-    expect(firstAbort).toBeInstanceOf(Error);
-    expect((firstAbort as Error).name).toBe("AbortError");
-    const secondAbort = await subscription
-      .waitForCompactionRetry()
-      .catch((error: unknown) => error);
-    expect(secondAbort).toBeInstanceOf(Error);
-    expect((secondAbort as Error).name).toBe("AbortError");
-    expect(abortCompaction).toHaveBeenCalledTimes(1);
-  });
-
-  it("emits tool summaries at tool start when verbose is on", async () => {
-    const onToolResult = vi.fn();
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-tool",
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-1",
-      args: { path: "/tmp/a.txt" },
-    });
-
-    // Wait for async handler to complete
+  }
+  const resolved = vi.fn();
+  const pending = subscription.waitForCompactionRetry().then(resolved);
+  await Promise.resolve();
+  expect(resolved).not.toHaveBeenCalled();
+  if (retry) {
+    emit({ type: "agent_end" });
     await Promise.resolve();
+    expect(resolved).not.toHaveBeenCalled();
+  }
+  emit(retry ? { type: "agent_end" } : skipped);
+  await pending;
+  expect(resolved).toHaveBeenCalledOnce();
+  expect(subscription.isCompacting()).toBe(false);
+});
 
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = toolResultPayloadAt(onToolResult, 0);
-    expect(payload?.text).toContain("/tmp/a.txt");
-
-    toolHarness.emit({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "tool-1",
-      isError: false,
-      result: "ok",
-    });
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
+it("rejects compaction waits with AbortError when unsubscribed", async () => {
+  const abortCompaction = vi.fn();
+  const { emit, subscription } = harness({
+    sessionExtras: { isCompacting: true, abortCompaction },
   });
-  it("includes browser action metadata in tool summaries", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-browser-tool",
-      verboseLevel: "on",
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "browser",
-      toolCallId: "tool-browser-1",
-      args: { action: "snapshot", targetUrl: "https://example.com" },
-    });
-
-    // Wait for async handler to complete
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = toolResultPayloadAt(onToolResult, 0);
-    expect(payload?.text).toContain("🌐");
-    expect(payload?.text).toContain("Browser");
-    expect(payload?.text).toContain("https://example.com");
+  emit({ type: "compaction_start" });
+  const pending = subscription.waitForCompactionRetry();
+  subscription.unsubscribe();
+  for (const wait of [pending, subscription.waitForCompactionRetry()]) {
+    const aborted: unknown = await wait.catch((error: unknown) => error);
+    expect(aborted).toBeInstanceOf(Error);
+    expect(aborted).toHaveProperty("name", "AbortError");
+  }
+  expect(abortCompaction).toHaveBeenCalledTimes(1);
+});
+it.each(["off", "on", "full"] as const)("emits %s tool summaries", async (verboseLevel) => {
+  const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
+  const { subscription, startTool, endTool } = harness({
+    verboseLevel,
+    onToolResult,
+    ...(verboseLevel === "off" ? { shouldEmitToolResult: () => true } : {}),
   });
-
-  it("emits exec output in full verbose mode and includes PTY indicator", async () => {
-    const onToolResult = vi.fn();
-
-    const toolHarness = createSubscribedSessionHarness({
-      runId: "run-exec-full",
-      verboseLevel: "full",
-      onToolResult,
-    });
-
-    toolHarness.emit({
-      type: "tool_execution_start",
-      toolName: "exec",
-      toolCallId: "tool-exec-1",
-      args: { command: "claude", pty: true },
-    });
-
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(1);
-    const summary = toolResultPayloadAt(onToolResult, 0);
-    expect(summary?.text).toContain("pty");
-    expect(summary?.text).toContain("claude");
-
-    toolHarness.emit({
-      type: "tool_execution_end",
-      toolName: "exec",
-      toolCallId: "tool-exec-1",
-      isError: false,
-      result: { content: [{ type: "text", text: "hello\nworld" }] },
-    });
-
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    const output = toolResultPayloadAt(onToolResult, 1);
-    expect(output?.text).toContain("hello");
-    expect(output?.text).toContain("```txt");
-
-    toolHarness.emit({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "tool-read-1",
-      isError: false,
-      result: { content: [{ type: "text", text: "file data" }] },
-    });
-
-    await Promise.resolve();
-
-    expect(onToolResult).toHaveBeenCalledTimes(3);
-    const readOutput = toolResultPayloadAt(onToolResult, 2);
-    expect(readOutput?.text).toContain("file data");
-  });
+  const steps =
+    verboseLevel === "full"
+      ? ([
+          ["exec", { command: "claude", pty: true }, ["pty", "claude"]],
+          ["exec", "hello\nworld", ["hello", "```txt"]],
+          ["read", "file data", ["file data"]],
+        ] as const)
+      : verboseLevel === "off"
+        ? ([["read", { path: "/tmp/c.txt" }, []]] as const)
+        : ([["exec", { command: "echo private-sentinel" }, ["Exec"]]] as const);
+  for (const [index, [toolName, input, expected]] of steps.entries()) {
+    if (typeof input === "string") {
+      endTool(toolName, input);
+    } else {
+      startTool(toolName, input);
+    }
+    await subscription.waitForPendingEvents();
+    expect(onToolResult).toHaveBeenCalledTimes(index + 1);
+    for (const fragment of expected) {
+      expect(onToolResult.mock.calls[index]?.[0].text).toContain(fragment);
+    }
+  }
+  if (verboseLevel === "on") {
+    expect(onToolResult.mock.calls[0]?.[0].text).not.toContain("private-sentinel");
+  }
 });

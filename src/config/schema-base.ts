@@ -1,27 +1,16 @@
-// Builds base config schema metadata shared across generated config surfaces.
-import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import type { ConfigUiHints } from "./schema.hints.js";
-import {
-  applySensitiveUrlHints,
-  buildBaseHints,
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
-} from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths, type ConfigUiHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
-  cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
+  type ConfigSchemaResponse,
 } from "./schema.shared.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 type ConfigSchema = Record<string, unknown>;
-
-const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
 
 /**
  * Recursively walk a JSON Schema object and apply field docs using dot-path
@@ -29,44 +18,25 @@ const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
  * preserved.
  */
 function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly string[] = [""]): void {
-  const props = node.properties;
-  if (props) {
-    for (const [key, child] of Object.entries(props)) {
-      const childObj = asSchemaObject(child);
-      if (!childObj) {
-        continue;
-      }
-      const childPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key));
-      applyNodeDocumentation(childObj, childPrefixes);
-      applyFieldDocumentation(childObj, childPrefixes);
-    }
+  for (const [key, child] of Object.entries(node.properties ?? {})) {
+    applyChildDocumentation(
+      child,
+      prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key)),
+    );
   }
-  // Handle additionalProperties (wildcard keys like "models.providers.*")
-  if (node.additionalProperties && typeof node.additionalProperties === "object") {
-    const addObj = asSchemaObject(node.additionalProperties);
-    if (addObj) {
-      const wildcardPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*"));
-      applyNodeDocumentation(addObj, wildcardPrefixes);
-      applyFieldDocumentation(addObj, wildcardPrefixes);
-    }
+  if (node.additionalProperties) {
+    applyChildDocumentation(
+      node.additionalProperties,
+      prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*")),
+    );
   }
-  // Handle array items. Help/labels may use either "[]" notation
-  // (bindings[].type) or wildcard "*" notation (agents.list.*.skills).
+  // Array help/labels accept both bindings[].type and bindings.*.type.
   if (node.items) {
-    const itemsObj = asSchemaObject(node.items);
-    if (itemsObj) {
-      const itemPrefixes = Array.from(
-        new Set(
-          prefixes.flatMap((prefix) => {
-            const arrayPath = prefix ? `${prefix}[]` : "[]";
-            const wildcardAlias = prefix ? `${prefix}.*` : "*";
-            return wildcardAlias === arrayPath ? [arrayPath] : [wildcardAlias, arrayPath];
-          }),
-        ),
-      );
-      applyNodeDocumentation(itemsObj, itemPrefixes);
-      applyFieldDocumentation(itemsObj, itemPrefixes);
-    }
+    applyChildDocumentation(node.items, [
+      ...new Set(
+        prefixes.flatMap((prefix) => (prefix ? [`${prefix}.*`, `${prefix}[]`] : ["*", "[]"])),
+      ),
+    ]);
   }
   // Recurse into composition branches (anyOf, oneOf, allOf) using the same
   // path aliases so union/intersection variants inherit the same field docs.
@@ -83,7 +53,11 @@ function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly stri
   }
 }
 
-function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly string[]): void {
+function applyChildDocumentation(value: unknown, pathCandidates: readonly string[]): void {
+  const node = asSchemaObject(value);
+  if (!node) {
+    return;
+  }
   for (const path of pathCandidates) {
     const title = FIELD_LABELS[path];
     if (!node.title && title) {
@@ -94,22 +68,16 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
       node.description = description;
     }
   }
+  applyFieldDocumentation(node, pathCandidates);
 }
 
-type BaseConfigSchemaResponse = {
-  schema: ConfigSchema;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
+type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;
 
-type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
-
-function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
+  // Zod returns an independent JSON tree; prepare it before publishing the cache.
+  const root = asSchemaObject(schema);
   if (!root || !root.properties) {
-    return next;
+    return schema;
   }
   // Allow `$schema` in config files for editor tooling, but hide it from the
   // Control UI form schema so it does not show up as a configurable section.
@@ -119,66 +87,24 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {
-    channelsNode.properties = {};
-    channelsNode.required = [];
+    // Keep plugin config permissive without advertising an untyped lookup wildcard.
     channelsNode.additionalProperties = true;
   }
-  return next;
-}
-
-function stripObjectPropertyPath(schema: ConfigSchema, path: readonly string[]): void {
-  const root = asSchemaObject(schema);
-  if (!root || path.length === 0) {
-    return;
-  }
-
-  let current: JsonSchemaObject | null = root;
-  for (const segment of path.slice(0, -1)) {
-    current = asSchemaObject(current?.properties?.[segment]);
-    if (!current) {
-      return;
-    }
-  }
-
-  const key = path[path.length - 1];
-  if (!current?.properties || !key) {
-    return;
-  }
-  delete current.properties[key];
-  if (Array.isArray(current.required)) {
-    current.required = current.required.filter((entry) => entry !== key);
-  }
-}
-
-function stripLegacyCompatSchemaPaths(schema: ConfigSchema): ConfigSchema {
-  const next = cloneSchema(schema);
-  for (const path of LEGACY_HIDDEN_PUBLIC_PATHS) {
-    stripObjectPropertyPath(next, path.split("."));
-  }
-  return next;
-}
-
-function stripLegacyCompatHints(hints: ConfigUiHints): ConfigUiHints {
-  const next: ConfigUiHints = { ...hints };
-  for (const path of LEGACY_HIDDEN_PUBLIC_PATHS) {
-    for (const key of Object.keys(next)) {
-      if (key === path || key.startsWith(`${path}.`) || key.startsWith(`${path}[`)) {
-        delete next[key];
-      }
-    }
-  }
-  return next;
+  return schema;
 }
 
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
+let baseConfigUiHints: ConfigUiHints | undefined;
+
+/** Core redaction needs sensitivity facts without materializing the JSON schema. */
+export function computeBaseConfigUiHints(): ConfigUiHints {
+  baseConfigUiHints ??= mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
+  return structuredClone(baseConfigUiHints);
+}
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (baseConfigSchemaStablePayload) {
-    return {
-      schema: cloneSchema(baseConfigSchemaStablePayload.schema),
-      uiHints: cloneSchema(baseConfigSchemaStablePayload.uiHints),
-      version: baseConfigSchemaStablePayload.version,
-    };
+    return baseConfigSchemaStablePayload;
   }
   const schema = OpenClawSchema.toJSONSchema({
     io: "input",
@@ -190,40 +116,24 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (schemaRoot) {
     applyFieldDocumentation(schemaRoot);
   }
-  const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
-  const sensitiveUrlPaths = collectMatchingSchemaPaths(
-    OpenClawSchema,
-    "",
-    isSensitiveUrlConfigPath,
-  );
-  const publicSchema = stripLegacyCompatSchemaPaths(stripChannelSchema(schema));
+  const baseHints = computeBaseConfigUiHints();
+  const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
-    uiHints: applyDerivedTags(
-      applyResolvedConfigTierHints(
-        publicSchema,
-        stripLegacyCompatHints(
-          applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
-        ),
-      ),
-    ),
+    uiHints: applyResolvedConfigTierHints(publicSchema, baseHints),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;
-  return {
-    schema: cloneSchema(stablePayload.schema),
-    uiHints: cloneSchema(stablePayload.uiHints),
-    version: stablePayload.version,
-  };
+  return stablePayload;
 }
 
 export function computeBaseConfigSchemaResponse(params?: {
   generatedAt?: string;
-}): BaseConfigSchemaResponse {
+}): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
-    schema: stablePayload.schema,
-    uiHints: stablePayload.uiHints,
+    schema: structuredClone(stablePayload.schema),
+    uiHints: structuredClone(stablePayload.uiHints),
     version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };

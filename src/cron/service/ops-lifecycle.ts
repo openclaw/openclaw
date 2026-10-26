@@ -1,178 +1,130 @@
-import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { subscribeCronJobsStoreMutations } from "../store.js";
 import { locked } from "./locked.js";
-import { emitCronRunFinished } from "./ops-run-preparation.js";
-import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
-import {
-  type InterruptedStartupRun,
-  markInterruptedStartupRun,
-  restoreFinalizedStartupRun,
-  STARTUP_INTERRUPTED_ERROR,
-} from "./startup-run-repair.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
-import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
-import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
+import { stopCronRunQueue, drainCronRunQueue, waitForCronRunQueue } from "./run-queue.js";
+import { recoverCronRuns } from "./run-recovery.js";
+import { refreshCronScheduler, startCronScheduler, stopCronScheduler } from "./scheduler-actor.js";
+import { emit, type CronServiceState } from "./state.js";
+import { ensureLoaded } from "./store.js";
 
-/** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
-export async function start(state: CronServiceState) {
+const mutationSubscriptions = new WeakMap<CronServiceState, () => void>();
+
+/** Adopt published rows; the worker alone recomputes schedules after this lock releases. */
+export async function reloadProvisionedCronJobs(
+  state: CronServiceState,
+  generation = state.lifecycleGeneration,
+  previousIds = new Set(state.store?.jobs.map((job) => job.id)),
+): Promise<void> {
+  if (state.stopped || state.lifecycleGeneration !== generation || !state.schedulerStarted) {
+    return;
+  }
+  await ensureLoaded(state);
+  if (state.stopped || state.lifecycleGeneration !== generation) {
+    return;
+  }
+  refreshCronScheduler(state);
+  for (const job of state.store?.jobs ?? []) {
+    if (!previousIds.has(job.id)) {
+      emit(state, { jobId: job.id, action: "added", job, nextRunAtMs: job.state.nextRunAtMs });
+    }
+  }
+}
+
+function subscribeStoreMutations(state: CronServiceState): void {
+  mutationSubscriptions.get(state)?.();
+  const generation = state.lifecycleGeneration;
+  mutationSubscriptions.set(
+    state,
+    subscribeCronJobsStoreMutations(state.deps.storeKey, () => {
+      const refresh = async () => {
+        await locked(state, () => reloadProvisionedCronJobs(state, generation));
+        if (!state.stopped && state.lifecycleGeneration === generation && state.schedulerStarted) {
+          await state.deps.onProvisionedJobsReloaded?.();
+        }
+      };
+      const work = runInDetachedAsyncContext(() =>
+        state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(refresh) : refresh(),
+      ).catch((error: unknown) => {
+        state.deps.log.warn({ err: String(error) }, "cron: failed to adopt provisioned jobs");
+      });
+      state.schedulerDrain = Promise.all([state.schedulerDrain, work]).then(() => undefined);
+    }),
+  );
+}
+
+/** Recover committed state before the worker starts dispatching new requests. */
+export async function start(state: CronServiceState): Promise<void> {
+  if (state.schedulerStarted) {
+    return;
+  }
+  const generation = state.lifecycleGeneration;
+  await state.schedulerDrain;
+  if (state.lifecycleGeneration !== generation) {
+    return;
+  }
+  if (state.schedulerScope.signal.aborted) {
+    state.schedulerScope = state.deps.scheduler.scope();
+  }
   state.stopped = false;
-  if (!state.deps.cronEnabled) {
-    state.deps.log.info({ enabled: false }, "cron: disabled");
+  const startupJobIds = new Set<string>();
+  const skipJobIds = await locked(state, async () => {
+    await ensureLoaded(state);
+    const recovered = await recoverCronRuns(state);
+    for (const job of state.store?.jobs ?? []) {
+      startupJobIds.add(job.id);
+    }
+    return recovered;
+  });
+  if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }
-
-  const interruptedJobIds = new Set<string>();
-  const interruptedRuns: InterruptedStartupRun[] = [];
-  const completedJobIdsToDelete = new Set<string>();
-  let repairedAnyStartupRun = false;
-  const postPersistNotifications: DeferredCronNotifications = [];
-  await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.stopped) {
-      return;
-    }
-    const jobs = state.store?.jobs ?? [];
-    for (const job of jobs) {
-      job.state ??= {};
-      if (typeof job.state.queuedAtMs === "number") {
-        state.deps.log.info(
-          { jobId: job.id, queuedAtMs: job.state.queuedAtMs },
-          "cron: releasing queued job reservation on startup",
-        );
-        job.state.queuedAtMs = undefined;
-        repairedAnyStartupRun = true;
-      }
-      if (typeof job.state.runningAtMs === "number") {
-        // Older releases used runningAtMs for both queued and active work. Those
-        // rows are intentionally recovered conservatively to avoid replaying side effects.
-        const runningAtMs = job.state.runningAtMs;
-        const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
-        const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
-        if (finalized) {
-          const repaired = restoreFinalizedStartupRun({
-            state,
-            job,
-            runningAtMs,
-            entry: finalized.entry,
-            ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
-            ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
-            deferredNotifications: postPersistNotifications,
-          });
-          // Skip only the old invocation; a distinct overdue replacement
-          // must remain eligible for normal one-shot startup catch-up.
-          if (repaired.replacementAtMs === undefined) {
-            interruptedJobIds.add(job.id);
-          }
-          if (repaired.shouldDelete) {
-            completedJobIdsToDelete.add(job.id);
-          }
-          repairedAnyStartupRun = true;
-          continue;
-        }
-        const nowMs = state.deps.nowMs();
-        const interrupted = markInterruptedStartupRun({
-          state,
-          job,
-          taskRunId,
-          runningAtMs,
-          nowMs,
-          deferredNotifications: postPersistNotifications,
-        });
-        if (interrupted.replacementAtMs === undefined) {
-          interruptedJobIds.add(job.id);
-        }
-        interruptedRuns.push(interrupted);
-        repairedAnyStartupRun = true;
-      }
-    }
-    if (completedJobIdsToDelete.size > 0 && state.store) {
-      state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
-    }
-    if (repairedAnyStartupRun || jobs.length > 0) {
-      // Recovery notifications describe repaired durable rows, so never
-      // publish them until the startup write has committed successfully.
-      await persist(state, {
-        ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
-        postPersistNotifications,
-      });
-    }
-  });
-
-  if (state.stopped) {
+  await startCronScheduler(state, skipJobIds);
+  if (state.stopped || state.lifecycleGeneration !== generation) {
+    await stopCronScheduler(state);
     return;
   }
-  await runMissedJobs(state, {
-    skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
-    deferAgentTurnJobs: true,
-  });
-
-  await locked(state, async () => {
-    // Startup catch-up already persisted the latest in-memory store state, and
-    // this path runs before the scheduler begins servicing regular timer ticks.
-    // Avoid an extra reload/write cycle on startup.
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.stopped) {
-      return;
-    }
-    const postPersistMaintenanceNotifications: DeferredCronNotifications = [];
-    const changed = recomputeNextRunsForMaintenance(state, {
-      recomputeExpired: true,
-      deferredNotifications: postPersistMaintenanceNotifications,
-    });
-    if (changed) {
-      await persist(state, {
-        postPersistNotifications: postPersistMaintenanceNotifications,
-      });
-    }
-    for (const interrupted of interruptedRuns) {
-      const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
-      emitCronRunFinished(
-        state,
-        {
-          jobId: interrupted.jobId,
-          action: "finished",
-          job,
-          status: "error",
-          error: STARTUP_INTERRUPTED_ERROR,
-          delivered: false,
-          deliveryStatus: "unknown",
-          deliveryError: STARTUP_INTERRUPTED_ERROR,
-          failureNotificationDelivery: job
-            ? failureNotificationDeliveryFromJobState(job)
-            : undefined,
-          runAtMs: interrupted.runAtMs,
-          durationMs: interrupted.durationMs,
-          nextRunAtMs: job?.state.nextRunAtMs,
-        },
-        undefined,
-        interrupted.taskRunId,
-      );
-    }
-    armTimer(state);
-    state.deps.log.info(
-      {
-        enabled: true,
-        jobs: state.store?.jobs.length ?? 0,
-        nextWakeAtMs: nextWakeAtMs(state) ?? null,
-      },
-      "cron: started",
-    );
-  });
+  subscribeStoreMutations(state);
+  // Startup requests can await execution while provisioning publishes new jobs.
+  await locked(state, () => reloadProvisionedCronJobs(state, generation, startupJobIds));
+  if (state.stopped || state.lifecycleGeneration !== generation) {
+    return;
+  }
+  await state.deps.onProvisionedJobsReloaded?.();
+  if (state.stopped || state.lifecycleGeneration !== generation) {
+    return;
+  }
+  state.deps.log.info(
+    { enabled: state.deps.cronEnabled, jobs: state.store?.jobs.length ?? 0 },
+    "cron: started",
+  );
 }
 
-/** Stops the cron service timer without mutating persisted job state. */
+/** Close dispatch synchronously, then join execution and the retained worker lease. */
 export function stop(state: CronServiceState) {
+  state.lifecycleGeneration += 1;
   state.stopped = true;
-  cancelCronRunAdmissionWaiters(state);
+  mutationSubscriptions.get(state)?.();
+  mutationSubscriptions.delete(state);
   state.schedulerStarted = false;
-  stopTimer(state);
+  state.schedulerDrain = Promise.allSettled([
+    state.schedulerDrain,
+    stopCronScheduler(state),
+    stopCronRunQueue(state),
+    waitForCronRunQueue(state),
+    state.schedulerScope.stop(),
+  ]).then((outcomes) => {
+    const errors = outcomes
+      .filter((outcome) => outcome.status === "rejected")
+      .map((outcome) => String(outcome.reason));
+    if (errors.length > 0) {
+      state.deps.log.warn({ errors }, "cron: shutdown left work for recovery");
+    }
+  });
 }
 
-/** Temporarily stops automatic ticks without running startup recovery on resume. */
 export function pauseScheduling(state: CronServiceState) {
   state.schedulingPaused = true;
-  stopTimer(state);
+  refreshCronScheduler(state);
 }
 
 export function resumeScheduling(state: CronServiceState) {
@@ -180,16 +132,8 @@ export function resumeScheduling(state: CronServiceState) {
     return;
   }
   state.schedulingPaused = false;
-  if (!state.schedulerStarted) {
-    return;
-  }
-  try {
-    armTimer(state);
-  } catch (err) {
-    // armTimer can install a timer before a later dependency throws. Roll the
-    // whole transition back so a suspension retry cannot reopen without cron.
-    state.schedulingPaused = true;
-    stopTimer(state);
-    throw err;
+  if (state.schedulerStarted) {
+    refreshCronScheduler(state);
+    void drainCronRunQueue(state);
   }
 }

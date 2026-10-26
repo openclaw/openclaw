@@ -1,109 +1,120 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createAgent: vi.fn(),
+  migrateLegacyMainSessionKeys: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: mocks.createAgent }));
-vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
+vi.mock("../agents/agent-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-create.js")>()),
+  createAgent: mocks.createAgent,
+}));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
+  migrateLegacyMainSessionKeys: mocks.migrateLegacyMainSessionKeys,
+}));
 
 const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+type AgentOptions = Parameters<typeof ensureOnboardingAgent>[0];
+const ensureAgent = (options: Partial<AgentOptions> = {}) =>
+  ensureOnboardingAgent({ config: {}, workspace: "/tmp/work", ...options });
+const mainConfig = { agents: { entries: { main: {} } } };
 
-describe("onboarding main-agent creation", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.createAgent.mockResolvedValue({
-      status: "existing",
-      agentId: "main",
-      name: "main",
-      workspace: "/tmp/work",
-      agentDir: "/tmp/agent",
-      bootstrapPending: true,
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.createAgent.mockResolvedValue({
+    status: "created",
+    agentId: "main",
+    bootstrapPending: true,
+    configHash: "hash-after-create",
+  });
+  mocks.migrateLegacyMainSessionKeys.mockResolvedValue({ warnings: [] });
+  mocks.readConfigFileSnapshot
+    .mockResolvedValueOnce({ exists: false, config: { ...mainConfig, gateway: {} } })
+    .mockResolvedValueOnce({
+      valid: true,
+      hash: "hash-after-create",
+      config: { ...mainConfig, gateway: { controlUi: { enabled: true } } },
     });
-    mocks.readConfigFileSnapshot
-      .mockResolvedValueOnce({
-        exists: false,
-        valid: true,
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] }, gateway: {} },
-        config: { agents: { list: [{ id: "main", default: true }] }, gateway: {} },
-      })
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        hash: "hash-after-create",
-        sourceConfig: {
-          agents: { list: [{ id: "main", default: true }] },
-          gateway: { controlUi: { enabled: true } },
-        },
-        config: {
-          agents: { list: [{ id: "main", default: true }] },
-          gateway: { controlUi: { enabled: true } },
-        },
-      });
+});
+
+it("provisions explicit main through createAgent on a fresh install", async () => {
+  const model = "openai/gpt-5.5";
+  const result = await ensureAgent({
+    config: {
+      agents: { defaults: { model } },
+      gateway: { mode: "local" },
+    },
   });
 
-  it("provisions explicit main through createAgent on a fresh install", async () => {
-    const result = await ensureOnboardingAgent({
-      config: {
-        agents: { defaults: { model: "openai/gpt-5.5" } },
-        gateway: { mode: "local" },
-      },
-      workspace: "/tmp/work",
-    });
+  expect(mocks.createAgent.mock.calls[0]?.[0]).toMatchObject({
+    entry: { id: "main" },
+    bootstrapMain: true,
+  });
+  expect(mocks.createAgent.mock.calls[0]?.[0]?.entry).not.toHaveProperty("default");
+  expect(result).toMatchObject({
+    agentId: "main",
+    // Creation rebases the caller onto its own persisted config revision (#112678).
+    configHash: "hash-after-create",
+    config: {
+      agents: { defaults: { model }, entries: { main: {} } },
+      gateway: { mode: "local", controlUi: { enabled: true } },
+    },
+  });
+});
 
-    expect(mocks.createAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({ id: "main", default: true }),
-      }),
-    );
-    expect(result).toMatchObject({
-      agentId: "main",
-      config: {
-        agents: {
-          defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
-        },
-        gateway: { mode: "local", controlUi: { enabled: true } },
-      },
-    });
+it("preserves an explicit imported candidate roster", async () => {
+  const config = mainConfig;
+
+  await expect(ensureAgent({ config, preserveCandidateRoster: true })).resolves.toEqual({
+    config,
+    configBase: config,
+    agentId: "main",
+    bootstrapPending: false,
+    createdAgent: false,
+  });
+  expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+  expect(mocks.createAgent).not.toHaveBeenCalled();
+});
+it("rejects a whitespace-only explicit first-agent name instead of defaulting to main", async () => {
+  await expect(ensureAgent({ firstAgent: { name: "   " } })).rejects.toThrow(
+    "Agent name is required",
+  );
+
+  expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+  expect(mocks.createAgent).not.toHaveBeenCalled();
+});
+
+it("surfaces pending detection outcomes even when inspection is complete", async () => {
+  const warning = "retained legacy main sessions require repair; run openclaw doctor --fix";
+  mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
+    armed: true,
+    complete: true,
+    warnings: [warning],
   });
 
-  it("preserves an explicit imported candidate roster", async () => {
-    const config = { agents: { list: [{ id: "main", default: true }] } };
+  const result = await ensureAgent({ firstAgent: { name: "robby" } });
 
-    await expect(
-      ensureOnboardingAgent({
-        config,
-        workspace: "/tmp/work",
-        preserveCandidateRoster: true,
-      }),
-    ).resolves.toEqual({ config, agentId: "main", bootstrapPending: false });
-    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(mocks.createAgent).not.toHaveBeenCalled();
-  });
-  it("reports the post-create config hash so callers can rebase their commit", async () => {
-    // Regression (#112678): creating the first roster agent writes the config
-    // file, so a caller holding a pre-create hash would fail its own optimistic
-    // write with ConfigMutationConflictError and leave onboarding half-applied.
-    const result = await ensureOnboardingAgent({
-      config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
-      workspace: "/tmp/work",
-    });
+  expect(result.sessionMigrationWarnings).toEqual([expect.stringContaining(warning)]);
+});
 
-    expect(result.configHash).toBe("hash-after-create");
+it("rejects a changed config revision before agent creation", async () => {
+  mocks.readConfigFileSnapshot.mockReset().mockResolvedValueOnce({
+    exists: true,
+    valid: true,
+    hash: "concurrent",
   });
 
-  it("omits the config hash when no agent had to be created", async () => {
-    const config = { agents: { list: [{ id: "main", default: true }] } };
+  await expect(
+    ensureAgent({
+      firstAgent: { name: "robby" },
+      expectedConfigHash: "approved",
+    }),
+  ).rejects.toThrow("config changed before first-agent creation");
 
-    const result = await ensureOnboardingAgent({
-      config,
-      workspace: "/tmp/work",
-      preserveCandidateRoster: true,
-    });
-
-    expect(result.configHash).toBeUndefined();
-    expect(mocks.createAgent).not.toHaveBeenCalled();
-  });
+  expect(mocks.createAgent).not.toHaveBeenCalled();
 });

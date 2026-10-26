@@ -10,10 +10,10 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../../src/infra/diagnostic-trace-context.js";
 import {
+  flushLogger,
   getChildLogger,
   resetLogger,
   setLoggerOverride,
-  testApi,
 } from "../../../../src/logging/logger.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -43,7 +43,7 @@ export async function runLoggingFileBoundary(outputRoot: string) {
   const diagnostics: Extract<DiagnosticEventPayload, { type: "log.record" }>[] = [];
   resetDiagnosticEventsForTest();
   resetLogger();
-  testApi.resetFileLogTransportForTests();
+  await flushLogger();
   setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 512 });
   const unsubscribe = onInternalDiagnosticEvent((event) => {
     if (event.type === "log.record") {
@@ -56,7 +56,7 @@ export async function runLoggingFileBoundary(outputRoot: string) {
       logger.info(`rotation-fill-${"x".repeat(700)}`);
       logger.info({ marker: "correlated" }, "qa-correlated-record");
     });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -89,9 +89,9 @@ export async function runLoggingFileBoundary(outputRoot: string) {
     return { currentRecords: current.length, archivedRecords: archived.length, trace: expected };
   } finally {
     unsubscribe();
+    await flushLogger();
     setLoggerOverride(null);
     resetLogger();
-    testApi.resetFileLogTransportForTests();
     resetDiagnosticEventsForTest();
   }
 }

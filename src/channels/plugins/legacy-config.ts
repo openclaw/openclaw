@@ -1,11 +1,7 @@
-/**
- * Channel legacy config rule collector.
- *
- * Gathers channel-owned doctor migration rules from public artifacts and plugin hooks.
- */
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
+import { isChannelConfigMetadataKey } from "../config-metadata.js";
 import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
 import type { ChannelId } from "./types.public.js";
@@ -19,8 +15,8 @@ function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
     return [];
   }
   return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults")
-    .map((channelId) => channelId as ChannelId);
+    .map((channelId) => channelId.trim())
+    .filter((channelId) => channelId && !isChannelConfigMetadataKey(channelId));
 }
 
 function shouldIncludeLegacyRuleForTouchedPaths(
@@ -65,17 +61,15 @@ function collectRelevantChannelIdsForTouchedPaths(params: {
     if (!second) {
       return filteredChannelIds;
     }
-    if (second === "defaults") {
+    const channelId = second.trim();
+    if (!channelId || isChannelConfigMetadataKey(channelId)) {
       continue;
     }
     // Channel ids are the second segment under channels.*; deeper touched paths
     // still map back to the owning channel for rule collection.
-    touchedChannelIds.add(second as ChannelId);
+    touchedChannelIds.add(channelId);
   }
 
-  if (touchedChannelIds.size === 0) {
-    return [];
-  }
   return filteredChannelIds.filter((channelId) => touchedChannelIds.has(channelId));
 }
 

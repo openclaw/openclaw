@@ -1,143 +1,322 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
-it("carries submitted work placement and model through background list reconciliation", async () => {
-  let resolveList: (result: SessionsListResult) => void = () => undefined;
-  const pendingList = new Promise<SessionsListResult>((resolve) => {
-    resolveList = resolve;
-  });
-  const key = "agent:main:created-in-background";
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.create") {
-      return { key };
-    }
-    if (method === "sessions.list") {
-      return await pendingList;
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const client = { request } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
-    snapshot: {
-      client,
-      phase: "connected" as const,
-      hello: null,
-      assistantAgentId: "main",
-      sessionKey: "agent:main:main",
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  });
+const listed = (key: string, fields: Partial<GatewaySessionRow>, ts: number) =>
+  sessionsResult([{ key, kind: "direct", ...fields }], ts);
+const worktree = { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" };
+const placement = (key: string, fields: Partial<GatewaySessionRow>) =>
+  listed(key, { updatedAt: 2, worktree, ...fields }, 2);
+const background = { reconciliation: "background" } as const;
+const model = "openai/gpt-5.6-sol";
+const thinkingEntry = (key: string, fields: Partial<GatewaySessionRow> = {}) => ({
+  key,
+  entry: { thinkingLevel: "xhigh", updatedAt: 1, ...fields },
+});
+
+async function createPrepared(
+  sessions: ReturnType<typeof createTestSessionCapability>,
+  key: string,
+) {
   const created = vi.fn();
   sessions.subscribeCreated(created);
-
   await expect(
-    sessions.createResult(
-      { agentId: "main", model: "openai/gpt-5.6-sol", worktree: true },
-      { reconciliation: "background" },
-    ),
+    sessions.createResult({ agentId: "main", model, worktree: true }, background),
   ).resolves.toMatchObject({ key });
-  expect(created).not.toHaveBeenCalled();
+  expect(created).toHaveBeenCalledExactlyOnceWith(key);
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
-  expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+  expect(sessions.state.modelOverrides[key]).toBe(model);
+  return created;
+}
 
-  resolveList({
-    ts: 2,
-    path: "(multiple)",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [
-      {
-        key,
-        kind: "direct",
-        updatedAt: 2,
-        worktree: { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" },
-      },
-    ],
+function changed(key: string, fields: Partial<GatewaySessionRow>): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: key, key, kind: "direct", ...fields },
+  };
+}
+
+function harness(routes: Record<string, (params?: unknown) => unknown>) {
+  const request = createGatewayRequestMock(async (method, params) => {
+    const handler = routes[method];
+    if (!handler) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return await handler(params);
   });
-  await waitForFast(() => expect(created).toHaveBeenCalledWith(key));
-  expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
+  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  return { ...gateway, request, sessions: createTestSessionCapability(gateway.gateway) };
+}
+
+it.each(["current", "key-only", "cancelled", "replaced"])(
+  "keeps creation failure attached to its request (%s)",
+  async (outcome) => {
+    const creation = createDeferred<unknown>();
+    const error = new Error("synthetic creation refused");
+    const controller = new AbortController();
+    const { sessions, publish, request } = harness({
+      "sessions.create": () => creation.promise,
+    });
+    const operation =
+      outcome === "key-only"
+        ? sessions.create({ agentId: "main" }, { signal: controller.signal })
+        : sessions.createResult({ agentId: "main" }, { signal: controller.signal });
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("sessions.create", expect.anything(), expect.anything()),
+    );
+    if (outcome === "cancelled") {
+      controller.abort();
+    } else if (outcome === "replaced") {
+      publish(false);
+    }
+    creation.reject(error);
+    if (outcome === "current") {
+      await expect(operation).rejects.toBe(error);
+    } else {
+      await expect(operation).resolves.toBeNull();
+    }
+    expect(sessions.state.error).toBe(
+      outcome === "current" || outcome === "key-only" ? error.message : null,
+    );
+    expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
+  },
+);
+
+it.each(["newer", "failed-before-list", "failed-after-list"])(
+  "reconciles created placement without retiring a newer model claim (%s)",
+  async (claim) => {
+    const pendingList = createDeferred<SessionsListResult>();
+    const key = "agent:main:created-in-background";
+    const pendingPatch = createDeferred<unknown>();
+    const { sessions } = harness({
+      "sessions.create": () => ({ key }),
+      "sessions.list": () => pendingList.promise,
+      "sessions.patch": () => pendingPatch.promise,
+    });
+    const created = await createPrepared(sessions, key);
+    const patch = sessions
+      .patch(key, { model: claim === "newer" ? model : "openai/gpt-5-mini" })
+      .catch((error: unknown) => error);
+    if (claim === "failed-before-list") {
+      pendingPatch.reject(new Error("model rejected"));
+      expect(await patch).toEqual(new Error("model rejected"));
+      expect(sessions.state.modelOverrides[key]).toBe(model);
+    }
+
+    pendingList.resolve(
+      placement(key, {
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+      }),
+    );
+    await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
+    if (claim === "failed-after-list") {
+      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5-mini");
+      pendingPatch.reject(new Error("model rejected"));
+      expect(await patch).toEqual(new Error("model rejected"));
+    }
+    expect(created).toHaveBeenCalledOnce();
+    expect(sessions.isPreparedWorkSession(key)).toBe(false);
+    expect(sessions.state.modelOverrides[key]).toBe(claim === "newer" ? model : undefined);
+    if (claim === "newer") {
+      pendingPatch.resolve({ ok: true, key, entry: {} });
+      await patch;
+      expect(sessions.state.modelOverrides[key]).toBeUndefined();
+    }
+  },
+);
+it.each([{ updatedAt: 2 }, { sessionId: "created-session" }])(
+  "reconciles created placement (%j)",
+  async (event) => {
+    const settleWithEvent = "updatedAt" in event;
+    const pendingList = createDeferred<SessionsListResult>();
+    const pendingAppendList = createDeferred<SessionsListResult>();
+    const pendingCanonicalList = createDeferred<SessionsListResult>();
+    const key = "agent:main:created-in-background";
+    const { sessions, emitEvent } = harness({
+      "sessions.create": () =>
+        thinkingEntry(key, {
+          sessionId: "created-session",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+        }),
+      "sessions.list": vi
+        .fn()
+        .mockReturnValueOnce(listed("agent:main:main", { updatedAt: 1 }, 1))
+        .mockReturnValueOnce(pendingList.promise)
+        .mockReturnValueOnce(
+          settleWithEvent ? pendingCanonicalList.promise : pendingAppendList.promise,
+        )
+        .mockReturnValue(pendingCanonicalList.promise),
+      "sessions.patch": () => {
+        throw new Error("thinking rejected");
+      },
+    });
+    await sessions.refresh({ force: true });
+    const created = await createPrepared(sessions, key);
+    expect(sessions.think(key)).toBe("xhigh");
+    const stateChanged = vi.fn();
+    sessions.subscribe(stateChanged);
+    emitEvent(changed(key, { thinkingLevel: "medium", ...event }));
+    expect(sessions.think(key)).toBe("medium");
+    expect(stateChanged).toHaveBeenCalledOnce();
+
+    pendingList.resolve(placement(key, { thinkingLevel: "xhigh" }));
+    await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
+    expect(sessions.think(key)).toBe("medium");
+    await expect(sessions.patch(key, { thinkingLevel: "medium" })).rejects.toThrow(
+      "thinking rejected",
+    );
+    expect(sessions.think(key)).toBe("medium");
+    if (settleWithEvent) {
+      emitEvent(changed(key, { thinkingLevel: "medium", updatedAt: 3 }));
+      expect(sessions.think(key)).toBeUndefined();
+    } else {
+      const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
+      pendingAppendList.resolve(sessionsResult([], 3));
+      await appendRefresh;
+      expect(sessions.think(key)).toBe("medium");
+    }
+    const canonicalRefresh = sessions.refresh({ force: true });
+    const canonicalThinkingLevel = settleWithEvent ? "medium" : "high";
+    pendingCanonicalList.resolve(
+      listed(key, { thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }, 3),
+    );
+    await canonicalRefresh;
+    expect(sessions.think(key)).toBeUndefined();
+    expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
+    expect(created).toHaveBeenCalledOnce();
+    expect(sessions.isPreparedWorkSession(key)).toBe(false);
+  },
+);
+
+it("clears a created thinking claim for an unversioned removal", async () => {
+  const key = "agent:main:created-then-archived";
+  const { sessions, emitEvent } = harness({
+    "sessions.create": () => thinkingEntry(key),
+    "sessions.list": () => listed(key, { thinkingLevel: "high", updatedAt: 0 }, 2),
+  });
+  await sessions.createResult({ agentId: "main" });
+  expect(sessions.think(key)).toBe("xhigh");
+  emitEvent(changed(key, { archived: true, thinkingLevel: "medium" }));
+  expect(sessions.state.result?.sessions).toHaveLength(0);
+  expect(sessions.think(key)).toBeUndefined();
 });
+
+it("isolates delayed raw-global thinking claims by agent", async () => {
+  const pendingList = createDeferred<SessionsListResult>();
+  const { sessions, gateway } = harness({
+    "sessions.create": (params) =>
+      thinkingEntry("global", {
+        thinkingLevel: asOptionalRecord(params)?.agentId === "alpha" ? "xhigh" : "medium",
+      }),
+    "sessions.list": () => pendingList.promise,
+  });
+  gateway.snapshot.sessionKey = "global";
+
+  await sessions.createResult({ agentId: "alpha" }, { reconciliation: "background" });
+  await sessions.createResult({ agentId: "beta" }, { reconciliation: "background" });
+
+  expect(sessions.think("global", "alpha")).toBe("xhigh");
+  expect(sessions.think("global", "beta")).toBe("medium");
+  expect(sessions.think("global", "main")).toBeUndefined();
+});
+
+it.each(["success", "in-place", "failure", "replaced"])(
+  "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
+  async (outcome) => {
+    const succeeded = outcome === "success" || outcome === "in-place";
+    const recovery = createDeferred<unknown>();
+    const list = createDeferred<unknown>();
+    const { sessions, publish, request } = harness({
+      "sessions.recover": () => recovery.promise,
+      "sessions.list": () => list.promise,
+    });
+    const created = vi.fn();
+    sessions.subscribeCreated(created);
+    const operation = sessions.recover({
+      key: "agent:main:expired",
+      agentId: "main",
+      ...(outcome === "in-place" ? { mode: "in-place" } : {}),
+    });
+    const successor = {
+      ok: true,
+      key: outcome === "in-place" ? "agent:main:expired" : "agent:main:recovered",
+      sessionId: "successor",
+    };
+
+    if (outcome === "replaced") {
+      publish(false);
+    }
+    if (outcome === "failure") {
+      recovery.reject(new Error("recovery rejected"));
+    } else {
+      recovery.resolve(successor);
+    }
+    if (succeeded) {
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "sessions.list",
+          expect.objectContaining({ agentId: "main" }),
+        ),
+      );
+      if (outcome === "success") {
+        expect(created).toHaveBeenCalledWith(successor.key);
+      } else {
+        expect(created).not.toHaveBeenCalled();
+      }
+      list.resolve(listed(successor.key, { updatedAt: 1 }, 1));
+    }
+
+    await expect(operation).resolves.toEqual(succeeded ? successor : null);
+    expect(sessions.state.error).toBe(outcome === "failure" ? "recovery rejected" : null);
+    if (!succeeded) {
+      expect(created).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
+    }
+  },
+);
 
 it("retires prepared work placement when the session is deleted", async () => {
   const key = "agent:main:deleted-worktree";
-  const emptyList: SessionsListResult = {
-    ts: 2,
-    path: "(multiple)",
-    count: 0,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [],
-  };
-  const client = {
-    request: vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        return { key };
-      }
-      if (method === "sessions.delete") {
-        return { deleted: true };
-      }
-      if (method === "sessions.list") {
-        return emptyList;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    }),
-  } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
-    snapshot: {
-      client,
-      phase: "connected" as const,
-      hello: null,
-      assistantAgentId: "main",
-      sessionKey: "agent:main:main",
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+  const { sessions } = harness({
+    "sessions.create": () => ({ key }),
+    "sessions.delete": () => ({ deleted: true }),
+    "sessions.list": () => sessionsResult([], 2),
   });
-
   await expect(
     sessions.createResult({ agentId: "main", worktree: true }, { reconciliation: "background" }),
   ).resolves.toMatchObject({ key });
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
-
   await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
-  // The key can be reused by a later ordinary thread, so it must not stay Coding.
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
 });
 
-it("does not prepare rejected worktree or model selections", async () => {
-  const key = "agent:main:rejected-worktree";
-  const client = {
-    request: vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        throw new Error("agent workspace is not a git checkout");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    }),
-  } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
-    snapshot: {
-      client,
-      phase: "connected" as const,
-      hello: null,
-      assistantAgentId: "main",
-      sessionKey: "agent:main:main",
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+it("retires a created thinking claim before replacement state is published", async () => {
+  const key = "agent:main:created-before-reconnect";
+  const { sessions, publish, request } = harness({
+    "sessions.create": () => thinkingEntry(key),
+    "sessions.list": () => listed(key, { thinkingLevel: "high", updatedAt: 0 }, 1),
+    "sessions.subscribe": () => ({ subscribed: true }),
   });
-
-  await expect(
-    sessions.createResult(
-      { key, model: "openai/gpt-5.6-sol", worktree: true },
-      { reconciliation: "background" },
-    ),
-  ).resolves.toBeNull();
-  expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  expect(sessions.state.modelOverrides[key]).toBeUndefined();
-  sessions.dispose();
+  await sessions.createResult({ agentId: "main" });
+  expect(sessions.think(key)).toBe("xhigh");
+  const published: Array<string | undefined> = [];
+  sessions.subscribe(() => published.push(sessions.think(key)));
+  publish(true, createTestGatewayClient(request));
+  expect(published[0]).toBeUndefined();
 });

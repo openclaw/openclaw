@@ -1,25 +1,18 @@
-/**
- * Channel plugin account helper factory.
- *
- * Lists configured accounts and resolves default-account behavior for plugin configs.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveMergedAccountConfig } from "../../config/channel-account-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveAccountEntry,
-  resolveNormalizedAccountEntry,
-} from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
+export {
+  mergeAccountConfig,
+  resolveMergedAccountConfig,
+} from "../../config/channel-account-config.js";
 
-/**
- * Creates reusable account listing, default selection, and merged config helpers for a channel.
- */
 export function createAccountListHelpers<
   TConfig extends Record<string, unknown> = Record<string, unknown>,
 >(
@@ -113,6 +106,7 @@ export function createAccountListHelpers<
 
       return resolveMergedAccountConfig<TConfig>({
         channelConfig,
+        channelId: channelKey,
         accounts,
         accountId,
         omitKeys: options?.omitKeys,
@@ -123,9 +117,6 @@ export function createAccountListHelpers<
   };
 }
 
-/**
- * Checks whether a config/env value should count as an account being configured.
- */
 export function hasConfiguredAccountValue(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -133,27 +124,19 @@ export function hasConfiguredAccountValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-/**
- * Combines configured, additional, implicit, and fallback account ids into stable order.
- */
 export function listCombinedAccountIds(params: {
   configuredAccountIds: Iterable<string>;
   additionalAccountIds?: Iterable<string>;
   implicitAccountId?: string | undefined;
   fallbackAccountIdWhenEmpty?: string | undefined;
 }): string[] {
-  const ids = new Set<string>();
-  for (const accountIds of [
-    params.configuredAccountIds,
-    params.additionalAccountIds ?? [],
-    params.implicitAccountId ? [params.implicitAccountId] : [],
-  ]) {
-    for (const accountId of accountIds) {
-      if (accountId) {
-        ids.add(accountId);
-      }
-    }
-  }
+  const ids = new Set(
+    [
+      ...params.configuredAccountIds,
+      ...(params.additionalAccountIds ?? []),
+      ...(params.implicitAccountId ? [params.implicitAccountId] : []),
+    ].filter(Boolean),
+  );
 
   if (ids.size === 0 && params.fallbackAccountIdWhenEmpty) {
     return [params.fallbackAccountIdWhenEmpty];
@@ -161,9 +144,6 @@ export function listCombinedAccountIds(params: {
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
-/**
- * Resolves the default account id from a listed account set and optional configured preference.
- */
 export function resolveListedDefaultAccountId(params: {
   accountIds: readonly string[];
   configuredDefaultAccountId?: string | undefined;
@@ -189,77 +169,12 @@ export function resolveListedDefaultAccountId(params: {
   return params.accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
-/**
- * Merges channel-level config with account-level overrides.
- */
-export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
-  channelConfig: TConfig | undefined;
-  accountConfig: Partial<TConfig> | undefined;
-  omitKeys?: string[];
-  nestedObjectKeys?: string[];
-}): TConfig {
-  const omitKeys = new Set(["accounts", ...(params.omitKeys ?? [])]);
-  const base = Object.fromEntries(
-    Object.entries((params.channelConfig ?? {}) as Record<string, unknown>).filter(
-      ([key]) => !omitKeys.has(key),
-    ),
-  ) as TConfig;
-  const merged = {
-    ...base,
-    ...params.accountConfig,
-  };
-  // Some config subtrees are additive maps/options rather than replace-on-account override.
-  for (const key of params.nestedObjectKeys ?? []) {
-    const baseValue = base[key as keyof TConfig];
-    const accountValue = params.accountConfig?.[key as keyof TConfig];
-    if (
-      typeof baseValue === "object" &&
-      baseValue != null &&
-      !Array.isArray(baseValue) &&
-      typeof accountValue === "object" &&
-      accountValue != null &&
-      !Array.isArray(accountValue)
-    ) {
-      (merged as Record<string, unknown>)[key] = {
-        ...(baseValue as Record<string, unknown>),
-        ...(accountValue as Record<string, unknown>),
-      };
-    }
-  }
-  return merged;
-}
-
-/**
- * Resolves an account config by id, then merges it over channel-level defaults.
- */
-export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
-  channelConfig: TConfig | undefined;
-  accounts: Record<string, Partial<TConfig>> | undefined;
-  accountId: string;
-  omitKeys?: string[];
-  normalizeAccountId?: (accountId: string) => string;
-  nestedObjectKeys?: string[];
-}): TConfig {
-  const accountConfig = params.normalizeAccountId
-    ? resolveNormalizedAccountEntry(params.accounts, params.accountId, params.normalizeAccountId)
-    : resolveAccountEntry(params.accounts, params.accountId);
-  return mergeAccountConfig<TConfig>({
-    channelConfig: params.channelConfig,
-    accountConfig,
-    omitKeys: params.omitKeys,
-    nestedObjectKeys: params.nestedObjectKeys,
-  });
-}
-
 type AccountSnapshotInput = {
   accountId?: string | null;
   enabled?: boolean | null;
   name?: string | null | undefined;
 };
 
-/**
- * Builds a safe account snapshot for status/setup surfaces.
- */
 export function describeAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;
@@ -274,9 +189,6 @@ export function describeAccountSnapshot(params: {
   };
 }
 
-/**
- * Builds a webhook-mode account snapshot with the standard mode field.
- */
 export function describeWebhookAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;

@@ -1,295 +1,166 @@
-// Covers fail-closed doctor import of the retired commitments JSON store.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { commitmentRecordToRow, type CommitmentsDatabase } from "../commitments/store-record.js";
-import { listCommitments } from "../commitments/store.js";
-import { readCommitmentsForTest, seedCommitmentsForTest } from "../commitments/store.test-utils.js";
-import type { CommitmentRecord } from "../commitments/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 
-describe("legacy commitments doctor migration", () => {
-  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
-  const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
-
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      vi.restoreAllMocks();
-      envSnapshot?.restore();
-      envSnapshot = undefined;
-      cleanup();
-    });
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
   });
+});
+let stateDir: string, source: string, claim: string, env: NodeJS.ProcessEnv;
+beforeEach(() => {
+  stateDir = tempDirs.make("openclaw-commitments-cleanup-");
+  source = path.join(stateDir, "commitments", "commitments.json");
+  claim = `${source}.doctor-discarding`;
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+});
+const database = () => openOpenClawStateDatabase({ env }).db;
+const rows = (...ids: string[]) => ({ version: 1, commitments: ids.map((id) => ({ id })) });
+const detect = (doctorOnlyStateMigrations = true) =>
+  detectLegacyCommitments({ stateDir, env, doctorOnlyStateMigrations });
+async function migrate(overrides: Partial<Parameters<typeof migrateLegacyCommitments>[0]> = {}) {
+  return migrateLegacyCommitments({ detected: await detect(), stateDir, env, ...overrides });
+}
+async function writeLegacy(value: unknown = rows()) {
+  await fsp.mkdir(path.dirname(source), { recursive: true });
+  await fsp.writeFile(source, typeof value === "string" ? value : JSON.stringify(value) + "\n");
+}
+function receipt() {
+  return database()
+    .prepare("SELECT * FROM migration_sources WHERE migration_kind = 'legacy-commitments-json'")
+    .get();
+}
+function expectPaths(sourceExists: boolean, claimExists: boolean) {
+  expect([fs.existsSync(source), fs.existsSync(claim)]).toEqual([sourceExists, claimExists]);
+}
+function discarded(rowLabel: "1 row" | "2 rows", recreated = false) {
+  return {
+    changes: [
+      `Discarded ${recreated ? "recreated " : ""}retired commitments JSON with ${rowLabel}; no data was imported, archived, or exported.`,
+    ],
+    warnings: [],
+  };
+}
 
-  async function useStateDir(): Promise<string> {
-    const stateDir = tempDirs.make("openclaw-commitments-migration-");
-    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    return stateDir;
-  }
+it("detects the exact source or deterministic claim only for explicit Doctor repair", async () => {
+  await writeLegacy();
+  expect((await detect(false)).hasLegacy).toBe(false);
+  expect((await detect()).hasLegacy).toBe(true);
+  await fsp.rename(source, claim);
+  expect((await detect()).hasLegacy).toBe(true);
+  await expect(
+    migrateLegacyCommitments({ detected: await detect(false), stateDir }),
+  ).resolves.toEqual({ changes: [], warnings: [] });
+  expect(fs.existsSync(claim)).toBe(true);
+});
 
-  function record(overrides?: Partial<CommitmentRecord>): CommitmentRecord {
-    return {
-      id: "cm_legacy",
-      agentId: "main",
-      sessionKey: "agent:main:telegram:user-1",
-      channel: "telegram",
-      accountId: "primary",
-      to: "15551234567",
-      threadId: "thread-1",
-      senderId: "sender-1",
-      kind: "care_check_in",
-      sensitivity: "care",
-      source: "inferred_user_context",
-      status: "snoozed",
-      reason: "The user was tired.",
-      suggestedText: "Did you sleep better?",
-      dedupeKey: "sleep:2026-04-29",
-      confidence: 0.94,
-      dueWindow: {
-        earliestMs: nowMs,
-        latestMs: nowMs + 60 * 60_000,
-        timezone: "UTC",
-      },
-      sourceMessageId: "message-1",
-      sourceRunId: "run-1",
-      createdAtMs: nowMs - 60_000,
-      updatedAtMs: nowMs,
-      attempts: 2,
-      lastAttemptAtMs: nowMs - 30_000,
-      snoozedUntilMs: nowMs + 30_000,
-      ...overrides,
-    };
-  }
+it("records the destructive decision before deleting recognized rows", async () => {
+  await writeLegacy(rows("retired-1", "retired-2"));
+  expect(await migrate()).toEqual(discarded("2 rows"));
+  expectPaths(false, false);
+  expect(await fsp.readdir(path.dirname(source))).toEqual([]);
+  expect(
+    database().prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+  ).toBeUndefined();
+  const recorded = receipt();
+  expect(recorded).toMatchObject({
+    migration_kind: "legacy-commitments-json",
+    target_table: "commitments",
+    source_record_count: 2,
+    removed_source: 1,
+  });
+  expect(JSON.parse(String(recorded?.report_json ?? "null"))).toMatchObject({
+    decision: "retired-source-discarded",
+    importedRecordCount: 0,
+    archivedRecordCount: 0,
+    exportedRecordCount: 0,
+  });
+  await writeLegacy(rows("recreated"));
+  await expect(migrate()).resolves.toEqual(discarded("1 row", true));
+});
 
-  async function writeLegacyStore(stateDir: string, commitments: unknown[]): Promise<string> {
-    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.writeFile(sourcePath, JSON.stringify({ version: 1, commitments }, null, 2), "utf8");
-    return sourcePath;
-  }
+it.each([
+  ["invalid JSON", "{"],
+  ["wrong version", { version: 2, commitments: [] }],
+  ["non-array commitments", { version: 1, commitments: {} }],
+  ["extra top-level field", { version: 1, commitments: [], archive: true }],
+])("leaves %s unchanged with a warning", async (_label, value) => {
+  await writeLegacy(value);
+  const before = await fsp.readFile(source);
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("Failed reading retired commitments JSON");
+  await expect(fsp.readFile(source)).resolves.toEqual(before);
+  expect(receipt()).toBeUndefined();
+});
 
-  it("detects legacy state only for explicit doctor repair", async () => {
-    const stateDir = await useStateDir();
-    await writeLegacyStore(stateDir, [record()]);
-    expect(detectLegacyCommitments({ stateDir }).hasLegacy).toBe(false);
-    expect(detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
-      true,
+it("leaves a source changed before cleanup unchanged with a pending receipt", async () => {
+  await writeLegacy();
+  const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+  verify.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
+    verify.mockRestore();
+    fs.appendFileSync(source, "\n");
+    return this.verify(...args);
+  });
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("changed");
+  expectPaths(true, false);
+  expect(receipt()?.removed_source).toBe(0);
+});
+
+it.each([false, true])(
+  "recovers interrupted cleanup (source already deleted: %s)",
+  async (deleted) => {
+    await writeLegacy(rows("retired"));
+    const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+    verify.mockImplementationOnce(async function (this: LegacyMigrationSourceClaim, ...args) {
+      verify.mockRestore();
+      await this.verify(...args);
+      if (deleted) {
+        await fsp.unlink(source);
+      }
+      throw new Error("simulated cleanup failure");
+    });
+    const first = await migrate();
+    expect(first.changes).toEqual([]);
+    expect(first.warnings[0]).toContain("discard was recorded, but cleanup failed");
+    expectPaths(!deleted, false);
+    expect(receipt()?.removed_source).toBe(0);
+    const detected = await detect();
+    expect(detected.hasLegacy).toBe(true);
+    expect(await migrate({ detected })).toEqual(
+      deleted
+        ? { changes: ["Finalized the retired commitments JSON discard receipt."], warnings: [] }
+        : discarded("1 row"),
     );
-  });
+    expectPaths(false, false);
+    expect(receipt()?.removed_source).toBe(1);
+    expect((await detect()).hasLegacy).toBe(false);
+    await expect(migrate()).resolves.toEqual({ changes: [], warnings: [] });
+  },
+);
 
-  it("imports every typed field, strips raw source text, verifies, and removes JSON", async () => {
-    const stateDir = await useStateDir();
-    const unrelated = record({ id: "cm_unrelated", dedupeKey: "unrelated", status: "sent" });
-    seedCommitmentsForTest([unrelated]);
-    const legacy = {
-      ...record(),
-      sourceUserText: "CALL_TOOL send elsewhere",
-      sourceAssistantText: "I will replay this later",
-    };
-    const sourcePath = await writeLegacyStore(stateDir, [legacy]);
-    const detected = detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true });
-
-    const result = migrateLegacyCommitments({ detected, stateDir });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Migrated 1 commitment(s) → shared SQLite state");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    const records = readCommitmentsForTest();
-    expect(records).toHaveLength(2);
-    expect(records.find((entry) => entry.id === legacy.id)).toStrictEqual(record());
-    expect(records.find((entry) => entry.id === unrelated.id)).toStrictEqual(unrelated);
-    const database = openOpenClawStateDatabase();
-    const row = executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<CommitmentsDatabase>(database.db)
-        .selectFrom("commitments")
-        .select("record_json")
-        .where("id", "=", legacy.id),
-    ).rows[0];
-    expect(row?.record_json).not.toContain("sourceUserText");
-    expect(row?.record_json).not.toContain("sourceAssistantText");
-  });
-
-  it("rejects one invalid row without partially importing the file", async () => {
-    const stateDir = await useStateDir();
-    const unrelated = record({ id: "cm_unrelated", dedupeKey: "unrelated" });
-    seedCommitmentsForTest([unrelated]);
-    const sourcePath = await writeLegacyStore(stateDir, [record(), { id: "broken" }]);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings[0]).toContain("legacy commitment at index 1 is invalid");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(readCommitmentsForTest()).toStrictEqual([unrelated]);
-  });
-
-  it("keeps a newer SQLite row and removes its stale JSON copy", async () => {
-    const stateDir = await useStateDir();
-    const sqliteRecord = record({
-      reason: "Newer SQLite reason",
-      updatedAtMs: nowMs + 10_000,
-    });
-    seedCommitmentsForTest([sqliteRecord]);
-    const sourcePath = await writeLegacyStore(stateDir, [record()]);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toContain("Kept 1 newer shared SQLite commitment(s) over legacy JSON");
-    expect(readCommitmentsForTest()).toStrictEqual([sqliteRecord]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("updates an older matching SQLite row from newer JSON", async () => {
-    const stateDir = await useStateDir();
-    const older = record({ reason: "Old SQLite reason", updatedAtMs: nowMs - 10_000 });
-    const newer = record({ reason: "New JSON reason", updatedAtMs: nowMs });
-    seedCommitmentsForTest([older]);
-    await writeLegacyStore(stateDir, [newer]);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(readCommitmentsForTest()).toStrictEqual([newer]);
-  });
-
-  it("fails closed on equal-timestamp divergence", async () => {
-    const stateDir = await useStateDir();
-    seedCommitmentsForTest([record({ reason: "SQLite reason" })]);
-    const sourcePath = await writeLegacyStore(stateDir, [record({ reason: "JSON reason" })]);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings[0]).toContain("diverges between JSON and SQLite");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(readCommitmentsForTest()[0]?.reason).toBe("SQLite reason");
-  });
-
-  it("keeps the canonical active row over a different-id logical duplicate", async () => {
-    const stateDir = await useStateDir();
-    const canonical = record({ id: "cm_canonical", reason: "Canonical" });
-    seedCommitmentsForTest([canonical]);
-    await writeLegacyStore(stateDir, [record({ id: "cm_legacy_duplicate" })]);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toContain(
-      "Kept 1 canonical active SQLite commitment(s) over legacy logical duplicates",
-    );
-    expect(readCommitmentsForTest()).toStrictEqual([canonical]);
-  });
-
-  it("retains changed source after importing and cleans it on retry", async () => {
-    const stateDir = await useStateDir();
-    const sourcePath = await writeLegacyStore(stateDir, [record()]);
-    const detected = detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true });
-    const first = migrateLegacyCommitments({
-      detected,
-      stateDir,
-      beforeVerify: () => {
-        fs.appendFileSync(sourcePath, "\n");
-      },
-    });
-    expect(first.warnings[0]).toContain("source changed");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(readCommitmentsForTest()).toStrictEqual([record()]);
-
-    const retry = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-    expect(retry.warnings).toStrictEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("restores the claimed source when cleanup fails, then retries idempotently", async () => {
-    const stateDir = await useStateDir();
-    const sourcePath = await writeLegacyStore(stateDir, [record()]);
-    const first = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-      removeSource: () => {
-        throw new Error("simulated unlink failure");
-      },
-    });
-    expect(first.warnings[0]).toContain("could not remove legacy source");
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(readCommitmentsForTest()).toStrictEqual([record()]);
-
-    const retry = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-    expect(retry.warnings).toStrictEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(readCommitmentsForTest()).toStrictEqual([record()]);
-  });
-
-  it("refuses a symlinked legacy source", async () => {
-    const stateDir = await useStateDir();
-    const realPath = path.join(stateDir, "outside.json");
-    await fsp.writeFile(realPath, JSON.stringify({ version: 1, commitments: [record()] }), "utf8");
-    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.symlink(realPath, sourcePath);
-
-    const result = migrateLegacyCommitments({
-      detected: detectLegacyCommitments({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-    });
-
-    expect(result.warnings[0]).toContain("non-symlink file");
-    expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
-    expect(readCommitmentsForTest()).toStrictEqual([]);
-  });
-
-  it("runtime ignores legacy JSON until doctor imports it", async () => {
-    const stateDir = await useStateDir();
-    const sourcePath = await writeLegacyStore(stateDir, [record()]);
-    await expect(listCommitments({ nowMs })).resolves.toStrictEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-  });
-
-  it("treats typed columns as authoritative over record_json", async () => {
-    await useStateDir();
-    const canonical = record();
-    const row = commitmentRecordToRow(canonical);
-    const database = openOpenClawStateDatabase();
-    executeSqliteQuerySync(
-      database.db,
-      getNodeSqliteKysely<CommitmentsDatabase>(database.db)
-        .insertInto("commitments")
-        .values({ ...row, record_json: JSON.stringify({ status: "sent", injected: true }) }),
-    );
-    expect(readCommitmentsForTest()).toStrictEqual([canonical]);
-  });
+it("leaves conflicting source and interrupted claim bytes unchanged", async () => {
+  await writeLegacy(rows("claim"));
+  await fsp.rename(source, claim);
+  await writeLegacy(rows("replacement"));
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("conflicts with its interrupted Doctor claim");
+  expectPaths(true, true);
+  expect(receipt()).toBeUndefined();
 });

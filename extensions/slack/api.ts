@@ -1,4 +1,3 @@
-// Slack API module exposes the plugin public contract.
 export { slackPlugin } from "./src/channel.js";
 export { slackSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -46,13 +45,8 @@ export {
   buildSlackPresentationBlocks,
   type SlackBlock,
 } from "./src/blocks-render.js";
+export { resolveSlackChannelType } from "./src/channel-type.js";
 export {
-  resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest,
-  resetSlackChannelTypeCacheForTest,
-  resolveSlackChannelType,
-} from "./src/channel-type.js";
-export {
-  clearSlackWriteClientCacheForTest,
   createSlackTokenCacheKey,
   createSlackWebClient,
   createSlackWriteClient,
@@ -66,12 +60,7 @@ export {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
-export {
-  handleSlackHttpRequest,
-  normalizeSlackWebhookPath,
-  registerSlackHttpHandler,
-  type SlackHttpRequestHandler,
-} from "./src/http/index.js";
+export { normalizeSlackWebhookPath } from "./src/http/paths.js";
 export type {
   SlackInteractiveHandlerContext,
   SlackInteractiveHandlerRegistration,
@@ -83,8 +72,6 @@ export {
 } from "./src/group-policy.js";
 export {
   allowListMatches,
-  normalizeAllowList,
-  normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
@@ -108,4 +95,9 @@ export {
   type SlackTargetParseOptions,
 } from "./src/targets.js";
 export { buildSlackThreadingToolContext } from "./src/threading-tool-context.js";
-export { resolveSlackRuntimeGroupPolicy } from "./src/monitor/provider.js";
+export { resolveOpenProviderRuntimeGroupPolicy as resolveSlackRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+
+export {
+  normalizeStringEntries as normalizeAllowList,
+  normalizeStringEntriesLower as normalizeAllowListLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";

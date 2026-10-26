@@ -1,7 +1,52 @@
-export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime-admission-errors.js";
+import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+
+export { PreparedModelRuntimeOwnerNotPublishedError };
+
+/** The embedded runner refused its initial admission before executing a generation. */
+export class PreparedModelRuntimeInitialRunAdmissionError extends PreparedModelRuntimeOwnerNotPublishedError {
+  constructor(error: PreparedModelRuntimeOwnerNotPublishedError) {
+    super(error.message, { cause: error, admissionBlocked: true });
+  }
+}
+
+export function isPreparedModelRuntimeMissingOwnerError(
+  error: unknown,
+): error is PreparedModelRuntimeOwnerNotPublishedError {
+  return error instanceof PreparedModelRuntimeOwnerNotPublishedError && !error.admissionBlocked;
+}
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
-export function toPreparedModelRuntimeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+export class PreparedModelRuntimePluginGenerationRetiredError extends Error {}
+
+export function isPreparedModelRuntimePluginLifecycleFailure(error: unknown): boolean {
+  return (
+    error instanceof PluginInstanceUnavailableError ||
+    error instanceof PreparedModelRuntimePluginGenerationRetiredError ||
+    error instanceof PreparedModelRuntimePublicationSupersededError
+  );
+}
+
+export function assertPreparedModelRuntimeInputCurrent(
+  input: PreparedModelRuntimeInput,
+  isCurrent: (() => boolean) | undefined,
+): void {
+  if (isCurrent && !isCurrent()) {
+    throw new PreparedModelRuntimePublicationSupersededError(
+      `prepared model runtime publication was superseded for ${input.agentDir}`,
+    );
+  }
+}
+
+export function assertPreparedModelRuntimeCandidatesCurrent(
+  candidates: readonly {
+    input: PreparedModelRuntimeInput;
+    isBuildCurrent?: () => boolean;
+  }[],
+): void {
+  for (const candidate of candidates) {
+    assertPreparedModelRuntimeInputCurrent(candidate.input, candidate.isBuildCurrent);
+  }
 }

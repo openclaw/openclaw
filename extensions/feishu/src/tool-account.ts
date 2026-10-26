@@ -1,8 +1,7 @@
-// Feishu plugin module implements tool account behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
@@ -15,17 +14,17 @@ import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 type FeishuToolFamily = keyof FeishuToolsConfig;
-type FeishuToolRequirement = {
-  family: FeishuToolFamily;
-  label: string;
-};
-
-function resolveImplicitToolAccountId(params: {
-  api: Pick<OpenClawPluginApi, "config">;
+type FeishuToolAccountParams = {
+  cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
-  requiredTool?: FeishuToolRequirement;
-}): string | undefined {
+  requiredTool: {
+    family: FeishuToolFamily;
+    label: string;
+  };
+};
+
+function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {
   const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
   if (explicitAccountId) {
     const normalizedAccountId = normalizeOptionalAccountId(explicitAccountId);
@@ -33,11 +32,11 @@ function resolveImplicitToolAccountId(params: {
       throw new Error(`Invalid Feishu account ID "${explicitAccountId}"`);
     }
     const listedAccountId =
-      listFeishuAccountIds(params.api.config).find(
+      listFeishuAccountIds(params.cfg).find(
         (accountId) => normalizeOptionalAccountId(accountId) === normalizedAccountId,
       ) ??
       (() => {
-        const defaultAccountId = resolveDefaultFeishuAccountId(params.api.config);
+        const defaultAccountId = resolveDefaultFeishuAccountId(params.cfg);
         return normalizeOptionalAccountId(defaultAccountId) === normalizedAccountId
           ? defaultAccountId
           : undefined;
@@ -45,71 +44,69 @@ function resolveImplicitToolAccountId(params: {
     if (!listedAccountId) {
       throw new Error(`Unknown Feishu account "${explicitAccountId}"`);
     }
+    // An explicit alias must stay bound to the exact configured key it
+    // matched; resolving with the normalized alias alone can pick up the root
+    // account's credentials and tool policy for punctuation-bearing keys.
     const account = resolveFeishuAccount({
-      cfg: params.api.config,
-      accountId: normalizedAccountId,
+      cfg: params.cfg,
+      accountId: listedAccountId,
     });
     if (!account.enabled) {
       throw new Error(`Feishu account "${listedAccountId}" is disabled`);
     }
-    return normalizedAccountId;
+    return listedAccountId;
   }
 
-  const contextualAccountId = normalizeOptionalString(params.defaultAccountId);
-  if (
-    contextualAccountId &&
-    listFeishuAccountIds(params.api.config).includes(contextualAccountId)
-  ) {
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  const contextualAccountKey = contextualAccountId
+    ? listFeishuAccountIds(params.cfg).find(
+        (accountId) => normalizeOptionalAccountId(accountId) === contextualAccountId,
+      )
+    : undefined;
+  if (contextualAccountKey !== undefined) {
     const contextualAccount = resolveFeishuAccount({
-      cfg: params.api.config,
-      accountId: contextualAccountId,
+      cfg: params.cfg,
+      accountId: contextualAccountKey,
     });
     if (contextualAccount.enabled) {
-      return contextualAccountId;
+      // Resolve with the exact configured key; a normalized alias can lose
+      // punctuation and silently inherit the root account's credentials
+      // and tool policy.
+      return contextualAccountKey;
     }
   }
 
   const configuredDefaultAccountId = normalizeOptionalString(
-    (params.api.config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
-      ?.defaultAccount,
+    (params.cfg.channels?.feishu as { defaultAccount?: unknown } | undefined)?.defaultAccount,
   );
-  if (configuredDefaultAccountId) {
+  // A routing preference must not reactivate credentials that the operator disabled.
+  if (
+    configuredDefaultAccountId &&
+    resolveFeishuAccount({ cfg: params.cfg, accountId: configuredDefaultAccountId }).enabled
+  ) {
     return configuredDefaultAccountId;
   }
 
-  if (params.requiredTool && params.api.config) {
-    for (const accountId of listFeishuAccountIds(params.api.config)) {
-      const account = resolveFeishuAccount({ cfg: params.api.config, accountId });
-      if (
-        account.enabled &&
-        account.configured &&
-        resolveToolsConfig(account.config.tools)[params.requiredTool.family]
-      ) {
-        return accountId;
-      }
+  for (const accountId of listFeishuAccountIds(params.cfg)) {
+    const account = resolveFeishuAccount({ cfg: params.cfg, accountId });
+    if (
+      account.enabled &&
+      account.configured &&
+      resolveToolsConfig(account.config.tools)[params.requiredTool.family]
+    ) {
+      return accountId;
     }
   }
 
-  return undefined;
+  throw new Error(`No usable Feishu account has ${params.requiredTool.label} tools enabled`);
 }
 
-export function resolveFeishuToolAccount(params: {
-  api: Pick<OpenClawPluginApi, "config">;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool?: FeishuToolRequirement;
-}): ResolvedFeishuAccount {
-  if (!params.api.config) {
-    throw new Error("Feishu config unavailable");
-  }
+export function resolveFeishuToolAccount(params: FeishuToolAccountParams): ResolvedFeishuAccount {
   const account = resolveFeishuRuntimeAccount({
-    cfg: params.api.config,
+    cfg: params.cfg,
     accountId: resolveImplicitToolAccountId(params),
   });
-  if (
-    params.requiredTool &&
-    !resolveToolsConfig(account.config.tools)[params.requiredTool.family]
-  ) {
+  if (!resolveToolsConfig(account.config.tools)[params.requiredTool.family]) {
     throw new Error(
       `Feishu ${params.requiredTool.label} tools are disabled for account "${account.accountId}"`,
     );
@@ -117,36 +114,6 @@ export function resolveFeishuToolAccount(params: {
   return account;
 }
 
-export function createFeishuToolClient(params: {
-  api: Pick<OpenClawPluginApi, "config">;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool?: FeishuToolRequirement;
-}): Lark.Client {
+export function createFeishuToolClient(params: FeishuToolAccountParams): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
-}
-
-export function resolveAnyEnabledFeishuToolsConfig(
-  accounts: ResolvedFeishuAccount[],
-): Required<FeishuToolsConfig> {
-  const merged: Required<FeishuToolsConfig> = {
-    doc: false,
-    chat: false,
-    wiki: false,
-    drive: false,
-    perm: false,
-    scopes: false,
-    bitable: false,
-  };
-  for (const account of accounts) {
-    const cfg = resolveToolsConfig(account.config.tools);
-    merged.doc = merged.doc || cfg.doc;
-    merged.chat = merged.chat || cfg.chat;
-    merged.wiki = merged.wiki || cfg.wiki;
-    merged.drive = merged.drive || cfg.drive;
-    merged.perm = merged.perm || cfg.perm;
-    merged.scopes = merged.scopes || cfg.scopes;
-    merged.bitable = merged.bitable || cfg.bitable;
-  }
-  return merged;
 }

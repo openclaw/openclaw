@@ -1,31 +1,11 @@
 // Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
-
-function isDriveLessWindowsRootedPath(value: string): boolean {
-  return process.platform === "win32" && /^:[\\/]/.test(value);
-}
-
-function resolveEnvironmentValue(
-  env: NodeJS.ProcessEnv | undefined,
-  name: string,
-): string | undefined {
-  if (!env) {
-    return undefined;
-  }
-  const exactValue = env[name] ?? (name === "PATH" ? env.Path : undefined);
-  if (exactValue !== undefined) {
-    return exactValue;
-  }
-  if (process.platform !== "win32") {
-    return undefined;
-  }
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
-}
+import { resolveEnvironmentValue } from "./process-env.js";
 
 export function resolveExecutablePathCandidate(
   rawExecutable: string,
@@ -34,7 +14,7 @@ export function resolveExecutablePathCandidate(
   const expanded = rawExecutable.startsWith("~")
     ? expandHomePrefix(rawExecutable, { env: options?.env })
     : rawExecutable;
-  if (isDriveLessWindowsRootedPath(expanded)) {
+  if (process.platform === "win32" && /^:[\\/]/.test(expanded)) {
     return undefined;
   }
   const hasPathSeparator = expanded.includes("/") || expanded.includes("\\");
@@ -47,7 +27,7 @@ export function resolveExecutablePathCandidate(
   if (path.isAbsolute(expanded)) {
     return path.resolve(expanded);
   }
-  const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+  const base = options?.cwd && options.cwd.trim() ? options.cwd : process.cwd();
   return path.resolve(base, expanded);
 }
 
@@ -56,19 +36,10 @@ function resolveWindowsExecutableExtensions(
   env: NodeJS.ProcessEnv | undefined,
   includeExtensionless = true,
 ): string[] {
-  if (process.platform !== "win32") {
+  if (process.platform !== "win32" || path.extname(executable).length > 0) {
     return [""];
   }
-  if (path.extname(executable).length > 0) {
-    return [""];
-  }
-  const extensions = (
-    resolveEnvironmentValue(env, "PATHEXT") ??
-    resolveEnvironmentValue(process.env, "PATHEXT") ??
-    ".EXE;.CMD;.BAT;.COM"
-  )
-    .split(";")
-    .map((ext) => normalizeLowercaseStringOrEmpty(ext));
+  const extensions = [...resolveWindowsExecutableExtSet(env)];
   return includeExtensionless ? ["", ...extensions] : extensions;
 }
 
@@ -86,21 +57,21 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
 }
 
 export function isRegularFile(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(filePath)?.isFile() ?? false;
 }
 
-function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
+const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
+
+/** Checks a supplied path without PATH lookup or lexical normalization. */
+export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   if (!isRegularFile(filePath)) {
     return false;
   }
   try {
     if (process.platform === "win32") {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-      if (!ext) {
+      // PATHEXT controls suffix probing, not an explicitly named native file.
+      if (!ext || WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(ext)) {
         return true;
       }
       return resolveWindowsExecutableExtSet(options?.env).has(ext);
@@ -112,7 +83,6 @@ function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv 
   }
 }
 
-const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 const EXECUTABLE_PATH_CACHE_TTL_MS = 60_000;
 const EXECUTABLE_PATH_CACHE_MAX_ENTRIES = 128;
 
@@ -131,39 +101,33 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
   pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
-function executablePathCacheKey(
-  executable: string,
-  pathEnv: string,
-  env: NodeJS.ProcessEnv | undefined,
-  includeExtensionless: boolean | undefined,
-): string {
-  const pathExt =
-    resolveEnvironmentValue(env, "PATHEXT") ??
-    resolveEnvironmentValue(process.env, "PATHEXT") ??
-    "";
-  let cwd = "";
-  try {
-    // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
-    cwd = process.cwd();
-  } catch {
-    // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
-  }
-  return `${process.platform}\0${executable}\0${pathEnv}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}`;
-}
-
 /** Clears process-local PATH probe results after the runtime environment changes. */
 export function clearExecutablePathCache(): void {
   executablePathCache.clear();
 }
 
+/** Prepared entries preserve delimiters introduced by caller-owned home expansion. */
 export function resolveExecutableFromPathEnv(
   executable: string,
-  pathEnv: string,
+  pathEnv: string | readonly string[],
   env?: NodeJS.ProcessEnv,
-  options?: { includeExtensionless?: boolean },
+  options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
 ): string | undefined {
-  const cacheKey = executablePathCacheKey(executable, pathEnv, env, options?.includeExtensionless);
-  const cached = executablePathCache.get(cacheKey);
+  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd) : undefined;
+  const useCache = options?.useCache !== false;
+  const pathExt =
+    resolveEnvironmentValue(env, "PATHEXT") ??
+    resolveEnvironmentValue(process.env, "PATHEXT") ??
+    "";
+  let cacheCwd = "";
+  try {
+    // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
+    cacheCwd = cwd ?? process.cwd();
+  } catch {
+    // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
+  }
+  const cacheKey = `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${options?.includeExtensionless !== false}\0${cacheCwd}\0${cwd !== undefined}`;
+  const cached = useCache ? executablePathCache.get(cacheKey) : undefined;
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
     // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
@@ -178,35 +142,40 @@ export function resolveExecutableFromPathEnv(
     executablePathCache.delete(cacheKey);
   }
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
-  const entries = pathEnv.split(delimiter).filter(Boolean);
+  const entries = (typeof pathEnv === "string" ? pathEnv.split(delimiter) : pathEnv).filter(
+    (entry) => Boolean(entry) || (cwd !== undefined && process.platform !== "win32"),
+  );
   const extensions = resolveWindowsExecutableExtensions(
     executable,
     env,
     options?.includeExtensionless,
   );
-  const hasNativeWindowsExtension =
-    process.platform === "win32" &&
-    WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(
-      normalizeLowercaseStringOrEmpty(path.extname(executable)),
-    );
   for (const entry of entries) {
+    const hasParentTraversal = process.platform !== "win32" && entry.split("/").includes("..");
+    const rawDirectory =
+      cwd !== undefined && !path.isAbsolute(entry) ? `${cwd}${path.sep}${entry}` : entry;
     for (const ext of extensions) {
-      const candidate = path.join(entry, executable + ext);
-      if (
-        hasNativeWindowsExtension ? isRegularFile(candidate) : isExecutableFile(candidate, { env })
-      ) {
-        cacheExecutablePath(cacheKey, candidate);
+      // Folding ".." can replace the filesystem parent of a symlink with a different directory.
+      const candidate = hasParentTraversal
+        ? `${rawDirectory}${path.sep}${executable}${ext}`
+        : path.join(cwd === undefined ? entry : path.resolve(cwd, entry), executable + ext);
+      if (isExecutableFile(candidate, { env })) {
+        if (useCache) {
+          cacheExecutablePath(cacheKey, candidate);
+        }
         return candidate;
       }
     }
   }
-  cacheExecutablePath(cacheKey, undefined);
+  if (useCache) {
+    cacheExecutablePath(cacheKey, undefined);
+  }
   return undefined;
 }
 
 export function resolveExecutablePath(
   rawExecutable: string,
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv; useCache?: boolean },
 ): string | undefined {
   const candidate = resolveExecutablePathCandidate(rawExecutable, options);
   if (!candidate) {
@@ -219,7 +188,10 @@ export function resolveExecutablePath(
     resolveEnvironmentValue(options?.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
     "";
-  return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
+  return resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
+    cwd: options?.cwd,
+    useCache: options?.useCache,
+  });
 }
 
 /**
@@ -250,21 +222,10 @@ export function resolveExecutable(cmd: string): string {
     }
   }
 
-  const cmdMatch = matches.find(
-    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd",
+  return (
+    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd") ??
+    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe") ??
+    matches[0] ??
+    cmd
   );
-  if (cmdMatch) {
-    return cmdMatch;
-  }
-  const exeMatch = matches.find(
-    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe",
-  );
-  if (exeMatch) {
-    return exeMatch;
-  }
-  if (matches[0]) {
-    return matches[0];
-  }
-
-  return cmd;
 }

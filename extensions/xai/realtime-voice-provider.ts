@@ -18,7 +18,6 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
       assertXaiRealtimeVoiceRequestSupported(req);
       return new XaiRealtimeVoiceBridge({
         ...req,
-        apiKey: config.apiKey,
         baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),
         model: config.model,
         voice: config.voice,
@@ -27,7 +26,7 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
         prefixPaddingMs: config.prefixPaddingMs,
         reasoningEffort: config.reasoningEffort,
         sessionResumption: config.sessionResumption,
-        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg),
+        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg, req.agentId),
       });
     },
   };

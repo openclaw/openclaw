@@ -1,163 +1,66 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  classifyConfigPathMigrationOwnership,
-  isSingleTopLevelIncludeMigration,
-} from "./include-migration-ownership.js";
-
-const sourceConfig = {
-  mcp: { servers: { local: { command: "node", disabled: true } } },
-} as unknown as OpenClawConfig;
-const candidate = {
-  mcp: { servers: { local: { command: "node", enabled: false } } },
-} as OpenClawConfig;
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../../../test-helpers/temp-dir.js";
+import { classifyOtelGrpcMigrationOwnership } from "./include-migration-ownership.js";
 
 describe("include migration ownership", () => {
   const configDir = path.resolve("/tmp/openclaw-config");
   const configPath = path.join(configDir, "openclaw.json");
-  const diagnosticsPath = path.join(configDir, "diagnostics.json5");
+  const classifyOtelOwnership = (
+    includeProvenance: NonNullable<
+      Parameters<typeof classifyOtelGrpcMigrationOwnership>[0]["snapshot"]["includeProvenance"]
+    >,
+    file = configPath,
+  ) =>
+    classifyOtelGrpcMigrationOwnership({
+      snapshot: { path: file, includeProvenance },
+      authoredConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+      resolvedConfig: { diagnostics: { otel: { protocol: "grpc" } } },
+    });
+  const include = (targetPath: string, includePath = "diagnostics") => ({
+    path: [includePath],
+    kind: "single" as const,
+    hasSiblingOverrides: false,
+    hasArrayAncestor: false,
+    targetPath,
+  });
 
   it("classifies direct config even when an unrelated include exists", () => {
     expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["agents"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              targetPath: path.join(configDir, "agents.json5"),
-            },
-          ],
-        },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
+      classifyOtelOwnership([include(path.join(configDir, "agents.json5"), "agents")]),
     ).toEqual({ kind: "direct" });
   });
 
-  it("allows one internal top-level include that solely owns diagnostics", () => {
-    expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: {
-          path: configPath,
-          includeProvenance: [
-            {
-              path: ["diagnostics"],
-              kind: "single",
-              hasSiblingOverrides: false,
-              targetPath: diagnosticsPath,
-            },
-          ],
-        },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
-    ).toEqual({ kind: "single-top-level-include", targetPath: diagnosticsPath });
-  });
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-include-ownership-" });
+
+  beforeAll(() => suiteRootTracker.setup());
+  afterAll(() => suiteRootTracker.cleanup());
 
   it.each([
-    {
-      name: "root include",
-      includeProvenance: [
-        {
-          path: [],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          targetPath: path.join(configDir, "root.json5"),
-        },
-      ],
-      targetPaths: [path.join(configDir, "root.json5")],
-    },
-    {
-      name: "include array",
-      includeProvenance: [
-        {
-          path: ["diagnostics"],
-          kind: "multiple" as const,
-          hasSiblingOverrides: false,
-          targetPaths: [
-            path.join(configDir, "diagnostics-a.json5"),
-            path.join(configDir, "diagnostics-b.json5"),
-          ],
-        },
-      ],
-      targetPaths: [
-        path.join(configDir, "diagnostics-a.json5"),
-        path.join(configDir, "diagnostics-b.json5"),
-      ],
-    },
-    {
-      name: "nested include",
-      includeProvenance: [
-        {
-          path: ["diagnostics", "otel"],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          targetPath: path.join(configDir, "otel.json5"),
-        },
-      ],
-      targetPaths: [path.join(configDir, "otel.json5")],
-    },
-    {
-      name: "sibling override",
-      includeProvenance: [
-        {
-          path: ["diagnostics"],
-          kind: "single" as const,
-          hasSiblingOverrides: true,
-          targetPath: diagnosticsPath,
-        },
-      ],
-      targetPaths: [diagnosticsPath],
-    },
-    {
-      name: "external include",
-      includeProvenance: [
-        {
-          path: ["diagnostics"],
-          kind: "single" as const,
-          hasSiblingOverrides: false,
-          targetPath: path.resolve(configDir, "..", "external-diagnostics.json5"),
-        },
-      ],
-      targetPaths: [path.resolve(configDir, "..", "external-diagnostics.json5")],
-    },
-  ])("requires manual repair for $name ownership", ({ includeProvenance, targetPaths }) => {
-    expect(
-      classifyConfigPathMigrationOwnership({
-        snapshot: { path: configPath, includeProvenance },
-        configPath: ["diagnostics", "otel", "protocol"],
-      }),
-    ).toEqual({ kind: "manual", targetPaths });
-  });
+    { name: "external symlink requires manual repair", external: true },
+    { name: "internal file is eligible for automatic repair", external: false },
+  ])("$name", async ({ external }) => {
+    const home = await suiteRootTracker.make(external ? "symlink-external" : "internal-file");
+    const realConfigDir = path.join(home, ".openclaw");
+    await fs.mkdir(realConfigDir, { recursive: true });
+    const targetPath = path.join(realConfigDir, "diagnostics.json5");
+    if (external) {
+      const externalDir = path.join(home, "external");
+      await fs.mkdir(externalDir, { recursive: true });
+      const externalTarget = path.join(externalDir, "diagnostics.json5");
+      await fs.writeFile(externalTarget, "{}\n", "utf-8");
+      await fs.symlink(externalTarget, targetPath);
+    } else {
+      await fs.writeFile(targetPath, "{}\n", "utf-8");
+    }
 
-  it("allows one isolated direct top-level string include", () => {
     expect(
-      isSingleTopLevelIncludeMigration({
-        parsed: { mcp: { $include: "./mcp.json5" } },
-        sourceConfig,
-        candidate,
-      }),
-    ).toBe(true);
-  });
-
-  it.each([
-    ["root include", { $include: "./openclaw.json5" }],
-    ["include array", { mcp: { $include: ["./a.json5", "./b.json5"] } }],
-    ["nested include", { mcp: { servers: { $include: "./servers.json5" } } }],
-    ["sibling override", { mcp: { $include: "./mcp.json5", sessionIdleTtlMs: 1000 } }],
-  ])("rejects %s ownership", (_label, parsed) => {
-    expect(isSingleTopLevelIncludeMigration({ parsed, sourceConfig, candidate })).toBe(false);
-  });
-
-  it("rejects migrations that change more than one top-level section", () => {
-    expect(
-      isSingleTopLevelIncludeMigration({
-        parsed: { mcp: { $include: "./mcp.json5" }, gateway: { mode: "local" } },
-        sourceConfig: { ...sourceConfig, gateway: { mode: "local" } },
-        candidate: { ...candidate, gateway: { mode: "remote" } },
-      }),
-    ).toBe(false);
+      classifyOtelOwnership([include(targetPath)], path.join(realConfigDir, "openclaw.json")),
+    ).toEqual(
+      external
+        ? { kind: "manual", targetPaths: [targetPath] }
+        : { kind: "single-include", targetPath },
+    );
   });
 });

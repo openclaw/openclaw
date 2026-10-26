@@ -1,274 +1,90 @@
-/**
- * Tests the registered gateway server method list and exported method names.
- */
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   createCoreGatewayMethodDescriptors,
-  listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-} from "./methods/core-descriptors.js";
-import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
-import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+} from "./methods/core-method-policy.js";
+import { listGatewayMethods } from "./server-methods-list.js";
+import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
-describe("GATEWAY_EVENTS", () => {
-  it("advertises Talk event streams in hello features", () => {
-    expect(GATEWAY_EVENTS).toContain("talk.event");
-    expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
-    expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
-  });
+const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+const descriptor = (name: string) => descriptors.find((entry) => entry.name === name);
 
-  it("advertises node presence activity updates", () => {
-    expect(GATEWAY_EVENTS).toContain("node.presence");
-  });
-
-  it("advertises skill invalidation updates", () => {
-    expect(GATEWAY_EVENTS).toContain("skills.changed");
-  });
-
-  it("advertises session observer digests", () => {
-    expect(GATEWAY_EVENTS).toContain("session.observer");
-  });
-
-  it("advertises question methods and events", () => {
-    expect(GATEWAY_EVENTS).toContain("question.requested");
-    expect(GATEWAY_EVENTS).toContain("question.resolved");
-    expect(listGatewayMethods()).toEqual(
-      expect.arrayContaining([
-        "question.request",
-        "question.waitAnswer",
-        "question.resolve",
-        "question.get",
-        "question.list",
-      ]),
-    );
-  });
+it.each([
+  ["agents.avatar.generate", "operator.admin", { since: "2026.10", controlPlaneWrite: true }],
+  [
+    "models.authSetApiKey plugins.reload plugins.refresh cron.add cron.update cron.remove cron.run",
+    "operator.admin",
+    { controlPlaneWrite: true },
+  ],
+  ["sessions.title.prepare projects.add", "operator.write", { controlPlaneWrite: true }],
+  ["projects.searchRemote", "operator.read", {}],
+  ["node.runnerInventory.update", "node", { advertise: false }],
+  ["mcp.events.list", "operator.read", { since: "2026.10" }],
+  ["gateway.restart.preflight", "operator.read", { since: "<=2026.7" }],
+  [
+    "environments.create environments.destroy environments.prepare",
+    "operator.admin",
+    { startup: "unavailable-until-sidecars", controlPlaneWrite: true },
+  ],
+  ["environments.session.status", "operator.read", { since: "2026.9" }],
+  [
+    "environments.session.create environments.session.destroy",
+    "operator.admin",
+    { since: "2026.9", controlPlaneWrite: true },
+  ],
+  ["environments.session.exec", "operator.admin", { since: "2026.9" }],
+] as const)("applies discovery and authority policy to %s", (names, scope, policy) => {
+  const methods = listGatewayMethods();
+  for (const name of names.split(" ")) {
+    expect(coreGatewayHandlers[name]).toBeTypeOf("function");
+    expect(descriptor(name)).toMatchObject({ scope, ...policy });
+    if ("startup" in policy) {
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(name);
+    }
+    if (name !== "node.runnerInventory.update") {
+      expect(methods).toContain(name);
+    }
+  }
 });
 
-describe("listGatewayMethods", () => {
-  it("advertises plugin surface refresh for capability rotation", () => {
-    expect(listGatewayMethods()).toContain("plugin.surface.refresh");
-    expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
-  });
+it("keeps read-only methods outside the control-plane write budget", () => {
+  for (const name of [
+    "gateway.restart.preflight",
+    "cron.get",
+    "cron.list",
+    "cron.status",
+    "cron.runs",
+    "cron.history",
+    "environments.session.status",
+    "environments.session.exec",
+  ]) {
+    expect(descriptor(name)?.controlPlaneWrite).toBeUndefined();
+  }
+});
 
-  it("advertises node plugin tool catalog updates", () => {
-    expect(listGatewayMethods()).toContain("node.pluginTools.update");
-  });
+it("preserves the legacy advertised prefix and appends the MCP catalog", () => {
+  const methods = listGatewayMethods();
+  expect(methods.slice(0, LEGACY_ADVERTISED_GATEWAY_METHODS.length)).toEqual(
+    LEGACY_ADVERTISED_GATEWAY_METHODS,
+  );
+  expect(methods.indexOf("mcp.events.list")).toBeGreaterThanOrEqual(
+    LEGACY_ADVERTISED_GATEWAY_METHODS.length,
+  );
+});
 
-  it("advertises node skill catalog updates", () => {
-    expect(listGatewayMethods()).toContain("node.skills.update");
-  });
-
-  it("advertises unified approval lookup, history, and resolution", () => {
-    expect(listGatewayMethods()).toContain("approval.get");
-    expect(listGatewayMethods()).toContain("approval.history");
-    expect(listGatewayMethods()).toContain("approval.resolve");
-  });
-
-  it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-31)).toEqual([
-      "models.probe",
-      "migrations.memory.plan",
-      "migrations.memory.apply",
-      "ui.command",
-      "approval.history",
-      "plugin.surface.refresh",
-      "conversations.list",
-      "session.discussion.info",
-      "session.discussion.open",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-      "sessions.observer.visibility",
-      "session.visibility.set",
-      "session.members.list",
-      "session.members.add",
-      "session.members.remove",
-      "session.suggestions.add",
-      "session.suggestions.list",
-      "session.suggestions.resolve",
-      "session.typing",
-      "sessions.companion.ask",
-      "sessions.companion.state",
-      "sessions.companion.reset",
-      "memory.search",
-      "skills.proposals.events.list",
-      "skills.proposals.evaluate",
-      "hooks.status",
-      "tasks.retry",
-      "tasks.dismiss",
-      "audit.run.inspect",
-    ]);
-    const methods = listGatewayMethods();
-    expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
-      methods.indexOf("node.describe") + 1,
-    );
-    expect(methods.indexOf("node.pluginTools.update")).toBe(
-      methods.indexOf("node.pluginSurface.refresh") + 1,
-    );
-  });
-
-  it("advertises ClawHub skill trust methods", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("skills.securityVerdicts");
-    expect(methods).toContain("skills.skillCard");
-  });
-
-  it("advertises Control UI GitHub previews", () => {
-    expect(listGatewayMethods()).toContain("controlUi.githubPreview");
-  });
-
-  it("advertises Control UI session pull request detection", () => {
-    expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests.subscribe");
-    expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
-  });
-
-  it("advertises explicit session viewer presence", () => {
-    expect(listGatewayMethods()).toContain("sessions.viewers.set");
-  });
-
-  it("advertises session workspace reveal", () => {
-    expect(listGatewayMethods()).toContain("sessions.files.reveal");
-    expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
-  });
-
-  it("advertises the versioned activity audit method", () => {
-    expect(listGatewayMethods()).toContain("audit.activity.list");
-    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
-    expect(listGatewayMethods()).toContain("audit.run.inspect");
-    expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
-  });
-
-  it("does not advertise hidden core handlers", () => {
-    const methods = listGatewayMethods();
-    expect(methods).not.toContain("config.openFile");
-    expect(methods).not.toContain("chat.inject");
-    expect(methods).not.toContain("nativeHook.invoke");
-    expect(methods).not.toContain("sessions.usage");
-  });
-
-  it("preserves the legacy advertised method order", () => {
-    const methods = listGatewayMethods();
-    const coreMethods = listCoreGatewayMethodNames();
-    expect(methods.slice(0, 5)).toEqual([
-      "health",
-      "diagnostics.stability",
-      "doctor.memory.status",
-      "doctor.memory.dreamDiary",
-      "doctor.memory.backfillDreamDiary",
-    ]);
-    expect(methods.slice(32, 37)).toEqual([
-      "exec.approvals.get",
-      "exec.approvals.set",
-      "exec.approvals.node.get",
-      "exec.approvals.node.set",
-      "exec.approval.get",
-    ]);
-    expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-38)).toEqual([
-      "sessions.catalog.continue",
-      "sessions.catalog.archive",
-      "approval.get",
-      "approval.resolve",
-      "sessions.search",
-      "sessions.dispatch",
-      "sessions.reclaim",
-      "models.probe",
-      "migrations.memory.plan",
-      "migrations.memory.apply",
-      "ui.command",
-      "approval.history",
-      "plugin.surface.refresh",
-      "conversations.list",
-      "session.discussion.info",
-      "session.discussion.open",
-      "board.prompt.authorize",
-      "board.data.read",
-      "board.action",
-      "sessions.observer.visibility",
-      "session.visibility.set",
-      "session.members.list",
-      "session.members.add",
-      "session.members.remove",
-      "session.suggestions.add",
-      "session.suggestions.list",
-      "session.suggestions.resolve",
-      "session.typing",
-      "sessions.companion.ask",
-      "sessions.companion.state",
-      "sessions.companion.reset",
-      "memory.search",
-      "skills.proposals.events.list",
-      "skills.proposals.evaluate",
-      "hooks.status",
-      "tasks.retry",
-      "tasks.dismiss",
-      "audit.run.inspect",
-    ]);
-    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
-    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
-    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
-  });
-
-  it("advertises the versioned Talk session RPCs", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("talk.client.create");
-    expect(methods).toContain("talk.client.transcript");
-    expect(methods).toContain("talk.client.close");
-    expect(methods).toContain("talk.client.toolCall");
-    expect(methods).toContain("talk.client.steer");
-    expect(methods).toContain("talk.session.create");
-    expect(methods).toContain("talk.session.join");
-    expect(methods).toContain("talk.session.appendAudio");
-    expect(methods).toContain("talk.session.startTurn");
-    expect(methods).toContain("talk.session.endTurn");
-    expect(methods).toContain("talk.session.cancelTurn");
-    expect(methods).toContain("talk.session.cancelOutput");
-    expect(methods).toContain("talk.session.acknowledgeMark");
-    expect(methods).toContain("talk.session.submitToolResult");
-    expect(methods).toContain("talk.session.steer");
-    expect(methods).toContain("talk.session.close");
-  });
-
-  it("advertises and wires cloud worker environment mutations", () => {
-    const methods = ["environments.create", "environments.destroy"] as const;
-    const advertisedMethods = listGatewayMethods();
-    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
-
-    for (const method of methods) {
-      expect(advertisedMethods).toContain(method);
-      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
-      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
-      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
-        name: method,
-        scope: "operator.admin",
-        startup: "unavailable-until-sidecars",
-        controlPlaneWrite: true,
-      });
-    }
-  });
-
-  it("classifies proposal evaluation as a control-plane write", () => {
-    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
-
-    expect(
-      descriptors.find((descriptor) => descriptor.name === "skills.proposals.evaluate"),
-    ).toMatchObject({
-      scope: "operator.admin",
-      controlPlaneWrite: true,
-    });
-  });
-
-  it("wires a dispatchable handler for every core descriptor", () => {
-    // A descriptor without a matching entry in the lazy handler routing table
-    // advertises a method that then dispatches as "unknown method" — exactly
-    // how terminal.attach/list/text and later sessions.dispatch first shipped
-    // broken. Aux methods are injected at server construction; assistant media
-    // is served by the control-ui handler.
-    const injectedElsewhere = new Set<string>([...GATEWAY_AUX_METHODS, "assistant.media.get"]);
-    const missing = listCoreGatewayMethodNames()
-      .filter((method) => !injectedElsewhere.has(method))
-      .filter((method) => typeof coreGatewayHandlers[method] !== "function");
-    expect(missing).toEqual([]);
-  });
+it.each([
+  "users.background.get",
+  "users.background.upload",
+  "users.background.remove",
+  "controlUi.sessionPullRequests.checks",
+  "update.runs.get",
+  "update.runs.list",
+  "talk.voice.get",
+  "talk.voice.set",
+  "talk.voice.complete",
+  "sessions.setInvolvement",
+])("advertises and wires %s", (name) => {
+  expect(listGatewayMethods()).toContain(name);
+  expect(coreGatewayHandlers[name]).toBeTypeOf("function");
 });

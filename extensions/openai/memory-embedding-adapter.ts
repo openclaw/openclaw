@@ -1,36 +1,27 @@
-// Openai plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { OPENAI_BATCH_ENDPOINT, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
-import {
-  createOpenAiEmbeddingProvider,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-} from "./embedding-provider.js";
+} from "openclaw/plugin-sdk/embedding-provider-adapter";
+import { OPENAI_DEFAULT_EMBEDDING_MODEL } from "./default-models.js";
 
 function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: string): string[] {
-  const excludedHeaders = ["authorization"];
+  const excludedHeaders = ["authorization", "x-api-key", "api-key"];
   if (providerId !== "openai") {
     return excludedHeaders;
   }
-  try {
-    if (new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com") {
-      // Native attribution changes on every upgrade; cache identity must describe embeddings,
-      // not the OpenClaw build that requested them.
-      excludedHeaders.push("version", "user-agent");
-    }
-  } catch {
-    // Invalid URLs are handled by the embedding client; keep existing custom-header identity.
+  if (URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com") {
+    // Native attribution changes on every upgrade; cache identity must describe embeddings,
+    // not the OpenClaw build that requested them.
+    excludedHeaders.push("version", "user-agent");
   }
   return excludedHeaders;
 }
 
 export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "openai",
-  defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
+  defaultModel: OPENAI_DEFAULT_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "openai",
   autoSelectPriority: 20,
@@ -38,6 +29,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const resolvedProvider = options.provider ?? "openai";
+    const { createOpenAiEmbeddingProvider } = await import("./embedding-provider.js");
     const { provider, client } = await createOpenAiEmbeddingProvider({
       ...options,
       provider: resolvedProvider,
@@ -61,9 +53,11 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
         },
         batchEmbed: async (batch) => {
           const inputType = client.documentInputType ?? client.inputType;
+          const { OPENAI_BATCH_ENDPOINT, runOpenAiEmbeddingBatches } =
+            await import("./embedding-batch.js");
           const byCustomId = await runOpenAiEmbeddingBatches({
+            ...batch,
             openAi: client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               method: "POST",
@@ -71,17 +65,12 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               body: {
                 model: client.model,
                 input: chunk.text,
-                ...(typeof client.outputDimensionality === "number"
+                ...(client.outputDimensionality !== undefined
                   ? { dimensions: client.outputDimensionality }
                   : {}),
                 ...(inputType ? { input_type: inputType } : {}),
               },
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

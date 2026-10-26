@@ -1,136 +1,103 @@
-// Qa Lab tests cover live gateway plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
+const { startQaGatewayChild, startQaProviderServer, gatewayStop } = vi.hoisted(() => ({
   startQaGatewayChild: vi.fn(),
+  gatewayStop: vi.fn(),
   startQaProviderServer: vi.fn(),
 }));
 
+// mock-isolation: Exercise child lifecycle outcomes without starting a Gateway process.
 vi.mock("../../gateway-child.js", () => ({
-  startQaGatewayChild,
+  createQaGatewayChild: () => ({ start: startQaGatewayChild, stop: gatewayStop }),
 }));
 
-vi.mock("../../providers/server-runtime.js", () => ({
-  startQaProviderServer,
-}));
+// mock-isolation: Control provider startup and teardown without opening a provider server.
+vi.mock("../../providers/server-runtime.js", () => ({ startQaProviderServer }));
 
-import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
+import { createQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
-type GatewayOptions = {
-  forcedRuntime?: string;
-  providerBaseUrl?: string;
-  providerMode?: string;
-  transportBaseUrl?: string;
-  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
-
-function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
+type StartOptions = Parameters<ReturnType<typeof createQaLiveLaneGateway>["start"]>[0];
+function gatewayParams(overrides: Partial<StartOptions> = {}): StartOptions {
   return {
-    requiredPluginIds: ["qa-channel"],
-    createGatewayConfig: () => ({
-      channels: {
-        "qa-channel": {
-          enabled: true,
-          baseUrl,
-          botUserId: "openclaw",
-          botDisplayName: "OpenClaw QA",
-          allowFrom: ["*"],
-          pollTimeoutMs: 250,
-        },
-      },
-      messages: {
-        groupChat: {
-          mentionPatterns: ["\\b@?openclaw\\b"],
-        },
-      },
-    }),
+    repoRoot: "/tmp/openclaw-repo",
+    transport: { requiredPluginIds: ["qa-channel"], createGatewayConfig: () => ({}) },
+    transportBaseUrl: "http://127.0.0.1:43123",
+    providerMode: "mock-openai",
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    controlUiEnabled: false,
+    ...overrides,
   };
 }
 
-function firstGatewayOptions(): GatewayOptions | undefined {
-  return startQaGatewayChild.mock.calls[0]?.[0] as GatewayOptions | undefined;
+function firstGatewayOptions() {
+  return startQaGatewayChild.mock.calls[0]?.[0] as
+    | (Partial<StartOptions> & { providerBaseUrl?: string })
+    | undefined;
 }
 
-describe("startQaLiveLaneGateway", () => {
-  const gatewayStop = vi.fn();
-  const gatewayCall = vi.fn();
+describe("createQaLiveLaneGateway", () => {
   const mockStop = vi.fn();
+  const start = (overrides: Partial<StartOptions> = {}) =>
+    createQaLiveLaneGateway().start(gatewayParams(overrides));
 
   beforeEach(() => {
-    gatewayStop.mockReset();
-    gatewayCall.mockReset();
+    gatewayStop.mockReset().mockResolvedValue({ process: "confirmed-stopped", errors: [] });
     mockStop.mockReset();
-    startQaGatewayChild.mockReset();
+    startQaGatewayChild
+      .mockReset()
+      .mockResolvedValue({ call: vi.fn(), cfg: {}, stop: gatewayStop });
     startQaProviderServer.mockReset();
-
-    startQaGatewayChild.mockResolvedValue({
-      call: gatewayCall,
-      cfg: {},
-      stop: gatewayStop,
-    });
     startQaProviderServer.mockImplementation(async (providerMode: string) =>
-      providerMode === "mock-openai"
-        ? {
-            baseUrl: "http://127.0.0.1:44080",
-            stop: mockStop,
-          }
-        : null,
+      providerMode === "mock-openai" ? { baseUrl: "http://127.0.0.1:44080", stop: mockStop } : null,
     );
   });
 
-  afterEach(() => {
-    vi.clearAllMocks();
+  afterEach(() => vi.clearAllMocks());
+
+  it("exposes unconfirmed teardown even when startup never returns a ready handle", async () => {
+    const startupError = new Error("gateway startup failed");
+    const stopError = new Error("gateway group still alive");
+    startQaGatewayChild.mockRejectedValueOnce(startupError);
+    gatewayStop.mockResolvedValue({ process: "unconfirmed", errors: [stopError] });
+    const owner = createQaLiveLaneGateway();
+    await expect(owner.start(gatewayParams())).rejects.toBe(startupError);
+    await expect(owner.stop()).resolves.toEqual({ process: "unconfirmed", errors: [stopError] });
+    expect(mockStop).toHaveBeenCalledOnce();
   });
 
-  it("threads the mock provider base url into the gateway child", async () => {
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
-      controlUiEnabled: false,
-    });
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
-      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
-    });
-    const gatewayOptions = firstGatewayOptions();
-    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
-    expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
-    expect(gatewayOptions?.providerMode).toBe("mock-openai");
-
-    await harness.stop();
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
-    expect(mockStop).toHaveBeenCalledTimes(1);
+  it("closes child admission while provider startup is pending", async () => {
+    const provider = Promise.withResolvers<{ baseUrl: string; stop: typeof mockStop }>();
+    startQaProviderServer.mockReturnValueOnce(provider.promise);
+    gatewayStop.mockResolvedValue({ process: "never-spawned", errors: [] });
+    const owner = createQaLiveLaneGateway();
+    const startup = owner.start(gatewayParams());
+    const rejection = expect(startup).rejects.toThrow("lifecycle is closed");
+    const stopping = owner.stop();
+    provider.resolve({ baseUrl: "http://127.0.0.1:44080", stop: mockStop });
+    await rejection;
+    await expect(stopping).resolves.toEqual({ process: "never-spawned", errors: [] });
+    expect(startQaGatewayChild).not.toHaveBeenCalled();
+    expect(mockStop).toHaveBeenCalledOnce();
   });
 
-  it("forwards a scenario-selected agent runtime to the gateway child", async () => {
-    await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.4",
-      forcedRuntime: "codex",
-    });
-
-    expect(firstGatewayOptions()?.forcedRuntime).toBe("codex");
-  });
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "starts and stops the %s lane with the selected runtime",
+    async (providerMode) => {
+      const harness = await start({ providerMode, forcedRuntime: "codex" });
+      expect(firstGatewayOptions()).toMatchObject({
+        providerBaseUrl: providerMode === "mock-openai" ? "http://127.0.0.1:44080/v1" : undefined,
+        forcedRuntime: "codex",
+      });
+      const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
+      await harness.stop(options);
+      expect(gatewayStop).toHaveBeenCalledExactlyOnceWith(options);
+      expect(mockStop).toHaveBeenCalledTimes(providerMode === "mock-openai" ? 1 : 0);
+    },
+  );
 
   it("disables memory search for transport-only live lanes", async () => {
-    await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
-    });
+    await start();
 
     const { mutateConfig } = firstGatewayOptions() ?? {};
     if (!mutateConfig) {
@@ -144,181 +111,69 @@ describe("startQaLiveLaneGateway", () => {
           "memory-core": { enabled: true },
           "qa-channel": { enabled: true },
         },
-        slots: {
-          memory: "memory-core",
-          contextEngine: "qmd",
-        },
+        slots: { memory: "memory-core", contextEngine: "custom-context" },
       },
-      memory: {
-        search: {
-          enabled: true,
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
+      memory: { search: { enabled: true } },
     });
 
-    expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
-    expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
-    expect(cfg?.plugins?.slots?.memory).toBe("none");
-    expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
-    expect(cfg?.memory?.search?.enabled).toBe(false);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "qa-channel"]);
+    expect(cfg.plugins?.slots).toEqual({ memory: "none", contextEngine: "custom-context" });
+    expect(cfg.memory?.search?.enabled).toBe(false);
+    expect(cfg.plugins?.entries).not.toHaveProperty("memory-core");
   });
 
-  it("forwards gateway stop options to the child harness", async () => {
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
-    });
+  it.each([false, true])(
+    "finalizes failed startup (mock cleanup failure: %s)",
+    async (cleanupFails) => {
+      const owner = createQaLiveLaneGateway();
+      startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
+      if (cleanupFails) {
+        mockStop.mockRejectedValueOnce(new Error("mock stuck"));
+      }
+      await expect(owner.start(gatewayParams())).rejects.toThrow("gateway failed");
 
-    await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
-    expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips mock bootstrap for live frontier runs", async () => {
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-      controlUiEnabled: false,
-    });
-
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
-      modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
-    });
-    const gatewayOptions = firstGatewayOptions();
-    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
-    expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
-    expect(gatewayOptions?.providerMode).toBe("live-frontier");
-
-    await harness.stop();
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops the mock server when gateway startup fails", async () => {
-    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
-
-    await expect(
-      startQaLiveLaneGateway({
-        repoRoot: "/tmp/openclaw-repo",
-        transport: createStubTransport(),
-        transportBaseUrl: "http://127.0.0.1:43123",
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        controlUiEnabled: false,
-      }),
-    ).rejects.toThrow("gateway failed");
-
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports mock cleanup failures after gateway startup failures", async () => {
-    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
-    mockStop.mockRejectedValueOnce(new Error("mock stuck"));
-
-    await expect(
-      startQaLiveLaneGateway({
-        repoRoot: "/tmp/openclaw-repo",
-        transport: createStubTransport(),
-        transportBaseUrl: "http://127.0.0.1:43123",
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        controlUiEnabled: false,
-      }),
-    ).rejects.toThrow(
-      "failed to start QA live lane gateway:\ngateway startup failed: gateway failed\nmock provider stop failed: mock stuck",
-    );
-
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("still stops the mock server when gateway shutdown fails", async () => {
-    gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
-    });
-
-    await expect(harness.stop()).rejects.toThrow(
-      "failed to stop QA live lane resources:\ngateway stop failed: gateway down",
-    );
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
+      const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
+      await expect(owner.stop(options)).resolves.toEqual({
+        process: "confirmed-stopped",
+        errors: cleanupFails ? [expect.objectContaining({ message: "mock stuck" })] : [],
+      });
+      expect(gatewayStop).toHaveBeenCalledWith(options);
+      expect(mockStop).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports both gateway and mock shutdown failures together", async () => {
-    gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
-    mockStop.mockRejectedValueOnce(new Error("mock down"));
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
+    gatewayStop.mockResolvedValueOnce({
+      process: "unconfirmed",
+      errors: [new Error("gateway down")],
     });
+    mockStop.mockRejectedValueOnce(new Error("mock down"));
+    const harness = await start();
 
     await expect(harness.stop()).rejects.toThrow(
-      "failed to stop QA live lane resources:\ngateway stop failed: gateway down\nmock provider stop failed: mock down",
+      "failed to stop QA live lane resources: gateway down; mock down",
     );
   });
 
-  it("retries only mock cleanup after gateway preservation succeeds", async () => {
-    mockStop.mockRejectedValueOnce(new Error("mock down"));
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
-    });
+  it.each(["mock", "gateway"] as const)("retries only failed %s cleanup", async (failed) => {
+    if (failed === "mock") {
+      mockStop.mockRejectedValueOnce(new Error("mock down"));
+    } else {
+      gatewayStop.mockResolvedValueOnce({
+        process: "unconfirmed",
+        errors: [new Error("gateway down")],
+      });
+    }
+    const harness = await start();
     const stopOptions = { preserveToDir: ".artifacts/qa-e2e/debug" };
-
-    await expect(harness.stop(stopOptions)).rejects.toThrow("mock provider stop failed: mock down");
-    await expect(harness.stop(stopOptions)).resolves.toBeUndefined();
-
-    expect(gatewayStop).toHaveBeenCalledTimes(1);
-    expect(gatewayStop).toHaveBeenCalledWith(stopOptions);
-    expect(mockStop).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries only gateway cleanup after mock shutdown succeeds", async () => {
-    gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
-    const harness = await startQaLiveLaneGateway({
-      repoRoot: "/tmp/openclaw-repo",
-      transport: createStubTransport(),
-      transportBaseUrl: "http://127.0.0.1:43123",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      controlUiEnabled: false,
-    });
-
-    await expect(harness.stop()).rejects.toThrow("gateway stop failed: gateway down");
-    await expect(harness.stop()).resolves.toBeUndefined();
-
-    expect(gatewayStop).toHaveBeenCalledTimes(2);
+    await expect(harness.stop(stopOptions)).rejects.toThrow(`${failed} down`);
     expect(mockStop).toHaveBeenCalledTimes(1);
+    await expect(harness.stop(stopOptions)).resolves.toBeUndefined();
+    expect(startQaGatewayChild).toHaveBeenCalledOnce();
+    expect(gatewayStop).toHaveBeenCalledWith(stopOptions);
+    if (failed === "gateway") {
+      expect(gatewayStop).toHaveBeenCalledTimes(2);
+    }
+    expect(mockStop).toHaveBeenCalledTimes(failed === "mock" ? 2 : 1);
   });
 });

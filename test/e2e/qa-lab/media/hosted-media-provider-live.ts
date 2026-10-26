@@ -5,8 +5,9 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+} from "../../../../extensions/qa-lab/test-api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -50,28 +51,34 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "deepinfra",
       "fal",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
     defaultProviders: [
       "alibaba",
       "byteplus",
       "deepinfra",
       "google",
+      "kie",
       "minimax",
-      "openai",
+      "novita",
       "openrouter",
+      "pixverse",
       "qwen",
       "runway",
       "together",
       "vydra",
       "xai",
+      "zai",
     ],
   },
 };
@@ -99,7 +106,6 @@ export type BuildRunPlanDeps = {
   collectProviderApiKeysImpl?: (provider: string) => Promise<unknown[]> | unknown[];
   getProviderEnvVarsImpl?: (provider: string) => Promise<string[]> | string[];
   loadShellEnvFallbackImpl?: (params: {
-    enabled: true;
     env: NodeJS.ProcessEnv;
     expectedKeys: string[];
     logger: { warn: (message: string) => void };
@@ -170,10 +176,6 @@ function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
 }
 
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
   return _spawnPnpmRunner({
     pnpmArgs: params.pnpmArgs,
@@ -188,12 +190,11 @@ async function collectProviderApiKeysForLiveMedia(provider: string): Promise<unk
 }
 
 async function getProviderEnvVarsForLiveMedia(provider: string): Promise<string[]> {
-  const { getProviderEnvVars } = await import("../../../../src/secrets/provider-env-vars.js");
-  return getProviderEnvVars(provider);
+  const { getProviderEnvVarsCore } = await import("../../../../src/secrets/provider-env-vars.js");
+  return getProviderEnvVarsCore(provider);
 }
 
 async function loadShellEnvFallbackForLiveMedia(params: {
-  enabled: true;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];
   logger: { warn: (message: string) => void };
@@ -441,7 +442,6 @@ export async function buildRunPlan(
   ];
   if (expectedKeys.length) {
     await (deps.loadShellEnvFallbackImpl ?? loadShellEnvFallbackForLiveMedia)({
-      enabled: true,
       env: process.env,
       expectedKeys,
       logger: { warn: (message: string) => console.warn(message) },
@@ -473,14 +473,14 @@ export async function buildRunPlan(
   );
 }
 
-export function formatHelp(): string {
+function formatHelp(): string {
   return `Media live harness
 
 Usage:
   pnpm test:live:media
   pnpm test:live:media image
-  pnpm test:live:media image video --providers openai,google,minimax
-  pnpm test:live:media video --video-providers openai,runway --all-providers
+  pnpm test:live:media image video --providers google,minimax,xai
+  pnpm test:live:media video --video-providers runway,xai --all-providers
 
 QA evidence mode:
   node --import tsx ${SOURCE_PATH} --qa-evidence --suite image --artifact-base <dir>
@@ -491,7 +491,7 @@ Defaults:
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
   - skips the slow fal video smoke by default; pass --video-providers fal to run it
-  - forwards extra args to scripts/test-live.mjs
+  - forwards extra args to scripts/test-live.mts
 
 Flags:
   --providers <csv>         global provider filter
