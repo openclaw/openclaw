@@ -17,6 +17,24 @@ import { localPlacement } from "./placement-suite.test-support.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
+type Service = ReturnType<typeof support.createService>;
+type CreateRequest = Parameters<Service["createWithRequest"]>[0];
+
+function create(service: Service, idempotencyKey: string, overrides: Partial<CreateRequest> = {}) {
+  return service.createWithRequest({ profileId: "development", idempotencyKey, ...overrides });
+}
+
+function inherited(
+  parent: Pick<
+    Awaited<ReturnType<Service["createWithRequest"]>>,
+    "profileId" | "providerId" | "profileSnapshot"
+  >,
+) {
+  return {
+    profileId: parent.profileId,
+    inheritedProfile: { providerId: parent.providerId, profileSnapshot: parent.profileSnapshot },
+  };
+}
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -37,10 +55,7 @@ describe("worker environment service", () => {
       },
     });
     const service = support.createService(provider);
-    const creating = service.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "status",
-    });
+    const creating = create(service, "status");
     try {
       await entered.promise;
       const environmentId = support.testState.store.list()[0]!.environmentId;
@@ -84,13 +99,9 @@ describe("worker environment service", () => {
         }),
         closure === "timeout" ? { providerCallTimeoutMs: 25 } : {},
       );
-      const creation = service
-        .createWithRequest({
-          profileId: "development",
-          idempotencyKey: "closed-preparation",
-          signal: controller.signal,
-        })
-        .catch((error: unknown) => error);
+      const creation = create(service, "closed-preparation", { signal: controller.signal }).catch(
+        (error: unknown) => error,
+      );
       try {
         await Promise.race([
           entered.promise,
@@ -151,15 +162,9 @@ describe("worker environment service", () => {
     });
 
     const workerService = support.createService(provider);
-    const create = (machineClass = "beast", os: string | undefined = "os-a") =>
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-1",
-        machineClass,
-        os,
-      });
-    const result = await create();
-    const repeated = await create();
+    const selection = { machineClass: "beast", os: "os-a" };
+    const result = await create(workerService, "request-1", selection);
+    const repeated = await create(workerService, "request-1", selection);
 
     expect(result).toMatchObject({ state: "ready", leaseId: "lease-1", ownerEpoch: 1 });
     expect(repeated.environmentId).toBe(result.environmentId);
@@ -195,14 +200,9 @@ describe("worker environment service", () => {
       ["beast", "os-b"],
       ["beast", undefined],
     ]) {
-      await expect(
-        workerService.createWithRequest({
-          profileId: "development",
-          idempotencyKey: "request-1",
-          machineClass,
-          os,
-        }),
-      ).rejects.toMatchObject({ code: "invalid_profile" });
+      await expect(create(workerService, "request-1", { machineClass, os })).rejects.toMatchObject({
+        code: "invalid_profile",
+      });
     }
     expect(operationIds).toHaveLength(1);
   });
@@ -213,32 +213,21 @@ describe("worker environment service", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "mode-configured",
-        executionMode: "remote-exec",
-      }),
+      create(workerService, "mode-configured", { executionMode: "remote-exec" }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     await expect(
-      workerService.createWithRequest({
-        profileId: "development",
+      create(workerService, "mode-inherited", {
         inheritedProfile: {
           providerId: provider.id,
           profileSnapshot: { install: "bundle", settings: { region: "test" } },
         },
-        idempotencyKey: "mode-inherited",
         executionMode: "worker-turn",
       }),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
 
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "lifecycle-only",
-      }),
-    ).resolves.toMatchObject({
+    await expect(create(workerService, "lifecycle-only")).resolves.toMatchObject({
       state: "ready",
     });
     expect(provision).toHaveBeenCalledOnce();
@@ -265,11 +254,7 @@ describe("worker environment service", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "transport-worker-turn-ssh",
-        executionMode: "worker-turn",
-      }),
+      create(workerService, "transport-worker-turn-ssh", { executionMode: "worker-turn" }),
     ).rejects.toMatchObject({
       code: "invalid_profile",
       message: expect.stringContaining("worker-turn providers must return a node lease"),
@@ -432,10 +417,7 @@ describe("worker environment service", () => {
     service.machineShapeNotifications.onChanged = () => {
       throw new Error("observer unavailable");
     };
-    const environment = await service.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "catalog-failure",
-    });
+    const environment = await create(service, "catalog-failure");
     expect(environment.state).toBe("ready");
     await support.waitForFast(() =>
       expect(warn).toHaveBeenCalledWith(
@@ -454,32 +436,24 @@ describe("worker environment service", () => {
 
   it.each([
     [
-      "multiple defaults for one OS",
+      "listMachineOptions",
       [
         { id: "standard", label: "Standard", default: true, os: "os-a" },
         { id: "fast", label: "Fast", default: true, os: "os-a" },
       ],
     ],
-  ])("omits %s returned by a worker provider", async (_name, options) => {
-    const provider = support.createProvider();
-    Object.defineProperty(provider, "listMachineOptions", { value: async () => options });
-    const workerService = support.createService(provider);
-
-    await expect(workerService.listMachineOptions("development")).resolves.toBeUndefined();
-  });
-
-  it.each(
     [
+      "listOperatingSystems",
       [
         { id: "os-a", label: "OS A", default: true },
         { id: "os-b", label: "OS B", default: true },
       ],
-    ].map((systems) => ({ systems })),
-  )("omits malformed operating-system catalog %#", async ({ systems }) => {
+    ],
+  ] as const)("omits multiple defaults in %s", async (method, options) => {
     const provider = support.createProvider();
-    Object.defineProperty(provider, "listOperatingSystems", { value: async () => systems });
+    Object.defineProperty(provider, method, { value: async () => options });
     const workerService = support.createService(provider);
-    await expect(workerService.listOperatingSystems("development")).resolves.toBeUndefined();
+    await expect(workerService[method]("development")).resolves.toBeUndefined();
   });
 
   it.each([
@@ -507,39 +481,17 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider({ provision }), {
       generateWorkerCredential: () => `inherited-worker-credential-${(credential += 1)}`,
     });
-    const parent = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "parent-inherited-profile",
-    });
-    const inherited = {
-      profileId: parent.profileId,
-      providerId: parent.providerId,
-      profileSnapshot: parent.profileSnapshot,
-    };
+    const parent = await create(workerService, "parent-inherited-profile");
     testCase.mutate();
 
     await expect(
-      workerService.createWithRequest({
-        profileId: inherited.profileId,
-        inheritedProfile: {
-          providerId: inherited.providerId,
-          profileSnapshot: inherited.profileSnapshot,
-        },
-        idempotencyKey: "fresh-inherited-profile",
-      }),
+      create(workerService, "fresh-inherited-profile", inherited(parent)),
     ).rejects.toMatchObject({ code: testCase.code });
     expect(provision).toHaveBeenCalledOnce();
     expect(support.testState.store.list()).toHaveLength(1);
 
     await expect(
-      workerService.createWithRequest({
-        profileId: inherited.profileId,
-        inheritedProfile: {
-          providerId: inherited.providerId,
-          profileSnapshot: inherited.profileSnapshot,
-        },
-        idempotencyKey: "parent-inherited-profile",
-      }),
+      create(workerService, "parent-inherited-profile", inherited(parent)),
     ).resolves.toMatchObject({ environmentId: parent.environmentId });
     expect(provision).toHaveBeenCalledOnce();
   });
@@ -560,13 +512,12 @@ describe("worker environment service", () => {
     );
 
     await expect(
-      workerService.createWithRequest({
+      create(workerService, "paired-profileless", {
         profileId: "device:device-1",
         inheritedProfile: {
           providerId: DEVICE_WORKER_PROVIDER_ID,
           profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
         },
-        idempotencyKey: "paired-profileless",
         executionMode: "worker-turn",
       }),
     ).resolves.toMatchObject({ state: "ready", nodeDeviceId: "device-1" });
@@ -594,21 +545,14 @@ describe("worker environment service", () => {
         generateWorkerCredential: () => `named-device-credential-${(credential += 1)}`,
       },
     );
-    const parent = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "named-device-parent",
+    const parent = await create(workerService, "named-device-parent", {
       executionMode: "worker-turn",
     });
     support.testState.config.cloudWorkers = { profiles: {} };
 
     await expect(
-      workerService.createWithRequest({
-        profileId: parent.profileId,
-        inheritedProfile: {
-          providerId: parent.providerId,
-          profileSnapshot: parent.profileSnapshot,
-        },
-        idempotencyKey: "named-device-child",
+      create(workerService, "named-device-child", {
+        ...inherited(parent),
         executionMode: "worker-turn",
       }),
     ).rejects.toMatchObject({ code: "profile_not_found" });
@@ -622,9 +566,7 @@ describe("worker environment service", () => {
     const provision = vi.fn(support.createProvider().provision);
 
     await expect(
-      support
-        .createService(support.createProvider({ provision }))
-        .createWithRequest({ profileId: "development", idempotencyKey: "request-secret" }),
+      create(support.createService(support.createProvider({ provision })), "request-secret"),
     ).rejects.toMatchObject({ code: "invalid_profile" });
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
@@ -640,12 +582,7 @@ describe("worker environment service", () => {
     });
     const workerService = support.createService(provider);
 
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "request-invalid",
-      }),
-    ).rejects.toMatchObject({
+    await expect(create(workerService, "request-invalid")).rejects.toMatchObject({
       code: "invalid_profile",
       message: expect.stringContaining("region is required"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -666,42 +603,36 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider());
 
     await expect(
-      workerService.createWithRequest({
-        profileId: " development ",
-        idempotencyKey: "request-spaced",
-      }),
+      create(workerService, "request-spaced", { profileId: " development " }),
     ).rejects.toMatchObject({
       code: "invalid_profile",
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(support.testState.store.list()).toEqual([]);
   });
 
-  it.each(["restart reconcile"] as const)(
-    "cancels a requested intent without allocating on %s",
-    async (mode) => {
-      const intent = await support.testState.store.createIntent({
-        environmentId: `worker-cancel-${mode}`,
-        providerId: "fake",
-        profileId: "development",
-        profileSnapshot: { settings: { region: "test" } },
-        provisionOperationId: `provision:cancel-${mode}`,
-      });
-      const provision = vi.fn(support.createProvider().provision);
-      const workerService = support.createService(support.createProvider({ provision }));
+  it("cancels a requested intent without allocating on restart reconcile", async () => {
+    const intent = await support.testState.store.createIntent({
+      environmentId: "worker-cancel-restart",
+      providerId: "fake",
+      profileId: "development",
+      profileSnapshot: { settings: { region: "test" } },
+      provisionOperationId: "provision:cancel-restart",
+    });
+    const provision = vi.fn(support.createProvider().provision);
+    const workerService = support.createService(support.createProvider({ provision }));
 
-      await support.testState.store.requestDestroy({
-        environmentId: intent.environmentId,
-        state: "requested",
-      });
-      support.testState.providersEnabled = false;
-      await workerService.reconcileOnce();
+    await support.testState.store.requestDestroy({
+      environmentId: intent.environmentId,
+      state: "requested",
+    });
+    support.testState.providersEnabled = false;
+    await workerService.reconcileOnce();
 
-      expect(provision).not.toHaveBeenCalled();
-      expect(support.testState.store.get(intent.environmentId)).toMatchObject({
-        state: "failed",
-        lastError: "Provisioning canceled before provider allocation",
-        destroyRequestedAtMs: expect.any(Number),
-      });
-    },
-  );
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+      state: "failed",
+      lastError: "Provisioning canceled before provider allocation",
+      destroyRequestedAtMs: expect.any(Number),
+    });
+  });
 });
