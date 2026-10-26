@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import * as approvalResolutionRef from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -32,6 +33,7 @@ import {
   recoverOperatorApprovalsOnStartup,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { decodeOperatorApprovalRow } from "./operator-approval-store.rows.js";
 import { createOperatorApproval as approval } from "./operator-approval-store.test-support.js";
 import { operatorApprovalOperations } from "./operator-approval-store.worker.js";
 
@@ -72,6 +74,22 @@ function rawApprovalRow(options: OpenClawStateDatabaseOptions, id: string) {
 }
 
 describe("operator approval store", () => {
+  it("validates decoded resolution references by exact identity without a second shape check", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({ approval: approval("exact-reference"), databaseOptions });
+    const row = rawApprovalRow(databaseOptions, "exact-reference")!;
+    const shapeChecks = vi.spyOn(approvalResolutionRef, "isApprovalResolutionRef");
+    try {
+      expect(decodeOperatorApprovalRow(row)?.id).toBe("exact-reference");
+      for (const resolutionRef of ["", "!".repeat(43), "a".repeat(43), row.resolution_ref + "a"]) {
+        expect(decodeOperatorApprovalRow({ ...row, resolution_ref: resolutionRef })).toBeNull();
+      }
+      expect(shapeChecks).not.toHaveBeenCalled();
+    } finally {
+      shapeChecks.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     if (!suiteDatabaseOptions) {
       return;
