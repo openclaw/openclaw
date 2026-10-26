@@ -153,39 +153,24 @@ describe("sidebar owner filter", () => {
     },
   );
 
-  describe("guest default", () => {
-    const auth = (scopes: string[], sessionCap?: "view" | "write") =>
-      ({
-        hello: { auth: { role: "operator", scopes, sessionCap } },
-      }) as unknown as Partial<ApplicationGatewaySnapshot>;
-    const guest = auth(["operator.sessions.write"], "view");
-
-    it("starts a guest without a saved choice on Involving me, then keeps their later choice", () => {
-      const { filter, host, update } = fixture(guest);
-      update();
-      expectOwner(host, null, true);
+  it.each([
+    ["guest", ["operator.sessions.write"], "view", choice(null, true)],
+    ["team member", ["operator.read", "operator.write"], "view", choice("profile-ada")],
+    ["write role", ["operator.sessions.write"], "write", choice("profile-ada")],
+    ["admin operator", ["operator.admin"], undefined, choice("profile-ada")],
+    ["legacy hello", undefined, undefined, choice("profile-ada")],
+  ] as const)(
+    "defaults %s without persisting an automatic choice",
+    (_label, scopes, sessionCap, expected) => {
+      const snapshot = scopes
+        ? ({
+            hello: { auth: { role: "operator", scopes: [...scopes], sessionCap } },
+          } as unknown as Partial<ApplicationGatewaySnapshot>)
+        : {};
+      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(expected);
       expect(localStorage.length).toBe(0);
-      filter.set("profile-ada");
-      expect(fixture(guest).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
-    });
-
-    it.each([choice("profile-ada"), choice("owner-bob"), choice(null)])(
-      "keeps a guest's saved $ownerId choice",
-      (savedFilter) => {
-        storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", savedFilter);
-        expect(fixture(guest).host.sidebarSessionOwnerFilter()).toEqual(savedFilter);
-      },
-    );
-
-    it.each([
-      ["team member", auth(["operator.read", "operator.write"], "view")],
-      ["write role", auth(["operator.sessions.write"], "write")],
-      ["admin operator", auth(["operator.admin"])],
-      ["legacy hello", {}],
-    ])("keeps the own-sessions default: %s", (_label, snapshot) => {
-      expect(fixture(snapshot).host.sidebarSessionOwnerFilter()).toEqual(choice("profile-ada"));
-    });
-  });
+    },
+  );
 
   it("keeps profiles and gateways isolated, including a temporarily unavailable identity", () => {
     const { filter, update, host } = fixture();

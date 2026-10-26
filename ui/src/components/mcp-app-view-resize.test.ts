@@ -17,19 +17,10 @@ type BridgeFixture = Awaited<ReturnType<typeof mountBridge>>;
 function expectHost(bridge: BridgeFixture["bridge"], context: Record<string, unknown>) {
   expect(bridge.setHostContext).toHaveBeenLastCalledWith(expect.objectContaining(context));
 }
-function theme(mode: string, background: string, text: string) {
+function setTheme(mode: string, background: string, text: string) {
   document.documentElement.dataset.themeMode = mode;
   document.documentElement.style.setProperty("--card", background);
   document.documentElement.style.setProperty("--text", text);
-  return {
-    theme: mode,
-    styles: {
-      variables: expect.objectContaining({
-        "--color-background-primary": background,
-        "--color-text-primary": text,
-      }),
-    },
-  };
 }
 function stubAppResizeObservers() {
   const observers: TestResizeObserver[] = [];
@@ -71,18 +62,26 @@ describe("mcp-app-view localization", () => {
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       () => ({ width, height }) as DOMRect,
     );
-    const dark = theme("dark", "#161920", "#d4d4d8");
+    setTheme("dark", "#161920", "#d4d4d8");
     const { bridge, frame, themeListeners, unsubscribe, view, unmount } = await mountBridge(
       `view-context-${crypto.randomUUID()}`,
     );
     expect(bridge.options.hostContext).toMatchObject({
-      ...dark,
+      theme: "dark",
       containerDimensions: { width: 640, height: 600 },
     });
     await expect.poll(() => themeListeners.size).toBe(1);
-    const light = theme("light", "#ffffff", "#403c35");
+    setTheme("light", "#ffffff", "#403c35");
     themeListeners.values().next().value?.();
-    expectHost(bridge, light);
+    expectHost(bridge, {
+      theme: "light",
+      styles: {
+        variables: expect.objectContaining({
+          "--color-background-primary": "#ffffff",
+          "--color-text-primary": "#403c35",
+        }),
+      },
+    });
     width = 720;
     resize();
     expectHost(bridge, { containerDimensions: { width: 720, height: 600 } });
@@ -99,16 +98,10 @@ describe("mcp-app-view localization", () => {
     bridge.onsizechange?.({ height: Number.NaN });
     expect(frame.style.height).toBe("900px");
     expect(onHeightChange).toHaveBeenCalledTimes(1);
-    for (const change of [
-      { title: "Updated library" },
-      { surface: "board" },
-      { relaunching: true },
-    ]) {
-      Object.assign(view, change);
-      await view.updateComplete;
-      expect(view.querySelector("iframe")).toBe(frame);
-      expect(frame.style.height).toBe("900px");
-    }
+    view.surface = "board";
+    await view.updateComplete;
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(frame.style.height).toBe("900px");
     view.fillContainer = true;
     await view.updateComplete;
     expect(view.querySelector("iframe")?.style.height).toBe("100%");

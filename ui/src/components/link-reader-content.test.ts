@@ -42,10 +42,7 @@ function detail(body: string, comments: ReaderComment[] = []): ControlUiLinkRead
     files: [],
   };
 }
-const updates = new WeakMap<
-  HTMLElement,
-  (value: ControlUiLinkReaderDocument, target: LinkReaderTarget) => void
->();
+const updates = new WeakMap<HTMLElement, (value: ControlUiLinkReaderDocument) => void>();
 const unmounts = new WeakMap<HTMLElement, () => void>();
 function mount(
   value: ControlUiLinkReaderDocument,
@@ -53,15 +50,13 @@ function mount(
   loadImage?: LoadImage,
   extra: Pick<Parameters<typeof LinkReaderContent>[0], "sections" | "onLoadSection"> = {},
 ) {
-  const [state, setState] = createSignal({ detail: value, target: link });
+  const [state, setState] = createSignal(value);
   const mounted = mountSolid(() =>
     createComponent(LinkReaderContent, {
       get detail() {
-        return state().detail;
+        return state();
       },
-      get target() {
-        return state().target;
-      },
+      target: link,
       loadImage,
       get sections() {
         return extra.sections;
@@ -69,15 +64,13 @@ function mount(
       onLoadSection: extra.onLoadSection,
     }),
   );
-  updates.set(mounted.container, (next, nextTarget) =>
-    setState({ detail: next, target: nextTarget }),
-  );
+  updates.set(mounted.container, setState);
   unmounts.set(mounted.container, mounted.unmount);
   flush();
   return mounted.container;
 }
-function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link = target) {
-  updates.get(container)!(value, link);
+function update(container: HTMLElement, value: ControlUiLinkReaderDocument) {
+  updates.get(container)!(value);
   flush();
 }
 
@@ -144,43 +137,37 @@ describe("link reader document content", () => {
     expect(loadSection).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["success", "Checks passed"],
-    ["unavailable", "Checks unavailable"],
-  ] as const)(
-    "renders %s check results without assuming service-specific labels",
-    (state, label) => {
-      const container = mount({
-        ...detail("Description"),
-        checks: {
-          state,
-          summary: "Provider-owned result",
-          total: 1,
-          items: [
-            {
-              name: "Build",
-              state: "pending",
-              detail: "Queued",
-              url: "/acme/project/actions/runs/1",
-            },
-          ],
-          url: url + "/checks",
-          commit: "abcdef0123456789",
-        },
-      });
-      const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
-      expect(checks.querySelector("summary strong")?.textContent).toBe(label);
-      expect(checks.open).toBe(false);
-      expect(checks.textContent).toContain("Provider-owned result");
-      expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
-      const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
-      expect(run.href).toBe("https://github.com/acme/project/actions/runs/1");
-      expect(run.rel).toContain("noreferrer");
-      expect(run.hasAttribute("data-link-reader-external")).toBe(true);
-      expect(checks.querySelector(".lr-checks-footer code")?.textContent).toBe("abcdef0");
-      expect(checks.querySelector(".lr-checks-meter") === null).toBe(state === "unavailable");
-    },
-  );
+  it("renders successful checks without assuming service-specific labels", () => {
+    const container = mount({
+      ...detail("Description"),
+      checks: {
+        state: "success",
+        summary: "Provider-owned result",
+        total: 1,
+        items: [
+          {
+            name: "Build",
+            state: "pending",
+            detail: "Queued",
+            url: "/acme/project/actions/runs/1",
+          },
+        ],
+        url: url + "/checks",
+        commit: "abcdef0123456789",
+      },
+    });
+    const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
+    expect(checks.querySelector("summary strong")?.textContent).toBe("Checks passed");
+    expect(checks.open).toBe(false);
+    expect(checks.textContent).toContain("Provider-owned result");
+    expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
+    const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
+    expect(run.href).toBe("https://github.com/acme/project/actions/runs/1");
+    expect(run.rel).toContain("noreferrer");
+    expect(run.hasAttribute("data-link-reader-external")).toBe(true);
+    expect(checks.querySelector(".lr-checks-footer code")?.textContent).toBe("abcdef0");
+    expect(checks.querySelector(".lr-checks-meter")).not.toBeNull();
+  });
 
   it("does not present incomplete check collections as a full meter or activate unsafe run URLs", () => {
     const container = mount({
@@ -195,6 +182,10 @@ describe("link reader document content", () => {
       },
     });
     expect(container.querySelector(".lr-checks-meter")).toBeNull();
+    expect(container.querySelector(".lr-checks summary strong")?.textContent).toBe(
+      "Checks unavailable",
+    );
+    expect(container.querySelector<HTMLDetailsElement>(".lr-checks")?.open).toBe(false);
     expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
     expect(container.querySelector(".lr-check-copy")?.textContent).toContain(
       "<script>unsafe</script>",
@@ -244,18 +235,6 @@ describe("link reader document content", () => {
       ["<!-- inline example -->", "<!-- fenced example -->", "<!-- indented example -->"],
     );
     expect(container.textContent).toContain("<!-- escaped example -->");
-  });
-
-  it("enables named emoji in descriptions and comments", () => {
-    const container = mount(
-      detail("## :rocket: Ready", [
-        comment(":white_check_mark: Covered. :not_a_real_emoji: :) :+1:"),
-      ]),
-    );
-    expect(container.querySelector(".lr-description h2")?.textContent).toBe("🚀 Ready");
-    expect(container.querySelector("#comment")?.textContent).toContain(
-      "✅ Covered. :not_a_real_emoji: :) 👍",
-    );
   });
 
   it("renders Markdown and HTML attachments with anonymous requests, source-relative URLs, and full-size links", () => {

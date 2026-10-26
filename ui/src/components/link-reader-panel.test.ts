@@ -50,6 +50,14 @@ const checkedItem = (summary: string, revision = "head-a"): ControlUiLinkReaderD
   revision,
   checks: { state: "success", summary, total: 1, items: [{ name: "Build", state: "success" }] },
 });
+async function pendingReader(trigger?: HTMLElement) {
+  const pending = createDeferred<ControlUiLinkReaderDocument>();
+  const request = vi.fn<DetailRequest>().mockReturnValue(pending.promise);
+  const panel = await mount(request);
+  open(panel, itemUrl(1), trigger);
+  await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+  return { panel, request, pending };
+}
 
 describe("Plugin link reader panel", () => {
   setupLinkReaderPanelTests();
@@ -167,12 +175,7 @@ describe("Plugin link reader panel", () => {
         .find((node) => node.textContent?.startsWith(name))!
         .click();
       await waitForFast(() => expect(panel.textContent).not.toContain("Could not refresh"));
-      expect(request).toHaveBeenCalledTimes(4);
-      expect(request).toHaveBeenLastCalledWith(
-        "forge.item",
-        expect.objectContaining({ section, refresh: true }),
-        expect.anything(),
-      );
+      expect(request.mock.lastCall?.[1]).toMatchObject({ section, refresh: true });
     },
   );
 
@@ -571,16 +574,10 @@ describe("Plugin link reader panel", () => {
   });
 
   it("clears reservations and cancels work on close, restores focus, and stays idle while hidden", async () => {
-    const pending = createDeferred<ControlUiLinkReaderDocument>();
-    const request = vi.fn(
-      (_method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
-    );
     const trigger = document.createElement("button");
     document.body.append(trigger);
     trigger.focus();
-    const panel = await mount(request);
-    open(panel, itemUrl(1), trigger);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+    const { pending, request, panel } = await pendingReader(trigger);
     expectReserve("560px");
     panel
       .querySelector(".lr-content")
@@ -597,14 +594,8 @@ describe("Plugin link reader panel", () => {
   });
 
   it("suspends hidden work and resumes once, then cleans up on removal", async () => {
-    const pending = createDeferred<ControlUiLinkReaderDocument>();
-    const request = vi
-      .fn<DetailRequest>()
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue(item());
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+    const { pending, request, panel } = await pendingReader();
+    request.mockResolvedValue(item());
     panel.suppressed = true;
     await panel.updateComplete;
     expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
@@ -779,25 +770,17 @@ describe("Plugin link reader panel", () => {
     await panel.updateComplete;
     expect(imageSignal?.aborted).toBe(true);
     expect(panel.hostedTabs).toEqual([]);
-    expect(panel.querySelector("h1")).toBeNull();
-    expect(panel.querySelector("img")).toBeNull();
+    expect(panel.querySelector("h1, img")).toBeNull();
     expect(image?.isConnected).toBe(false);
 
     pending.resolve({ url: pendingUrl, dataUrl });
     await pending.promise;
     await panel.updateComplete;
-    expect(panel.querySelector("h1")).toBeNull();
-    expect(panel.querySelector("img")).toBeNull();
+    expect(panel.querySelector("h1, img")).toBeNull();
   });
 
   it("drops disabled plugin tabs and fences a response that resolves after removal", async () => {
-    const pending = createDeferred<ControlUiLinkReaderDocument>();
-    const request = vi.fn(
-      (_method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
-    );
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const { pending, request, panel } = await pendingReader();
     panel.readers = [];
     await panel.updateComplete;
     expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);

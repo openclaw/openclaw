@@ -36,6 +36,8 @@ import {
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
 
+const modalElement = () => document.body.querySelector("openclaw-modal-dialog");
+
 vi.mock("../lib/toast.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/toast.ts")>()),
   showToast: vi.fn(),
@@ -185,7 +187,7 @@ describe("session organizer nested archive choice", () => {
     expect(reads.describeSession).toHaveBeenCalledOnce();
     reads.refreshList.mockImplementation(async () => harness.retireScope());
     expect(await confirmSessionArchive(root, harness.scope, isCurrent)).toBeNull();
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modalElement()).toBeNull();
   });
 
   it("returns a partial archive failure while retaining successful-only Undo after navigation", async () => {
@@ -223,77 +225,71 @@ describe("session organizer nested archive choice", () => {
     ["alternative", 3, 0],
     ["cancel", 3, 0],
     ["confirm", 2, 1],
-  ] as const)(
-    "honors %s for %s sessions with active work at depth %s",
-    async (choice, count, activeDepth) => {
-      const modal = modalFixture();
-      const harness = createHarness();
-      const root = sessionRow(0, {
-        hasArchiveDescendants: true,
-        hasActiveRun: activeDepth === 0,
-      });
-      prepareArchiveTree(
-        harness,
-        Array.from({ length: count }, (_, index) =>
-          gatewayRow(index, {
-            hasActiveRun: index === activeDepth,
-            ...(index > 0 ? { parentSessionKey: sessionRow(index - 1).key } : {}),
+  ] as const)("handles %s (%s rows; active depth %s)", async (choice, count, activeDepth) => {
+    const modal = modalFixture();
+    const harness = createHarness();
+    const root = sessionRow(0, {
+      hasArchiveDescendants: true,
+      hasActiveRun: activeDepth === 0,
+    });
+    prepareArchiveTree(
+      harness,
+      Array.from({ length: count }, (_, index) =>
+        gatewayRow(index, {
+          hasActiveRun: index === activeDepth,
+          ...(index > 0 ? { parentSessionKey: sessionRow(index - 1).key } : {}),
+        }),
+      ),
+    );
+    const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain(
+      '"Batch 0" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
+    );
+    expect(document.body.textContent).toContain(t("sessionsView.archiveRunningSessions"));
+    expect(actions.textContent).toContain(`Archive all (${count})`);
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    answerConfirmDialog(actions, choice);
+    await pending;
+    expect(harness.patch).toHaveBeenCalledTimes(choice === "alternative" ? 1 : 0);
+    expect(harness.request).toHaveBeenCalledTimes(choice === "confirm" ? 1 : 0);
+    if (choice === "alternative") {
+      expect(harness.patch).toHaveBeenCalledWith(
+        root.key,
+        { archived: true },
+        { agentId: "main", expectedSessionId: root.sessionId },
+      );
+    } else if (choice === "confirm") {
+      expect(harness.request.mock.calls[0]?.[1]).toEqual({
+        targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
+          Object.assign(guardedTarget(index), {
+            expectedArchived: false,
+            expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
+              guardedTarget(index - ancestor - 1),
+            ),
           }),
         ),
-      );
-      const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
-      const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain(
-        '"Batch 0" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
-      );
-      expect(document.body.textContent).toContain(t("sessionsView.archiveRunningSessions"));
-      expect(actions.textContent).toContain(`Archive all (${count})`);
-      expect(harness.patch).not.toHaveBeenCalled();
-      expect(harness.request).not.toHaveBeenCalled();
-      answerConfirmDialog(actions, choice);
-      await pending;
-      expect(harness.patch).toHaveBeenCalledTimes(choice === "alternative" ? 1 : 0);
-      expect(harness.request).toHaveBeenCalledTimes(choice === "confirm" ? 1 : 0);
-      if (choice === "alternative") {
-        expect(harness.patch).toHaveBeenCalledWith(
-          root.key,
-          { archived: true },
-          { agentId: "main", expectedSessionId: root.sessionId },
-        );
-      } else if (choice === "confirm") {
-        expect(harness.request.mock.calls[0]?.[1]).toEqual({
-          targets: Array.from({ length: count }, (_, index) => count - index - 1).map((index) =>
-            Object.assign(guardedTarget(index), {
-              expectedArchived: false,
-              expectedSidebarAncestors: Array.from({ length: index }, (_, ancestor) =>
-                guardedTarget(index - ancestor - 1),
-              ),
-            }),
-          ),
-          patch: { archived: true },
-        });
-      }
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      if (choice === "cancel") {
-        expect(harness.beginArchive).not.toHaveBeenCalled();
-      }
-    },
-  );
+        patch: { archived: true },
+      });
+    }
+    expect(modalElement()).toBeNull();
+    if (choice === "cancel") {
+      expect(harness.beginArchive).not.toHaveBeenCalled();
+    }
+  });
 
-  it.each([false, true])(
-    "keeps single archive when no descendants remain (hint=%s)",
-    async (hint) => {
-      const harness = createHarness();
-      const root = { ...sessionRow(0), hasArchiveDescendants: hint };
-      const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
-      await archiveSessionWithUndo(harness.host, root, harness.scope);
-      expect(harness.patch).toHaveBeenCalledOnce();
-      expect(harness.request).not.toHaveBeenCalled();
-      expect(reads.describeSession).toHaveBeenCalledTimes(hint ? 1 : 0);
-      expect(reads.refreshList).toHaveBeenCalledTimes(hint ? 1 : 0);
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    },
-  );
+  it.each([false, true])("archives a leaf immediately (hint=%s)", async (hint) => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), hasArchiveDescendants: hint };
+    const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
+    await archiveSessionWithUndo(harness.host, root, harness.scope);
+    expect(harness.patch).toHaveBeenCalledOnce();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(reads.describeSession).toHaveBeenCalledTimes(hint ? 1 : 0);
+    expect(reads.refreshList).toHaveBeenCalledTimes(hint ? 1 : 0);
+    expect(modalElement()).toBeNull();
+  });
 });
 
 function createOfflineArchiveHarness() {
@@ -494,6 +490,9 @@ describe("personal pin archive Undo", () => {
     await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
     vi.mocked(showToast).mock.calls.at(-1)![0].onAction!();
     await waitForFast(() => expect(h.scope.sessions.patch).toHaveBeenCalledTimes(4));
+    expect(queuedPatch.mock.calls.map(([key]) => key)).toEqual(
+      [...rows, ...rows].map((row) => row.key),
+    );
     expect(vi.mocked(h.scope.sessions.patch).mock.calls.map(([, patch]) => patch)).toEqual([
       { archived: true },
       { archived: true },

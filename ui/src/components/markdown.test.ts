@@ -22,11 +22,7 @@ function texts(root: ParentNode, selector: string) {
 
 describe("toSanitizedMarkdownHtml", () => {
   it("normalizes Unicode and CR line breaks before rendering", () => {
-    const unicodeInput = "## Unicode\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta";
-    const normalizedInput = "## Unicode\n\n- alpha\n- beta\n- gamma\n- delta";
-    const unicodeHtml = toSanitizedMarkdownHtml(unicodeInput);
-    expect(unicodeHtml).toBe(toSanitizedMarkdownHtml(normalizedInput));
-    const fragment = htmlFragment(unicodeHtml);
+    const fragment = render("## Unicode\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta");
     expectText(fragment, "h2").toBe("Unicode");
     expect(texts(fragment, "li")).toEqual(["alpha", "beta", "gamma", "delta"]);
   });

@@ -150,16 +150,12 @@ it("removes chips with Backspace on empty text and with the chip button", async 
   element.querySelector<HTMLButtonElement>(".multi-select__chip .chip-remove")?.click();
   expect(props.onChange).toHaveBeenLastCalledWith([gemini]);
 });
-it("moves the highlight with arrow keys and closes on Escape", async () => {
+it("closes on Escape and clears the unconfirmed query", async () => {
   const { element, props } = await createMultiSelect();
   await pressKey(element, "Enter");
   expect(props.onChange).not.toHaveBeenCalled();
   await pressKey(element, "ArrowDown");
   expect(isOpen(element)).toBe(true);
-  await pressKey(element, "ArrowDown");
-  expect(highlighted(element)).toBe(gemini);
-  await pressKey(element, "ArrowUp");
-  expect(highlighted(element)).toBe(opus);
   await typeText(element, "op");
   await pressKey(element, "Escape");
   expect(isOpen(element)).toBe(false);

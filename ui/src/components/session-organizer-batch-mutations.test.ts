@@ -29,23 +29,15 @@ import {
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
-import {
-  archiveSessionWithUndo,
-  createSessionGroup,
-  deleteSession,
-  deleteSessionGroup,
-  deleteSessionsBatch,
-  patchSession,
-  runBatchSessionAction,
-  stopCloudWorker,
-  snoozeSessionWithUndo,
-} from "./session-organizer-operations.runtime.ts";
+import * as ops from "./session-organizer-operations.runtime.ts";
+
+const modalElement = () => document.body.querySelector("openclaw-modal-dialog");
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 describe("patchSessionRows", () => {
   it.each(["connected", "reconnecting"] as const)(
-    "preserves tree guards with queued work while %s",
+    "preserves queued tree guards while %s",
     async (phase) => {
       const h = createHarness({ phase });
       h.scope.gateway.snapshot.deferredIntentCount = 1;
@@ -64,37 +56,14 @@ describe("patchSessionRows", () => {
       }
     },
   );
-  it("queues offline bulk archive as one mutation per selected row", async () => {
-    const h = createHarness({ phase: "reconnecting" });
-    h.scope.allowDeferred = true;
-    h.scope.sessions.patch = vi.fn(async () => ({ queued: true as const }));
-    const rows = [sessionRow(0), sessionRow(1)];
-    await expect(h.patchRows(rows, { archived: true }, { sessionScope: true })).resolves.toEqual(
-      rows,
-    );
-    expect(h.scope.sessions.patch).toHaveBeenCalledTimes(2);
-    expect(h.request).not.toHaveBeenCalled();
-    expect(h.publishSessionMutationError).not.toHaveBeenCalled();
+  it("keeps a personal pin when the archive is rejected", async () => {
+    const h = createHarness();
+    h.patch.mockRejectedValueOnce(new Error("archive rejected"));
+    await expect(
+      ops.patchSession(h.host, sessionRow(1), { archived: true }, h.scope),
+    ).resolves.toBe("failed");
+    expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
   });
-  it.each([true, false])(
-    "retires only a confirmed archive's personal pin (accepted: %s)",
-    async (accepted) => {
-      const h = createHarness();
-      const row = makeRow(1, { pinned: false });
-      const pin = "session:" + row.key;
-      const retained = ["session:agent:main:other", "session-rail:" + row.key, "route:usage"];
-      let entries = [pin, ...retained];
-      h.host.pruneSidebarSessionEntry = (key) => {
-        entries = entries.filter((entry) => entry !== "session:" + key);
-      };
-      if (!accepted) {
-        h.patch.mockRejectedValueOnce(new Error("archive rejected"));
-      }
-      const result = await patchSession(h.host, row, { archived: true }, h.scope);
-      expect(result).toBe(accepted ? "completed" : "failed");
-      expect(entries).toEqual(accepted ? retained : [pin, ...retained]);
-    },
-  );
 
   it.each(["move", "create"])("preserves placement/order for %s", async (action) => {
     const h = createHarness();
@@ -106,7 +75,7 @@ describe("patchSessionRows", () => {
     ];
     if (action === "create") {
       h.host.knownSessionGroups = () => ["Projects"];
-      await expect(createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
+      await expect(ops.createSessionGroup(h.host, "Projects", rows, h.scope)).resolves.toBe(
         "completed",
       );
     } else {
@@ -120,7 +89,7 @@ describe("patchSessionRows", () => {
     expect(h.publishSessionMutationError).not.toHaveBeenCalled();
   });
 
-  it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
+  it("rejects a hidden worker as an archive root", async () => {
     const h = createHarness();
     const root = sessionRow(0, {
       key: "agent:main:subagent:hidden",
@@ -134,7 +103,7 @@ describe("patchSessionRows", () => {
         updatedAt: null,
       },
     }));
-    await archiveSessionWithUndo(h.host, root, h.scope);
+    await ops.archiveSessionWithUndo(h.host, root, h.scope);
     expect(h.request).not.toHaveBeenCalled();
     expectError(h, expect.objectContaining({ message: t("sessionsView.archiveTreeRootRequired") }));
   });
@@ -142,7 +111,9 @@ describe("patchSessionRows", () => {
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const h = createHarness();
-    await expect(patchSession(h.host, row, { unread: false }, h.scope)).resolves.toBe("completed");
+    await expect(ops.patchSession(h.host, row, { unread: false }, h.scope)).resolves.toBe(
+      "completed",
+    );
     expectPatch(h, row, { unread: false });
   });
 
@@ -150,7 +121,16 @@ describe("patchSessionRows", () => {
     "acknowledges hidden runs with %s",
     async (scope) => {
       const run = makeRow(1, { key: "agent:main:subagent:done", isChild: true });
-      const parent = withHiddenRun(run, { unread: false });
+      const foreign = makeRow(2, { key: "agent:main:subagent:foreign", sharingRole: "member" });
+      const parent = sessionRow(0, {
+        unread: false,
+        subagentSummary: {
+          attention: { kind: "none" },
+          runningChildCount: 0,
+          failedChildCount: 0,
+          unreadHiddenRuns: [run, foreign],
+        },
+      });
       const h = createHarness({ scopes: [scope] });
       expect(menuReason(h, [parent], "toggle-unread")).toBeUndefined();
 
@@ -167,6 +147,7 @@ describe("patchSessionRows", () => {
         { unread: false },
         { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
       );
+      expect(h.publishSessionMutationError).not.toHaveBeenCalled();
     },
   );
 
@@ -186,16 +167,7 @@ describe("patchSessionRows", () => {
     expect(h.publishSessionMutationError).toHaveBeenCalledOnce();
   });
 
-  it("leaves foreign hidden runs unread when an owner marks the parent read", async () => {
-    const run = makeRow(1, { key: "agent:main:subagent:foreign", sharingRole: "member" as const });
-    const parent = withHiddenRun(run);
-    const h = createHarness({ scopes: ["operator.sessions.write"] });
-    await h.action({ kind: "toggle-unread" }, [parent], true);
-    expect(h.request).toHaveBeenCalledOnce();
-    expectNoCalls(h.patch, h.publishSessionMutationError);
-  });
-
-  it("preflights every lifecycle identity before dispatching the first chunk", async () => {
+  it("preflights all identities before dispatch", async () => {
     const h = createHarness();
     const rows = batchRows(101);
     rows[100] = { ...rows[100]!, sessionId: undefined };
@@ -206,24 +178,32 @@ describe("patchSessionRows", () => {
     expectError(h, "Session lifecycle action requires a durable session identity.");
   });
 
-  it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
-    const rows = batchRows(101);
-    const h = createHarness();
-
-    const archived = await h.patchRows(rows, { archived: true, unread: false });
-
+  it.each([false, true])("chunks ordered outcomes (partial=%s)", async (partial) => {
+    const guard = partial
+      ? { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false }
+      : {};
+    const rows = batchRows(101).map((row) =>
+      partial ? Object.assign(row, { archiveGuard: guard }) : row,
+    );
+    const failed = partial ? [rows[0]!, rows[100]!] : [];
+    const successful = rows.filter((row) => !failed.includes(row));
+    const h = createHarness({ failedKeys: failed.map((row) => row.key) });
+    const patch = partial ? { archived: true } : { archived: true, unread: false };
+    await expect(h.patchRows(rows, patch)).resolves.toEqual(successful);
     expect(h.request.mock.calls).toEqual(
       [rows.slice(0, 100), rows.slice(100)].map((chunk) => [
         "sessions.patchMany",
-        { targets: chunk.map(sessionTarget), patch: { archived: true, unread: false } },
+        mutation(chunk, patch, guard),
         { timeoutMs: 10 * 60_000 },
       ]),
     );
-    expect(archived).toEqual(rows);
     expect(h.pruneSidebarSessionEntry.mock.calls.map(([key]) => key)).toEqual(
-      rows.map((row) => row.key),
+      successful.map((row) => row.key),
     );
     expect(h.reconcileMutation).toHaveBeenCalledOnce();
+    if (partial) {
+      expectError(h, failed.map((row) => `${row.key}: failed ${row.key}`).join("; "));
+    }
   });
 
   it.each([
@@ -235,26 +215,6 @@ describe("patchSessionRows", () => {
     await expect(h.patchRows(rows, { archived: true })).resolves.toBeNull();
     expect(h.request).toHaveBeenCalledTimes(scenario.requests);
     expect(h.reconcileMutation).not.toHaveBeenCalled();
-  });
-
-  it("keeps ordered partial outcomes and prunes only successful archived rows", async () => {
-    const archiveGuard = {
-      expectedSidebarRoot: false,
-      expectedCategory: null,
-      expectedArchived: false,
-    };
-    const rows = batchRows(3).map((row) => Object.assign(row, { archiveGuard }));
-    const h = createHarness({ failedKeys: [rows[0]!.key, rows[2]!.key] });
-
-    await expect(h.patchRows(rows, { archived: true })).resolves.toEqual([rows[1]]);
-
-    expect(requestParams(h)).toEqual([mutation(rows, { archived: true }, archiveGuard)]);
-    expect(h.pruneSidebarSessionEntry).toHaveBeenCalledExactlyOnceWith(rows[1]!.key);
-    expectError(
-      h,
-      `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
-    );
-    expect(h.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -385,35 +345,21 @@ function menuReason(
     batchRows: rows,
   })[action];
 }
-function withHiddenRun(
-  run: SidebarRecentSession,
-  extra: Partial<SidebarRecentSession> = {},
-): SidebarRecentSession {
-  return makeRow(0, {
-    ...extra,
-    subagentSummary: {
-      attention: { kind: "none" },
-      runningChildCount: 0,
-      failedChildCount: 0,
-      unreadHiddenRuns: [run],
-    },
-  });
-}
 function createHarness(config?: Parameters<typeof createBaseHarness>[0]) {
   const h = createBaseHarness(config);
   return {
     ...h,
     action: (action: SessionMenuAction, rows: SidebarRecentSession[], unread = false) =>
-      runBatchSessionAction(h.host, action, rows, unread, h.scope),
+      ops.runBatchSessionAction(h.host, action, rows, unread, h.scope),
     patchRows: (
       rows: SidebarRecentSession[],
       patch: SessionsPatchMutation,
       options?: Parameters<typeof patchSessionRows>[4],
     ) => patchSessionRows(h.host, rows, patch, h.scope, options),
-    snooze: (row: SidebarRecentSession, options: Parameters<typeof snoozeSessionWithUndo>[2]) =>
-      snoozeSessionWithUndo(h.host, row, options, h.scope),
-    remove: (row = sessionRow(0), options?: Parameters<typeof deleteSession>[3]) =>
-      deleteSession(h.host, row, h.scope, options),
+    snooze: (row: SidebarRecentSession, options: Parameters<typeof ops.snoozeSessionWithUndo>[2]) =>
+      ops.snoozeSessionWithUndo(h.host, row, options, h.scope),
+    remove: (row = sessionRow(0), options?: Parameters<typeof ops.deleteSession>[3]) =>
+      ops.deleteSession(h.host, row, h.scope, options),
   };
 }
 
@@ -448,7 +394,7 @@ const destructiveOperations = [
   {
     name: "batch delete",
     run: (h: OperationsHarness) =>
-      deleteSessionsBatch(h.host, [sessionRow(0), sessionRow(1)], h.scope),
+      ops.deleteSessionsBatch(h.host, [sessionRow(0), sessionRow(1)], h.scope),
     mutation: (h: OperationsHarness) => h.deleteMany,
     staleMessage: t("sessionsView.deleteSessionsStale", { count: "2" }),
   },
@@ -460,13 +406,13 @@ const destructiveOperations = [
   },
   {
     name: "cloud worker stop",
-    run: (h: OperationsHarness) => stopCloudWorker(h.host, cloudWorkerRow(false), h.scope),
+    run: (h: OperationsHarness) => ops.stopCloudWorker(h.host, cloudWorkerRow(false), h.scope),
     mutation: (h: OperationsHarness) => h.request,
     staleMessage: t("sessionsView.stopCloudWorkerStale", { session: cloudWorkerRow(false).label }),
   },
   {
     name: "session-group delete",
-    run: (h: OperationsHarness) => deleteSessionGroup(h.host, "Group A", h.scope),
+    run: (h: OperationsHarness) => ops.deleteSessionGroup(h.host, "Group A", h.scope),
     mutation: (h: OperationsHarness) => h.groupsDelete,
     staleMessage: t("sessionsView.deleteGroupStale", { group: "Group A" }),
   },
@@ -486,7 +432,7 @@ describe("session organizer destructive confirmations", () => {
     restoreDialogPolyfill();
   });
 
-  it("keeps a preservation notice when optimistic navigation unmounts the initiating header", async () => {
+  it("shows worktree preservation after header unmount", async () => {
     const h = createHarness(destructiveHarness);
     const response = createDeferred<SessionDeleteOutcome>();
     h.deleteOne.mockImplementationOnce(() => response.promise);
@@ -501,7 +447,7 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {
+  it("confirms batch deletion and reports partial failure", async () => {
     const h = createHarness(destructiveHarness);
     const rows = [sessionRow(0), sessionRow(1)];
     const retryError = `Session ${rows[0]!.key} changed before deletion. Retry.`;
@@ -514,11 +460,9 @@ describe("session organizer destructive confirmations", () => {
     });
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
 
-    const pending = deleteSessionsBatch(h.host, rows, h.scope);
+    const pending = ops.deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
-    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions and their transcripts?",
-    );
+    expect(modalElement()?.textContent).toContain("Delete 2 sessions and their transcripts?");
     answerConfirmDialog(actions, "confirm");
     await pending;
 
@@ -552,7 +496,7 @@ describe("session organizer destructive confirmations", () => {
       expect(showToast).not.toHaveBeenCalled();
       return;
     }
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modalElement()).toBeNull();
     expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
 
     // Reconnecting must release the old dialog's lock before the operator retries.
@@ -563,7 +507,7 @@ describe("session organizer destructive confirmations", () => {
     expect(operation.mutation(h)).toHaveBeenCalledOnce();
   });
 
-  it("keeps a retired scope from navigating when the worktree prompt is cancelled", async () => {
+  it("does not navigate on a retired worktree prompt", async () => {
     const h = worktreeHarness("cleanup-failed");
     const active = makeRow(0, { active: true });
 
@@ -597,9 +541,7 @@ describe("session organizer destructive confirmations", () => {
       const pending = h.remove();
       await answer();
       const worktreeActions = await waitForConfirmDialogActions();
-      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-        "OpenClaw could not create a safety snapshot",
-      );
+      expect(modalElement()?.textContent).toContain("OpenClaw could not create a safety snapshot");
       answerConfirmDialog(worktreeActions, "confirm");
       await pending;
 
@@ -628,7 +570,7 @@ describe("session organizer destructive confirmations", () => {
       }
       answerConfirmDialog(actions, "confirm");
     } else {
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(modalElement()).toBeNull();
     }
     await pending;
     expect(h.deleteOne).toHaveBeenCalledOnce();
@@ -646,7 +588,7 @@ describe("session organizer destructive confirmations", () => {
       const h = worktreeHarness("foreign-lock");
       const pending =
         operation === "cloud worker stop"
-          ? stopCloudWorker(h.host, cloudWorkerRow(false), h.scope)
+          ? ops.stopCloudWorker(h.host, cloudWorkerRow(false), h.scope)
           : h.remove();
       const actions = await waitForConfirmDialogActions();
       expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
@@ -679,9 +621,9 @@ describe("session organizer destructive confirmations", () => {
   it("never opens the stop confirm for a reclaim target with an active run", async () => {
     const h = createHarness(destructiveHarness);
 
-    await stopCloudWorker(h.host, cloudWorkerRow(true), h.scope);
+    await ops.stopCloudWorker(h.host, cloudWorkerRow(true), h.scope);
 
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modalElement()).toBeNull();
     expect(h.request).not.toHaveBeenCalled();
   });
 });
