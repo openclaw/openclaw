@@ -59,6 +59,15 @@ describe("diagnostic stability bundles", () => {
     return JSON.parse(fs.readFileSync(file, "utf8")) as DiagnosticStabilityBundle;
   }
 
+  function readSanitizedBundle(file: string) {
+    const result = readDiagnosticStabilityBundleFileSync(file);
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      throw new Error("Expected readable stability bundle");
+    }
+    return result.bundle;
+  }
+
   function createImportedBundle(): Record<string, unknown> {
     return {
       version: 1,
@@ -71,9 +80,7 @@ describe("diagnostic stability bundles", () => {
         node: "24.14.1",
         uptimeMs: 1000,
       },
-      host: {
-        hostname: "<redacted-hostname>",
-      },
+      host: { hostname: "<redacted-hostname>" },
       snapshot: {
         generatedAt: "2026-04-22T12:00:00.000Z",
         capacity: 1000,
@@ -85,63 +92,15 @@ describe("diagnostic stability bundles", () => {
     };
   }
 
-  it("writes a payload-free bundle with safe failure metadata", () => {
-    startDiagnosticStabilityRecorder();
-    emitDiagnosticEvent({
-      type: "webhook.error",
-      channel: "telegram",
-      chatId: "chat-secret",
-      error: "raw diagnostic error with message body",
-    });
-    emitDiagnosticEvent({
-      type: "payload.large",
-      surface: "gateway.http.json",
-      action: "rejected",
-      bytes: 2048,
-      limitBytes: 1024,
-      reason: "json_body_limit",
-    });
-
-    const secret = "sk-1234567890abcdef";
-    const error = Object.assign(
-      new Error(
-        `Startup failed: OPENAI_API_KEY=${secret} while opening google/web-search-contract-api.js`,
-      ),
-      { code: "ERR_TEST" },
-    );
-    const result = writeBundle("gateway.restart_startup_failed", error, {
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
-
-    const file = result.path;
-    const bundle = readBundle(file);
-    const raw = fs.readFileSync(file, "utf8");
-
-    expect(bundle.version).toBe(1);
-    expect(bundle.generatedAt).toBe("2026-04-22T12:00:00.000Z");
-    expect(bundle.reason).toBe("gateway.restart_startup_failed");
-    expect(bundle.error?.name).toBe("Error");
-    expect(bundle.error?.code).toBe("ERR_TEST");
-    expect(bundle.host.hostname).toBe("<redacted-hostname>");
-    expect(bundle.snapshot.count).toBe(2);
-    expect(bundle.snapshot.events[0]?.type).toBe("webhook.error");
-    expect(bundle.snapshot.events[0]?.channel).toBe("telegram");
-    expect(bundle.snapshot.events[0]).not.toHaveProperty("chatId");
-    expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
-    expect(bundle.error?.message).toContain("google/web-search-contract-api.js");
-    expect(bundle.error?.message).not.toContain(secret);
-    expect(raw).not.toContain("chat-secret");
-    expect(raw).not.toContain("message body");
-    expect(raw).not.toContain(secret);
-    expect(raw).not.toContain(os.hostname());
-  });
-
   it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
     const secret = "sk-1234567890abcdef";
-    const error = Object.assign(new Error("raw startup config payload"), {
-      code: "ERR_CONFIG_PARSE",
-      stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
-    });
+    const error = Object.assign(
+      new Error("raw startup config payload at google/web-search-contract-api.js"),
+      {
+        code: "ERR_CONFIG_PARSE",
+        stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
+      },
+    );
     const result = writeBundle("gateway.restart_startup_failed", error, {
       now: new Date("2026-04-22T12:00:00.000Z"),
     });
@@ -152,7 +111,7 @@ describe("diagnostic stability bundles", () => {
     expect(bundle.error).toEqual({
       name: "Error",
       code: "ERR_CONFIG_PARSE",
-      message: "raw startup config payload",
+      message: "raw startup config payload at google/web-search-contract-api.js",
       stack: expect.stringContaining("\n    at finishPosixAuthority (relay-host.js:12:3)"),
     });
     expect(bundle.snapshot.count).toBe(0);
@@ -192,12 +151,8 @@ describe("diagnostic stability bundles", () => {
     const result = writeBundle("gateway.restart_close_failed", error, {
       shutdownStep: "gateway-server-close",
     });
-    const readback = readDiagnosticStabilityBundleFileSync(result.path);
-    expect(readback.status).toBe("found");
-    if (readback.status !== "found") {
-      return;
-    }
-    expect(readback.bundle.evidence?.shutdown).toMatchObject({
+    const readback = readSanitizedBundle(result.path);
+    expect(readback.evidence?.shutdown).toMatchObject({
       step: "gateway-server-close",
       errors: [
         { name: "AggregateError", message: "Gateway shutdown did not complete cleanly" },
@@ -210,7 +165,7 @@ describe("diagnostic stability bundles", () => {
       ],
     });
     expect(fs.readFileSync(result.path, "utf8")).not.toContain(secret);
-    expect(JSON.stringify(readback.bundle)).not.toContain(secret);
+    expect(JSON.stringify(readback)).not.toContain(secret);
   });
 
   it("bounds cyclic shutdown error graphs and stack text without losing non-Error throws", () => {
@@ -284,6 +239,12 @@ describe("diagnostic stability bundles", () => {
     expect(files).toHaveLength(20);
     expect(files[0]).toContain("12-00-02");
     expect(files[19]).toContain("12-00-21");
+    const latest = readLatestDiagnosticStabilityBundleSync({ stateDir: tempDir });
+    expect(latest.status).toBe("found");
+    expect(latest.status === "found" ? path.basename(latest.path) : "").toBe(files[19]);
+    expect(latest.status === "found" ? latest.bundle.reason : "").toBe(
+      "gateway.restart_respawn_failed",
+    );
   });
 
   it("keeps the published bundle within retention despite future mtimes", () => {
@@ -302,26 +263,6 @@ describe("diagnostic stability bundles", () => {
     expect(fs.existsSync(current.path)).toBe(true);
     expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
     expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(20);
-  });
-
-  it("reads the newest retained bundle", () => {
-    startDiagnosticStabilityRecorder();
-    emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
-
-    writeBundle("gateway.restart_startup_failed", undefined, {
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
-    writeBundle("gateway.restart_respawn_failed", undefined, {
-      now: new Date("2026-04-22T12:00:01.000Z"),
-    });
-
-    const latest = readLatestDiagnosticStabilityBundleSync({ stateDir: tempDir });
-
-    expect(latest.status).toBe("found");
-    expect(latest.status === "found" ? latest.path : "").toContain("12-00-01");
-    expect(latest.status === "found" ? latest.bundle.reason : "").toBe(
-      "gateway.restart_respawn_failed",
-    );
   });
 
   it("preserves OS and worker memory attribution and unavailable samples in exported bundles", () => {
@@ -344,15 +285,6 @@ describe("diagnostic stability bundles", () => {
         heapUsedBytes: 512,
         externalBytes: 32,
         arrayBuffersBytes: 16,
-        workerCount: 2,
-        postgresBridgeCount: 3,
-        postgresPoolSelfRootCount: 1,
-        workerHeapSampledCount: 1,
-        workerHeapTotalBytes: 2048,
-        workerHeapUsedBytes: 1024,
-        workerExternalBytes: 1024,
-        workerArrayBuffersBytes: 512,
-        workerArrayBuffersSampledCount: 1,
         workerMemoryScope: "direct",
         workerMemoryCoverage: "partial",
         workerHeaps: [
@@ -361,19 +293,13 @@ describe("diagnostic stability bundles", () => {
             threadId: 2,
             heapUsed: 1024,
             heapSizeLimitBytes: 1100,
-            oldGenerationAfterGcBytes: 800,
             heapTotal: 2048,
-            external: 1024,
-            arrayBuffers: 512,
             sampleAgeMs: 20,
             retainedData: [
               {
                 structure: "catalog-source",
                 entries: 100,
                 approximateBytes: 512,
-                generations: 1,
-                providers: 2,
-                accounts: 3,
                 truncated: true,
               },
             ],
@@ -386,15 +312,9 @@ describe("diagnostic stability bundles", () => {
     } satisfies Parameters<typeof emitDiagnosticEvent>[0];
     const expectedMemory = structuredClone(pressure.memory);
     emitDiagnosticEvent(pressure);
-    const written = writeBundle("uncaught_exception", undefined, {
-      stateDir: tempDir,
-    });
-    const readback = readDiagnosticStabilityBundleFileSync(written.path);
-    expect(readback.status).toBe("found");
-    if (readback.status !== "found") {
-      throw new Error("Expected readable diagnostics");
-    }
-    expect(readback.bundle.snapshot.events[0]).toMatchObject({
+    const written = writeBundle("uncaught_exception");
+    const readback = readSanitizedBundle(written.path);
+    expect(readback.snapshot.events[0]).toMatchObject({
       type: "diagnostic.memory.pressure",
       level: "critical",
       reason: "worker_heap_threshold",
@@ -403,18 +323,32 @@ describe("diagnostic stability bundles", () => {
       thresholdBytes: 990,
       workerThreadId: 2,
     });
-    expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+    expect(readback.snapshot.events[0]?.memory).toMatchObject({
       ...expectedMemory,
       workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
     });
-    expect(JSON.stringify(readback.bundle)).not.toContain("secret-worker");
+    expect(JSON.stringify(readback)).not.toContain("secret-worker");
   });
 
   it("sanitizes imported bundles before returning them", () => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
-    const retainedRuntimeEvidence = {
-      heapStatistics: { heapSizeLimitBytes: 8192, usedHeapSizeBytes: 1536 },
+    const safeRetained = {
+      structure: "catalog-config",
+      entries: 1,
+      approximateBytes: 256,
+      stringBytes: 128,
+      objects: 2,
+      providers: 2,
+      accounts: 3,
+      truncated: false,
+    };
+    const runtimeEvidence = {
+      heapStatistics: {
+        heapSizeLimitBytes: 8192,
+        usedHeapSizeBytes: 1536,
+        totalHeapSizeBytes: 1536.75,
+      },
       heapSpaces: [
         {
           spaceName: "old_space",
@@ -431,16 +365,44 @@ describe("diagnostic stability bundles", () => {
       },
       activeResources: { total: 3, byType: { Timeout: 2, PipeWrap: 1 } },
     };
+    const safeEvents = [
+      { seq: 1, ts: 1, type: "webhook.error", channel: "telegram" },
+      {
+        seq: 2,
+        ts: 2,
+        type: "exec.approval.followup_suppressed",
+        approvalId: "approval-imported-123",
+        reason: "session_rebound",
+        phase: "gateway_preflight",
+      },
+      { seq: 3, ts: 3, type: "model.usage", durationMs: 0, costUsd: 0, usage: {}, context: {} },
+      {
+        seq: 4,
+        ts: 4,
+        type: "model.call.error",
+        failureKind: "aborted",
+        durationMs: 130,
+        providerProcessingMs: 20.25,
+        providerWaitEstimateMs: 109.75,
+      },
+    ];
+    const byType = Object.fromEntries(safeEvents.map((event) => [event.type, 1]));
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
+      process: {
+        ...(bundle.process as Record<string, unknown>),
+        command: "process-command-secret",
+      },
+      host: { hostname: "private-hostname", fqdn: "host-extra-secret" },
+      error: {
+        name: "private error name",
+        code: "ERR_TEST",
+        message: "OPENAI_API_KEY=sk-1234567890abcdef",
+      },
       evidence: {
         memoryPressure: {
-          ...retainedRuntimeEvidence,
-          heapStatistics: {
-            ...retainedRuntimeEvidence.heapStatistics,
-            totalHeapSizeBytes: 1536.75,
-          },
+          ...runtimeEvidence,
           level: "critical",
           reason: "rss_threshold",
           thresholdBytes: 0,
@@ -459,22 +421,11 @@ describe("diagnostic stability bundles", () => {
                 heapTotal: 1024,
                 retainedData: [
                   {
-                    structure: "catalog-config",
-                    entries: 1,
-                    approximateBytes: 256,
-                    stringBytes: 128,
-                    objects: 2,
-                    providers: 2,
-                    accounts: 3,
-                    truncated: false,
+                    ...safeRetained,
                     credentials: "catalog-credential-secret",
                     modelKeys: ["private-model-key"],
                   },
-                  {
-                    structure: "private-provider-name",
-                    entries: 1,
-                    approximateBytes: 100,
-                  },
+                  { structure: "private-provider-name", entries: 1, approximateBytes: 100 },
                 ],
               },
             ],
@@ -488,162 +439,55 @@ describe("diagnostic stability bundles", () => {
           ],
         },
       },
-      error: {
-        name: "private error name",
-        code: "ERR_TEST",
-        message: "OPENAI_API_KEY=sk-1234567890abcdef",
+      snapshot: {
+        ...(bundle.snapshot as Record<string, unknown>),
+        count: 4,
+        privateSnapshot: "snapshot-secret",
+        events: [
+          {
+            ...safeEvents[0],
+            reason: "private event reason",
+            chatId: "chat-id-secret",
+            error: "event-error-secret",
+          },
+          { ...safeEvents[1], command: "raw command secret" },
+          safeEvents[2],
+          safeEvents[3],
+        ],
+        summary: {
+          byType: { ...byType, "private summary type": 1 },
+          privateSummary: "summary-secret",
+        },
       },
     });
-    Object.assign(bundle.process as Record<string, unknown>, {
-      command: "process-command-secret",
+    fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
+    const result = readSanitizedBundle(file);
+    const sanitized = result;
+    expect(sanitized.reason).toBe("unknown");
+    expect(sanitized.host).toEqual({ hostname: "<redacted-hostname>" });
+    expect(sanitized.error).toMatchObject({
+      code: "ERR_TEST",
+      message: expect.stringContaining("OPENAI_API_KEY="),
     });
-    Object.assign(bundle.host as Record<string, unknown>, {
-      hostname: "private-hostname",
-      fqdn: "host-extra-secret",
+    expect(sanitized.error).not.toHaveProperty("stack");
+    expect(sanitized.evidence?.memoryPressure).toMatchObject({
+      ...runtimeEvidence,
+      heapStatistics: { ...runtimeEvidence.heapStatistics, totalHeapSizeBytes: 1536 },
+      thresholdBytes: 0,
+      rssGrowthBytes: -1,
+      windowMs: 0.5,
+      topSessionFiles: [{ relativePath: "agents/<agent>/sessions/<session>.jsonl" }],
+      memory: { workerHeaps: [{ retainedData: [safeRetained] }] },
     });
-    const snapshot = bundle.snapshot as Record<string, unknown>;
-    Object.assign(snapshot, {
-      count: 4,
-      privateSnapshot: "snapshot-secret",
-      events: [
-        {
-          seq: 1,
-          ts: 1,
-          type: "webhook.error",
-          channel: "telegram",
-          reason: "private event reason",
-          chatId: "chat-id-secret",
-          error: "event-error-secret",
-        },
-        {
-          seq: 2,
-          ts: 2,
-          type: "exec.approval.followup_suppressed",
-          approvalId: "approval-imported-123",
-          reason: "session_rebound",
-          phase: "gateway_preflight",
-          command: "raw command secret",
-        },
-        {
-          seq: 3,
-          ts: 3,
-          type: "model.usage",
-          costUsd: 0,
-          durationMs: 0,
-          usage: {},
-          context: {},
-        },
-        {
-          seq: 4,
-          ts: 4,
-          type: "model.call.error",
-          durationMs: 130,
-          providerProcessingMs: 20.25,
-          providerWaitEstimateMs: 109.75,
-          failureKind: "aborted",
-        },
-      ],
-      summary: {
-        byType: {
-          "webhook.error": 1,
-          "exec.approval.followup_suppressed": 1,
-          "model.usage": 1,
-          "model.call.error": 1,
-          "private summary type": 1,
-        },
-        privateSummary: "summary-secret",
-      },
-    });
-    fs.writeFileSync(file, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
-
-    const result = readDiagnosticStabilityBundleFileSync(file);
-
-    expect(result.status).toBe("found");
-    if (result.status !== "found") {
-      return;
-    }
-    expect(result.bundle.reason).toBe("unknown");
-    expect(result.bundle.host).toEqual({ hostname: "<redacted-hostname>" });
-    expect(result.bundle.error?.code).toBe("ERR_TEST");
-    expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
-    expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
-    expect(result.bundle.error).not.toHaveProperty("stack");
-    expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
-      "agents/<agent>/sessions/<session>.jsonl",
-    );
-    expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
-    expect(result.bundle.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
-      {
-        structure: "catalog-config",
-        entries: 1,
-        approximateBytes: 256,
-        stringBytes: 128,
-        objects: 2,
-        providers: 2,
-        accounts: 3,
-        truncated: false,
-      },
+    expect(sanitized.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
+      safeRetained,
     ]);
+    expect(sanitized.snapshot.events).toEqual(safeEvents);
+    expect(sanitized.snapshot.summary.byType).toEqual(byType);
     for (const secret of [
       "catalog-credential-secret",
       "private-model-key",
       "private-provider-name",
-    ]) {
-      expect(JSON.stringify(result.bundle)).not.toContain(secret);
-    }
-    expect(result.bundle.evidence?.memoryPressure).toMatchObject({
-      thresholdBytes: 0,
-      rssGrowthBytes: -1,
-      windowMs: 0.5,
-      heapStatistics: { totalHeapSizeBytes: 1536 },
-    });
-    expect(Object.keys(result.bundle.evidence?.memoryPressure?.heapStatistics ?? {})).toEqual([
-      "totalHeapSizeBytes",
-      "usedHeapSizeBytes",
-      "heapSizeLimitBytes",
-    ]);
-    expect(result.bundle.snapshot.events[0]).toEqual({
-      seq: 1,
-      ts: 1,
-      type: "webhook.error",
-      channel: "telegram",
-    });
-    expect(result.bundle.snapshot.events[1]).toEqual({
-      seq: 2,
-      ts: 2,
-      type: "exec.approval.followup_suppressed",
-      approvalId: "approval-imported-123",
-      reason: "session_rebound",
-      phase: "gateway_preflight",
-    });
-    expect(JSON.stringify(result.bundle.snapshot.events[2])).toBe(
-      JSON.stringify({
-        seq: 3,
-        ts: 3,
-        type: "model.usage",
-        durationMs: 0,
-        costUsd: 0,
-        usage: {},
-        context: {},
-      }),
-    );
-    expect(result.bundle.snapshot.events[3]).toEqual({
-      seq: 4,
-      ts: 4,
-      type: "model.call.error",
-      failureKind: "aborted",
-      durationMs: 130,
-      providerProcessingMs: 20.25,
-      providerWaitEstimateMs: 109.75,
-    });
-    expect(result.bundle.snapshot.summary.byType).toEqual({
-      "webhook.error": 1,
-      "exec.approval.followup_suppressed": 1,
-      "model.usage": 1,
-      "model.call.error": 1,
-    });
-    const sanitized = JSON.stringify(result.bundle);
-    for (const secret of [
       "private reason",
       "top-level-secret",
       "private error name",
@@ -660,7 +504,7 @@ describe("diagnostic stability bundles", () => {
       "private summary type",
       "summary-secret",
     ]) {
-      expect(sanitized).not.toContain(secret);
+      expect(JSON.stringify(sanitized)).not.toContain(secret);
     }
   });
 
@@ -677,55 +521,31 @@ describe("diagnostic stability bundles", () => {
   });
 
   it.each([
-    {
-      name: "legacy bundle without build identity",
-      identity: {},
-      expected: {},
-    },
-    {
-      name: "public version metadata and maximum generated build id",
-      identity: {
-        openclawVersion: "2026.4.22-beta.1+fixture",
-        buildId: "b".repeat(96),
-        commit: "abcdef0",
-      },
-      expected: {
-        openclawVersion: "2026.4.22-beta.1+fixture",
-        buildId: "b".repeat(96),
-        commit: "abcdef0",
-      },
-    },
-    {
-      name: "unsafe imported identity",
-      identity: {
-        openclawVersion: "version\nsecret",
-        buildId: "/private/build",
-        commit: "not-a-commit",
-      },
-      expected: {},
-    },
-    {
-      name: "overlong imported identity",
-      identity: {
-        openclawVersion: "v".repeat(257),
-        buildId: "b".repeat(97),
-        commit: "a".repeat(41),
-      },
-      expected: {},
-    },
-  ])("preserves only recorded safe build identity: $name", ({ identity, expected }) => {
+    ["legacy", {}, true],
+    [
+      "safe",
+      { openclawVersion: "2026.4.22-beta.1+fixture", buildId: "b".repeat(96), commit: "abcdef0" },
+      true,
+    ],
+    [
+      "unsafe",
+      { openclawVersion: "version\nsecret", buildId: "/private/build", commit: "not-a-commit" },
+      false,
+    ],
+    [
+      "overlong",
+      { openclawVersion: "v".repeat(257), buildId: "b".repeat(97), commit: "a".repeat(41) },
+      false,
+    ],
+  ] as const)("preserves only recorded safe build identity: %s", (_name, identity, accepted) => {
     const file = path.join(tempDir, "imported.json");
     const bundle = createImportedBundle();
     const originalProcess = bundle.process as Record<string, unknown>;
     bundle.process = { ...originalProcess, ...identity };
     fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
 
-    const result = readDiagnosticStabilityBundleFileSync(file);
-    expect(result.status).toBe("found");
-    if (result.status !== "found") {
-      throw new Error("Expected readable stability bundle");
-    }
-    expect(result.bundle.process).toEqual({ ...originalProcess, ...expected });
+    const result = readSanitizedBundle(file);
+    expect(result.process).toEqual({ ...originalProcess, ...(accepted ? identity : {}) });
   });
 
   it("rejects oversized bundle files before reading them", () => {

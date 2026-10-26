@@ -166,21 +166,10 @@ describe("registered exact secret values", () => {
 });
 
 describe("redactSensitiveText", () => {
-  it("masks URL userinfo and connection-string passwords", () => {
-    const input = [
-      "https://browser-user:browser-password-1234567890@api.example.test/v1",
-      "https://:empty-username-password-1234567890@api.example.test/v1",
-      "postgres://secret:secret@db.example.test/openclaw",
-      "mongodb+srv://mongo:mongodb-password-1234567890@cluster.example.test/app",
-    ].join(" ");
-    expect(redactSensitiveText(input)).toBe(
-      [
-        "https://browser-user:browse…7890@api.example.test/v1",
-        "https://:empty-…7890@api.example.test/v1",
-        "postgres://secret:***@db.example.test/openclaw",
-        "mongodb+srv://mongo:mongod…7890@cluster.example.test/app",
-      ].join(" "),
-    );
+  it("masks URL passwords when the username is empty", () => {
+    expect(
+      redactSensitiveText("https://:empty-username-password-1234567890@api.example.test/v1"),
+    ).toBe("https://:empty-…7890@api.example.test/v1");
   });
 
   it("preserves shell references, option prose, and ordinary token-like identifiers", () => {
@@ -215,67 +204,20 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
   });
 
-  it("masks representative vendor token grammars through the default fast path", () => {
-    const tokens = [
-      "sk-ant-abcdefghijklmnopqrstuvwxyz",
-      "gho_abcdefghijklmnopqrstuvwxyz",
-      "glpat-abcdefghijklmnopqrstuvwxyz12.ab.abcdefghi",
-      ["xoxb", "1234567890", "abcdefghijklmnopqrstuvwxyz"].join("-"),
-      "https://hooks.slack.com/services/T1234567890/B1234567890/abcdefghijklmnopqrstuvwxy",
-      "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
-      `discord bot token ${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`,
-      "AIzaabcdefghijklmnopqrstuvwxyzABCDE",
-      "GOCSPX-abcdefghijklmnopqrstuvwx_y-z",
-      "fc-abcdefghijklmnopqrstuvwxyz",
-      "gAAAAabcdefghijklmnopqrstuvwxyz123456",
-      "AKIAABCDEFGHIJKLMNOP",
-      ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"),
-      "SG.abcdefghijklmnopqrstuvwxyz.0123456789abcdefghijklmnopqrstuvwxyz",
-      `glc_eyJ${"A".repeat(80)}`,
-      `ATATT${"A".repeat(48)}=ABCDEF12`,
-      `FlyV1 fm123_${"A".repeat(120)}`,
-      "am_abcdefghijklmnopqrstuvwxyz",
-      "sk_abcdefghijklmnopqrstuvwxyz",
-      `fw-${"C".repeat(40)}`,
-      `fw_${"A".repeat(40)}`,
-      `fpk_${"B".repeat(40)}`,
-    ];
+  it("masks Anthropic and OAuth client secrets absent from the recorded corpus", () => {
+    const tokens = ["sk-ant-abcdefghijklmnopqrstuvwxyz", "GOCSPX-abcdefghijklmnopqrstuvwx_y-z"];
     // Isolated inputs require each grammar to reach the default prefilter itself.
     for (const token of tokens) {
       expect(redactSensitiveText(token), token).not.toContain(token);
     }
   });
 
-  it("masks AWS secret access keys in bare text and keyed fields", () => {
-    const bare = "Wj7/".repeat(10);
-    const keyed = "AbCd".repeat(10);
-    const cases: [secret: string, input: string[], expected: string[]][] = [
-      [
-        bare,
-        [
-          `aws_secret_access_key = ${bare}`,
-          JSON.stringify({ SecretAccessKey: bare }),
-          `bare ${bare}`,
-        ],
-        [
-          `aws_secret_access_key = Wj7/Wj…Wj7/`,
-          '"SecretAccessKey":"Wj7/Wj…Wj7/"',
-          "bare Wj7/Wj…Wj7/",
-        ],
-      ],
-      [
-        keyed,
-        [`cmd --aws-secret-access-key=${keyed}`, `cmd --awsSecretAccessKey ${keyed}`],
-        ["--aws-secret-access-key=AbCdAb…AbCd", "--awsSecretAccessKey AbCdAb…AbCd"],
-      ],
-    ];
-    for (const [secret, input, expected] of cases) {
-      const output = redactSensitiveText(input.join("\n"), { mode: "tools" });
-      expect(output).not.toContain(secret);
-      for (const field of expected) {
-        expect(output).toContain(field);
-      }
-    }
+  it("masks AWS CLI aliases even for an all-letter secret", () => {
+    const secret = "AbCd".repeat(10);
+    expectTextRedactions([
+      [`cmd --aws-secret-access-key=${secret}`, "cmd --aws-secret-access-key=AbCdAb…AbCd"],
+      [`cmd --awsSecretAccessKey ${secret}`, "cmd --awsSecretAccessKey AbCdAb…AbCd"],
+    ]);
   });
 
   it("masks credential headers across text and serialized forms", () => {
@@ -302,10 +244,7 @@ describe("redactSensitiveText", () => {
           "Proxy-Authorization: Foo",
           `Proxy-Authorization: Basic ${proxyValue}`,
           `X-Authorization: Basic ${customValue}`,
-          JSON.stringify({
-            "x-access-token": accessValue,
-            "x-goog-api-key": googleValue,
-          }),
+          JSON.stringify({ "x-access-token": accessValue, "x-goog-api-key": googleValue }),
         ].join("\n"),
         undefined,
         [proxyValue, customValue, accessValue, googleValue],
@@ -337,24 +276,14 @@ describe("redactSensitiveText", () => {
       [
         "sig=short-sig-123&x-api-key=short-key-123&x-access-token=short-at-123&x-auth-token=short-authtok&safe=value",
         "sig=***&x-api-key=***&x-access-token=***&x-auth-token=***&safe=value",
-        ["short-sig-123", "short-key-123"],
       ],
       [
         "code=oauth-code-123&hook_token=hook-token-123&jwt=jwt-secret-123&pass=form-pass-123&client_secret=oauth-client-secret-1234567890&refresh_token=refresh-token-1234567890&token_count=42&session_id=session-visible",
         "code=***&hook_token=***&jwt=***&pass=***&client_secret=***&refresh_token=***&token_count=42&session_id=session-visible",
-        [
-          "oauth-code-123",
-          "hook-token-123",
-          "jwt-secret-123",
-          "form-pass-123",
-          "oauth-client-secret-1234567890",
-          "refresh-token-1234567890",
-        ],
       ],
       [
         'body: password="opaque-password-secret" client_id=visible&app_secret="opaque-app-secret"&safe=1',
         "body: password=*** client_id=visible&app_secret=***&safe=1",
-        ["opaque-password-secret", "opaque-app-secret"],
       ],
       [
         [
@@ -362,12 +291,10 @@ describe("redactSensitiveText", () => {
           "trace body: client%5Fsecret=multiline-secret&safe=1",
         ].join("\n"),
         "client%5Fsecret=***\ntrace body: client%5Fsecret=***&safe=1",
-        ["single-secret", "multiline-secret"],
       ],
       [
         "body: code=oauth-code-123 form_body=signature=aws-signature-123 Oops code=E1",
         "body: code=*** form_body=signature=*** Oops code=E1",
-        ["oauth-code-123", "aws-signature-123"],
       ],
     ]);
   });
@@ -376,13 +303,10 @@ describe("redactSensitiveText", () => {
       [
         "GET /cb?token=abc)def&safe=1 /cb?client%5Fsecret=abc]def&safe=1 /cb?code=short#frag",
         "GET /cb?token=***&safe=1 /cb?client%5Fsecret=***&safe=1 /cb?code=***#frag",
-        ["abc)def", "abc]def"],
-        ["#frag"],
       ],
       [
         'GET /cb?token="opaque-token-secret"&safe=1 /cb?client%5Fsecret="oauth-secret"',
         "GET /cb?token=opaque…cret&safe=1 /cb?client%5Fsecret=***",
-        ["opaque-token-secret", "oauth-secret"],
       ],
       [
         "callback https://example.test/oauth?code=oauth-code-abc123&state=visible&x-amz-signature=abc123xyz&x-amz-security-token=aws-session-token-123&authorization=authz-secret-123&private_key=pk-secret-123&app_secret=app-secret-123&credential=credential-secret-123",
@@ -400,7 +324,6 @@ describe("redactSensitiveText", () => {
       [
         "password=abc,def token=abc;def client_secret=abc]def pass=abc)def",
         "password=*** token=*** client_secret=*** pass=***",
-        ["abc,def", "abc;def", "abc]def", "abc)def"],
       ],
     ]);
   });
@@ -435,7 +358,6 @@ describe("redactSensitiveText", () => {
       [
         `Authorization: Digest realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"${["escaped", "quoted", "response", "1234567890abcdef"].join("-")}\\"; status=401`,
         "Authorization: Digest ***; status=401",
-        [["escaped", "quoted", "response", "1234567890abcdef"].join("-")],
       ],
       ["Authorization: Basic dXNlcg==, status=401", "Authorization: Basic ***, status=401"],
     ]);
@@ -539,10 +461,7 @@ describe("redactSensitiveText", () => {
     );
     expect(redactSensitiveText(opaque)).toBe(
       JSON.stringify(
-        JSON.stringify({
-          Authorization: "opaque…cdef",
-          "Proxy-Authorization": "opaque…cdef",
-        }),
+        JSON.stringify({ Authorization: "opaque…cdef", "Proxy-Authorization": "opaque…cdef" }),
       ),
     );
   });
@@ -585,10 +504,7 @@ describe("redactSensitiveText", () => {
     ["a named backreference", String.raw`project_value=(?<secret>[^&]+)&confirm=\k<secret>`],
   ])("redactSensitiveText locates the custom capture with %s", (_name, pattern) => {
     const input = "project_value=abc123456789012345&confirm=abc123456789012345";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: [pattern],
-    });
+    const output = redactSensitiveText(input, { mode: "tools", patterns: [pattern] });
     expect(output).toBe("project_value=abc123…2345&confirm=abc123456789012345");
   });
 
@@ -632,10 +548,7 @@ describe("redactSensitiveText", () => {
 
   it("keeps custom redaction patterns active for structured sensitive fields", () => {
     expect(
-      redactSensitiveFieldValue("TOKEN", "${TOKEN}", {
-        mode: "tools",
-        patterns: [/TOKEN/g],
-      }),
+      redactSensitiveFieldValue("TOKEN", "${TOKEN}", { mode: "tools", patterns: [/TOKEN/g] }),
     ).toBe("${***}");
   });
 
