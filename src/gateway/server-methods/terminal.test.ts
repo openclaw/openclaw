@@ -151,18 +151,14 @@ function nodeSession(
   };
 }
 
-function pendingCatalog() {
+async function startCatalogLookup() {
   const plan = createDeferred<ReturnType<typeof localPlan>>();
   const openTerminal = vi.fn(() => plan.promise);
   installTerminalCatalog(openTerminal);
-  return { plan, openTerminal, ...makeOpts(catalogParams()) };
-}
-
-async function startCatalogLookup() {
-  const fixture = pendingCatalog();
+  const fixture = makeOpts(catalogParams());
   const opening = runTerminal("terminal.open", fixture.opts);
-  await waitForFast(() => expect(fixture.openTerminal).toHaveBeenCalledOnce());
-  return { ...fixture, opening };
+  await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
+  return { ...fixture, plan, opening };
 }
 
 function openOwnedTerminal(opts: ReturnType<typeof makeOpts>["opts"], sessionKey: string) {
