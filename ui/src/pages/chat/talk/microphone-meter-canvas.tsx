@@ -18,18 +18,31 @@ export function MicrophoneMeterCanvas(props: MicrophoneMeterCanvasProps) {
   let canvas: HTMLCanvasElement | undefined;
   onSettled(() => {
     const host = props.readHost();
-    if (!host || !canvas) {
+    const surface = canvas;
+    if (!host || !surface) {
       return undefined;
     }
-    // Connecting is brief and uses the CSS bars without allocating a bitmap.
-    const renderer =
-      initialStatus === "connecting"
-        ? undefined
-        : createMicrophoneMeter(host, canvas, props.readBars(), initialStatus, reducedMotion);
+    let renderer: ReturnType<typeof createMicrophoneMeter> | undefined;
+    const initialLevel = initialSource?.value ?? 0;
     const setLevel = (level: number) => {
       const value = String(level);
       if (host.dataset.level !== value) {
         host.dataset.level = value;
+      }
+      // CSS already draws silence. Allocate only when there is activity to paint.
+      if (
+        !renderer &&
+        (initialStatus === "thinking" || (initialStatus === "listening" && level > 0))
+      ) {
+        renderer = createMicrophoneMeter(
+          host,
+          surface,
+          props.readBars(),
+          initialStatus,
+          reducedMotion,
+        );
+        // Preserve the first transition from silence rather than jumping to its target.
+        renderer.setLevel(initialLevel);
       }
       renderer?.setLevel(level);
     };

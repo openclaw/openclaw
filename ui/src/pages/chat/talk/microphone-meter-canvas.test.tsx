@@ -16,6 +16,36 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps silence in CSS and preserves the first level transition when activity begins", async () => {
+  const source = new RealtimeTalkLevelSignal();
+  const view = mountSolid(() => <MicrophoneActivity status="listening" inputLevel={source} />);
+  try {
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector("openclaw-microphone-activity")?.getAttribute("data-level"),
+      ).toBe("0"),
+    );
+    expect(renderer.create).not.toHaveBeenCalled();
+    const host = view.container.querySelector("openclaw-microphone-activity");
+    const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
+
+    source.set(0.6);
+    expect(renderer.create).toHaveBeenCalledOnce();
+    const active = renderer.create.mock.results[0].value;
+    expect(vi.mocked(active.setLevel).mock.calls).toEqual([[0], [0.6]]);
+    expect(host?.getAttribute("data-level")).toBe("0.6");
+    expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
+      bars,
+    );
+
+    source.set(0);
+    expect(renderer.create).toHaveBeenCalledOnce();
+    expect(active.setLevel).toHaveBeenLastCalledWith(0);
+  } finally {
+    view.unmount();
+  }
+});
+
 it("keeps the host and bars while replacing only the status/source canvas lifetime", async () => {
   const warnings = vi.spyOn(console, "warn");
   const firstSource = new RealtimeTalkLevelSignal();
