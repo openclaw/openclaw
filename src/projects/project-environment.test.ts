@@ -51,9 +51,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => [],
   resolveAgentWorkspaceDir: vi.fn(),
 }));
-vi.mock("../infra/node-sqlite.js", () => ({
-  openNodeSqliteDatabase: mocks.forbiddenSqlite,
-}));
+vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: mocks.forbiddenSqlite }));
 vi.mock("../infra/kysely-sync.js", () => ({
   executeSqliteQuerySync: mocks.forbiddenSqlite,
   executeSqliteQueryTakeFirstSync: mocks.forbiddenSqlite,
@@ -63,9 +61,7 @@ vi.mock("../state/openclaw-state-db.js", () => ({
   openOpenClawStateDatabase: mocks.forbiddenSqlite,
   runOpenClawStateWriteTransaction: mocks.forbiddenSqlite,
 }));
-vi.mock("../state/openclaw-state-lease.js", () => ({
-  withOpenClawStateLease: mocks.lease,
-}));
+vi.mock("../state/openclaw-state-lease.js", () => ({ withOpenClawStateLease: mocks.lease }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
@@ -417,13 +413,7 @@ describe("clone registration", () => {
       if (!repoRoot) {
         throw new Error("Expected a produced checkout");
       }
-      return {
-        id: "project",
-        displayName: "project",
-        repoRoot,
-        originUrl: "https://github.com/example/project.git",
-        source: "cloned",
-      };
+      return { ...project, id: "project", displayName: "project", repoRoot };
     });
   });
 

@@ -89,6 +89,10 @@ describe("project registry persistence", () => {
     return { source, target };
   }
 
+  function registerClone(repoRoot: string, originUrl: string, name = "Recorded", state = options) {
+    return registerClonedProjectRegistry({ path: repoRoot, name, originUrl }, state);
+  }
+
   it.each(["new", "reused", "refreshed"] as const)(
     "keeps ordinary Git commands in a %s managed clone out of auto-GC",
     async (mode) => {
@@ -98,10 +102,7 @@ describe("project registry persistence", () => {
         await git(target, "config", "maintenance.auto", "true");
         await git(target, "config", "gc.auto", "6700");
         const originUrl = mode === "refreshed" ? source : "https://github.com/example/project.git";
-        const project = await registerClonedProjectRegistry(
-          { path: target, name: "Legacy clone", originUrl },
-          options,
-        );
+        const project = await registerClone(target, originUrl, "Legacy clone");
         if (mode === "reused") {
           await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
         } else {
@@ -197,10 +198,7 @@ describe("project registry persistence", () => {
     const source = await initializeRepository(root, "source");
     const checkout = path.join(root, "checkout");
     await git(root, "clone", ...(noLocal ? ["--no-local"] : []), source, checkout);
-    const project = await registerClonedProjectRegistry(
-      { path: checkout, name: "Recorded", originUrl: source },
-      options,
-    );
+    const project = await registerClone(checkout, source);
     return { source, checkout, project };
   }
 
@@ -229,10 +227,7 @@ describe("project registry persistence", () => {
       path: path.join(stateDir, "openclaw.sqlite"),
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     };
-    const project = await registerClonedProjectRegistry(
-      { path: checkout, name, originUrl },
-      stateOptions,
-    );
+    const project = await registerClone(checkout, originUrl, name, stateOptions);
     return { checkout, originUrl, options: stateOptions, project };
   }
 
@@ -606,10 +601,7 @@ describe("project registry persistence", () => {
       await git(checkout, "remote", "add", "origin", fixtureUrl);
       const originUrl =
         operation === "refresh" ? fixtureUrl : "https://github.com/acme/refresh.git";
-      const project = await registerClonedProjectRegistry(
-        { path: checkout, name: "Refresh", originUrl },
-        options,
-      );
+      const project = await registerClone(checkout, originUrl, "Refresh");
       if (operation === "pinned commit") {
         await git(
           checkout,
