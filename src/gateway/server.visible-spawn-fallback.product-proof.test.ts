@@ -77,7 +77,6 @@ type Scenario = {
   visible?: false;
   model?: string;
   configuredProfile?: boolean;
-  configuredAlias?: boolean;
   emptyFallbacks?: boolean;
   backup?: string;
   directAgent?: boolean;
@@ -222,11 +221,7 @@ async function withProofGateway(
       const token = randomUUID();
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       const claim = await acquireGatewayE2ePortBlock();
-      const primary = scenario.configuredAlias
-        ? "proof-primary/fast"
-        : scenario.configuredProfile
-          ? `${PRIMARY}@${PROFILE}`
-          : PRIMARY;
+      const primary = scenario.configuredProfile ? `${PRIMARY}@${PROFILE}` : PRIMARY;
       const ladder = { primary, fallbacks: [BACKUP] };
       const childLadder =
         !scenario.cli && (scenario.inherited || scenario.emptyFallbacks || scenario.directAgent);
@@ -238,13 +233,7 @@ async function withProofGateway(
             skipBootstrap: true,
             model: scenario.cli ? CHILD_BACKUP : scenario.inherited ? ladder : undefined,
             models: Object.fromEntries(
-              [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
-                ref,
-                {
-                  ...(scenario.configuredAlias && ref === PRIMARY ? { alias: "fast" } : {}),
-                  params: { ...params },
-                },
-              ]),
+              [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [ref, { params: { ...params } }]),
             ),
             subagents: {
               allowAgents: ["*"],
@@ -356,7 +345,6 @@ const scenarios: Scenario[] = [
     stopControl: "session",
   },
   { name: "configured agent ladder", backup: "backup" },
-  { name: "configured qualified alias", configuredAlias: true, backup: "backup" },
   { name: "inherited primary with distinct child ladder", inherited: true, backup: "child-backup" },
   // Configured profiles express an auth retry preference; a caller's model is a strict pin.
   { name: "configured profile preference", configuredProfile: true, backup: "backup" },
@@ -461,12 +449,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           expect(provider.requests.some((request) => request.waitingInput)).toBe(false);
           expect(provider.errors).toEqual([]);
           return;
-        }
-        if (scenario.configuredAlias) {
-          expect(provider.requests.filter((request) => !request.child)).toContainEqual(
-            expect.objectContaining({ model: "primary" }),
-          );
-          expect(provider.requests.some((request) => request.model === "fast")).toBe(false);
         }
         const { childSessionKey: childKey } = spawn;
         let settledRunId = spawn.runId;

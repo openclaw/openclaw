@@ -97,6 +97,19 @@ describe("spawn input ownership transfer", () => {
     sessionId,
     storePath: (await loadSessionEntryAsync(sessionKey, { agentId })).storePath,
   });
+  const seedSession = (
+    sessionKey: string,
+    entry: Partial<Parameters<typeof sessionAccessor.upsertSessionEntryCore>[1]> = {},
+    agentId = "main",
+  ) =>
+    sessionAccessor.upsertSessionEntryCore(
+      { agentId, sessionKey },
+      {
+        sessionId: sessionKey,
+        updatedAt: 1,
+        ...entry,
+      },
+    );
   const holdInput = async (
     scope: { storePath: string; agentId: string },
     beforeStaging: boolean,
@@ -177,15 +190,11 @@ describe("spawn input ownership transfer", () => {
         scopes: ["operator.admin"],
       });
       for (const sessionKey of [parentKey, childKey]) {
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: sessionKey,
-            updatedAt: 1,
-            ...(kind === "native" && sessionKey === childKey
-              ? { spawnedBy: parentKey, spawnDepth: 1 }
-              : {}),
-          },
+        await seedSession(
+          sessionKey,
+          kind === "native" && sessionKey === childKey
+            ? { spawnedBy: parentKey, spawnDepth: 1 }
+            : {},
         );
       }
       await withPreparedSessionResolve(
@@ -359,20 +368,16 @@ describe("spawn input ownership transfer", () => {
         scopes: ["operator.admin"],
       });
       for (const sessionKey of [parentKey, childKey]) {
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: sessionKey,
-            updatedAt: Date.now(),
-            createdVia: "operator",
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: client.authenticatedUserProfile!.profileId,
-            },
-            ...(sessionKey === childKey ? { spawnedBy: parentKey, spawnDepth: 1 } : {}),
+        await seedSession(sessionKey, {
+          updatedAt: Date.now(),
+          createdVia: "operator",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: client.authenticatedUserProfile!.profileId,
           },
-        );
+          ...(sessionKey === childKey ? { spawnedBy: parentKey, spawnDepth: 1 } : {}),
+        });
       }
       const operator = await captureGatewayOperatorRunAuthority({ client, context });
       if (!operator) {
@@ -501,14 +506,8 @@ describe("spawn input ownership transfer", () => {
       try {
         setRuntimeConfigSnapshot(config);
         await prepareGatewayReplyRuntimeForTest({ force: true, config });
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "main", sessionKey: requesterKey },
-          { sessionId: requesterKey, updatedAt: 1, spawnDepth: 1 },
-        );
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "worker", sessionKey: targetKey },
-          { sessionId, updatedAt: 1 },
-        );
+        await seedSession(requesterKey, { spawnDepth: 1 });
+        await seedSession(targetKey, { sessionId }, "worker");
         const scope = await inputScope(targetKey, sessionId, "worker");
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAdmission(config, `send-policy-source-${runId}`, "send-policy-proof");
@@ -598,10 +597,7 @@ describe("spawn input ownership transfer", () => {
     const parentKey = `agent:main:parent:${runId}`;
     const childKey = `agent:main:subagent:${runId}`;
     const sessionId = `child-${runId}`;
-    await sessionAccessor.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: childKey },
-      { sessionId, updatedAt: Date.now() },
-    );
+    await seedSession(childKey, { sessionId, updatedAt: Date.now() });
     const scope = await inputScope(childKey, sessionId);
     const admission = prepareAdmission(
       context.getRuntimeConfig(),
@@ -612,6 +608,17 @@ describe("spawn input ownership transfer", () => {
     const guard = await withGatewayToolCallerIdentity(caller(admitted, parentKey), () =>
       captureAgentToolSourceExecutionGuard(),
     );
+    const dispatchInput = (message: string, syntheticScopes?: string[]) =>
+      dispatchGatewayMethodInProcess(
+        "agent",
+        { message, sessionKey: childKey, idempotencyKey: runId },
+        {
+          forceSyntheticClient: true,
+          ...(syntheticScopes ? { syntheticScopes } : {}),
+          resolveGatewayContext: () => context,
+          sessionMutationCommitGuard: guard,
+        },
+      );
     if (boundary === "before reset" || boundary === "live reset") {
       const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
       let hookCalls = 0;
@@ -626,16 +633,7 @@ describe("spawn input ownership transfer", () => {
       };
       registerInternalHook("command:new", onReset);
       try {
-        const reset = dispatchGatewayMethodInProcess(
-          "agent",
-          { message: "/new", sessionKey: childKey, idempotencyKey: runId },
-          {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.admin"],
-            resolveGatewayContext: () => context,
-            sessionMutationCommitGuard: guard,
-          },
-        );
+        const reset = dispatchInput("/new", ["operator.admin"]);
         if (boundary === "before reset") {
           await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
           expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
@@ -658,15 +656,7 @@ describe("spawn input ownership transfer", () => {
     signal.addEventListener("abort", held.release, { once: true });
     let dispatch: Promise<unknown> | undefined;
     try {
-      dispatch = dispatchGatewayMethodInProcess(
-        "agent",
-        { message: "synthetic staged child input", sessionKey: childKey, idempotencyKey: runId },
-        {
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => context,
-          sessionMutationCommitGuard: guard,
-        },
-      );
+      dispatch = dispatchInput("synthetic staged child input");
       const outcome = dispatch.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),

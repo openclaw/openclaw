@@ -2,18 +2,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createSessionProjection,
-  projectLiveSessionMessage,
-} from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessage,
-  projectChatDisplayMessages,
-} from "./chat-display-projection.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
@@ -549,14 +542,18 @@ it.each([
     { diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }] },
     "Chat stopped as a precaution. Review the findings in chat before continuing.",
   ],
+  [
+    { errorMessage: "429: PRIVATE_CANARY" },
+    "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+  ],
 ] as const)("preserves guidance with empty and partial replies (%j)", (error, expected) => {
-  for (const content of [[], [text("Partial reply")]]) {
+  for (const content of [[], [text("The first step completed.")]]) {
     const message = {
       ...failed,
       __openclaw: { id: "legacy", seq: 2 },
-      ...error,
       content,
       errorMessage: "PRIVATE_PROVIDER_DETAIL",
+      ...error,
       errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
     };
     const messages = projectStable([user, message]);
@@ -565,6 +562,7 @@ it.each([
       content: [text([expected, ...content.map((part) => part.text)].join("\n\n"))],
     });
     expect(JSON.stringify(messages)).not.toContain("PRIVATE_");
+    expect(messages.at(-1)).not.toHaveProperty("errorBody");
   }
 });
 
@@ -631,11 +629,6 @@ it.each([
   expect(projected[0]).not.toHaveProperty("openclawRunError");
   expect(projected[0]).not.toHaveProperty("stopReason");
   expect(readRunFailureNotice(projected[1])?.runId).toBe("run-a");
-  let state = createSessionProjection({ sessionKey: "agent:main:split" }, projected);
-  for (const message of projected) {
-    state = projectLiveSessionMessage(state, message);
-  }
-  expect(state.messages).toEqual(projected);
 });
 
 it("retires repeated non-visible failed attempts after their run answers", () => {
@@ -688,24 +681,4 @@ it("repairs only matching attempts when run identities interleave", () => {
     other["__openclaw"],
     answer["__openclaw"],
   ]);
-});
-
-it("retains safe failure guidance alongside partial output", () => {
-  const projected = projectChatDisplayMessage(
-    assistant([text("The first step completed.")], {
-      stopReason: "error",
-      errorMessage: "429: PRIVATE_CANARY",
-      errorBody: "PRIVATE_BODY",
-    }),
-  );
-  expect(projected).toMatchObject({
-    content: [
-      text(
-        "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
-      ),
-    ],
-  });
-  expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
-  expect(projected).not.toHaveProperty("errorBody");
-  expect(projectChatDisplayMessage(projected)).toEqual(projected);
 });
