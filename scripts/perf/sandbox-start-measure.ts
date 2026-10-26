@@ -127,7 +127,7 @@ try {
   const owner = (await import(
     pathToFileURL(path.resolve(values.owner)).href
   )) as typeof import("../../src/agents/sandbox/docker.js");
-  const readOnlyResourceMounts = [];
+  const readOnlyResourceMounts: Array<{ hostPath: string; containerPath: string }> = [];
   for (let index = 0; index < 40; index++) {
     const hostPath = path.join(root, `resource-${index}`);
     await fs.mkdir(hostPath);
