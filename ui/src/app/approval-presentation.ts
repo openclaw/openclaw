@@ -1,6 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ApprovalPresentation } from "../../../packages/gateway-protocol/src/approval-result-validators.js";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import { t } from "../i18n/index.ts";
+
+/** Exec warning recorded with the approval; absent for other kinds and unprompted commands. */
+export function execWarningText(presentation: ApprovalPresentation): string | null {
+  return presentation.kind === "exec" ? presentation.warningText || null : null;
+}
 
 export function summarizeApprovalScopeLabel(scope: ApprovalScope): string {
   switch (scope.kind) {
