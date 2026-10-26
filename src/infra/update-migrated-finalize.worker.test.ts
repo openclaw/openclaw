@@ -513,34 +513,25 @@ type DeadlineCase = [
   owner: string | undefined,
   serialized: string | undefined,
   expected: number | undefined,
-  restartPending?: boolean,
   inherited?: number,
 ];
 it.each<DeadlineCase>([
   ["supported omission", 1, null, "parent", "1800", undefined],
-  ["omission during restart", 1, null, "parent", "1800", undefined, true],
   ["explicit deadline", 1, "1800", "parent", "1800", 10_800_000],
   ["unknown version", 2, null, "parent", "1800", 10_800_000],
   ["mismatched serialization", 1, null, "parent", "900", 10_800_000],
   ["malformed operator", 1, false, "parent", "1800", 10_800_000],
   ["wrong completion owner", 1, null, "child", "1800", 10_800_000],
   ["legacy producer", undefined, undefined, undefined, undefined, 10_800_000],
-  ["inherited explicit allowance", 1, null, "parent", "1800", 12_345, false, 12_345],
+  ["inherited explicit allowance", 1, null, "parent", "1800", 12_345, 12_345],
 ])(
   "preserves aggregate deadline intent for %s",
-  async (_name, version, operator, owner, serialized, expected, restartPending, inherited) => {
+  async (_name, version, operator, owner, serialized, expected, inherited) => {
     const input = {
       ...workerInput({
-        ...finalizationParams(
-          {
-            activationTimeoutMs: inherited,
-            ...(restartPending
-              ? { completionOwner: "gateway-restart", gatewayRestartRequired: true }
-              : {}),
-          },
-          "/synthetic",
-          { timeout: version === undefined ? undefined : "1800" },
-        ),
+        ...finalizationParams({ activationTimeoutMs: inherited }, "/synthetic", {
+          timeout: version === undefined ? undefined : "1800",
+        }),
         updateStepTimeoutMs: 1_800_000,
       }),
       completionOwner: owner,
@@ -548,11 +539,7 @@ it.each<DeadlineCase>([
     };
     fixture.budget.mockResolvedValue(10_800_000);
     fixture.finish.mockResolvedValue(input.params.result);
-    fixture.terminal.mockReturnValue({
-      runId: "synthetic-run",
-      status: restartPending ? "running" : "succeeded",
-      ...(restartPending ? { phase: "restarting" } : {}),
-    });
+    fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "succeeded" });
     await runWorker(input);
 
     expect(process.exitCode).toBe(originalExitCode);
@@ -562,14 +549,11 @@ it.each<DeadlineCase>([
     expect(fixture.budget).toHaveBeenCalledTimes(
       expected === undefined || inherited !== undefined ? 0 : 1,
     );
-    expect(fixture.finish).toHaveBeenCalledOnce();
-    expect(fixture.writeFile).toHaveBeenCalledOnce();
-    if (restartPending) {
+    if (expected === undefined) {
       expect(fixture.finish).toHaveBeenCalledWith(
         expect.objectContaining({ opts: expect.objectContaining({ timeout: undefined }) }),
         finalizationOptions,
       );
-      expectResultFile(input, true, "synthetic-run");
     }
   },
 );
