@@ -92,6 +92,8 @@ export function createSidebarSessionWindow(
   let margin = 0;
   let layout = "";
   let restored = false;
+  // Initial list sizing can clamp scrollTop before its logical anchor is restored.
+  const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
   const publish = () => {
@@ -141,7 +143,7 @@ export function createSidebarSessionWindow(
     publish();
   };
   const scheduleMeasurement = createLayoutMeasurement(
-    () => ({ items: inputs(), anchor: scroll.readAnchor() }),
+    () => ({ items: inputs() }),
     (request) => {
       const scroller = scroll.element();
       if (!request || !scroller) {
@@ -162,8 +164,11 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
-        // Match the CSS minimum before extrapolating unmounted row heights.
-        setRowFloor(nextRowFloor);
+        // This request still contains estimates for the previous CSS minimum.
+        if (rowFloor() !== nextRowFloor) {
+          setRowFloor(nextRowFloor);
+          return;
+        }
         if (layout !== nextLayout) {
           measured.clear();
         }
@@ -180,9 +185,9 @@ export function createSidebarSessionWindow(
         rebuild();
         if (!restored && current.length) {
           const restoredItem =
-            request.anchor && positions.find((item) => item.row.key === request.anchor?.key);
+            restoreAnchor && positions.find((item) => item.row.key === restoreAnchor.key);
           if (restoredItem) {
-            scroller.scrollTop = margin + restoredItem.top + request.anchor!.offset;
+            scroller.scrollTop = margin + restoredItem.top + restoreAnchor!.offset;
           }
           restored = true;
           publish();

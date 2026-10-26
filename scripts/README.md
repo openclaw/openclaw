@@ -81,7 +81,7 @@ database state after collecting results.
 
 ## Control UI warm interactions
 
-The headless Chromium/WebKit companion reuses the 26 interaction scenarios and
+The headless Chromium/WebKit companion reuses the current interaction catalog and
 adds cold boot, persisted-state warm reload, 2,000-message open and 645-delta
 streaming. It alternates engines and bundles within each pair:
 
