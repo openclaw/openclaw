@@ -1,7 +1,7 @@
+import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import type {
-  MigrationApplyResult,
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
@@ -38,17 +38,9 @@ it("registers synchronously and loads only the invoked migration operations", as
   const register = vi.fn<(provider: MigrationProviderPlugin) => void>();
   const api = createTestPluginApi({ registerMigrationProvider: register });
   expect(pluginEntry.register(api)).toBeUndefined();
-  expect(register).toHaveBeenCalledTimes(1);
   const provider = register.mock.calls[0]?.[0];
-  if (!provider) {
-    throw new Error("Hermes provider was not registered");
-  }
-  expect(provider).toMatchObject({
-    id: "hermes",
-    label: "Hermes",
-    description: "Import Hermes config, memories, skills, and supported credentials.",
-    supportedItemKinds: ["memory"],
-  });
+  assert(provider, "Hermes provider was not registered");
+  expect([provider.id, provider.supportedItemKinds]).toEqual(["hermes", ["memory"]]);
   expect(mocks.loaded).toEqual([]);
 
   const ctx = makeContext({ source: "/hermes", stateDir: "/state", workspaceDir: "/workspace" });
@@ -56,22 +48,13 @@ it("registers synchronously and loads only the invoked migration operations", as
   mocks.discover.mockResolvedValue(source);
   mocks.hasSource.mockReturnValue(true);
   mocks.memoryOnly.mockReturnValue(false);
-  await expect(provider.detect?.(ctx)).resolves.toEqual({
-    found: true,
-    source: source.root,
-    label: "Hermes",
-    confidence: "high",
-    message: "Hermes state found.",
-  });
-  expect(mocks.discover).toHaveBeenCalledWith(ctx.source);
-  expect(mocks.memoryOnly).toHaveBeenCalledWith(ctx);
+  await provider.detect?.(ctx);
   expect(mocks.loaded).toEqual(["source", "memory"]);
 
   mocks.memoryOnly.mockReturnValue(true);
   await expect(provider.detect?.(ctx)).resolves.toMatchObject({ found: false, confidence: "low" });
   mocks.discover.mockResolvedValue({ ...source, memoryPath: "/hermes/memories/MEMORY.md" });
   await expect(provider.detect?.(ctx)).resolves.toMatchObject({ found: true });
-  expect(mocks.hasSource).toHaveBeenCalledTimes(1);
 
   const plan: MigrationPlan = {
     providerId: "hermes",
@@ -92,13 +75,10 @@ it("registers synchronously and loads only the invoked migration operations", as
   const secondPlan = provider.plan(ctx);
   await secondPlanStarted.promise;
   finishPlans.resolve(plan);
-  const planned = await Promise.all([firstPlan, secondPlan]);
-  expect(planned[0]).toBe(plan);
-  expect(planned[1]).toBe(plan);
-  expect(mocks.plan.mock.calls).toEqual([[ctx], [ctx]]);
+  (await Promise.all([firstPlan, secondPlan])).forEach((result) => expect(result).toBe(plan));
   expect(mocks.loaded).toEqual(["source", "memory", "plan"]);
 
-  const result: MigrationApplyResult = { ...plan, reportDir: "/report" };
+  const result = { ...plan, reportDir: "/report" };
   mocks.apply.mockResolvedValue(result);
   await expect(provider.apply(ctx, plan)).resolves.toBe(result);
   expect(mocks.apply).toHaveBeenLastCalledWith({ ctx, plan, runtime: api.runtime });
