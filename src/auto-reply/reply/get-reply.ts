@@ -10,7 +10,6 @@ import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import {
   WorkspaceAliasRepointedError,
@@ -91,7 +90,7 @@ import {
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { prepareReplyWorkspace } from "./reply-workspace.js";
+import { prepareReplyWorkspace, resolveReplyStagingWorkspace } from "./reply-workspace.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveScheduledSessionModelSelection } from "./session-event-model-selection.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
@@ -908,12 +907,16 @@ async function resolveReplyFromConfig(
     ) {
       const stagingSessionEntry =
         sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
-      const stagingWorkspaceDir =
-        resolveIngressWorkspaceOverrideForSessionRun({
-          spawnedBy: stagingSessionEntry.spawnedBy,
-          workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
-          cwd: stagingSessionEntry.spawnedCwd,
-        }) ?? workspaceDir;
+      const stagingWorkspaceDir = resolveReplyStagingWorkspace({
+        cfg,
+        provider: runProvider,
+        modelId: runModel,
+        agentId,
+        sessionKey,
+        ctx,
+        sessionEntry: stagingSessionEntry,
+        workspaceDir,
+      });
       // Private library selections change the sandbox isolation identity. Resolve
       // the current selection before staging so the attachment and admitted run
       // select the same SSH runtime, even when a prior snapshot needs refreshing.

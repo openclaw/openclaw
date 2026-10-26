@@ -240,6 +240,41 @@ describe("sandbox explain command", () => {
     });
   });
 
+  it("keeps node-hosted Claude diagnostics in the local workspace for standard model providers", async () => {
+    const tempDir = sessionDirs.make();
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:builder:claude-node-session";
+    const localWorkspace = path.join(tempDir, "local-workspace");
+    const remoteCwd = "/remote/claude-worktree";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "node-claude-session",
+      updatedAt: Date.now(),
+      execHost: "node",
+      execNode: "claude-node",
+      spawnedCwd: remoteCwd,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+    } as SessionEntry);
+    mockCfg = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "off" },
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        entries: { builder: { workspace: localWorkspace } },
+      },
+      session: { store: storePath },
+    };
+
+    const parsed = await explain({ json: true, session: sessionKey });
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(path.resolve(localWorkspace));
+    expect(parsed.sandbox.runtimeWorkdir).toBe(remoteCwd);
+    expect(parsed.sandbox.workspaceSource).toBe("direct");
+  });
+
   it("uses the sole configured agent for global sessions", async () => {
     mockCfg = config(
       { mode: "non-main" },
