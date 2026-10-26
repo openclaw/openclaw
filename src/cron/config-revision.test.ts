@@ -35,10 +35,7 @@ it.each([
   { configLabel: "changed-policy" },
   {
     operator: {
-      profileId: "profile-ada",
-      githubLogin: null,
-      scopes: ["operator.write"],
-      assignedRole: null,
+      ...makeCronStreamSandboxTarget().operator!,
       gatewayAccessGrant: { pluginId: "access", grantId: "replacement-grant" },
     },
   },
@@ -54,43 +51,23 @@ it.each([
 });
 
 it("preserves order when case-insensitive command env keys collide on Windows", () => {
-  const firstWinsLast: CronJob = {
-    ...makeJob(),
-    payload: {
-      kind: "command",
-      argv: ["printenv"],
-      env: { Path: "first", PATH: "second" },
-    },
-  };
-  const secondWinsLast: CronJob = {
-    ...firstWinsLast,
-    payload: {
-      kind: "command",
-      argv: ["printenv"],
-      env: { PATH: "second", Path: "first" },
-    },
-  };
-
-  expect(resolveCronJobConfigRevision(firstWinsLast)).not.toBe(
-    resolveCronJobConfigRevision(secondWinsLast),
+  const revision = (env: Record<string, string>) =>
+    resolveCronJobConfigRevision(
+      makeJob({ payload: { kind: "command", argv: ["printenv"], env } }),
+    );
+  expect(revision({ Path: "first", PATH: "second" })).not.toBe(
+    revision({ PATH: "second", Path: "first" }),
   );
 });
 
 it("distinguishes inherited and explicitly cleared delivery fields", () => {
   const inherited = makeJob();
-  const explicitlyCleared: CronJob = {
-    ...inherited,
-    delivery: {
-      mode: "announce",
-      channel: "telegram",
-      to: "chat-1",
-      failureDestination: { channel: undefined },
-    },
-  };
-
-  expect(resolveCronJobConfigRevision(explicitlyCleared)).not.toBe(
-    resolveCronJobConfigRevision(inherited),
-  );
+  expect(
+    resolveCronJobConfigRevision({
+      ...inherited,
+      delivery: { ...inherited.delivery!, failureDestination: { channel: undefined } },
+    }),
+  ).not.toBe(resolveCronJobConfigRevision(inherited));
 });
 
 it("matches SQLite normalization across optional fields, schedules, payloads, triggers, and alerts", async () => {

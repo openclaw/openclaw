@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOAuthManager } from "../agents/auth-profiles/oauth-manager.js";
 import { mockOAuthProviderOperations } from "../agents/auth-profiles/oauth-native-provider.test-support.js";
@@ -7,7 +8,6 @@ import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/profil
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../agents/auth-profiles/store-state-owner.test-support.js";
-import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolvePreparedRuntimeModelAuth } from "../agents/runtime-plan/resolve-auth.js";
@@ -31,17 +31,6 @@ const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
 afterEach(() => vi.restoreAllMocks());
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
-
-function oauth(access = "synthetic-subscription-access"): OAuthCredential {
-  return {
-    type: "oauth",
-    provider: "openai",
-    access,
-    refresh: "synthetic-subscription-refresh",
-    expires: Date.now() + 3_600_000,
-    accountId: "synthetic-account",
-  };
-}
 
 function config(agentDir: string): OpenClawConfig {
   return {
@@ -76,7 +65,14 @@ async function fixture(
           { profileId: platformId, credential: apiKey("synthetic-platform-key") },
           {
             profileId: subscriptionId,
-            credential: { ...oauth(), ...(expired ? { expires: Date.now() - 1_000 } : {}) },
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-subscription-access",
+              refresh: "synthetic-subscription-refresh",
+              accountId: "synthetic-account",
+              expires: Date.now() + (expired ? -1_000 : 3_600_000),
+            },
           },
         ],
       });
@@ -98,10 +94,10 @@ function creator(profileId: string): SessionEntry {
 
 async function capture(cfg: OpenClawConfig, profileId: string) {
   const sessionEntry = creator(profileId);
-  const binding = await captureCronInferenceBinding({ cfg, agentId: "main", sessionEntry });
-  if (!binding) {
-    throw new Error("Expected creator's stored inference account");
-  }
+  const binding = expectDefined(
+    await captureCronInferenceBinding({ cfg, agentId: "main", sessionEntry }),
+    "creator's stored inference account",
+  );
   // Capturing authorization must not pin or otherwise rewrite the creator's session.
   expect(sessionEntry).toEqual(creator(profileId));
   expect(binding).toMatchObject({ version: 1, provider: "openai", profileId, source: "auto" });
@@ -124,11 +120,10 @@ async function reloadJob(storePath: string) {
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
-  const job = (await loadCronJobsStore(storePath)).jobs[0];
-  if (!job?.inferenceBinding) {
-    throw new Error("Stored cron inference binding was lost");
-  }
-  return job;
+  return expectDefined(
+    (await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding,
+    "stored cron inference binding",
+  );
 }
 
 /** Real scheduler/auth owners, stopping at the provider I/O boundary (no session or runner mocks). */
@@ -138,8 +133,7 @@ async function resolveFreshRun(
   agentDir: string,
   modelId: "gpt-4.1" | "gpt-4o" = "gpt-4o",
 ) {
-  const job = await reloadJob(storePath);
-  const binding = job.inferenceBinding!;
+  const binding = await reloadJob(storePath);
   const authority = await acquireCronInferenceAuthorization({ binding, cfg, agentDir });
   try {
     const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
@@ -166,13 +160,9 @@ async function resolveFreshRun(
       allowAuthProfileFallback: false,
       routeIntent: { authRequirement: binding.authRequirement, source: "explicit" },
     });
-    const route = prepared.plan.modelRoute;
-    if (!route) {
-      throw new Error("Expected a concrete provider route");
-    }
+    const route = expectDefined(prepared.plan.modelRoute, "concrete provider route");
     const model = makeProviderModelFixture({
       id: modelId,
-      name: modelId,
       provider: route.provider,
       api: route.api,
       baseUrl: route.baseUrl,
@@ -253,13 +243,12 @@ describe("durable cron inference authorization", () => {
         accountId: "synthetic-account",
       }));
       mockOAuthProviderOperations({ refreshCredential });
-      const manager = createOAuthManager();
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(root.agentDir);
       const credential = store.profiles[subscriptionId];
       if (credential?.type !== "oauth") {
         throw new Error("Expected persisted OAuth fixture");
       }
-      await manager.resolveOAuthAccess({
+      await createOAuthManager().resolveOAuthAccess({
         store,
         profileId: subscriptionId,
         credential,
@@ -283,15 +272,15 @@ describe("durable cron inference authorization", () => {
         profileId: platformId,
         credential: apiKey("synthetic-replacement-key"),
       });
-      const adopted = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        model: "openai/gpt-4o@openai:platform",
-        sessionEntry: creator(subscriptionId),
-      });
-      if (!adopted) {
-        throw new Error("Explicit adoption must capture the selected owner");
-      }
+      const adopted = expectDefined(
+        await captureCronInferenceBinding({
+          cfg,
+          agentId: "main",
+          model: "openai/gpt-4o@openai:platform",
+          sessionEntry: creator(subscriptionId),
+        }),
+        "explicitly adopted owner",
+      );
       expect(adopted).toMatchObject({
         profileId: platformId,
         source: "user",
