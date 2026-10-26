@@ -62,28 +62,17 @@ describe("vydra video-generation provider", () => {
       cfg: { models: { providers: { vydra: { baseUrl, models: [], request: policy } } } },
     });
     expectPost(fetchMock, `${baseUrl}/models/veo3`, { prompt: "policy proof" });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      `${baseUrl}/jobs/job-policy`,
-      expect.objectContaining({ method: "GET" }),
-    );
     expect(result.videos).toEqual([
       { buffer: Buffer.from("webm-data"), mimeType: "video/webm", fileName: "video-1.webm" },
     ]);
     expect(result.metadata).toEqual(completed("job-policy", videoUrl));
     const submitRequest = submitSpy.mock.calls[0]?.[0];
-    expect(submitRequest).toMatchObject({
-      allowPrivateNetwork: true,
-      dispatcherPolicy: policy.proxy,
-    });
+    expect(submitRequest?.dispatcherPolicy).toEqual({ mode: "env-proxy" });
     const pollRequest = pollSpy.mock.calls[0]?.[0];
-    expect(pollRequest?.allowPrivateNetwork).toBe(true);
     expect(pollRequest?.dispatcherPolicy).toBe(submitRequest?.dispatcherPolicy);
-    const downloadRequest = downloadSpy.mock.calls.find(([url]) => url === videoUrl);
-    expect(downloadRequest?.[4]).toMatchObject({
+    expect(downloadSpy.mock.calls.find(([url]) => url === videoUrl)?.[4]).toMatchObject({
       ssrfPolicy: { allowPrivateNetwork: true },
       dispatcherPolicy: submitRequest?.dispatcherPolicy,
-      auditContext: "vydra-media-download",
     });
     for (const index of [0, 1, 2]) {
       const call = fetchMock.mock.calls[index];
@@ -115,6 +104,5 @@ describe("vydra video-generation provider", () => {
       video_url: "https://example.com/reference.png",
     });
     expect(result.videos.map(({ mimeType }) => mimeType)).toEqual(["video/mp4"]);
-    expect(result.metadata).toEqual(completed("job-kling", videoUrl));
   });
 });

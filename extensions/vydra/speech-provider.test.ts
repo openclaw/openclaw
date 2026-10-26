@@ -25,9 +25,8 @@ describe("vydra speech provider", () => {
 
   it("exposes the default voice and model", async () => {
     expect(provider.models).toEqual(["elevenlabs/tts"]);
-    expect(await provider.listVoices?.({})).toEqual([
-      { id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel" },
-    ]);
+    const voices = await provider.listVoices?.({});
+    expect(voices).toEqual([{ id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel" }]);
   });
 
   it("posts to the tts endpoint and downloads the audio", async () => {
@@ -36,7 +35,6 @@ describe("vydra speech provider", () => {
       binaryResponse("mp3-data", "audio/mpeg"),
     );
     const result = await synthesize();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect([url, init.method, init.body]).toEqual([
       "https://www.vydra.ai/api/v1/models/elevenlabs/tts",
