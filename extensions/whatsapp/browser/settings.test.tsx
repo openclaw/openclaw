@@ -8,6 +8,12 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { settingsViews } from "./index.tsx";
 
 const emptyLogin = { message: null, qrDataUrl: null, connected: null, busy: false };
+const settle = (check: () => void) =>
+  vi.waitFor(() => {
+    flush();
+    check();
+  });
+
 function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
   let snapshot: ControlUiChannelSettingsSnapshot = {
     channelId: "whatsapp",
@@ -65,6 +71,16 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     ...context.login,
     container,
     buttons,
+    rows,
+    retainNodes(selector: string) {
+      const query = () => [...container.querySelectorAll(selector)];
+      const original = query();
+      return (inserted: (Element | null | undefined)[] = []) => {
+        const current = query().filter((node) => !inserted.includes(node));
+        expect(current).toHaveLength(original.length);
+        current.forEach((node, index) => expect(node).toBe(original[index]));
+      };
+    },
     button: (label: string) =>
       buttons().find((node) => node.textContent?.trim() === label) ??
       assert.fail(`Missing ${label}`),
@@ -125,66 +141,40 @@ it("uses the declared default account for configured fallback and keeps absent s
 it("retains fact rows and login controls across status refreshes and locale changes", async () => {
   const qrDataUrl = "data:image/png,qr";
   const f = fixture({ login: { ...emptyLogin, message: "Scan now", qrDataUrl } });
-  const facts = () => [...f.container.querySelectorAll("dt")];
-  const original = facts();
-  const values = original.map((row) => row.nextElementSibling);
-  const controls = f.buttons();
+  const expectOriginal = f.retainNodes("dt, dd, button, img");
   const qr = f.container.querySelector("img");
   f.update({ status: { configured: true, running: true } });
-  for (const [index, row] of facts().entries()) {
-    expect(row).toBe(original[index]);
-    expect(row.nextElementSibling).toBe(values[index]);
-  }
+  expectOriginal();
   f.expectFacts({ Configured: "Yes", Running: "Yes" });
-
   f.update({ status: { configured: true, running: true, self: { e164: "+15555550123" } } });
-  const withPhone = facts();
-  expect(withPhone[2]?.nextElementSibling?.textContent).toBe("+15555550123");
-  for (const [index, row] of original.entries()) {
-    expect(withPhone[index < 2 ? index : index + 1]).toBe(row);
-    expect(row.nextElementSibling).toBe(values[index]);
-  }
+  const withPhone = f.rows();
   const phone = withPhone[2];
-  const phoneValue = phone?.nextElementSibling;
+  expect(phone?.nextElementSibling?.textContent).toBe("+15555550123");
+  expectOriginal([phone, phone?.nextElementSibling]);
+  const expectWithPhone = f.retainNodes("dt, dd, button, img");
   const labels = withPhone.map((row) => row.textContent);
   f.update({ locale: "de" });
-  await vi.waitFor(() => {
-    flush();
-    f.expectFacts({ Konfiguriert: "Ja", Läuft: "Ja", Telefonnummer: "+15555550123" });
-  });
-  for (const [index, row] of facts().entries()) {
-    expect(row).toBe(withPhone[index]);
-  }
-  expect(phone?.nextElementSibling).toBe(phoneValue);
-  for (const [index, button] of f.buttons().entries()) {
-    expect(button).toBe(controls[index]);
-  }
-  expect(f.container.querySelector("img")).toBe(qr);
+  await settle(() =>
+    f.expectFacts({ Konfiguriert: "Ja", Läuft: "Ja", Telefonnummer: "+15555550123" }),
+  );
+  expectWithPhone();
   expect(qr?.getAttribute("src")).toBe(qrDataUrl);
   expect(qr?.getAttribute("alt")).toBe("WhatsApp-QR");
   expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
 
   f.update({ locale: "en" });
-  expect(facts().map((row) => row.textContent)).toEqual(labels);
-  for (const [index, button] of f.buttons().entries()) {
-    expect(button).toBe(controls[index]);
-  }
+  expect(f.rows().map((row) => row.textContent)).toEqual(labels);
+  expectWithPhone();
   expect(qr?.getAttribute("alt")).toBe("WhatsApp QR");
   f.update({ locale: "sv" });
-  await vi.waitFor(() => {
-    flush();
-    expect(f.button("Uppdatera")).toBe(controls.at(-1));
-  });
-  expect(f.container.querySelector("img")).toBe(qr);
+  await settle(() => expect(f.button("Uppdatera")).toBe(f.buttons().at(-1)));
+  expectWithPhone();
   expect(f.mountConfig).toHaveBeenCalledOnce();
   expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);
 
   f.update({ status: { configured: true, running: true } });
   expect(phone?.isConnected).toBe(false);
-  for (const [index, row] of facts().entries()) {
-    expect(row).toBe(original[index]);
-    expect(row.nextElementSibling).toBe(values[index]);
-  }
+  expectOriginal();
 });
 
 it("requires the operator's confirmation before invoking the captured account logout", async () => {
@@ -224,10 +214,7 @@ it("ignores a superseded refresh failure and keeps command errors retryable", as
 
   f.refresh.mockRejectedValueOnce(new Error("Current refresh failed"));
   refresh.click();
-  await vi.waitFor(() => {
-    flush();
-    expect(f.container.textContent).toContain("Current refresh failed");
-  });
+  await settle(() => expect(f.container.textContent).toContain("Current refresh failed"));
   const retry = createDeferred<void>();
   f.refresh.mockReturnValueOnce(retry.promise);
   refresh.click();
@@ -247,12 +234,11 @@ it("ignores a superseded refresh failure and keeps command errors retryable", as
 it("loads an initial locale and disposes the host configuration slot without resetting login", async () => {
   const f = fixture({ locale: "de" });
   expect(f.mountConfig).toHaveBeenCalledOnce();
-  await vi.waitFor(() => {
-    flush();
+  await settle(() =>
     expect(f.container.textContent).toContain(
       "WhatsApp Web verknüpfen und Verbindungsstatus überwachen.",
-    );
-  });
+    ),
+  );
   f.dispose();
   expect(f.configDispose).toHaveBeenCalledOnce();
   expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);
