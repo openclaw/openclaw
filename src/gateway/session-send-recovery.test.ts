@@ -119,6 +119,25 @@ function peerInput(
     },
   };
 }
+function chatInput(
+  id: string,
+  ageMs = 0,
+  state: SessionPendingInput["state"] = "interrupted",
+  message: SessionPendingInput["message"] = input.message,
+): SessionPendingInput {
+  return {
+    ...input,
+    id,
+    runId: id,
+    acceptedAt: Date.now() - ageMs,
+    state,
+    message: {
+      ...message,
+      idempotencyKey: `${id}:user`,
+      __openclaw: { chatInputRecovery: { version: 1 } },
+    },
+  };
+}
 const pendingInputs = (...items: SessionPendingInput[]) =>
   io.pending.mockResolvedValue({ items, total: items.length });
 const blockedReport = () => io.report.mock.calls[0]![1].selectReport(undefined);
@@ -337,19 +356,9 @@ it.each([
 ] as const)(
   "keeps a %s input's %s failure scoped to its session and eligibility",
   async (inputKind, failure) => {
-    const inputs = ["first", "next", "other"].map((id): SessionPendingInput => ({
-      id,
-      runId: id,
-      acceptedAt: Date.now(),
-      state: "interrupted",
-      message: {
-        role: "user",
-        content: id,
-        timestamp: Date.now(),
-        idempotencyKey: `${id}:user`,
-        __openclaw: { chatInputRecovery: { version: 1 } },
-      },
-    }));
+    const inputs = ["first", "next", "other"].map((id) =>
+      chatInput(id, 0, "interrupted", { role: "user", content: id, timestamp: Date.now() }),
+    );
     if (inputKind === "peer") {
       inputs[0] = peerInput({ runId: "first" }, { id: "first" });
     }
@@ -390,35 +399,23 @@ it.each([
 );
 
 it("resumes chat inputs in acceptance order across pages, excluding expired and withdrawn inputs", async () => {
-  const chat = (id: string, ageMs = 0, state: SessionPendingInput["state"] = "interrupted") => ({
-    ...input,
-    id,
-    runId: id,
-    acceptedAt: Date.now() - ageMs,
-    state,
-    message: {
-      ...input.message,
-      idempotencyKey: `${id}:user`,
-      __openclaw: { chatInputRecovery: { version: 1 } },
-    },
-  });
   io.source.mockImplementation(async (_scope, idempotencyKey: string) => {
     const id = idempotencyKey.slice(0, -":user".length);
     return sourceSnapshot(
-      chat(id),
+      chatInput(id),
       id === "withdrawn" ? "cancelled" : "interrupted",
       id === "consumed" ? "collected-event" : null,
     );
   });
   io.pending
-    .mockResolvedValueOnce({ items: [chat("second")], nextBefore: 1 })
+    .mockResolvedValueOnce({ items: [chatInput("second")], nextBefore: 1 })
     .mockResolvedValueOnce({
       items: [
-        chat("expired", 24 * 60 * 60_000 + 1),
-        chat("cancelled", 0, "cancelled"),
-        chat("withdrawn"),
-        chat("consumed"),
-        chat("first"),
+        chatInput("expired", 24 * 60 * 60_000 + 1),
+        chatInput("cancelled", 0, "cancelled"),
+        chatInput("withdrawn"),
+        chatInput("consumed"),
+        chatInput("first"),
       ],
     });
   const firstEntered = createDeferredCore();
@@ -686,13 +683,6 @@ it.each(recoveryDiagnosticCases)(
   },
 );
 
-it("retries discovery without losing the saved delivery", async () => {
-  io.discover.mockRejectedValueOnce(new WorkerTaskError("Inventory starting", "unavailable"));
-  await recoverWithTimers();
-  expect(dispatch).toHaveBeenCalledOnce();
-  expect(io.report).not.toHaveBeenCalled();
-});
-
 it.each(["removed", "retained"] as const)(
   "ignores an already consumed %s input before checking a replaced endpoint",
   async (consumed) => {
@@ -706,6 +696,7 @@ it.each(["removed", "retained"] as const)(
 );
 
 it.each([
+  new WorkerTaskError("Inventory starting", "unavailable"),
   new SessionStoreUnavailableError("main", "schema-missing"),
   new SessionStoreUnavailableError("main", "read-failed", {
     name: "SqliteError",
@@ -713,12 +704,16 @@ it.each([
     message: "Reader is locked",
   }),
   inspectionError("pending", false),
-])("retries storage readiness without replacing the saved delivery: %s", async (error) => {
-  io.load.mockRejectedValueOnce(error);
-  await recoverWithTimers();
-  expect(dispatch).toHaveBeenCalledOnce();
-  expect(io.report).not.toHaveBeenCalled();
-});
+])(
+  "retries discovery or storage readiness without replacing the saved delivery: %s",
+  async (error) => {
+    const stage = error instanceof WorkerTaskError ? io.discover : io.load;
+    stage.mockRejectedValueOnce(error);
+    await recoverWithTimers();
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(io.report).not.toHaveBeenCalled();
+  },
+);
 
 it.each(terminalRecoveryFailures)(
   "does not retry terminal admission or storage failures: %s",
