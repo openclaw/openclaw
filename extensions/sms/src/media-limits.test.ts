@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  createPluginRuntimeMediaMock,
-  createPluginRuntimeMock,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withServer } from "openclaw/plugin-sdk/test-env";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveSmsAccount } from "./accounts.js";
@@ -14,6 +10,7 @@ import { materializeSmsInboundMedia, tryHandleHostedSmsMediaRequest } from "./me
 import { setSmsRuntime } from "./runtime.js";
 import { prepareSmsMediaAttempt } from "./send.js";
 import type { ResolvedSmsAccount, SmsChannelConfig } from "./types.js";
+import { createSmsTestRequest, createSmsTestResponse } from "./webhook.test-support.js";
 
 const MB = 1024 * 1024;
 const ACCOUNT_SID = `AC${"a".repeat(32)}`;
@@ -74,25 +71,20 @@ describe("SMS configured media limits", () => {
     },
   );
 
-  it("serves exact below-cap bytes through the hosted HTTP route", async () => {
+  it("serves exact below-cap bytes through the hosted media handler", async () => {
     const account = accountFor({ mediaMaxMb: PDF.length / MB }, 1 / MB);
     const attempt = await prepare(account);
-    await withServer(
-      (req, res) => {
-        void tryHandleHostedSmsMediaRequest(req, res, account.accountId).catch(() => {
-          res.statusCode = 500;
-          res.end();
-        });
-      },
-      async (baseUrl) => {
-        const hosted = new URL(attempt.hostedMediaUrl);
-        const response = await fetch(`${baseUrl}${hosted.pathname}${hosted.search}`);
-        expect(response.status).toBe(200);
-        expect(response.headers.get("content-type")).toBe("application/pdf");
-        expect(Buffer.from(await response.arrayBuffer())).toEqual(PDF);
-        await attempt.cleanupHostedMedia();
-      },
-    );
+    const hosted = new URL(attempt.hostedMediaUrl);
+    const request = Object.assign(createSmsTestRequest({ body: "", signature: "" }), {
+      method: "GET",
+      url: `${hosted.pathname}${hosted.search}`,
+    });
+    const response = createSmsTestResponse();
+    await tryHandleHostedSmsMediaRequest(request, response, account.accountId);
+    expect(response.statusCode).toBe(200);
+    expect(response.setHeaderMock).toHaveBeenCalledWith("Content-Type", "application/pdf");
+    expect(response.endMock).toHaveBeenCalledWith(PDF);
+    await attempt.cleanupHostedMedia();
   });
 
   it("retains Twilio's GIF ceiling when the configured cap is larger", async () => {
@@ -105,18 +97,6 @@ describe("SMS configured media limits", () => {
 
   it("applies the per-attachment cap without making it a shared inbound budget", async () => {
     const bodies = [PDF, Buffer.alloc(33), PDF];
-    const media = createPluginRuntimeMediaMock({
-      saveRemoteMedia: async (options) => {
-        const body = bodies.shift();
-        if (!body) {
-          throw new Error("unexpected attachment fetch");
-        }
-        return await saveResponseMedia(
-          new Response(body, { headers: { "content-type": "application/pdf" } }),
-          { ...options, sourceUrl: options.url },
-        );
-      },
-    });
     const result = await materializeSmsInboundMedia({
       account: accountFor({ mediaMaxMb: 32 / MB }),
       msg: {
@@ -130,7 +110,20 @@ describe("SMS configured media limits", () => {
           contentType: "application/pdf",
         })),
       },
-      mediaRuntime: { media },
+      mediaRuntime: {
+        media: {
+          saveRemoteMedia: async (options) => {
+            const body = bodies.shift();
+            if (!body) {
+              throw new Error("unexpected attachment fetch");
+            }
+            return await saveResponseMedia(
+              new Response(body, { headers: { "content-type": "application/pdf" } }),
+              { ...options, sourceUrl: options.url },
+            );
+          },
+        },
+      },
     });
     expect(result.media).toHaveLength(2);
     expect(result.body).toBe("three attachments\n\n[1 Twilio MMS attachment unavailable]");
