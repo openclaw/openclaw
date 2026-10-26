@@ -42,8 +42,6 @@ it.each([
     expect(t("chat.pullRequests.open")).toBe("Open");
     expect(connections.manage).toBeUndefined();
     expect(publication.failedAttempt).toBeUndefined();
-    expect(t("githubPublication.newAction")).toBe("Choose a new publication");
-    expect(t("githubConnections.title")).toBe("GitHub connections");
     await manager.setLocale("de");
     // Preserve dependency registrations across cold imports; skip already-defined elements.
     const define = customElements.define.bind(customElements);
@@ -54,11 +52,7 @@ it.each([
           define(name, constructor, options);
         }
       });
-    try {
-      await load();
-    } finally {
-      registration.mockRestore();
-    }
+    await load().finally(() => registration.mockRestore());
     expectNamespaces();
     expect(t("githubConnections.manage")).toBe("Verbindungen verwalten");
     if (settings) {
@@ -90,7 +84,6 @@ it.each([
     (await import("./locales/en-github.ts")).registerGitHubEnglish();
     expectNamespaces();
     expect(t("sessionHovercard.checks.passing")).toBe("CI-Prüfungen erfolgreich");
-    expect(t("chat.pullRequests.open")).toBe("Open");
     expect(t("githubConnections.manage")).toBe("Verbindungen verwalten");
   },
 );

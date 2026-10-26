@@ -40,21 +40,20 @@ it("keeps a cold roster metadata failure readable before its view catalog loads"
   const agentsHome = en.agentsHome;
   const { createRosterFixture, rosterResult } =
     await import("../lib/agents/roster-activity-store.test-support.ts");
-  const { createGatewayRequestMock, createTestGatewayClient } =
-    await import("../test-helpers/gateway-client.ts");
-  const request = createGatewayRequestMock(async (method) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
+  const { createTestGatewayClient } = await import("../test-helpers/gateway-client.ts");
+  const replies = new Map<string, () => unknown>([
+    ["sessions.subscribe", () => ({ subscribed: true })],
+    ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
+    ["sessions.list", rosterResult],
+  ]);
+  const client = createTestGatewayClient(async (method) => {
+    const reply = replies.get(method);
+    if (!reply) {
+      throw new Error(`Unexpected RPC: ${method}`);
     }
-    if (method === "sessions.groups.list") {
-      return { groups: [], sectionOrder: [] };
-    }
-    if (method === "sessions.list") {
-      return rosterResult();
-    }
-    throw new Error(`Unexpected RPC: ${method}`);
+    return reply();
   });
-  const { context, store, sessions } = createRosterFixture(createTestGatewayClient(request));
+  const { context, store, sessions } = createRosterFixture(client);
   context.agents.ensureList = async () => null;
   expect(manager.t("agentsHome.pinnedAgents")).toBe("agentsHome.pinnedAgents");
   const stop = store.subscribe(() => {});
@@ -102,16 +101,8 @@ it("loads optional English copy at each view boundary while keeping shared label
   expect(manager.t("aboutPage.artifactDetails")).toBe("Control UI build details");
   await manager.setLocale("de");
   for (const [key, copy, load] of [
-    [
-      "aboutPage.tagline",
-      "Your personal AI assistant, running on your own devices.",
-      () => import("../pages/about/view.tsx"),
-    ],
-    [
-      "dashboardsPage.emptyDescription",
-      "Dashboards created in your tasks will appear here.",
-      () => import("../pages/dashboards/view.tsx"),
-    ],
+    ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],
+    ["dashboardsPage.live", "Live", () => import("../pages/dashboards/view.tsx")],
   ] as const) {
     expect(manager.t(key)).toBe(key);
     await load();
