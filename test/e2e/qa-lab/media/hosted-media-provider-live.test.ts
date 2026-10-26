@@ -1,5 +1,4 @@
 import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MEDIA_SUITES,
@@ -29,13 +28,7 @@ const planEntry = (suite: MediaSuiteId, providers: string[] = []): SuiteRunPlan 
 });
 const emptyPlan = () => [{ ...planEntry("image"), skippedReason: "no providers with usable auth" }];
 const hostedOptions = (suite: string, ...args: string[]) =>
-  parseHostedMediaOptions([
-    "--suite",
-    suite,
-    "--artifact-base",
-    path.join(os.tmpdir(), "openclaw-hosted-media-live-test", suite),
-    ...args,
-  ]);
+  parseHostedMediaOptions(["--suite", suite, "--artifact-base", os.tmpdir(), ...args]);
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -60,11 +53,8 @@ describe("hosted media provider live QA producer", () => {
   });
 
   it("classifies missing live media auth as blocked evidence", () => {
-    expect(
-      classifyHostedMediaFailureStatus(
-        "[live:media] no runnable providers matched available auth; pass --allow-empty",
-      ),
-    ).toBe("blocked");
+    const missingAuth = "no runnable providers matched available auth";
+    expect(classifyHostedMediaFailureStatus(missingAuth)).toBe("blocked");
     expect(classifyHostedMediaFailureStatus("provider response was malformed")).toBe("fail");
   });
 
@@ -94,11 +84,13 @@ describe("hosted media provider live CLI", () => {
   it.each([
     ["image", "openrouter"],
     ["music", "fal,openrouter"],
-    ["video", "openrouter"],
-  ] as const)("accepts %s providers %s", (suite, providers) => {
-    expect(
-      cli(`${suite} --${suite}-providers ${providers} --all-providers`).suiteProviders[suite],
-    ).toEqual(new Set(providers.split(",")));
+    ["video", "fal,google,kie,novita,openrouter,pixverse,runway,zai"],
+  ] as const)("selects %s providers %s without auth narrowing", async (suite, providers) => {
+    const plan = await buildRunPlan(
+      cli(`${suite} --${suite}-providers ${providers} --all-providers`),
+      planDependencies,
+    );
+    expect(plan).toMatchObject([{ suite: { id: suite }, providers: providers.split(",") }]);
   });
 
   it.each([
@@ -114,25 +106,16 @@ describe("hosted media provider live CLI", () => {
     expect(cli(`image ${args}`)).toMatchObject({ suites: ["image"], ...expected });
   });
 
-  it("fails explicit suite selections that auth filtering would skip", () => {
-    const options = cli("image music --image-providers openai --music-providers minimax");
-    const skipped = findSkippedExplicitProviderSelections(options, [
-      planEntry("image", ["openai"]),
-      planEntry("music"),
-    ]);
-
-    expect(skipped.map((entry) => entry.suite.id)).toEqual(["music"]);
-  });
-
-  it("does not fail global provider filters for suites without provider overlap", () => {
-    const options = cli("image music video --providers openai");
-    const skipped = findSkippedExplicitProviderSelections(options, [
-      planEntry("image", ["openai"]),
-      planEntry("music"),
-      planEntry("video"),
-    ]);
-
-    expect(skipped).toEqual([]);
+  it.each([
+    ["image music --image-providers openai --music-providers minimax", ["music"]],
+    ["image music video --providers openai", []],
+  ] as const)("reports only explicitly selected suites skipped by auth: %s", (args, expected) => {
+    const options = cli(args);
+    const plan = options.suites.map((suite) =>
+      planEntry(suite, suite === "image" ? ["openai"] : []),
+    );
+    const skipped = findSkippedExplicitProviderSelections(options, plan);
+    expect(skipped.map(({ suite }) => suite.id)).toEqual(expected);
   });
 
   it.each([
@@ -152,17 +135,6 @@ describe("hosted media provider live CLI", () => {
       ["image", "fal,google,minimax,openai,vydra".split(",")],
       ["music", ["fal", "google", "minimax"]],
       ["video", "google,kie,minimax,vydra".split(",")],
-    ]);
-  });
-
-  it("supports suite-specific provider filters without auth narrowing", async () => {
-    const plan = await buildRunPlan(
-      cli("video --video-providers fal,google,kie,novita,pixverse,runway,zai --all-providers"),
-      planDependencies,
-    );
-
-    expect(plan).toMatchObject([
-      { suite: { id: "video" }, providers: "fal,google,kie,novita,pixverse,runway,zai".split(",") },
     ]);
   });
 });

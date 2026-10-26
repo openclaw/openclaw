@@ -27,14 +27,11 @@ async function runSmoke(
 describe("realtime Talk live QA producer", () => {
   it("builds the canonical one-cycle OpenAI-only smoke command", () => {
     const command = buildRealtimeTalkLiveCommand({ OPENAI_API_KEY: "test-key" });
-    expect(command.args).toEqual([
-      "--import",
-      "tsx",
-      "scripts/dev/realtime-talk-live-smoke.ts",
-      "--openai-only",
-      "--openai-audio-cycles",
-      "1",
-    ]);
+    expect(command.args).toEqual(
+      "--import tsx scripts/dev/realtime-talk-live-smoke.ts --openai-only --openai-audio-cycles 1".split(
+        " ",
+      ),
+    );
     expect(command.env.OPENAI_API_KEY).toBe("test-key");
   });
 
