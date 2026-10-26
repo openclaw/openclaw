@@ -687,38 +687,6 @@ describe("private subagent completion processing receipts", () => {
     expect(pending()).toEqual([]);
   });
 
-  it("publishes a failed final when the required receipt write fails, then permits retry", async () => {
-    ensureSessionInputCompletionsSchema(database().db);
-    const refusal = refusePendingInputCommit({
-      operation: "complete",
-      message: "synthetic receipt write unavailable",
-      sessionId,
-      runId,
-    });
-    agentCommandMock.mockImplementation(processPrivateInput);
-    try {
-      let acceptedSource: RpcSourceRef | undefined;
-      await expect(
-        dispatch(undefined, () => {
-          acceptedSource = source(runId);
-        }),
-      ).rejects.toThrow("synthetic receipt write unavailable");
-      const active = expectDefined(acceptedSource, "accepted private receipt source");
-      await active.input.settlement.promise;
-      expect(source(runId)).toBeUndefined();
-
-      expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
-        ok: false,
-        payload: { status: "error" },
-      });
-      expect(completions()).toEqual([]);
-    } finally {
-      refusal.mockRestore();
-    }
-    await expectProcessed(2);
-    expect(completions()).toMatchObject([{ succeeded: 1 }]);
-  });
-
   it("retries a private queue timeout and settles processing without caller-thread pending-input writes", async ({
     signal,
   }) => {
@@ -865,7 +833,7 @@ describe("private subagent completion processing receipts", () => {
     },
   );
 
-  it.each(["admission", "queued-abort"] as const)(
+  it.each(["admission", "queued-abort", "processed"] as const)(
     "publishes failure and retains retry when the worker commit refuses %s",
     async (phase) => {
       ensureSessionPendingInputsSchema(database().db);
@@ -877,32 +845,48 @@ describe("private subagent completion processing receipts", () => {
         runId,
       });
       const aborted: Array<{ runId: string; entry: RpcSourceRef }> = [];
-
+      let acceptedSource: RpcSourceRef | undefined;
+      if (phase === "processed") {
+        agentCommandMock.mockImplementation(processPrivateInput);
+      }
       try {
         await expect(
-          dispatch(
-            undefined,
-            phase === "queued-abort"
-              ? () => {
-                  abortQueued(aborted);
-                }
-              : undefined,
-          ),
+          dispatch(undefined, () => {
+            if (phase === "queued-abort") {
+              abortQueued(aborted);
+            } else if (phase === "processed") {
+              acceptedSource = source(runId);
+            }
+          }),
         ).rejects.toThrow("synthetic private transaction failure");
+        if (phase === "processed") {
+          await expectDefined(acceptedSource, "accepted private receipt source").input.settlement
+            .promise;
+        }
         await expectDrained(aborted);
         expect(source(runId)).toBeUndefined();
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        expect(completions()).toEqual([]);
-        if (phase === "admission") {
-          expect(pending()).toEqual([]);
+        if (phase === "processed") {
+          expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
+            ok: false,
+            payload: { status: "error" },
+          });
         } else {
-          expect(pending()).toMatchObject([{ state: "interrupted" }]);
+          expect(agentCommandMock).not.toHaveBeenCalled();
+          if (phase === "admission") {
+            expect(pending()).toEqual([]);
+          } else {
+            expect(pending()).toMatchObject([{ state: "interrupted" }]);
+          }
         }
+        expect(completions()).toEqual([]);
       } finally {
         refusal.mockRestore();
       }
       agentCommandMock.mockImplementationOnce(processPrivateInput);
-      await expectProcessed();
+      await expectProcessed(phase === "processed" ? 2 : 1);
+      if (phase === "processed") {
+        expect(completions()).toMatchObject([{ succeeded: 1 }]);
+      }
     },
   );
 
