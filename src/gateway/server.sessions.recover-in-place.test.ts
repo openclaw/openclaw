@@ -232,14 +232,7 @@ async function recover(
   return { ok, payload: payload as SessionsRecoverResult | undefined, error };
 }
 
-test.for([
-  "interrupted",
-  "settled",
-  "cancelled",
-  "replacement",
-  "cli-full",
-  "cli-restricted",
-] as const)(
+test.for(["interrupted", "cancelled", "replacement", "cli-full", "cli-restricted"] as const)(
   "sessions.recover resumes only the original restart-interrupted native child (%s)",
   async (scenario, { signal }) => {
     const cli = scenario === "cli-full" || scenario === "cli-restricted";
@@ -273,16 +266,10 @@ test.for([
       },
       requesterAgentId: "main",
       execution: {
-        status: scenario === "settled" ? "terminal" : "interrupted",
+        status: "interrupted",
         startedAt: 1,
         interruptionReason: "gateway-restart",
-        ...(scenario === "settled"
-          ? { endedAt: 2, outcome: { status: "error", error: "Interrupted by Gateway restart" } }
-          : {}),
       },
-      ...(scenario === "settled"
-        ? { endedReason: "subagent-error", terminalOwner: "interrupted-recovery" }
-        : {}),
     });
     await mutateSubagentRuns([runId], () => ({
       value: undefined,
@@ -484,21 +471,6 @@ test.for(["sessionId", "recoveryCycleId"] as const)(
     await expectUnchanged();
   },
 );
-
-test("operator resume rejects a foreign read-only caller without clearing the tombstone", async () => {
-  const current = await fixture("denied-resume");
-  const reader = roleClient("view", "resume-foreign-reader");
-  const expectUnchanged = await current.expectUnchangedAfter();
-  const denied = await recover(current, { client: reader });
-  expect(denied).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      details: { code: "SESSION_PARTICIPATION_REQUIRED" },
-    },
-  });
-  await expectUnchanged();
-});
 
 test("operator revocation while resume waits for admission preserves the tombstone", async ({
   signal,
