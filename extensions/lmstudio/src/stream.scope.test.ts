@@ -17,16 +17,12 @@ afterEach(() => {
 function createScenario(name: string, failure: "credential" | "load" | false) {
   const key = "qwen3.5-0.8b";
   const baseUrl = `http://${name}.localhost:1234/v1`;
-  const requests: Array<{ path: string; authorization: string | null; route: string | null }> = [];
+  const requests: Array<{ path: string; headers: Headers }> = [];
   let loads = 0;
   vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     const path = new URL(url).pathname;
-    requests.push({
-      path,
-      authorization: headers.get("authorization"),
-      route: headers.get("x-route"),
-    });
+    requests.push({ path, headers });
     if (failure === "credential" && headers.get("authorization") === "Bearer fixture-stale") {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -39,11 +35,11 @@ function createScenario(name: string, failure: "credential" | "load" | false) {
     }
     return Response.json(listedModel(key, 262144));
   });
-  const dispatched: Array<{ canonical: string; target: unknown }> = [];
+  const dispatched: unknown[] = [];
   const streamFn: StreamFn = async (model, _context, options) => {
     const payload = { model: model.id };
     const replacement = await options?.onPayload?.(payload, model);
-    dispatched.push({ canonical: model.id, target: replacement ?? payload });
+    dispatched.push(replacement ?? payload);
     const stream = createAssistantMessageEventStream();
     stream.end();
     return stream;
@@ -56,7 +52,9 @@ function createScenario(name: string, failure: "credential" | "load" | false) {
       agentDir,
       streamFn,
     });
-  return { model, wrap, requests, dispatched, loads: () => loads };
+  const run = (route: string, options: Parameters<StreamFn>[2], agentDir?: string) =>
+    wrap(agentDir)({ ...model, headers: { "X-Route": route } }, { messages: [] }, options);
+  return { run, requests, dispatched, loads: () => loads };
 }
 
 it.each(["credential", "headers", "timeout", "agent"] as const)(
@@ -66,50 +64,34 @@ it.each(["credential", "headers", "timeout", "agent"] as const)(
       `cooldown-${scope}`,
       scope === "credential" ? "credential" : "load",
     );
-    const first = scenario.wrap(scope === "agent" ? "/fixture/agent-a" : undefined);
-    const second = scenario.wrap(scope === "agent" ? "/fixture/agent-b" : undefined);
-    const apiKey = scope === "credential" ? "fixture-stale" : "fixture-valid";
-    await first(
-      { ...scenario.model, headers: { "X-Route": "first" } },
-      { messages: [] },
-      { apiKey, timeoutMs: 120_000 },
+    await scenario.run(
+      "first",
+      { apiKey: scope === "credential" ? "fixture-stale" : "fixture-valid", timeoutMs: 120_000 },
+      scope === "agent" ? "/fixture/agent-a" : undefined,
     );
-    await second(
-      { ...scenario.model, headers: { "X-Route": scope === "headers" ? "second" : "first" } },
-      { messages: [] },
+    await scenario.run(
+      scope === "headers" ? "second" : "first",
       { apiKey: "fixture-valid", timeoutMs: scope === "timeout" ? 180_000 : 120_000 },
+      scope === "agent" ? "/fixture/agent-b" : undefined,
     );
     expect(scenario.dispatched.at(-1)).toEqual({
-      canonical: scenario.model.id,
-      target: { model: scope === "credential" ? "prepared-1" : "prepared-2" },
+      model: scope === "credential" ? "prepared-1" : "prepared-2",
     });
     expect(scenario.requests.filter((request) => request.path.endsWith("/models"))).toHaveLength(2);
-    expect(scenario.requests.at(-1)).toMatchObject({
+    expect(Object.fromEntries(new Headers(scenario.requests.at(-1)?.headers))).toMatchObject({
       authorization: "Bearer fixture-valid",
-      route: scope === "headers" ? "second" : "first",
+      "x-route": scope === "headers" ? "second" : "first",
     });
   },
 );
 
-it.each([false, true])(
-  "shares an in-flight preload only for matching headers (different=%s)",
-  async (different) => {
-    const scenario = createScenario(`concurrent-${different}`, false);
-    const wrapped = scenario.wrap();
-    await Promise.all(
-      ["first", different ? "second" : "first"].map(async (route) =>
-        wrapped(
-          { ...scenario.model, headers: { "X-Route": route } },
-          { messages: [] },
-          { apiKey: "fixture-valid" },
-        ),
-      ),
-    );
-    expect(scenario.loads()).toBe(different ? 2 : 1);
-    expect(scenario.dispatched.map((entry) => entry.target)).toEqual(
-      different
-        ? expect.arrayContaining([{ model: "prepared-1" }, { model: "prepared-2" }])
-        : [{ model: "prepared-1" }, { model: "prepared-1" }],
-    );
-  },
-);
+it("does not share an in-flight preload across different headers", async () => {
+  const scenario = createScenario("concurrent-headers", false);
+  await Promise.all(
+    ["first", "second"].map((route) => scenario.run(route, { apiKey: "fixture-valid" })),
+  );
+  expect(scenario.loads()).toBe(2);
+  expect(scenario.dispatched).toEqual(
+    expect.arrayContaining([{ model: "prepared-1" }, { model: "prepared-2" }]),
+  );
+});

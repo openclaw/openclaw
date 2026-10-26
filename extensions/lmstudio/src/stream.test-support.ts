@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+type StreamModel = Parameters<StreamFn>[0];
 
 export function listedModel(
   key: string,
@@ -8,10 +9,7 @@ export function listedModel(
   return { models: [{ type: "llm", key, max_context_length, loaded_instances }] };
 }
 
-export function streamModel(
-  baseUrl: string,
-  overrides: Partial<Parameters<StreamFn>[0]> = {},
-): Parameters<StreamFn>[0] {
+export function streamModel(baseUrl: string, overrides: Partial<StreamModel> = {}): StreamModel {
   return {
     id: "qwen3.5-0.8b",
     name: "Test model",
