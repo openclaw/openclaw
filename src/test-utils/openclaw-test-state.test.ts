@@ -35,12 +35,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 const removeOptions = { recursive: true, force: true, maxRetries: 20, retryDelay: 25 };
-function makeAuthStore() {
-  return {
-    version: 1,
-    profiles: { "openai:test": { type: "api_key" as const, provider: "openai", key: "sk-test" } },
-  };
-}
 const readEnv = (keys: string[], env = process.env) =>
   Object.fromEntries(keys.map((key) => [key, env[key]]));
 function expectEnv(expected: NodeJS.ProcessEnv, env = process.env) {
@@ -52,10 +46,14 @@ function expectOpen(isOpen: boolean, ...databases: Pick<DatabaseSync, "isOpen">[
   }
 }
 function saveAuthFixture(dir: string) {
-  saveAuthProfileStore(makeAuthStore(), dir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: { "openai:test": { type: "api_key", provider: "openai", key: "sk-test" } },
+    },
+    dir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
+  );
 }
 
 async function createRollbackFixture() {
@@ -91,16 +89,13 @@ describe("openclaw test state", () => {
       }
       Reflect.deleteProperty(process.env, "OPENCLAW_ACQUISITION_ABSENT");
       const keys = [
-        "HOME",
         "USERPROFILE",
         "HOMEDRIVE",
         "HOMEPATH",
         "OPENCLAW_HOME",
         "OPENCLAW_STATE_DIR",
         "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_AGENT_DIR",
-        "PI_CODING_AGENT_DIR",
-        "OPENCLAW_ACQUISITION_EMPTY",
+        ...Object.keys(inherited),
         "OPENCLAW_ACQUISITION_ABSENT",
       ];
       const previous = readEnv(keys);
@@ -202,22 +197,19 @@ describe("openclaw test state", () => {
           expect(() => owner.assertReleased()).not.toThrow();
           await expectRestored();
           injected.mockRestore();
-          const recovered = await createTestState({
-            prefix,
-            layout: "split",
-            scenario: "minimal",
-            applyEnv: false,
-          });
-          try {
-            expectEnv(previous);
-            expect(recovered.configPath).toBe(path.join(recovered.root, "config", "openclaw.json"));
-            expect(JSON.parse(await fs.readFile(recovered.configPath, "utf8"))).toEqual({});
-            recovered.applyEnv();
-            expectEnv({ HOME: recovered.home, OPENCLAW_STATE_DIR: recovered.stateDir });
-          } finally {
-            await recovered.cleanup();
-          }
-          await recovered.cleanup();
+          await withTestState(
+            { prefix, layout: "split", scenario: "minimal", applyEnv: false },
+            async (recovered) => {
+              expectEnv(previous);
+              expect(recovered.configPath).toBe(
+                path.join(recovered.root, "config", "openclaw.json"),
+              );
+              expect(JSON.parse(await fs.readFile(recovered.configPath, "utf8"))).toEqual({});
+              recovered.applyEnv();
+              expectEnv({ HOME: recovered.home, OPENCLAW_STATE_DIR: recovered.stateDir });
+              await recovered.cleanup();
+            },
+          );
           await expectRestored();
         }
       } finally {
