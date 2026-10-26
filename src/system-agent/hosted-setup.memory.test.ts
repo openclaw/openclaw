@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { SetupMemoryImportOutcome } from "../wizard/setup.memory-import.js";
 import * as audit from "./audit.js";
 import {
-  fakeOverviewLoader,
+  createChatEngine,
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
@@ -17,11 +17,7 @@ import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
-  return new SystemAgentChatEngine({
-    runAgentTurn: async () => null,
-    ...options,
-    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
-  });
+  return createChatEngine({ runAgentTurn: async () => null, ...options });
 }
 
 function prepareMemoryConfig(workspace: string): OpenClawConfig {
@@ -51,9 +47,6 @@ it("refuses memory import before provider discovery when the default workspace i
 
 it("rechecks inference authority immediately before a hosted memory copy", async () => {
   const baseConfig = prepareMemoryConfig(useTempStateDir());
-  const changedConfig: OpenClawConfig = {
-    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
-  };
   const configFixture = await createInferenceConfigFixture(baseConfig);
   const snapshot = configFixture.snapshot;
   const verifiedInference = await createAmbientVerifiedBinding(
@@ -72,15 +65,12 @@ it("rechecks inference authority immediately before a hosted memory copy", async
     }
     // Route changes mid-wizard, after the turn gate: only the copy-boundary
     // recheck can catch it.
-    await configFixture.write(changedConfig);
+    await configFixture.write({ agents: { defaults: { model: "anthropic/claude-opus-4-8" } } });
     await params.beforeApply?.();
     copyEffect();
     return { status: "completed", providers: [] };
   });
-  const engine = createEngine({
-    surface: "gateway",
-    verifiedInference,
-  });
+  const engine = createEngine({ surface: "gateway", verifiedInference });
 
   const confirm = await engine.handle("import memory");
   expect(confirm.text).toContain("Import detected memory?");
@@ -89,31 +79,29 @@ it("rechecks inference authority immediately before a hosted memory copy", async
   expect(copyEffect).not.toHaveBeenCalled();
 });
 
+const provider = { providerId: "codex", label: "Codex" };
+const failedProviders = ["Codex", "Claude"].map((label) => ({
+  providerId: label.toLowerCase(),
+  label,
+  migrated: 0,
+  skipped: 0,
+  failure: "copy failed",
+}));
+const outcomes = {
+  empty: { status: "nothing-to-import", providers: [] },
+  failed: { status: "completed", providers: failedProviders },
+  partial: {
+    status: "completed",
+    providers: [{ ...provider, failure: "failed", copiesIndeterminate: true }],
+  },
+  "audit-failure": { status: "completed", providers: [{ ...provider, migrated: 1, skipped: 0 }] },
+} satisfies Record<string, SetupMemoryImportOutcome>;
 it.each([
   ["empty", "import memories", "Nothing to import"],
   ["failed", "memory import", "Memory import did not complete"],
   ["partial", "memory import", "Memory import failed partway"],
   ["audit-failure", "import memory", "Imported 1 item from Codex."],
 ] as const)("reports %s without misrepresenting progress", async (kind, command, expected) => {
-  const provider = { providerId: "codex", label: "Codex" };
-  const result: SetupMemoryImportOutcome =
-    kind === "empty"
-      ? { status: "nothing-to-import", providers: [] }
-      : {
-          status: "completed",
-          providers:
-            kind === "failed"
-              ? ["Codex", "Claude"].map((label) => ({
-                  providerId: label.toLowerCase(),
-                  label,
-                  migrated: 0,
-                  skipped: 0,
-                  failure: "copy failed",
-                }))
-              : kind === "partial"
-                ? [{ ...provider, failure: "failed", copiesIndeterminate: true }]
-                : [{ ...provider, migrated: 1, skipped: 0 }],
-        };
   const appendAuditEntry = vi.fn(async () => {
     if (kind === "audit-failure") {
       throw new Error("audit store is read-only");
@@ -121,7 +109,7 @@ it.each([
     return "state/openclaw.sqlite";
   });
   vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
-  vi.spyOn(hostedSetup, "runHostedMemoryImport").mockResolvedValueOnce(result);
+  vi.spyOn(hostedSetup, "runHostedMemoryImport").mockResolvedValueOnce(outcomes[kind]);
   const reply = await createEngine().handle(command);
   expect(reply.text).toContain(expected);
   if (kind === "empty" || kind === "failed") {

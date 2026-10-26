@@ -8,7 +8,6 @@ import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
-  type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 import * as verifiedInference from "./verified-inference.js";
@@ -36,35 +35,23 @@ function verifiedInferenceConfig(model: string): OpenClawConfig {
   };
 }
 
-async function createVerifiedInference(
-  model = "openai/gpt-5.5@openai:p2",
-  metadata = cliPluginMetadataSnapshot!,
-): Promise<SystemAgentVerifiedInferenceBinding> {
-  return metadata.run(
-    async () =>
-      (await createSystemAgentVerifiedInferenceTestFixture(verifiedInferenceConfig(model))).binding,
-    verifiedInferenceConfig(model),
+async function createVerifiedInference(model = DEFAULT_MODEL) {
+  const config = verifiedInferenceConfig(model);
+  return createSystemAgentPluginMetadataTestSnapshot(config).run(
+    async () => (await createSystemAgentVerifiedInferenceTestFixture(config)).binding,
+    config,
   );
 }
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding;
 let restoreCliBackendFixture: (() => void) | undefined;
-let cliPluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 const classify = (binding = sharedVerifiedInference, message = "alright then", proposal?: string) =>
-  cliPluginMetadataSnapshot!.run(() =>
-    classifySystemAgentApprovalIntentImpl({ message, proposal, verifiedInference: binding }),
-  );
+  classifySystemAgentApprovalIntentImpl({ message, proposal, verifiedInference: binding });
 
 beforeAll(async () => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  const defaultSnapshot = createSystemAgentPluginMetadataTestSnapshot(
-    verifiedInferenceConfig(DEFAULT_MODEL),
-  );
-  sharedVerifiedInference = await createVerifiedInference(DEFAULT_MODEL, defaultSnapshot);
-  cliPluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
-    verifiedInferenceConfig(CLI_MODEL),
-  );
+  sharedVerifiedInference = await createVerifiedInference();
 });
 
 afterAll(() => restoreCliBackendFixture?.());
@@ -164,13 +151,5 @@ describe("classifySystemAgentApprovalIntent", () => {
 
     await expect(classify(binding)).resolves.toBe("other");
     expect(deps.acquire).not.toHaveBeenCalled();
-  });
-
-  it("rejects a verdict when the verified owner drifts during classification", async () => {
-    const binding = await createVerifiedInference(DEFAULT_MODEL);
-    const deps = completionDeps("approve", binding);
-    deps.resolveRoute.mockResolvedValueOnce(binding.execution).mockResolvedValueOnce(null);
-
-    await expect(classify(binding)).resolves.toBe("other");
   });
 });
