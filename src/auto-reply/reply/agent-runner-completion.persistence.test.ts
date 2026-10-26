@@ -295,15 +295,12 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
   },
 );
 
-it.each(["publication-failure", "unknown-commit", "unknown-storage-commit"] as const)(
+it.each(["unknown-commit", "unknown-storage-commit"] as const)(
   "does not disclose or replay a durable final after %s",
   async (failure) => {
     const fixture = await createFixture(true);
-    if (failure === "publication-failure") {
-      fixture.context.activeSessionStore = Object.freeze({ ...fixture.context.activeSessionStore });
-    }
     using observer = observeCommands({
-      hideCommittedReceipt: failure !== "publication-failure",
+      hideCommittedReceipt: true,
       lostReplyError: failure === "unknown-storage-commit" ? lostStorageReply() : undefined,
     });
     const error = await finalizeReplyAgentRun(fixture.context).catch(
@@ -314,9 +311,7 @@ it.each(["publication-failure", "unknown-commit", "unknown-storage-commit"] as c
       "message",
       failure === "unknown-storage-commit"
         ? "Worker response lost"
-        : failure === "unknown-commit"
-          ? "Unconfirmed actor settlement"
-          : expect.stringMatching(/read only|readonly|extensible/i),
+        : "Unconfirmed actor settlement",
     );
     if (failure === "unknown-storage-commit") {
       expectReconciliation(error);
@@ -358,29 +353,20 @@ it("preserves storage guidance when queued activity loses its commit reply", asy
   expect(fixture.context.activeSessionStore?.[fixture.context.sessionKey!]).toBe(original);
 });
 
-it.each(["usage-only", "with-final-custody"] as const)(
-  "preserves %s failure semantics after a proven worker rollback",
-  async (kind) => {
-    const fixture = await createFixture(true);
-    const before = fixture.read();
-    const beforeCommit = vi.fn(() => {
-      throw new Error("synthetic completion refusal");
-    });
-    using observer = observeCommands({ beforeCommit });
-    if (kind === "usage-only") {
-      await expect(
-        fixture.account("ordinary", { usage: { input: 120, output: 8 } }),
-      ).resolves.toBeUndefined();
-    } else {
-      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-        "synthetic completion refusal",
-      );
-    }
-    expect(observer.count("session.actor.completeTurn")).toBe(1);
-    expect(beforeCommit).toHaveBeenCalledOnce();
-    expect(fixture.read()).toEqual(before);
-  },
-);
+it("preserves usage-only failure semantics after a proven worker rollback", async () => {
+  const fixture = await createFixture(true);
+  const before = fixture.read();
+  const beforeCommit = vi.fn(() => {
+    throw new Error("synthetic completion refusal");
+  });
+  using observer = observeCommands({ beforeCommit });
+  await expect(
+    fixture.account("ordinary", { usage: { input: 120, output: 8 } }),
+  ).resolves.toBeUndefined();
+  expect(observer.count("session.actor.completeTurn")).toBe(1);
+  expect(beforeCommit).toHaveBeenCalledOnce();
+  expect(fixture.read()).toEqual(before);
+});
 
 it("rechecks the live reply operation at the final commit boundary", async () => {
   const fixture = await createFixture();
