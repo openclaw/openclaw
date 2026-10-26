@@ -166,6 +166,46 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts a request that failed before any output as zero usage, not a lower bound", async () => {
+  const failed = (timestamp: string, content: unknown[]) =>
+    assistant(
+      timestamp,
+      {
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+        cost: { total: 0 },
+        usageReport: { state: "unavailable" },
+      },
+      {
+        provider: "openai",
+        model: "gpt-5.5",
+        content,
+        stopReason: "error",
+        errorMessage: "Connection error.",
+      },
+    );
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    failed("2026-02-05T12:01:00.000Z", []),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 2, errors: 1 },
+  });
+  expect(summary?.usageReport).toBeUndefined();
+  // A failure after output can still have lost billed usage.
+  const partial = await writeTranscript(
+    "failed-after-output",
+    failed("2026-02-05T12:02:00.000Z", [textBlock("partial answer")]),
+  );
+  expect((await readSummary({ sessionFile: partial }))?.usageReport).toEqual({
+    state: "unavailable",
+  });
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";

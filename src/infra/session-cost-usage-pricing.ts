@@ -67,7 +67,16 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
+  const normalizedUsage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
+  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+  // A request that failed before any output (connection, rate-limit or auth errors) was not
+  // billed: its unreported usage is zero, not unknown, so it does not make totals lower bounds.
+  const failedBeforeOutput =
+    stopReason === "error" &&
+    normalizedUsage?.usageReport?.state === "unavailable" &&
+    (normalizedUsage.output ?? 0) === 0 &&
+    (Array.isArray(message.content) ? message.content.length === 0 : !message.content);
+  const usage = failedBeforeOutput ? undefined : normalizedUsage;
 
   const provider =
     (typeof message.provider === "string" ? message.provider : undefined) ??
@@ -77,7 +86,6 @@ export const parseUsageCostTranscriptRecord = (
     (typeof entry.model === "string" ? entry.model : undefined);
 
   const costBreakdown = extractCostBreakdown(usageRaw);
-  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
   const toolNames: string[] = [];
   const toolResultCounts = { total: 0, errors: 0 };
