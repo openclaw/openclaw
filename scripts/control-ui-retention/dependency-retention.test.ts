@@ -12,17 +12,14 @@ beforeAll(async () => {
 });
 afterAll(async () => browser?.close());
 
-function probe(name: string, contents: string, value: unknown, collected?: string) {
+function probe(name: string, contents: string, value: unknown, alive = [false, false, false]) {
   it.each(["production", "development", "observe"])(`%s ${name}`, async (mode) => {
     const output = await build({
       stdin: {
-        contents: `
-        let references;
+        contents: `let references = [];
         ${contents}
-        window.retentionProbe = { retire, alive: () => references.map(ref => !!ref.deref()) };
-      `,
+        window.retentionProbe = { retire, alive: () => references.map(ref => !!ref.deref()) };`,
         resolveDir: new URL("../../ui", import.meta.url).pathname,
-        sourcefile: "dependency-retention-probe.js",
       },
       bundle: true,
       write: false,
@@ -39,11 +36,8 @@ function probe(name: string, contents: string, value: unknown, collected?: strin
       const result: unknown = await page.evaluate("retentionProbe.retire()");
       await cdp.send("HeapProfiler.collectGarbage");
       await cdp.send("HeapProfiler.collectGarbage");
-      const alive: unknown = await page.evaluate("retentionProbe.alive()");
-      expect(result).toBe(value);
-      if (collected) {
-        expect(alive, collected).toEqual([false, false, false]);
-      }
+      const collected: unknown = await page.evaluate("retentionProbe.alive()");
+      expect({ value: result, alive: collected }).toEqual({ value, alive });
     } finally {
       await cdp.detach();
       await page.close();
@@ -75,88 +69,72 @@ probe(
       }
     `,
   "second",
-  "select, form, GC control",
 );
 
-probe(
-  "releases an unobserved pending computation after root disposal while idle",
-  `
-      import { createMemo, createRoot, getOwner } from "solid-js";
-      function retire() {
+function idleProbe(name: string, rejectSource: boolean) {
+  probe(
+    name,
+    `
+      import { createMemo, createRoot, flush, getOwner } from "solid-js";
+      const source = ${rejectSource} && createRoot(() => {
+        let reject;
+        const read = createMemo(() => new Promise((_, fail) => { reject = fail; }), { loadingValue: "ready" });
+        return { read, reject };
+      });
+      async function retire() {
         const payload = { pending: true };
         let started = false;
         const dispose = createRoot(dispose => {
           references = [new WeakRef(payload), new WeakRef(getOwner()), new WeakRef({ control: true })];
-          createMemo(async () => {
+          createMemo(source ? () => {
+            started = true;
+            source.read();
+            return payload;
+          } : async () => {
             started = true;
             await new Promise(() => {});
             return payload;
           });
           return dispose;
         });
+        if (source) {
+          flush();
+          source.reject(new Error("idle rejection"));
+          await Promise.resolve();
+        }
         dispose();
         return started;
       }
     `,
-  true,
-  "payload, root, GC control",
-);
-
-probe(
-  "releases a reader queued by an idle rejection in another root",
-  `
-      import { createMemo, createRoot, flush, getOwner } from "solid-js";
-      const source = createRoot(dispose => {
-        let reject;
-        const read = createMemo(() => new Promise((_, fail) => { reject = fail; }), {
-          loadingValue: "ready"
-        });
-        return { read, reject, dispose };
-      });
-      async function retire() {
-        const payload = { pending: true };
-        const dispose = createRoot(dispose => {
-          references = [new WeakRef(payload), new WeakRef(getOwner()), new WeakRef({ control: true })];
-          createMemo(() => { source.read(); return payload; });
-          return dispose;
-        });
-        flush();
-        source.reject(new Error("idle rejection"));
-        await Promise.resolve();
-        dispose();
-        return true;
-      }
-    `,
-  true,
-  "payload, reader root, GC control",
-);
+    true,
+  );
+}
+idleProbe("releases an unobserved pending computation after root disposal while idle", false);
+idleProbe("releases a reader queued by an idle rejection in another root", true);
 
 probe(
   "cleans up the committed frame when its async replacement rejects",
   `
       import { createMemo, createRoot, createSignal, flush, onCleanup, resolve } from "solid-js";
-      async function retire() {
-        let cleanups = 0;
-        const root = createRoot(dispose => {
+      const retire = () => createRoot(async dispose => {
+          let cleanups = 0;
           const [revision, setRevision] = createSignal(0);
           const read = createMemo(() => {
             if (revision()) return Promise.reject(new Error("replacement rejected"));
             onCleanup(() => { cleanups++; });
             return Promise.resolve("ready");
           });
-          return { read, setRevision, dispose };
-        });
-        try {
-          await resolve(root.read);
-          root.setRevision(1);
-          flush();
-          await resolve(root.read).catch(() => {});
-          references = [];
-          return cleanups;
-        } finally {
-          root.dispose();
-        }
-      }
+          try {
+            await resolve(read);
+            setRevision(1);
+            flush();
+            await resolve(read).catch(() => {});
+            return cleanups;
+          } finally {
+            dispose();
+          }
+      });
     `,
   1,
+  [],
 );
