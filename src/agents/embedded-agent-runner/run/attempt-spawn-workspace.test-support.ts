@@ -3,6 +3,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import type {
@@ -468,18 +469,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../../model-selection.js", () => ({
-  findNormalizedProviderValue: <T>(entries: Record<string, T> | undefined, provider: string) => {
-    if (!entries) {
-      return undefined;
-    }
-    const providerKey = normalizeMockProviderId(provider);
-    for (const [key, value] of Object.entries(entries)) {
-      if (normalizeMockProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  },
+  findNormalizedProviderValue,
   normalizeProviderId: normalizeMockProviderId,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
