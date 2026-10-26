@@ -408,6 +408,11 @@ describe("dreaming service reconciliation", () => {
       await release.promise;
       throw new Error("startup list failed");
     });
+    const removeStaleJobFamily = vi.fn(async () => 0);
+    const cron = {
+      ...harness.cron,
+      removeStaleJobFamily,
+    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
     try {
       registerShortTermPromotionDreamingForTest(api);
       await getDreamingService(api).start({
@@ -415,7 +420,7 @@ describe("dreaming service reconciliation", () => {
         stateDir: ".",
         logger,
         scheduler: api.scheduler,
-        getCron: () => harness.cron,
+        getCron: () => cron,
       });
       await entered.promise;
       // The host closes every scheduler before invoking service stop hooks in reverse order.
@@ -425,6 +430,7 @@ describe("dreaming service reconciliation", () => {
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
       expect(list).toHaveBeenCalledOnce();
       expect(harness.addCalls).toEqual([]);
+      expect(removeStaleJobFamily).not.toHaveBeenCalled();
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
       release.resolve();
