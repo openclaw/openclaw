@@ -74,11 +74,7 @@ describe("pw-role-snapshot", () => {
     const result = finalize({
       snapshot:
         '- button "Visible \\" [ref=e2]" [ref=e1]\n- button: attacker [ref=e2]\n\nLinks:\n1. [ref=e3] -> https://example.com/',
-      refs: {
-        e1: { role: "button" },
-        e2: { role: "button" },
-        e3: { role: "link" },
-      },
+      refs: { ...visible.refs, e2: { role: "button" }, e3: { role: "link" } },
     });
 
     expect(result.refs).toEqual({ e1: { role: "button" } });
@@ -120,7 +116,7 @@ describe("pw-role-snapshot", () => {
       e8: { role: "dialog", name: "Confirmation" },
     };
     const finalized = finalize({
-      snapshot: ['- button "Save" [ref=e7]', '- dialog "Confirmation" [ref=e8]'].join("\n"),
+      snapshot: '- button "Save" [ref=e7]\n- dialog "Confirmation" [ref=e8]',
       refs,
       delta: { mode: "role", previousKeys },
     });

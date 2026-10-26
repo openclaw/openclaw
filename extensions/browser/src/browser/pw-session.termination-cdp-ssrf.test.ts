@@ -8,10 +8,9 @@ import { forceDisconnectPlaywrightForTarget } from "./pw-session.js";
 
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
 
-const wsMockState = vi.hoisted(() => ({
-  constructorUrls: [] as string[],
-  constructorOptions: [] as Array<{ agent?: unknown } | undefined>,
-}));
+const socketOpened = vi.hoisted(() =>
+  vi.fn<(url: string, options?: { agent?: unknown }) => void>(),
+);
 
 vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
   class MockWebSocket {
@@ -21,8 +20,7 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
     private readonly handlers = new Map<string, (error?: Error) => void>();
 
     constructor(url: string, options?: { agent?: unknown }) {
-      wsMockState.constructorUrls.push(url);
-      wsMockState.constructorOptions.push(options);
+      socketOpened(url, options);
       setTimeout(() => {
         this.handlers.get("error")?.(new Error("test socket should not open"));
       }, 0);
@@ -73,8 +71,7 @@ function installBrowserMock() {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketEndpointSpy.mockReset();
-  wsMockState.constructorUrls = [];
-  wsMockState.constructorOptions = [];
+  socketOpened.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -104,7 +101,7 @@ describe("pw-session termination CDP SSRF guard", () => {
     await expect(
       forceDisconnectPlaywrightForTarget({ cdpUrl, page, targetId: "TARGET_1" }),
     ).resolves.toBeUndefined();
-    expect(wsMockState.constructorUrls).toEqual([]);
+    expect(socketOpened).not.toHaveBeenCalled();
     expect(browserClose).toHaveBeenCalledOnce();
   });
 
@@ -121,7 +118,7 @@ describe("pw-session termination CDP SSRF guard", () => {
     await listPagesViaPlaywright({ cdpUrl });
     discovery.resolve(targetResponse("127.0.0.1:18792"));
     await termination;
-    expect(wsMockState.constructorUrls).toEqual([]);
+    expect(socketOpened).not.toHaveBeenCalled();
     expect(replacement.browserClose).not.toHaveBeenCalled();
   });
 
@@ -134,7 +131,7 @@ describe("pw-session termination CDP SSRF guard", () => {
     const fetchUrls = fetchSpy.mock.calls.map((call) => call[0]);
     expect(fetchUrls).toContain(`${cdpUrl}/json/list`);
     expect(fetchUrls).not.toContain("http://169.254.169.254/json/list");
-    expect(wsMockState.constructorUrls).toEqual([]);
+    expect(socketOpened).not.toHaveBeenCalled();
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
 
@@ -164,7 +161,9 @@ describe("pw-session termination CDP SSRF guard", () => {
       targetId: "TARGET_1",
       ssrfPolicy: {},
     });
-    expect(wsMockState.constructorUrls).toEqual(["ws://cdp-pinned.test/devtools/page/TARGET_1"]);
-    expect(wsMockState.constructorOptions[0]?.agent).toBeDefined();
+    expect(socketOpened.mock.calls.map(([url]) => url)).toEqual([
+      "ws://cdp-pinned.test/devtools/page/TARGET_1",
+    ]);
+    expect(socketOpened.mock.calls[0]?.[1]?.agent).toBeDefined();
   });
 });

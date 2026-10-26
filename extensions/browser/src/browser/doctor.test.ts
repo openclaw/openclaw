@@ -9,10 +9,7 @@ const equivalentExtensionVersion =
     ? `${chromeExtensionManifest.version}.0`
     : chromeExtensionManifest.version.replace(/\.0$/, "");
 
-function reportFor(
-  overrides: Partial<BrowserStatus>,
-  options: Omit<Parameters<typeof buildBrowserDoctorReport>[0], "status"> = {},
-) {
+function reportFor(overrides: Partial<BrowserStatus>, extensionVersion?: string) {
   const status: BrowserStatus = {
     enabled: true,
     profile: "openclaw",
@@ -29,7 +26,7 @@ function reportFor(
     attachOnly: false,
     ...overrides,
   };
-  return buildBrowserDoctorReport({ status, ...options });
+  return buildBrowserDoctorReport({ status, extensionVersion });
 }
 
 function check(report: ReturnType<typeof buildBrowserDoctorReport>, id: string) {
@@ -129,7 +126,7 @@ it.each([
   ["all-zero version", "0.0.0.0", "info"],
   ["too many version components", "2.0.0.0.0", "info"],
 ] as const)("classifies %s extension version evidence", (_label, extensionVersion, severity) => {
-  const report = reportFor({ transport: "extension", running: true }, { extensionVersion });
+  const report = reportFor({ transport: "extension", running: true }, extensionVersion);
 
   const versionCheck = check(report, "extension-version");
   expect(versionCheck?.status).toBe(severity);
