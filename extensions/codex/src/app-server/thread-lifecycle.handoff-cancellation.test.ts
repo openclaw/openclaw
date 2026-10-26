@@ -361,3 +361,32 @@ it("cancels a passive old-thread read without stopping sibling work", async () =
     fixture.cleanup();
   }
 });
+
+it("keeps waiting for the retired process exit when its passive status read fails", async () => {
+  const fixture = await createHandoffFixture("closed-during-status-read");
+  retireSharedCodexAppServerClientIfCurrent(fixture.old.client);
+  let outcome: unknown = "pending";
+  const handoff = fixture.handoff().then(
+    () => {
+      outcome = "resolved";
+    },
+    (error: unknown) => {
+      outcome = error;
+    },
+  );
+  try {
+    await setImmediate();
+    expect(fixture.old.client.getPendingRequestMethods()).toContain("thread/read");
+    // Closing rejects pending requests before the transport reports exit.
+    fixture.old.client.close();
+    await setImmediate();
+    expect(outcome).toBe("pending");
+    fixture.old.emitExit();
+    await handoff;
+    expect(outcome).toBe("resolved");
+  } finally {
+    fixture.old.emitExit();
+    await Promise.allSettled([handoff]);
+    fixture.cleanup();
+  }
+});

@@ -255,12 +255,17 @@ export async function releaseCodexBoundLiveThread(
                 { threadId: options.threadId, includeTurns: false },
                 { signal, assertCurrent: options.assertCurrent, withCurrent: options.withCurrent },
               )
-              .then(({ thread }) => {
-                if (thread.id !== options.threadId) {
-                  throw new Error("Codex returned another thread during retired-owner handoff");
-                }
-                return thread.status?.type === "notLoaded" ? undefined : retiredExit;
-              }),
+              .then(
+                ({ thread }) => {
+                  if (thread.id !== options.threadId) {
+                    throw new Error("Codex returned another thread during retired-owner handoff");
+                  }
+                  return thread.status?.type === "notLoaded" ? undefined : retiredExit;
+                },
+                // Closing rejects pending requests before the transport exits; a
+                // failed read proves nothing, so keep the exit/closure fence.
+                () => retiredExit,
+              ),
           );
         }
         // Siblings may keep the old process alive after this exact thread stops.
