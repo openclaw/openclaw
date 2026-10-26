@@ -50,11 +50,9 @@ describe("EventStream", () => {
 
     stream.push(1);
     expect(await iterator.next()).toEqual({ value: 1, done: false });
-
     const waiting = iterator.next();
     stream.push(2);
     expect(await waiting).toEqual({ value: 2, done: false });
-
     stream.push(3);
     stream.end();
     expect(await iterator.next()).toEqual({ value: 3, done: false });
@@ -75,42 +73,28 @@ describe("EventStream", () => {
     const queueState = stream as unknown as { queue: number[]; queueHead: number };
     expect(queueState.queueHead).toBe(0);
     expect(queueState.queue).toHaveLength(1024);
-
     for (let value = 2048; value < 2052; value += 1) {
       stream.push(value);
     }
     stream.end();
-    expect(await read(1028)).toEqual(
-      Array.from({ length: 1028 }, (_, index) => ({ value: index + 1024, done: false })),
+    expect(await collect({ [Symbol.asyncIterator]: () => iterator })).toEqual(
+      Array.from({ length: 1028 }, (_, index) => index + 1024),
     );
     expect(await iterator.next()).toEqual({ value: undefined, done: true });
   });
 
-  it("resolves result() from a terminal event and from an explicit end(result)", async () => {
-    const terminal = createNumberStream();
-    terminal.push(-1);
-    terminal.end();
-    await expect(terminal.result()).resolves.toBe(-1);
-    await expect(getEventStreamCompletion(terminal)).resolves.toBe(-1);
-
-    const explicit = createNumberStream();
-    explicit.push(7);
-    explicit.end(42);
-    await expect(explicit.result()).resolves.toBe(42);
-    await expect(getEventStreamCompletion(explicit)).resolves.toBe(42);
-  });
-
-  it("rejects result() when the stream ends without a terminal event or explicit result", async () => {
+  it.each<[number, number | undefined, number]>([
+    [-1, undefined, -1],
+    [7, 42, 42],
+  ])("settles event %s/end(%s) with %s", async (event, result, expected) => {
     const stream = createNumberStream();
-    stream.push(1);
-    stream.end();
-    const error = "event stream ended without a terminal event or final result";
-    await expect(stream.result()).rejects.toThrow(error);
-    await expect(getEventStreamCompletion(stream)).rejects.toThrow(error);
-    expect(await collect(stream)).toEqual([1]);
+    stream.push(event);
+    stream.end(result);
+    await expect(stream.result()).resolves.toBe(expected);
+    await expect(getEventStreamCompletion(stream)).resolves.toBe(expected);
   });
 
-  it("keeps iterate-only consumers free of unhandled rejections on bare end()", async () => {
+  it("rejects bare-end results without unhandled rejections for iterate-only consumers", async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
     process.on("unhandledRejection", onRejection);
@@ -121,6 +105,9 @@ describe("EventStream", () => {
       expect(await collect(stream)).toEqual([1]);
       await setImmediate(); // Let any unhandled rejection surface.
       expect(rejections).toEqual([]);
+      const error = "event stream ended without a terminal event or final result";
+      await expect(stream.result()).rejects.toThrow(error);
+      await expect(getEventStreamCompletion(stream)).rejects.toThrow(error);
     } finally {
       process.off("unhandledRejection", onRejection);
     }
