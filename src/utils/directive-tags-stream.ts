@@ -80,8 +80,6 @@ export function findDirectiveCodePrefix(
 
 /** Prose appends cannot open directive syntax or change Markdown code ownership. */
 const APPEND_SAFE_DELTA = /^[^[`~]*$/u;
-/** Characters that can complete an image, link title, table, or reference definition. */
-const APPEND_CHANGES_OWNERSHIP = /[[\]():"'|>=\t]| {4}|-{3}/u;
 
 function hasUnsettledDirectiveMarker(source: string): boolean {
   const marker = source.lastIndexOf("[[");
@@ -126,7 +124,6 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         source.length + appended.length === input.text.length &&
         APPEND_SAFE_DELTA.test(appended) &&
         (!hasMarker ||
-          !APPEND_CHANGES_OWNERSHIP.test(appended) ||
           canReuseMarkdownOwnershipForAppend(
             source,
             appended,

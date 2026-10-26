@@ -93,6 +93,19 @@ describe("inline directive display stream", () => {
     }
   });
 
+  test("retains parsing when a plain character invalidates a table delimiter", () => {
+    const chunks = ["`\n[[reply_to_current]]\n` |\n---|", "x"];
+    const source = chunks.join("");
+    const expected = stripInlineDirectiveTagsForDisplay(source).text;
+    expect(expected).toBe(source);
+    const projection = createLiveAssistantTextProjection({});
+    let text = "";
+    for (const chunk of chunks) {
+      text = projection.append(chunk).text;
+    }
+    expect(text).toBe(expected);
+  });
+
   test("keeps deltas correct when a later chunk first strips a directive", () => {
     const projection = createTextProjection([inlineDirectiveDisplayTextFilter]);
     projection.append("Hello");
