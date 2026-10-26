@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
@@ -44,6 +44,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
   });
   const before = getSessionRowSelectionMetrics();
   const beforeTask = before.partitions.find((counter) => counter.task === "sessions.subscribe");
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const monitor = createMainThreadStallMonitor();
   const select = (retained: WeakMap<object, SessionListFilteredEntries>) =>
     runWithMainThreadTask("gateway:rpc:sessions.subscribe", () => {
@@ -85,5 +86,6 @@ it("attributes retained hits and misses separately from winner revisions and vie
     expect(revisionCount(after, "automation") - revisionCount(before, "automation")).toBe(0);
   } finally {
     monitor.stop();
+    vi.useRealTimers();
   }
 });
