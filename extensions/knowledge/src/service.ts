@@ -147,9 +147,15 @@ export function createKnowledgeService(
         await maintenance.start(ctx.scheduler, ctx.getCron);
       }
     },
-    stop() {
-      stores.stop();
+    async stop() {
+      await Promise.all([stores.stop(), maintenance.stop()]);
     },
+  });
+  // Instance disposal runs after the host drains admitted calls. Knowledge ends
+  // for good and resolves only once its workers have exited and maintenance has
+  // stopped, so a replacement generation never opens a store this one holds.
+  api.lifecycle?.onDispose?.(async () => {
+    await Promise.all([stores.dispose(), maintenance.stop()]);
   });
 
   /** Handlers bound to one operator viewing selection. Tools always resolve

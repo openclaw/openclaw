@@ -87,6 +87,23 @@ const remember = (service: any, context: any, text: any) =>
 const page = (service: any, context: any, title: any, type = "company") =>
   service.save_page({ requestId: randomUUID(), title, type, body: "Page.\n" }, context);
 
+it("stopping the service ends maintenance: a pass in flight neither re-arms nor records state afterwards", async () => {
+  const f = await fixture(),
+    scheduler = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+    service = await f.boot(scheduler);
+  await remember(service, toolContext(f.host.api, "main"), "Atlas Labs moved its launch to March.");
+  const warnings: string[] = [];
+  f.host.api.logger = { info() {}, warn: (m: string) => warnings.push(m), error() {} };
+  const pass = scheduler.fire("knowledge-maintenance");
+  await f.lifecycles[0].stop();
+  await pass;
+  expect(scheduler.jobs.size, "no job is armed on the stopped scheduler").toBe(0);
+  expect(
+    warnings.filter((m) => /schedule was not recorded/.test(m)),
+    "the stopped service records no maintenance state",
+  ).toStrictEqual([]);
+});
+
 it("a scheduled pass links across every store and partition, skips unprovisioned stores, repeats as a no-op, and catches up after a miss", async () => {
   const f = await fixture(),
     start = Date.parse("2026-10-20T10:20:00Z");
