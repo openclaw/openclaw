@@ -12,6 +12,18 @@ export type AcpSessionStore = {
   }) => AcpSession;
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
+  /**
+   * Lists open sessions bound to a gateway session key, most recently
+   * touched first. Optional: stores without the lookup simply cannot route
+   * prompt-less gateway events (background runs) to an ACP session.
+   */
+  findSessionsByKey?: (sessionKey: string) => AcpSession[];
+  /**
+   * Rebinds a session's gateway session key through the store so key-indexed
+   * lookups (findSessionsByKey) stay consistent with the authoritative record.
+   * Optional: stores without key-indexed lookups can omit it.
+   */
+  rebindSessionKey?: (sessionId: string, sessionKey: string) => void;
   /** Binds an active runtime run to a session so cancel/close can abort it later. */
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string, expectedRunId?: string) => void;
@@ -41,14 +53,37 @@ export function createInMemorySessionStore(
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
+  const sessionIdsByKeys = new Map<string, Set<string>>();
+
+  const bindSessionKey = (session: AcpSession, previousKey?: string) => {
+    if (previousKey && previousKey !== session.sessionKey) {
+      const previous = sessionIdsByKeys.get(previousKey);
+      previous?.delete(session.sessionId);
+      if (previous?.size === 0) {
+        sessionIdsByKeys.delete(previousKey);
+      }
+    }
+    let ids = sessionIdsByKeys.get(session.sessionKey);
+    if (!ids) {
+      ids = new Set();
+      sessionIdsByKeys.set(session.sessionKey, ids);
+    }
+    ids.add(session.sessionId);
+  };
 
   const removeSession = (sessionId: string) => {
     const session = sessions.get(sessionId);
     if (!session) {
       return false;
     }
+    const key = session.sessionKey;
     session.abortController?.abort();
     sessions.delete(sessionId);
+    const ids = sessionIdsByKeys.get(key);
+    ids?.delete(sessionId);
+    if (ids?.size === 0) {
+      sessionIdsByKeys.delete(key);
+    }
     onSessionRemoved?.(sessionId);
     return true;
   };
@@ -97,12 +132,14 @@ export function createInMemorySessionStore(
       const sessionId = params.sessionId ?? randomUUID();
       const existingSession = sessions.get(sessionId);
       if (existingSession) {
+        const previousKey = existingSession.sessionKey;
         existingSession.sessionKey = params.sessionKey;
         if ("ledgerSessionId" in params) {
           existingSession.ledgerSessionId = params.ledgerSessionId;
         }
         existingSession.cwd = params.cwd;
         existingSession.lastTouchedAt = nowMs;
+        bindSessionKey(existingSession, previousKey);
         return existingSession;
       }
       reapIdleSessions(nowMs);
@@ -124,15 +161,40 @@ export function createInMemorySessionStore(
         activeRunId: null,
       };
       sessions.set(sessionId, session);
+      bindSessionKey(session);
       return session;
     },
     hasSession: (sessionId) => sessions.has(sessionId),
+    rebindSessionKey(sessionId, sessionKey) {
+      const session = sessions.get(sessionId);
+      if (!session || session.sessionKey === sessionKey) {
+        return;
+      }
+      const previousKey = session.sessionKey;
+      session.sessionKey = sessionKey;
+      bindSessionKey(session, previousKey);
+    },
     getSession(sessionId) {
       const session = sessions.get(sessionId);
       if (session) {
         session.lastTouchedAt = Date.now();
       }
       return session;
+    },
+    findSessionsByKey(sessionKey) {
+      const ids = sessionIdsByKeys.get(sessionKey);
+      if (!ids?.size) {
+        return [];
+      }
+      const matches: AcpSession[] = [];
+      for (const sessionId of ids) {
+        const session = sessions.get(sessionId);
+        if (session) {
+          matches.push(session);
+        }
+      }
+      matches.sort((left, right) => right.lastTouchedAt - left.lastTouchedAt);
+      return matches;
     },
     setActiveRun(sessionId, runId, abortController) {
       const session = sessions.get(sessionId);
@@ -168,6 +230,7 @@ export function createInMemorySessionStore(
       }
       const removed = [...sessions.keys()];
       sessions.clear();
+      sessionIdsByKeys.clear();
       for (const sessionId of removed) {
         onSessionRemoved?.(sessionId);
       }

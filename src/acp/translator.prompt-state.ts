@@ -7,15 +7,17 @@ export type AcpDisconnectContext = {
   reason: string;
 };
 
-export type AcpPendingPrompt = {
+/**
+ * Streaming state shared by pending prompts and prompt-less background runs.
+ * Tracks what has already been emitted so incremental gateway events are
+ * forwarded as deltas instead of full replays.
+ */
+export type AcpStreamContext = {
   sessionId: string;
   sessionKey: string;
   ledgerSessionId?: string;
+  /** Gateway run id; also the ledger recording key for emitted updates. */
   idempotencyKey: string;
-  sendAccepted?: boolean;
-  disconnectContext?: AcpDisconnectContext;
-  resolve: (response: PromptResponse) => void;
-  reject: (err: Error) => void;
   sentText?: string;
   sentPreambles?: Map<string, string>;
   preambleNeedsSeparator?: boolean;
@@ -24,6 +26,21 @@ export type AcpPendingPrompt = {
   streamMessage?: unknown;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };
+
+export type AcpPendingPrompt = AcpStreamContext & {
+  sendAccepted?: boolean;
+  disconnectContext?: AcpDisconnectContext;
+  resolve: (response: PromptResponse) => void;
+  reject: (err: Error) => void;
+};
+
+/**
+ * Streaming state for a gateway run with no pending ACP prompt, such as a
+ * sub-agent completion waking the requester session after its turn ended.
+ * Updates are forwarded as plain session/update notifications; there is no
+ * session/prompt response to settle.
+ */
+export type AcpBackgroundRun = AcpStreamContext;
 
 export type AcpPendingApprovalRelay = {
   approvalId: string;

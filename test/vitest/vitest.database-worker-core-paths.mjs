@@ -27,6 +27,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/talk-browser-defaults.test.ts",
   "src/acp/event-ledger.prepared.test.ts",
   "src/acp/event-ledger.test.ts",
+  "src/acp/translator.background-runs.test.ts",
   "src/acp/translator.cancel-scoping.test.ts",
   "src/acp/translator.commentary-producer.test.ts",
   "src/acp/translator.commentary.test.ts",
