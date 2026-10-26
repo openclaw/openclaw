@@ -80,14 +80,9 @@ function requireAgentsApiHarness(runtime: PluginRuntime) {
   const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
   plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
   const harness = registerAgentHarness.mock.calls[0]?.[0];
-  assert(
-    typeof harness?.runAttempt === "function" &&
-      typeof harness.reset === "function" &&
-      typeof harness.withSessionDeletion === "function" &&
-      typeof harness.withSessionContextReset === "function" &&
-      typeof harness.dispose === "function",
-    "The Agents API harness requires run, reset, deletion, context reset, and disposal",
-  );
+  assert(harness);
+  const { reset, withSessionDeletion, withSessionContextReset, dispose } = harness;
+  assert(reset && withSessionDeletion && withSessionContextReset && dispose);
   const mutationHook =
     (hook: "withSessionDeletion" | "withSessionContextReset") =>
     (
@@ -100,10 +95,10 @@ function requireAgentsApiHarness(runtime: PluginRuntime) {
       runInHarnessToolAuthorityForTest(params, "agentsapi", (admitted) =>
         harness.runAttempt(admitted),
       ),
-    reset: harness.reset.bind(harness),
+    reset: reset.bind(harness),
     withSessionDeletion: mutationHook("withSessionDeletion"),
     withSessionContextReset: mutationHook("withSessionContextReset"),
-    dispose: harness.dispose.bind(harness),
+    dispose: dispose.bind(harness),
   };
 }
 

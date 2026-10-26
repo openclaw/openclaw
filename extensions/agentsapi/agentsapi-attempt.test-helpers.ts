@@ -64,30 +64,20 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
       if (mkdir) {
         await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       }
-      try {
-        await fs.writeFile(destination, data, { flag: "wx", mode: 0o600 });
-        return "created";
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-          return "exists";
-        }
-        throw error;
-      }
+      const exists = await fs
+        .writeFile(destination, data, { flag: "wx", mode: 0o600 })
+        .catch(fsFallback("EEXIST", true));
+      return exists ? "exists" : "created";
     },
     async stat({ filePath }) {
-      try {
-        const stat = await fs.stat(path.join(remoteRoot, filePath));
-        return {
+      const stat = await fs.stat(path.join(remoteRoot, filePath)).catch(fsFallback("ENOENT", null));
+      return (
+        stat && {
           type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
           size: stat.size,
           mtimeMs: stat.mtimeMs,
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return null;
         }
-        throw error;
-      }
+      );
     },
   } satisfies AgentWorkspaceAccess["bridge"];
   const release = registerAgentWorkspaceAccess(gatewayRoot, {
@@ -99,4 +89,13 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
   });
   onTestFinished(release);
   return { gatewayRoot, remoteRoot, release };
+}
+
+function fsFallback<T>(code: string, fallback: T) {
+  return (error: NodeJS.ErrnoException) => {
+    if (error.code !== code) {
+      throw error;
+    }
+    return fallback;
+  };
 }
