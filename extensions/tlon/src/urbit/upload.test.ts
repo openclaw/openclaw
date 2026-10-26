@@ -7,7 +7,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));
-vi.mock("../tlon-api.js", () => ({ uploadFile: vi.fn() }));
+vi.mock("../tlon-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tlon-api.js")>()),
+  uploadFile: vi.fn(),
+}));
 const mockReadRemoteMediaBuffer = vi.mocked(readRemoteMediaBuffer);
 const mockUploadFile = vi.mocked(uploadFile);
 const clientConfig = {

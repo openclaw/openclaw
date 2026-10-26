@@ -2,7 +2,10 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";
 import { UrbitSSEClient } from "./sse-client.js";
-vi.mock("./fetch.js", () => ({ urbitFetch: vi.fn() }));
+vi.mock("./fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fetch.js")>()),
+  urbitFetch: vi.fn(),
+}));
 function guardedResponse(response = new Response(null, { status: 200 })) {
   return {
     response,
