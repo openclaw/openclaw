@@ -1,9 +1,12 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
@@ -29,6 +32,24 @@ const globalHost = () =>
 
 function emitEvent(host: ReturnType<typeof createHost>, ...event: Parameters<typeof agentEvent>) {
   handleAgentEvent(host, agentEvent(...event));
+}
+
+function statusEvent(sessionKey: string, agentId: string, details: Record<string, unknown>) {
+  return {
+    ...agentEvent("run-1", 1, "tool", {
+      phase: "result",
+      name: "session_status",
+      toolCallId: "status-1",
+      result: { details },
+    }),
+    sessionKey,
+    agentId,
+  };
+}
+
+function expectNoCompaction(host: ReturnType<typeof createHost>) {
+  expect(host.compactionStatus).toBeNull();
+  expect(host.compactionClearTimer).toBeNull();
 }
 
 const fallback = {
@@ -106,24 +127,12 @@ function expectCompactionCompleteAndRetained(host: ReturnType<typeof createHost>
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
-  const globalWithWindow = globalThis as typeof globalThis & {
-    window?: Window & typeof globalThis;
-  };
-  let installedTestWindow = false;
-
   beforeAll(() => {
-    if (!globalWithWindow.window) {
-      globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
-      installedTestWindow = true;
+    if (typeof window === "undefined") {
+      vi.stubGlobal("window", globalThis);
     }
   });
-
-  afterAll(() => {
-    if (installedTestWindow) {
-      Reflect.deleteProperty(globalWithWindow, "window");
-    }
-  });
-
+  afterAll(() => vi.unstubAllGlobals());
   afterEach(() => vi.useRealTimers());
 
   it("rejects idle fallback lifecycle events for other sessions", () => {
@@ -191,31 +200,15 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         model: "gpt-5.6-sol",
         modelOverrideSource: null,
       };
-      const result: SessionsListResult = {
-        ts: 1,
-        path: "(multiple)",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [row],
-      };
+      const result = sessionsResult([row]);
       const pendingPatch = createDeferred<unknown>();
       const request = vi.fn(async (method: string) =>
         method === "sessions.patch" ? pendingPatch.promise : result,
       );
-      const sessions = createTestSessionCapability(
-        {
-          snapshot: {
-            client: { request } as unknown as GatewayBrowserClient,
-            phase: "connected",
-            hello: null,
-            assistantAgentId: agentId,
-            sessionKey: key,
-          },
-          subscribe: () => () => undefined,
-          subscribeEvents: () => () => undefined,
-        },
-        agentId,
-      );
+      const { gateway } = createGatewayHarness(createTestGatewayClient(request), undefined, {
+        initial: { assistantAgentId: agentId, sessionKey: key },
+      });
+      const sessions = createTestSessionCapability(gateway, agentId);
       const sessionHost = () =>
         createHost({
           sessionKey: key,
@@ -224,23 +217,12 @@ describe("app-tool-stream fallback lifecycle handling", () => {
           sessions,
         });
       const host = sessionHost();
-      const event = {
-        ...agentEvent(
-          "run-1",
-          1,
-          "tool",
-          {
-            phase: "result",
-            name: "session_status",
-            toolCallId: "status-1",
-            result: {
-              details: { changedModel: true, sessionKey: target, agentId, modelOverride: override },
-            },
-          },
-          key,
-        ),
+      const event = statusEvent(key, agentId, {
+        changedModel: true,
+        sessionKey: target,
         agentId,
-      };
+        modelOverride: override,
+      });
       handleAgentEvent(host, event);
       await waitForFast(() =>
         expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5.6-sol"),
@@ -272,21 +254,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     { changedModel: true, sessionKey: "global", agentId: "main" },
   ])("does not refresh an unrelated/read-only status result (%j)", (details) => {
     const host = globalHost();
-    handleAgentEvent(host, {
-      ...agentEvent(
-        "run-1",
-        1,
-        "tool",
-        {
-          phase: "result",
-          name: "session_status",
-          toolCallId: "status-1",
-          result: { details },
-        },
-        "global",
-      ),
-      agentId: "work",
-    });
+    handleAgentEvent(host, statusEvent("global", "work", details));
     expect(host.sessions.reconcileMutation).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides).toEqual({});
   });
@@ -466,8 +434,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionStatus).toBe(status);
     expect(host.compactionClearTimer).toBe(timer);
     vi.advanceTimersByTime(5 * 60_000);
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 
   it("auto-clears active compaction after the stale timeout", () => {
@@ -476,24 +443,13 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     emitEvent(host, "run-1", 1, "compaction", { phase: "start" });
 
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "run-1"));
     vi.advanceTimersByTime(5 * 60_000 - 1);
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "run-1"));
 
     vi.advanceTimersByTime(1);
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 
   it("shows manual session operation compaction progress while idle", () => {
@@ -523,16 +479,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost({ sessionKey: "agent:main:main" });
 
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:other:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
+    emitOperation(host, "operation-1", "start", "agent:other:main");
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 
   it("ignores selected-global session operation compaction for another agent", () => {
@@ -544,8 +493,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     emitOperation(host, "operation-main", "start", "global", { agentId: "main" });
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 
   it("accepts canonical global live events for selected agent main aliases", () => {
@@ -576,8 +524,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     expect(host.compactionStatus).toEqual(compaction("active", "operation-2"));
     vi.advanceTimersByTime(5 * 60_000);
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 
   it("treats lifecycle error as terminal for retry-pending compaction", () => {
@@ -615,12 +562,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       completed: false,
     });
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
 
     emitEvent(host, "run-1", 3, "lifecycle", { phase: "error", error: "boom" });
 
-    expect(host.compactionStatus).toBeNull();
-    expect(host.compactionClearTimer).toBeNull();
+    expectNoCompaction(host);
   });
 });
