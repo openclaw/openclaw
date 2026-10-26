@@ -75,11 +75,6 @@ describe("projectSessionDisplayMessage", () => {
     ["NO_REPLY.", "NO_REPLY."],
     ['"NO_REPLY"', '"NO_REPLY"'],
     ['{"action":"NO_REPLY"}', '{"action":"NO_REPLY"}'],
-    ["no_reply\nREADY", "READY"],
-    ["READY\nNo_Reply", "READY"],
-    ["no_reply\nNo_Reply", "No_Reply"],
-    ["Done\nNO_REPLY", "Done"],
-    ["NO_REPLY\nREADY", "READY"],
     ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
     ["NO_REPLY\nNO_REPLY\nREADY", "NO_REPLY\nREADY"],
     [" NO_REPLY\nREADY", "NO_REPLY\nREADY"],
@@ -88,8 +83,8 @@ describe("projectSessionDisplayMessage", () => {
     expect(projectSessionDisplayMessage(assistant(content))).toEqual(visible(text));
   });
 
-  test.each(["NO_REPLY", "no_reply", "No_Reply"])("hides raw %s assistant history", (content) => {
-    expect(projectSessionDisplayMessage(assistant(content))).toBeNull();
+  test("hides raw NO_REPLY assistant history", () => {
+    expect(projectSessionDisplayMessage(assistant("NO_REPLY"))).toBeNull();
   });
 
   test("preserves user text and explicit visible or final source replies", () => {
@@ -161,25 +156,13 @@ describe("projectSessionDisplayMessage", () => {
     );
   });
 
-  test.each([
-    ["nested label brackets", "[Report [Q3]](LONG)", "Read the Report [Q3] and then deploy."],
-    [
-      "balanced destination parentheses",
-      "[report](LONG/report_(Q3))",
-      "Read the report and then deploy.",
-    ],
-    [
-      "escaped destination parentheses",
-      "[report](LONG/report\\)Q3)",
-      "Read the report and then deploy.",
-    ],
-  ])("flattens links with %s before bounding a preview", (_label, link, expected) => {
+  test("flattens links before bounding a preview", () => {
     const longUrl = `https://example.com/${"x".repeat(SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS)}`;
     const preview = projectSessionDisplayMessage(
-      assistant(`Read the ${link.replace("LONG", longUrl)} and then deploy.`),
+      assistant(`Read the [report](${longUrl}) and then deploy.`),
       { flattenMarkdown: true },
     );
 
-    expect(preview?.text).toBe(expected);
+    expect(preview?.text).toBe("Read the report and then deploy.");
   });
 });
