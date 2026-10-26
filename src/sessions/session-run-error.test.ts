@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
-import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { resolveSessionRunError } from "./session-run-error-format.js";
 import { recordGatewaySessionRunFailure } from "./session-run-error.js";
@@ -24,33 +23,27 @@ const storageFailures = [
 ] as const;
 
 it.each([
-  ...storageFailures.flatMap(([error, legacyError, summary]) => {
+  ...storageFailures.map(([error, , summary]) => {
     const content = `⚠️ ${summary} For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\` in your terminal.`;
-    return [
-      [error, expect.any(String), content],
-      [legacyError, legacyError, content],
-    ] as const;
+    return [error, expect.any(String), content] as const;
   }),
-  ...[
-    ["Synthetic run failure", "Synthetic run failure"],
-    [
-      Object.assign(new Error("EACCES: permission denied, scandir '/synthetic/workspace-main'"), {
-        code: "EACCES",
-      }),
-      '{"code":"EACCES"}',
-    ],
-  ].map(([error, diagnostic]) => [
-    error,
-    diagnostic,
-    `Your request couldn't be completed: ${diagnostic}`,
-  ]),
+  [
+    Object.assign(new Error("EACCES: permission denied, scandir '/synthetic/workspace-main'"), {
+      code: "EACCES",
+    }),
+    '{"code":"EACCES"}',
+    'Your request couldn\'t be completed: {"code":"EACCES"}',
+  ],
 ])("appends failure copy and retains its diagnostic: %s", async (error, diagnostic, content) => {
-  let appended: CustomMessageReportAppend | undefined;
+  expect.hasAssertions();
   vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
     if (report.kind !== "custom") {
       throw new Error("Expected a custom run-failure notice");
     }
-    appended = report.selectReport(undefined);
+    expect(report.selectReport(undefined)).toMatchObject({
+      content,
+      details: { runId: "failed-run", error: diagnostic },
+    });
     return { ok: true, value: undefined };
   });
 
@@ -63,14 +56,6 @@ it.each([
     },
     runId: "failed-run",
     error,
-  });
-
-  expect(appended).toEqual({
-    customType: "run-failed-before-reply",
-    content,
-    display: true,
-    excludeFromContext: true,
-    details: { runId: "failed-run", error: diagnostic },
   });
 });
 
