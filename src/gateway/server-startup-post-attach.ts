@@ -236,12 +236,10 @@ export async function startGatewayPostAttachRuntime(params: {
   const startupLogSettled = createDeferredCore();
   // Tailscale and sidecar work can delay the public readiness handle past log failure.
   void startupLogSettled.promise.catch(() => {});
-  let startupLogOwnerAssigned = false;
   const assignStartupLogOwner = (owner: Promise<void>) => {
-    if (params.sidecarStartup !== "defer" || startupLogOwnerAssigned) {
+    if (params.sidecarStartup !== "defer") {
       return;
     }
-    startupLogOwnerAssigned = true;
     void owner.then(startupLogSettled.resolve, startupLogSettled.reject);
   };
   const startStartupLog = () => {

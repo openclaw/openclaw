@@ -176,6 +176,10 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 
 Twenty runs alternate ten base/head pairs. Supply a second copy of the base
 bundle for an A/A control. `--boot-route new` measures the New Session composer.
+Cold New Session omits owner registration and sidebar counters because it has no
+Chat owner to finish registration. The effective `ownerProbes` and
+`sidebarCounters` flags are recorded in `summary.json`; other routes and warm
+reloads retain their existing instrumentation.
 Browser storage and HTTP caches are cleared between samples; Gateway asset
 caches stay warm for each immutable bundle. Each bundle's index is read before
 sampling to initialize the shared file reader outside the first timed reload.

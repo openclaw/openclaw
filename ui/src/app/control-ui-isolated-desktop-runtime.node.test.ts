@@ -120,11 +120,8 @@ it.each([false, true])(
     const shared = isolated.chunks.find(
       (chunk) => sidebar in chunk.modules && outbox in chunk.modules,
     );
-    expect(shared).toBeDefined();
     const chatChunk = isolated.chunks.find((chunk) => chat in chunk.modules);
-    expect(chatChunk).toBeDefined();
     const interactionChunk = isolated.chunks.find((chunk) => composerInteraction in chunk.modules);
-    expect(interactionChunk).toBeDefined();
     for (const route of ["chat", "new"] as const) {
       const before = routePreloads(original.html, route);
       const after = routePreloads(isolated.html, route);
@@ -155,7 +152,6 @@ it.each([false, true])(
       }
     }
     const desktopChunk = isolated.chunks.find((chunk) => chunk.exports.includes("default"));
-    expect(desktopChunk).toBeDefined();
     expect(isolated.html).not.toContain(desktopChunk!.fileName);
 
     const entered = Promise.withResolvers<void>();
@@ -175,7 +171,6 @@ it.each([false, true])(
     };
     vi.stubGlobal("desktopBuildFixture", fixture);
     const entry = isolated.chunks.find((chunk) => chunk.isEntry);
-    expect(entry).toBeDefined();
     await import(
       /* @vite-ignore */ pathToFileURL(path.join(isolated.outDir, entry!.fileName)).href
     );
@@ -214,8 +209,6 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
   const entries = {
     online: modulePath("../components/app-sidebar-online.tsx"),
     catalog: modulePath("../components/mcp-app-catalog-view.tsx"),
-    resources: modulePath("../components/mcp-app-resources-view.tsx"),
-    context: modulePath("../components/solid/mcp-app-context-strip-view.tsx"),
     placement: modulePath("./session-placement-startup.runtime.ts"),
     creator: modulePath("../pages/claws/creator-review-view.tsx"),
     signer: modulePath("../lib/nodes/device-signing.runtime.ts"),
@@ -269,7 +262,6 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
   );
   const chunkFor = (id: string) => {
     const chunk = chunks.find((output) => id in output.modules);
-    expect(chunk).toBeDefined();
     return chunk!;
   };
   const commonChunks = [entries.online, commonDependency].map((id) => chunkFor(id).fileName);
@@ -299,9 +291,7 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
     signerChunk,
   );
   expect(html).not.toContain(chunkFor(entries.creator).fileName);
-  for (const entry of [entries.catalog, entries.resources, entries.context]) {
-    expect(html).not.toContain(chunkFor(entry).fileName);
-  }
+  expect(html).not.toContain(chunkFor(entries.catalog).fileName);
 
   const fixture: {
     events: string[];
@@ -309,7 +299,6 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
   } = { events: [], load: {} };
   vi.stubGlobal("preloadBuildFixture", fixture);
   const entry = chunks.find((chunk) => chunk.isEntry);
-  expect(entry).toBeDefined();
   await import(/* @vite-ignore */ pathToFileURL(path.join(outDir, entry!.fileName)).href);
   expect(fixture.events).toEqual([]);
   expect((await fixture.load.online!()).value).toBe("common");

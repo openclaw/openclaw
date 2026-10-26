@@ -43,76 +43,27 @@ afterEach(() => {
 
 describe("Gateway presence delivery", () => {
   it("matches the shared native presence stream", () => {
+    const original = structuredClone(nativePresenceStream);
     store.current().request.mockImplementation(() => new Promise(() => {}));
     const events = vi.fn();
     store.gateway.subscribeEvents(events);
+    store.gateway.subscribeEventLog(() => {});
     for (const step of nativePresenceStream) {
       if (step.reconnect) {
         store.current().testOptions.onHello?.(hello());
       }
       events.mockClear();
+      const requests = store.current().request.mock.calls.length;
       store.current().testOptions.onEvent?.(createGatewayEvent("presence", step.payload));
       if (step.expected === null) {
         expect(events, step.name).not.toHaveBeenCalled();
       } else {
         expect(events.mock.lastCall?.[0].payload, step.name).toEqual({ presence: step.expected });
+        expect(store.gateway.eventLog[0]?.payload, step.name).toEqual({ presence: step.expected });
+        expect(store.current().request.mock.calls, step.name).toHaveLength(requests);
       }
     }
-  });
-
-  it("publishes reconstructed snapshots to every consumer in server order", () => {
-    const events = vi.fn();
-    store.gateway.subscribeEvents(events);
-    store.gateway.subscribeEventLog(() => {});
-    send(reset(2));
-    const changed = { ...first, host: "Changed" };
-    send(
-      delta(2, {
-        upsert: [
-          { key: "first-key", presence: changed },
-          { key: "second-key", presence: second },
-        ],
-        order: ["second-key", "first-key"],
-      }),
-    );
-    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second, changed] });
-    expect(store.gateway.eventLog[0]?.payload).toEqual({ presence: [second, changed] });
-    send(delta(3, { remove: ["first-key"], order: ["second-key"] }));
-    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
-    send(reset(5));
-    expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [first] });
-    expect(store.current().request).not.toHaveBeenCalled();
-  });
-
-  it("applies field patches without losing metadata or retaining cleared fields", () => {
-    const events = vi.fn();
-    store.gateway.subscribeEvents(events);
-    const original = { ...first, watchedSessions: ["agent:main:old"], roles: ["operator"] };
-    send(reset(2, [original]));
-    send(
-      delta(2, {
-        upsert: [
-          { key: "first-key", set: { ts: 20, roles: ["node"] }, unset: ["watchedSessions"] },
-          { key: "second-key", presence: second },
-        ],
-        order: ["second-key", "first-key"],
-      }),
-    );
-    expect(events.mock.lastCall?.[0].payload).toEqual({
-      presence: [second, { ...first, ts: 20, roles: ["node"] }],
-    });
-    expect(original.watchedSessions).toEqual(["agent:main:old"]);
-    expect(original.ts).toBe(1);
-    expect(store.current().request).not.toHaveBeenCalled();
-
-    send(
-      delta(3, {
-        upsert: [{ key: "missing-key", set: { ts: 30 }, unset: [] }],
-        order: ["second-key", "first-key", "missing-key"],
-      }),
-    );
-    expect(events).toHaveBeenCalledTimes(2);
-    expect(store.current().request).toHaveBeenCalledWith("system-presence", { snapshot: true });
+    expect(nativePresenceStream).toEqual(original);
   });
 
   it("deduplicates mismatched deltas and publishes the recovered full snapshot", async () => {

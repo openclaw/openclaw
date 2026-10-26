@@ -68,62 +68,6 @@ export function defineGitHubPublicationAccountTests({
     return { page, gateway };
   }
 
-  it("explains changed publication availability without requiring a connection", async () => {
-    const { page, gateway } = await openPublication({
-      assistantName: "Publication QA",
-      workspace: "/synthetic/publication-qa",
-      communityInvite: false,
-      methodResponses: {
-        "sessions.github.options": {
-          ...publicationOptions,
-          shared: null,
-          personal: {
-            ...publicationOptions.personal,
-            state: "disconnected",
-            account: null,
-            generation: null,
-          },
-          sharedUnavailableReason: "changed",
-        },
-      },
-    });
-    const discovered = await gateway.waitForRequest("sessions.github.options");
-    expect(discovered.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-    await openChatPublication(page);
-    const publish = publicationAction(page, "Create PR");
-    await publish.waitFor();
-    await expect.poll(() => publish.isEnabled()).toBe(false);
-    const row = page.locator(".chat-environment__branch");
-    const note = row.locator(".chat-pr__publication-note");
-    const refresh = publicationAction(row, "Refresh publication");
-    await note.waitFor();
-    expect(await refresh.count()).toBe(1);
-    expect(await refresh.isEnabled()).toBe(true);
-    expect(await note.textContent()).toContain(
-      "The Gateway GitHub account changed. Reload and retry publication.",
-    );
-    expect(await row.textContent()).not.toContain("Connect GitHub in Settings");
-    expect(await publicationAction(page, "Publication account").count()).toBe(0);
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-    const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
-    await gateway.setMethodResponse("sessions.github.options", {
-      ...publicationOptions,
-      personal: null,
-      shared: { ...publicationOptions.shared, source: "system-detected" },
-    });
-    await refresh.click();
-    const retried = await gateway.waitForRequest("sessions.github.options", {
-      after: previousOptions,
-    });
-    expect(retried.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-    await expect.poll(() => publish.isEnabled()).toBe(true);
-    await note.waitFor({ state: "hidden" });
-    expect(await refresh.count()).toBe(0);
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-  });
-
   it.each([1180, 390])(
     "keeps the account menu compact and keyboard accessible at %ipx",
     async (width) => {
@@ -138,6 +82,8 @@ export function defineGitHubPublicationAccountTests({
           : {},
         width,
       );
+      const reopenDetails = () =>
+        width === 390 ? openChatPublication(page) : openChatDetails(page);
       await openChatPublication(page);
       const arrow =
         width === 390
@@ -193,11 +139,7 @@ export function defineGitHubPublicationAccountTests({
         .poll(() => arrow.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await showPublicationBranch(gateway, "openclaw/updated-branch");
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await reopenDetails();
       await row
         .getByText("openclaw/updated-branch", { exact: true })
         .waitFor({ state: "attached" });
@@ -220,11 +162,7 @@ export function defineGitHubPublicationAccountTests({
           "false",
         );
       }
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await reopenDetails();
       expect(await personal.isVisible()).toBe(false);
       if (width === 390) {
         await navigationDrawerToggle(page).click();

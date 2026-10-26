@@ -518,6 +518,7 @@ describe("Gateway external shared-state ownership", () => {
       ]);
       expect(conflictingClaim.code).toBe(1);
       expect(JSON.parse(conflictingClaim.stdout)).toMatchObject({
+        ok: false,
         error: {
           type: "cli_error",
           message: expect.stringContaining(

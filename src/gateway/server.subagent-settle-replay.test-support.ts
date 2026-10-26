@@ -57,6 +57,12 @@ export async function runTombstonedRequesterSettleCase(
   },
 ) {
   const { child, requesterScope: scope } = context;
+  const recovery = {
+    key: scope.sessionKey,
+    mode: "in-place" as const,
+    sessionId: scope.sessionId,
+    recoveryCycleId: `recovery-${child.runId}`,
+  };
   const lifecycleRevision = `tombstoned-${child.runId}`;
   await persistSessionTranscriptTurn(scope, {
     updateMode: "none",
@@ -127,16 +133,7 @@ export async function runTombstonedRequesterSettleCase(
 
   const reader = await context.harness.openClient({ scopes: ["operator.read"] });
   try {
-    expect(
-      await rpcReq(reader.ws, "sessions.recover", {
-        key: scope.sessionKey,
-        mode: "in-place",
-        sessionId: scope.sessionId,
-        recoveryCycleId: `recovery-${child.runId}`,
-      }),
-    ).toMatchObject({
-      ok: false,
-    });
+    expect(await rpcReq(reader.ws, "sessions.recover", recovery)).toMatchObject({ ok: false });
     expect(loadSessionEntryReadOnly(scope)?.mainRestartRecovery?.tombstone).toBeDefined();
     expect(readChild()).toEqual(retained);
   } finally {
@@ -164,14 +161,7 @@ export async function runTombstonedRequesterSettleCase(
     return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
   });
   try {
-    expect(
-      await context.recoverViaRpc({
-        key: scope.sessionKey,
-        mode: "in-place",
-        sessionId: scope.sessionId,
-        recoveryCycleId: `recovery-${child.runId}`,
-      }),
-    ).toMatchObject({
+    expect(await context.recoverViaRpc(recovery)).toMatchObject({
       ok: true,
       payload: { continuation: { status: "started" } },
     });

@@ -184,6 +184,7 @@ describe("transcript projection", () => {
   });
 
   it("updates and parks voice captions without projecting the transcript for each fragment", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const paneId = "voice-leaf-projection";
     const transcript = createTestTranscript(paneId);
     const talk = createInitialChatRealtimeState().realtimeTalk;
@@ -260,6 +261,23 @@ describe("transcript projection", () => {
     expect(view.container.querySelector(".agent-chat__voice-turn")?.textContent).toContain(
       "Hidden continuation.",
     );
+
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    projectRows.mockClear();
+    publish(" Background continuation.");
+    flush();
+    expect(talk.snapshot.realtimeTalkConversationState.entries[0]?.text).toContain(
+      "Background continuation.",
+    );
+    expect(row.textContent).not.toContain("Background continuation.");
+    expect(projectRows).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    flush();
+    expect(view.container.querySelector(".agent-chat__voice-turn")).toBe(row);
+    expect(row.textContent).toContain("Background continuation.");
 
     projectRows.mockClear();
     publish("Final answer.", true, "voice:answer");
