@@ -144,7 +144,12 @@ describe("presence projection without resident session facts", () => {
       const project = createPresenceRecipientProjection({ cfg, presence, projection });
       const readers: GatewayClient[] = Array.from({ length: 65 }, () => ({
         ...recipient(["operator.read"]),
-        authenticatedUserProfile: { profileId: "reader", updatedAt: 1 },
+        authenticatedUserProfile: {
+          profileId: "reader",
+          displayName: "Reader",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
       }));
       const pending = recipient(["operator.read"]);
       pending.authenticatedGitHubIdentitySync = async () => ({

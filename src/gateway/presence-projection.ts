@@ -17,7 +17,10 @@ import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharin
 export function createPresenceRecipientProjection(params: {
   cfg: OpenClawConfig;
   presence: SystemPresence[];
-  projection?: SessionRowProjection;
+  projection?: Pick<
+    SessionRowProjection,
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+  >;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
   const memory = getSessionActorStorageBinding({});

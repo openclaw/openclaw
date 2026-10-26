@@ -262,7 +262,7 @@ it("projects unbound memory watches from current facts with the existing recipie
   const project = createPresenceRecipientProjection({
     cfg,
     presence: [{ ...person, watchedSessions: [sessionKey, siblingKey, otherKey] }],
-    projection: projection as SessionRowProjection,
+    projection,
   });
   const client: GatewayClient = {
     connect: {

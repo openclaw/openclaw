@@ -144,7 +144,7 @@ function fixture() {
       createPresenceRecipientProjection({
         cfg,
         presence,
-        projection: projection as SessionRowProjection,
+        projection,
       }),
     restrict: () => {
       cfg = {
