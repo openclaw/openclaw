@@ -161,6 +161,7 @@ it("does not finalize a shared source while a duplicate row is still visible", a
   const page = createCaptionPage(rows);
   await page.poll();
   const initial = page.read().pendingLines;
+  expect(initial[0]?.source).toEqual(initial[1]?.source);
   expect(initial[0]?.provenance?.observationId).not.toBe(initial[1]?.provenance?.observationId);
   const survivor = rows[1]!;
   page.show([survivor]);

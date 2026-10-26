@@ -137,8 +137,9 @@ it("joins invocation settlement when owner stop overlaps release", async () => {
 
 it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (claimed) => {
   vi.useFakeTimers();
-  const { desktopRegistry: registry, observe } = createFixture("attachment");
+  const { desktopRegistry: registry, observe, nodeRegistry } = createFixture("attachment");
   const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+  const invoke = vi.spyOn(nodeRegistry, "invoke");
   const stream = new PassThrough();
   const observed = await observe(undefined, stream);
   const { attachment, sourceKey, ownerEpoch } = mint.mock.calls[0]![0];
@@ -151,6 +152,9 @@ it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (cla
   await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
   expect(stream.destroyed).toBe(!claimed);
   expect(registry.hasActivity(sourceKey, ownerEpoch)).toBe(claimed);
+  if (!claimed) {
+    await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
+  }
 });
 
 it.each([

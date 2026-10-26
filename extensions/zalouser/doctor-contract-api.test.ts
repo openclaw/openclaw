@@ -154,7 +154,12 @@ describe("zalouser doctor state migration", () => {
     const groupKey = `agent:${agentId}:zalouser:group:room-1`;
     const storePath = collision ? path.join(stateDir, "sessions.json") : undefined;
     const scope = { agentId, env, storePath: resolveStorePath(storePath, { agentId, env }) };
-    const put = (sessionKey: string, sessionId: string, updatedAt: number, chatType = "direct") =>
+    const put = (
+      sessionKey: string,
+      sessionId: string,
+      updatedAt: number,
+      chatType: "direct" | "group" = "direct",
+    ) =>
       upsertSessionEntry({
         ...scope,
         sessionKey,

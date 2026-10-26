@@ -25,7 +25,9 @@ function fixturePath(root: string, file: string) {
 }
 
 it.each([
-  ...["ts", "tsx", "ctsx", "mts", "mjsx", "js"].map((extension) => ({ extension, excluded: true })),
+  ...["ts", "tsx", "cts", "ctsx", "mts", "mtsx", "js", "jsx", "cjs", "cjsx", "mjs", "mjsx"].map(
+    (extension) => ({ extension, excluded: true }),
+  ),
   ...["json", "ts.map", "txt"].map((extension) => ({ extension, excluded: false })),
 ])("classifies .$extension specialized suites (excluded: $excluded)", ({ extension, excluded }) => {
   const directory = "extensions/example/src";
@@ -35,6 +37,7 @@ it.each([
     expect(cli.isSharedVitestExcludedPath(file.replaceAll("/", "\\")), file).toBe(excluded);
     expect(cli.isSharedVitestExcludedPath(file, directory), file).toBe(excluded);
   }
+  expect(cli.isSharedVitestExcludedPath(`${directory}/example.test.${extension}`)).toBe(false);
 });
 
 it("plans Node CI test ownership before dependencies are installed", () => {
