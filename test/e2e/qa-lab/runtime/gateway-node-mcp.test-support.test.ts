@@ -19,12 +19,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Tree signaling joins dispatch, not the foreign descendant's waitpid completion.
 async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (processIsAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`timed out waiting for fixture descendant ${pid} to exit`, { cause: error });
+  while (processIsAlive(pid)) {
+    await waitForProcessTick(10, undefined, { signal });
   }
 }
 

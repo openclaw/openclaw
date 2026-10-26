@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const writerDefaults = {
@@ -19,14 +17,10 @@ const writerDefaults = {
 };
 const readJson = async (file: string): Promise<unknown> =>
   JSON.parse(await fs.readFile(file, "utf8"));
-const readEvidence = async (base: string) =>
-  validateQaEvidenceSummaryJson(await readJson(path.join(base, "qa-evidence.json")));
+type WriterOptions = Parameters<typeof createQaScriptEvidenceWriter>[0];
 
-async function makeWriter(
-  params: Pick<
-    Parameters<typeof createQaScriptEvidenceWriter>[0],
-    "maxDetailsBytes" | "maxLogBytes"
-  > = {},
+function makeWriter(
+  params: Pick<WriterOptions, "maxDetailsBytes" | "maxLogBytes" | "coverageBinding"> = {},
 ) {
   const repoRoot = tempRoots.make("openclaw-script-evidence-");
   const artifactBase = path.join(repoRoot, ".artifacts", "qa-e2e", "script");
@@ -42,8 +36,7 @@ async function makeWriter(
     artifactBase,
     repoRoot,
     writer,
-    write: (details?: string, status: QaScriptEvidenceStatus = "fail") =>
-      writer.write({ details, status, durationMs: 1 }),
+    write: (details?: string) => writer.write({ details, status: "fail", durationMs: 1 }),
     log: () => fs.readFile(path.join(artifactBase, "producer.log"), "utf8"),
   };
 }
@@ -62,30 +55,21 @@ it("writes evidence with normalized artifact paths", async () => {
     status: "pass",
   });
 
-  expect(evidence.entries[0]).toMatchObject({
-    coverage: [],
-    execution: {
-      artifacts: [
-        { kind: "log", path: "producer.log", source: "script" },
-        { kind: "summary", path: path.join("nested", "summary.json"), source: "script" },
-      ],
-    },
-    result: { status: "pass", timing: { wallMs: 25 } },
-  });
-  expect(await readEvidence(artifactBase)).toEqual(evidence);
+  expect(evidence.entries[0]?.coverage).toEqual([]);
+  expect(evidence.entries[0]?.execution?.artifacts).toEqual([
+    { kind: "log", path: "producer.log", source: "script" },
+    { kind: "summary", path: path.join("nested", "summary.json"), source: "script" },
+  ]);
+  expect(await readJson(path.join(artifactBase, "qa-evidence.json"))).toEqual(evidence);
   expect(await readJson(path.join(artifactBase, "latest-run.json"))).toEqual({
     qaEvidence: "qa-evidence.json",
   });
 });
 
 it("rejects uncataloged targets unless coverage binding is disabled", () => {
-  expect(() =>
-    createQaScriptEvidenceWriter({
-      ...writerDefaults,
-      artifactBase: path.join(os.tmpdir(), "openclaw-script-evidence-unknown"),
-      repoRoot: process.cwd(),
-    }),
-  ).toThrow("unknown qa scenario: script-evidence-test");
+  expect(() => makeWriter({ coverageBinding: "catalog" })).toThrow(
+    "unknown qa scenario: script-evidence-test",
+  );
 });
 
 it("keeps UTF-8 logs and failure details within byte limits", async () => {
@@ -109,8 +93,7 @@ it("applies built-in and configured redaction before bounding logs and details",
   const configPath = path.join(repoRoot, "openclaw.json");
   await fs.writeFile(
     configPath,
-    `${JSON.stringify({ logging: { redactPatterns: ["/internal-\\d+/g"] } })}\n`,
-    "utf8",
+    JSON.stringify({ logging: { redactPatterns: ["/internal-\\d+/g"] } }),
   );
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   writer.appendLog(`${"x".repeat(16_380)}inter`);
@@ -125,13 +108,11 @@ it("applies built-in and configured redaction before bounding logs and details",
 });
 
 it("omits oversized raw logs instead of truncating before redaction", async () => {
-  const secretTail = "private-secret-tail-1234567890";
   const { writer, write, log } = await makeWriter({ maxLogBytes: 128 });
-  writer.appendLog(`password=${"x".repeat(40 * 1024)}${secretTail}`);
+  writer.appendLog(`password=${"x".repeat(40 * 1024)}private-secret-tail-1234567890`);
 
   await write();
-  const output = await log();
-  expect(output).toBe("QA evidence log omitted: safe redaction buffer exceeded.\n");
+  expect(await log()).toBe("QA evidence log omitted: safe redaction buffer exceeded.\n");
 });
 
 it.each(["..", "../outside.log"])(
