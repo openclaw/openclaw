@@ -20,9 +20,11 @@ import {
 } from "./history-rejection.js";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
-const loadAgentSessions = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/agent-sessions"),
-);
+const loadAgentSessions = createLazyRuntimeModule(async () => {
+  const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
+    await import("openclaw/plugin-sdk/agent-sessions");
+  return { buildSessionContext, migrateSessionEntries, parseSessionEntries };
+});
 
 export type ResolvedCodexHistoryTarget =
   | { kind: "empty" }

@@ -23,9 +23,24 @@ import type { StoredCodexAppServerBinding } from "../app-server/session-binding-
 const loadSessionBindingRecord = createLazyRuntimeModule(
   () => import("../app-server/session-binding-record.js"),
 );
-const loadSqliteRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/sqlite-runtime"),
-);
+const loadSqliteRuntime = createLazyRuntimeModule(async () => {
+  const {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  return {
+    withSqliteReadOnlyInspection,
+    executeSqliteQuerySync,
+    getNodeSqliteKysely,
+    openNodeSqliteDatabase,
+    resolveExistingSqliteFileUri,
+    runSqliteImmediateTransactionSync,
+  };
+});
 
 type Params = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type AssignmentSessionStore = Pick<

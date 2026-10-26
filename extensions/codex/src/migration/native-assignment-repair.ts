@@ -12,9 +12,11 @@ import { readCodexNativeSubagentSubmissions } from "../app-server/native-subagen
 import { CODEX_APP_SERVER_BINDING_NAMESPACE } from "../app-server/session-binding-meta.js";
 import { readStoredCodexAppServerBinding } from "../app-server/session-binding-record-codec.js";
 
-const loadSessionStoreRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/session-store-runtime"),
-);
+const loadSessionStoreRuntime = createLazyRuntimeModule(async () => {
+  const { getSessionEntryByIdAsync, resolveStorePath } =
+    await import("openclaw/plugin-sdk/session-store-runtime");
+  return { getSessionEntryByIdAsync, resolveStorePath };
+});
 const loadSessionBindingRecord = createLazyRuntimeModule(
   () => import("../app-server/session-binding-record.js"),
 );

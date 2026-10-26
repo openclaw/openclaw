@@ -43,9 +43,10 @@ const loadSessionBinding = createLazyRuntimeModule(
 const loadConversationBindingData = createLazyRuntimeModule(
   () => import("../conversation-binding-data.js"),
 );
-const loadSessionStoreRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/session-store-runtime"),
-);
+const loadSessionStoreRuntime = createLazyRuntimeModule(async () => {
+  const { prepareSessionEntryPatch } = await import("openclaw/plugin-sdk/session-store-runtime");
+  return { prepareSessionEntryPatch };
+});
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";

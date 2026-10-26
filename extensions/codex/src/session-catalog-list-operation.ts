@@ -40,9 +40,10 @@ import type {
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
 
 const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
-const loadSessionCatalog = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/session-catalog"),
-);
+const loadSessionCatalog = createLazyRuntimeModule(async () => {
+  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+  return { sessionCatalogAdoptedSourceKey };
+});
 const loadNodeAdoption = createLazyRuntimeModule(
   () => import("./session-catalog-node-adoption.js"),
 );

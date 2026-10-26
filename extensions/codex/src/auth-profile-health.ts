@@ -7,7 +7,10 @@ import {
   formatCodexAuthProfileUnavailableMessage,
 } from "./app-server/auth-profile-recovery.js";
 
-const loadAgentRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/agent-runtime"));
+const loadAgentRuntime = createLazyRuntimeModule(async () => {
+  const { loadAuthProfileStoreForRuntimeAsync } = await import("openclaw/plugin-sdk/agent-runtime");
+  return { loadAuthProfileStoreForRuntimeAsync };
+});
 const loadAgentScopeRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/agent-scope-runtime"),
 );
