@@ -26,7 +26,6 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -62,6 +61,7 @@ import * as materialization from "./session-row-projection-materialize.js";
 import {
   createTestProjection,
   holdForeground,
+  watchRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
@@ -277,21 +277,10 @@ it("reuses descendants after parent progress while keeping inherited models curr
         children[0],
       ]);
       const reads: string[] = [];
-      const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-      vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume) =>
-          readDatabases(targets, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                readRowFacts(input) {
-                  reads.push(...input.sessionKeys);
-                  return owner.readRowFacts(input);
-                },
-              })),
-            ),
-          ),
-      );
+      watchRowFacts((owner) => (input) => {
+        reads.push(...input.sessionKeys);
+        return owner.readRowFacts(input);
+      });
       const original = children.map(sequence);
       const siblingSequence = sequence(siblingKey);
       const snapshot = (key: string) =>

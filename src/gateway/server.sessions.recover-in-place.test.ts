@@ -44,6 +44,34 @@ beforeEach(async () => {
 });
 let requestSequence = 0;
 
+function installCliBackend() {
+  const previous = { ...getTestPluginRegistry() };
+  setTestPluginRegistry({
+    ...previous,
+    cliBackends: [
+      ...previous.cliBackends,
+      {
+        pluginId: "anthropic",
+        source: "test",
+        backend: {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "unused-fixture" },
+        },
+      },
+    ],
+  });
+  return () => setTestPluginRegistry(previous);
+}
+
+function pendingRecovery(cycleId: string) {
+  return {
+    status: "interrupted" as const,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId, revision: 4, chargedAttempts: 0 },
+  };
+}
+
 async function fixture(
   name: string,
   runtime?: "codex" | "claude-cli",
@@ -214,23 +242,7 @@ test.for([
     const cli = scenario === "cli-full" || scenario === "cli-restricted";
     const current = await fixture(`child-recovery-${scenario}`, cli ? "claude-cli" : undefined);
     if (cli) {
-      const previousRegistry = { ...getTestPluginRegistry() };
-      setTestPluginRegistry({
-        ...previousRegistry,
-        cliBackends: [
-          ...previousRegistry.cliBackends,
-          {
-            pluginId: "anthropic",
-            source: "test",
-            backend: {
-              id: "claude-cli",
-              modelProvider: "anthropic",
-              config: { command: "unused-fixture" },
-            },
-          },
-        ],
-      });
-      onTestFinished(() => setTestPluginRegistry(previousRegistry));
+      onTestFinished(installCliBackend());
     }
     const runId = `child-run-${scenario}`;
     const lifecycleRevision = `child-revision-${scenario}`;
@@ -335,13 +347,7 @@ test.for(["builtin", "native", "pending", "pending-child"] as const)(
               parentSessionKey: "agent:requester:discord:group:synthetic",
             }
           : {}),
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: current.recoveryCycleId,
-          revision: 4,
-          chargedAttempts: 0,
-        },
+        ...pendingRecovery(current.recoveryCycleId),
       }));
     }
     const before = await current.transcript();
@@ -423,32 +429,9 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
       deliveryConstraint,
     );
     if (pending) {
-      await patchSessionEntryCore(current.scope, () => ({
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: current.recoveryCycleId,
-          revision: 4,
-          chargedAttempts: 0,
-        },
-      }));
+      await patchSessionEntryCore(current.scope, () => pendingRecovery(current.recoveryCycleId));
     }
-    const previousRegistry = { ...getTestPluginRegistry() };
-    setTestPluginRegistry({
-      ...previousRegistry,
-      cliBackends: [
-        ...previousRegistry.cliBackends,
-        {
-          pluginId: "anthropic",
-          source: "test",
-          backend: {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "unused-fixture" },
-          },
-        },
-      ],
-    });
+    const restoreRegistry = installCliBackend();
     try {
       const before = current.entry();
       if (!before) {
@@ -508,7 +491,7 @@ test.for([undefined, "media", "message", "text", "pending", "pending-revoked"] a
       try {
         await current.drain();
       } finally {
-        setTestPluginRegistry(previousRegistry);
+        restoreRegistry();
       }
     }
   },

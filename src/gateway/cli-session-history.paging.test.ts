@@ -29,17 +29,16 @@ import {
   LEGACY_EXEC_COMPLETION_PROMPT,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
+import {
+  historyParams as baseHistoryParams,
+  historyTarget,
+} from "./session-history-events.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
 
 async function historyFixture(state: OpenClawTestState, nativeId: string, sessionId: string) {
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(state.sessionsDir(), "sessions.json"),
-  };
+  const scope = historyTarget(state, sessionId);
   const entry = {
     sessionId,
     updatedAt: 1,
@@ -108,18 +107,12 @@ function historyParams(
   max = 10,
 ): ChatHistoryPageParams {
   return {
-    entry,
+    ...baseHistoryParams(scope, entry),
     provider: "claude-cli",
-    sessionId: scope.sessionId,
-    storePath: scope.storePath,
-    sessionAgentId: scope.agentId,
-    canonicalKey: scope.sessionKey,
     cliHistoryHomeDir: homeDir,
     max,
     maxHistoryBytes: 64 * 1024,
     effectiveMaxChars: 4096,
-    offset: undefined,
-    messageId: undefined,
   };
 }
 
