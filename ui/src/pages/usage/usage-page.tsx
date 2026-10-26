@@ -1,4 +1,4 @@
-import { createEffect, createMemo } from "solid-js";
+import { createEffect, createMemo, createProjection } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { UsagePageShell } from "./page-shell.tsx";
@@ -20,9 +20,12 @@ export function UsagePage(props: { routeData?: UsageRouteData }) {
 }
 
 export function UsagePageContent(props: { state: UsageProps; result: SessionsUsageResult | null }) {
+  // Reconcile the owner's snapshot so query drafts and read status cannot
+  // invalidate unchanged calendar, summary, and session data.
+  const state = createProjection(() => props.state);
   return (
     <UsagePageShell result={props.result}>
-      <UsageView {...props.state} />
+      <UsageView {...state} />
     </UsagePageShell>
   );
 }
