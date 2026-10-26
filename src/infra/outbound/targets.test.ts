@@ -89,6 +89,27 @@ function setPlugins(...plugins: ChannelPlugin[]) {
   setActivePluginRegistry(createTargetsTestRegistry(plugins));
 }
 
+function directoryTarget(kind: "user" | "group") {
+  return async ({ normalized }: { normalized: string }) => ({
+    to: normalized,
+    kind,
+    source: "directory" as const,
+  });
+}
+
+function route(channel: string, target: string, chatType: "direct" | "group") {
+  const scope = chatType === "direct" ? "user" : "group";
+  const sessionKey = `main:${channel}:${scope}:${target}`;
+  return {
+    sessionKey,
+    baseSessionKey: sessionKey,
+    peer: { kind: chatType, id: target },
+    chatType,
+    from: chatType === "group" ? `${channel}:group:${target}` : `${channel}:${target}`,
+    to: target,
+  };
+}
+
 function ownerPlugin(
   id: ChannelPlugin["id"],
   ownerId: string,
@@ -465,11 +486,7 @@ describe("resolveSessionDeliveryTarget", () => {
       messaging: {
         ...alpha.messaging,
         resolveOutboundSessionRoute: () => ({
-          sessionKey: "main:alpha:user:u123",
-          baseSessionKey: "main:alpha:user:u123",
-          peer: { kind: "direct", id: "u123" },
-          chatType: "direct",
-          from: "alpha:u123",
+          ...route("alpha", "u123", "direct"),
           to: "user:u123",
         }),
       },
@@ -495,35 +512,21 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("uses resolved target kind before applying proactive directPolicy to routed handles", async () => {
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        createTestChannelPlugin({
-          id: "telegram",
-          outbound: passthroughOutbound,
-          messaging: {
-            targetPrefixes: ["telegram"],
-            inferTargetChatType: () => "group",
-            targetResolver: {
-              resolveTarget: async ({ normalized }) => ({
-                to: normalized,
-                kind: "group",
-                source: "directory",
-              }),
-            },
-            resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
-              const isGroup = resolvedTarget?.kind === "group";
-              return {
-                sessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
-                baseSessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
-                peer: { kind: isGroup ? "group" : "direct", id: target },
-                chatType: isGroup ? "group" : "direct",
-                from: isGroup ? `telegram:group:${target}` : `telegram:${target}`,
-                to: target,
-              };
-            },
+    setPlugins(
+      createTestChannelPlugin({
+        id: "telegram",
+        outbound: passthroughOutbound,
+        messaging: {
+          targetPrefixes: ["telegram"],
+          inferTargetChatType: () => "group",
+          targetResolver: {
+            resolveTarget: directoryTarget("group"),
           },
-        }),
-      ]),
+          resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
+            return route("telegram", target, resolvedTarget?.kind === "group" ? "group" : "direct");
+          },
+        },
+      }),
     );
 
     const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
@@ -546,20 +549,9 @@ describe("resolveSessionDeliveryTarget", () => {
       messaging: {
         inferTargetChatType: () => "direct",
         targetResolver: {
-          resolveTarget: async ({ normalized }) => ({
-            to: normalized,
-            kind: "user",
-            source: "directory",
-          }),
+          resolveTarget: directoryTarget("user"),
         },
-        resolveOutboundSessionRoute: ({ target }) => ({
-          sessionKey: `main:alpha:group:${target}`,
-          baseSessionKey: `main:alpha:group:${target}`,
-          peer: { kind: "group", id: target },
-          chatType: "group",
-          from: `alpha:group:${target}`,
-          to: target,
-        }),
+        resolveOutboundSessionRoute: ({ target }) => route("alpha", target, "group"),
       },
     });
     alpha.config = { ...alpha.config, resolveAllowFrom: () => ["operator"] };
@@ -656,11 +648,7 @@ describe("resolveSessionDeliveryTarget", () => {
       outbound: passthroughOutbound,
       messaging: {
         targetResolver: {
-          resolveTarget: async ({ normalized }) => ({
-            to: normalized,
-            kind: "user",
-            source: "directory",
-          }),
+          resolveTarget: directoryTarget("user"),
         },
       },
     });
@@ -696,14 +684,7 @@ describe("resolveSessionDeliveryTarget", () => {
     const external = createTestChannelPlugin({
       id: "external-channel",
       label: "External",
-      outbound: {
-        deliveryMode: "direct",
-        sendText: vi.fn(),
-        resolveTarget: ({ to }) =>
-          to
-            ? { ok: true as const, to: to.trim() }
-            : { ok: false as const, error: new Error("target required") },
-      },
+      outbound: { ...passthroughOutbound, sendText: vi.fn() },
       messaging: {
         inferTargetChatType: () => "direct",
       },
@@ -744,32 +725,25 @@ describe("resolveSessionDeliveryTarget", () => {
   ])("resolves proactive reserved literals: $name", async ({ groups, expected }) => {
     const listGroups = vi.fn().mockResolvedValue(groups);
     const listGroupsLive = vi.fn().mockResolvedValue([]);
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...createTestChannelPlugin({
-            id: "telegram",
-            outbound: passthroughOutbound,
-            messaging: {
-              targetPrefixes: ["telegram", "tg"],
-              targetResolver: {
-                reservedLiterals: ["current", "self", "this", "me"],
-                hint: "<chatId>",
-              },
-              resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
-                sessionKey: `main:telegram:group:${target}`,
-                baseSessionKey: `main:telegram:group:${target}`,
-                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
-                chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
-                from: `telegram:group:${target}`,
-                to: target,
-              }),
-            },
+    setPlugins({
+      ...createTestChannelPlugin({
+        id: "telegram",
+        outbound: passthroughOutbound,
+        messaging: {
+          targetPrefixes: ["telegram", "tg"],
+          targetResolver: {
+            reservedLiterals: ["current", "self", "this", "me"],
+            hint: "<chatId>",
+          },
+          resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
+            ...route("telegram", target, "group"),
+            peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
+            chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
           }),
-          directory: { listGroups, listGroupsLive },
         },
-      ]),
-    );
+      }),
+      directory: { listGroups, listGroupsLive },
+    });
     const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
       cfg: {},
       agentId: "main",
@@ -784,20 +758,16 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("keeps proactive route canonicalization best-effort when route resolution fails", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            inferTargetChatType: () => "group",
-            resolveOutboundSessionRoute: () => {
-              throw new Error("route lookup failed");
-            },
-          },
+    setPlugins({
+      ...alpha,
+      messaging: {
+        ...alpha.messaging,
+        inferTargetChatType: () => "group",
+        resolveOutboundSessionRoute: () => {
+          throw new Error("route lookup failed");
         },
-      ]),
-    );
+      },
+    });
 
     const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
       cfg: {},
