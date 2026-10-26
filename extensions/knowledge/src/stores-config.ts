@@ -24,8 +24,8 @@ const REVIEW_JOB_DESCRIPTION =
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
   {
-    operatorRead: Type.Optional(Type.Boolean()),
-    writesEnabled: Type.Optional(Type.Boolean()),
+    operatorRead: Type.Optional(Type.Boolean({ default: true })),
+    writesEnabled: Type.Optional(Type.Boolean({ default: true })),
     stores: Type.Optional(StoresSection),
     maintenance: Type.Optional(
       Type.Object(
