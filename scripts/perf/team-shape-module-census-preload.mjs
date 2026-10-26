@@ -11,12 +11,27 @@ import "./main-module-census-preload.mjs";
 if (isMainThread) {
   process.on("message", (message) => {
     if (message?.channel === "team-shape-stress" && message.action === "stop") {
-      process.emit("message", {
-        channel: "main-module-census",
-        action: "capture",
-        id: "team-stress-census",
-        output: path.join(message.output, "module-census.json"),
-      });
+      // Telemetry finishes asynchronously; the stop request is not its boundary.
+      const send = process.send;
+      process.send = function (...args) {
+        const reply = args[0];
+        const stopped = reply?.channel === "team-shape-stress" && reply.action === "stop";
+        if (stopped) {
+          process.send = send;
+        }
+        const result = Reflect.apply(send, this, args);
+        if (stopped && reply.ok) {
+          queueMicrotask(() => {
+            process.emit("message", {
+              channel: "main-module-census",
+              action: "capture",
+              id: "team-stress-census",
+              output: path.join(message.output, "module-census.json"),
+            });
+          });
+        }
+        return result;
+      };
     }
   });
 }
