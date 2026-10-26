@@ -8,20 +8,15 @@ import type { SessionRowBadgesParams } from "./session-row-badge-presentation.ts
 import { SessionRowBadges } from "./solid/session-presentation.tsx";
 import "./tooltip.ts";
 
-let container: HTMLElement;
-let view: ReturnType<typeof mountSolid> | undefined;
-
-function renderBadges(params: SessionRowBadgesParams) {
-  view?.unmount();
-  view = mountSolid(() => createComponent(SessionRowBadges, params));
-  container = view.container;
-}
+const renderBadges = (params: SessionRowBadgesParams) =>
+  mountSolid(() => createComponent(SessionRowBadges, params)).container;
+const badge = (container: HTMLElement, kind: string) =>
+  container.querySelector<HTMLElement>(`.session-row-badge--${kind}`);
 
 beforeEach(() => i18n.setLocale("en"));
 
 function renderBadge(params: SessionRowBadgesParams, kind: string, text: string) {
-  renderBadges(params);
-  const indicator = badge(kind);
+  const indicator = badge(renderBadges(params), kind);
   expect(indicator?.getAttribute("aria-label")).toBe(text);
   expect(indicator?.hasAttribute("title")).toBe(false);
   expect(indicator?.closest<HTMLElement & { content?: string }>("openclaw-tooltip")?.content).toBe(
@@ -29,10 +24,6 @@ function renderBadge(params: SessionRowBadgesParams, kind: string, text: string)
   );
   expect(indicator?.querySelector("svg")).not.toBeNull();
   return indicator;
-}
-
-function badge(kind: string) {
-  return container.querySelector<HTMLElement>(`.session-row-badge--${kind}`);
 }
 
 const pr = (
@@ -60,15 +51,15 @@ it("renders outbox attention and stays quiet when empty", () => {
   );
   expect(indicator?.textContent).toContain("3");
 
-  renderBadges({ outboxAttentionCount: 1 });
-  expect(badge("attention")?.getAttribute("aria-label")).toBe("1 message needs attention");
+  expect(
+    badge(renderBadges({ outboxAttentionCount: 1 }), "attention")?.getAttribute("aria-label"),
+  ).toBe("1 message needs attention");
 
-  renderBadges({ outboxAttentionCount: 0 });
-  expect(container.querySelector(".session-row-badges")).toBeNull();
+  expect(renderBadges({ outboxAttentionCount: 0 }).querySelector(".session-row-badges")).toBeNull();
 });
 
 it("keeps child placement badges hidden while showing PR and approval", () => {
-  renderBadges({
+  const container = renderBadges({
     isChild: true,
     ...pr("open", 111532),
     hasApproval: true,
@@ -76,9 +67,9 @@ it("keeps child placement badges hidden while showing PR and approval", () => {
   });
 
   expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
-  expect(badge("pull-request")).not.toBeNull();
-  expect(badge("approval")).not.toBeNull();
-  expect(badge("cloud")).toBeNull();
+  expect(badge(container, "pull-request")).not.toBeNull();
+  expect(badge(container, "approval")).not.toBeNull();
+  expect(badge(container, "cloud")).toBeNull();
 });
 
 it.each([
@@ -97,6 +88,8 @@ it.each([
     );
     expect(indicator?.dataset.placementState).toBe(placementState);
     expect(indicator?.dataset.workspaceConflicts).toBe(String(count));
-    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+    expect(
+      indicator?.closest(".session-row-badges")?.querySelectorAll(".session-row-badge"),
+    ).toHaveLength(1);
   },
 );

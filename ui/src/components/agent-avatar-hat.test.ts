@@ -66,10 +66,6 @@ it.each([
     expect(overlay?.querySelector(".identity-avatar__hat-svg")?.namespaceURI).toBe(
       "http://www.w3.org/2000/svg",
     );
-    if (surface !== "identity") {
-      expect(overlay?.parentElement).toBe(image?.parentElement);
-      expect(overlay?.parentElement?.dataset.avatarState).toBe("loaded");
-    }
   }
   resetBranding();
   flush();

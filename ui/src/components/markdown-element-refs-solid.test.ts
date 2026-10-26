@@ -9,25 +9,17 @@ import { markdownBlocksRef } from "./markdown-element-refs-solid.ts";
 afterEach(() => vi.unstubAllGlobals());
 
 it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
-  const observed = new Set<Element>();
+  const observers: Set<Element>[] = [];
   vi.stubGlobal(
     "ResizeObserver",
     class {
       private readonly targets = new Set<Element>();
-      observe(target: Element) {
-        this.targets.add(target);
-        observed.add(target);
+      constructor() {
+        observers.push(this.targets);
       }
-      unobserve(target: Element) {
-        this.targets.delete(target);
-        observed.delete(target);
-      }
-      disconnect() {
-        for (const target of this.targets) {
-          observed.delete(target);
-        }
-        this.targets.clear();
-      }
+      observe = (target: Element) => this.targets.add(target);
+      unobserve = (target: Element) => this.targets.delete(target);
+      disconnect = () => this.targets.clear();
     },
   );
   const notify = (owner: EventTarget, active: boolean) => {
@@ -35,9 +27,11 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     expectWork(active);
   };
   const expectWork = (active: boolean, target = code) => {
-    expect(observed.has(target)).toBe(active);
-    if (!active) {
-      expect(observed.size).toBe(0);
+    const observed = observers.flatMap((targets) => [...targets]);
+    if (active) {
+      expect(observed).toContain(target);
+    } else {
+      expect(observed).toHaveLength(0);
     }
   };
 
@@ -62,6 +56,10 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     },
     { targetElement: root },
   );
+  const present = async (value: PresentationValue) => {
+    updatePresentation(value);
+    await waitForSolid(() => expectWork(true));
+  };
 
   try {
     await waitForSolid(() => expectWork(true));
@@ -75,18 +73,15 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     await Promise.resolve();
     expectWork(false);
 
-    updatePresentation({ ...binding });
-    await waitForSolid(() => expectWork(true));
+    await present({ ...binding });
     const nextOwner = new EventTarget();
     let nextVisible = true;
-    updatePresentation({ owner: nextOwner, isPresented: () => nextVisible });
-    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    await present({ owner: nextOwner, isPresented: () => nextVisible });
     visible = false;
     notify(presentationOwner, true);
     nextVisible = false;
     notify(nextOwner, false);
-    updatePresentation(true);
-    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    await present(true);
     notify(nextOwner, true);
 
     const nextRoot = document.createElement("div");
@@ -95,7 +90,7 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     root.replaceWith(nextRoot);
     replaceRoot(nextRoot);
     await waitForSolid(() => {
-      expect(observed.has(code)).toBe(false);
+      expect(observers.some((targets) => targets.has(code))).toBe(false);
       expectWork(true, nextRoot.querySelector("code")!);
     });
     view.unmount();
