@@ -304,12 +304,15 @@ describe("production lint suppressions", () => {
         "src/shared/store-writer-acquisitions.ts|typescript/prefer-promise-reject-errors|1",
         // Usage outputs sort freshly materialized private arrays without another copy.
         "src/shared/usage-aggregates.ts|unicorn/no-array-sort|1",
+        "src/shared/usage-overview.ts|unicorn/no-array-sort|5",
+        "src/skills/loading/skill-precedence.ts|unicorn/no-array-sort|3",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         // JSON string scanning must detect and reject unescaped control characters.
         "src/state/json-predicate-fields.ts|no-control-regex|1",
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
+        "src/status/status-plugin-health.ts|unicorn/no-array-sort|6",
         "src/test-utils/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         // The query observer invokes the captured native method with the intercepted database receiver.
