@@ -317,6 +317,12 @@ runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
 
+Async approval reads share frozen snapshots until the policy changes. Treat the
+returned file and its nested grants as read-only; use `structuredClone(file)` to
+prepare an edit before submitting it through the approval writer. Retaining a
+snapshot does not retain execution authority: pending updates and revocations
+still fail closed at the final execution check.
+
 ### Session reset freshness
 
 Channel runtime consumers should await
