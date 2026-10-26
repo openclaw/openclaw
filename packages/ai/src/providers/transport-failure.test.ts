@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { anthropicEvents } from "../provider-transport-parity.test-support.js";
 import { createAnthropicMessagesTransportStreamFn } from "../transports/anthropic-transport-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { Context } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
-import { frame, serializeSse } from "./provider-stream.test-support.js";
+import { serializeSse } from "./provider-stream.test-support.js";
 
 const initialHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(initialHost));
@@ -75,16 +76,7 @@ describe.each(implementations)("%s transport failures", (_name, api, stream) => 
   it("does not mark a socket drop after content starts", async () => {
     const events =
       api === "anthropic-messages"
-        ? [
-            frame("message_start", {
-              message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-            }),
-            frame("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
-            frame("content_block_delta", {
-              index: 0,
-              delta: { type: "text_delta", text: "Partial" },
-            }),
-          ]
+        ? anthropicEvents.slice(0, 3)
         : [{ choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }] }];
     let failBody: (() => void) | undefined;
     const body = new ReadableStream<Uint8Array>({
