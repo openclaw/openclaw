@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { isIndexedSessionEntry } from "../../../agents/sessions/session-manager-codec.js";
 import { SessionManager } from "../../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../agents/test-helpers/agent-message-fixtures.js";
@@ -23,31 +23,23 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2 });
 
 async function createConsult(excludeFromContext = true) {
-  let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+  const createBridge = vi.fn((_request: RealtimeVoiceBridgeCreateRequest) => controlBridge());
   const { relay } = await createRelay({
     cfg: { agents: { entries: { main: {} } } },
     context: controlContext(),
     connId,
     controlSource: "delegation",
-    provider: createIdleRelayProvider((options) => {
-      bridgeRequest = options;
-      return controlBridge();
-    }),
+    provider: createIdleRelayProvider(createBridge),
     instructions: "Answer briefly.",
   });
-  const onTranscript = bridgeRequest?.onTranscript;
-  const onEvent = bridgeRequest?.onEvent;
+  const { onTranscript, onEvent, onReady } = createBridge.mock.calls[0]![0];
   if (!onTranscript || !onEvent) {
     throw new Error("expected registered relay transcript and response callbacks");
   }
-  bridgeRequest?.onReady?.();
+  onReady?.();
   onEvent({ direction: "server", type: "response.created", responseId: "consult-response" });
-  const scope = {
-    agentId: "main",
-    sessionId: "main",
-    sessionKey,
-    storePath: relay.sessionTarget.storePath,
-  };
+  const { storePath } = relay.sessionTarget;
+  const scope = { agentId: "main", sessionId: "main", sessionKey, storePath };
   await upsertSessionEntryCore(scope, {
     sessionFile: formatSqliteSessionFileMarker(scope),
     sessionId: scope.sessionId,
@@ -60,11 +52,7 @@ async function createConsult(excludeFromContext = true) {
     ...(excludeFromContext ? { excludeFromContext: true } : {}),
     timestamp: 1,
   };
-  await appendTranscriptMessage(scope, {
-    eventId: "keyed-consult-turn",
-    message: consult,
-    now: 1,
-  });
+  await appendTranscriptMessage(scope, { eventId: "keyed-consult-turn", message: consult, now: 1 });
   const recordSpeech = async (roles: readonly ("assistant" | "user")[]) => {
     for (const role of roles) {
       onTranscript(role, speech[role], true);
@@ -86,41 +74,37 @@ async function createConsult(excludeFromContext = true) {
 }
 
 it.each([
-  { roles: ["user", "assistant"], excludeFromContext: true },
-  { roles: ["assistant", "user"], excludeFromContext: false },
-] as const)(
-  "adopts the exact consult after live $roles speech (excluded: $excludeFromContext)",
-  async ({ roles, excludeFromContext }) => {
-    const { consult, recordSpeech, messages, openManager } =
-      await createConsult(excludeFromContext);
-    await recordSpeech(roles);
-    const beforeAdoption = await messages();
-    expect(beforeAdoption).toMatchObject([
-      { id: "keyed-consult-turn", message: consult },
-      ...roles.map((role) => ({
-        message: {
-          role,
-          content: [{ type: "text", text: speech[role] }],
-          provenance: { kind: "realtime_voice", sourceChannel: "talk" },
-        },
-      })),
-    ]);
+  [["user", "assistant"], true],
+  [["assistant", "user"], false],
+] as const)("adopts consult after %j speech (excluded: %s)", async (roles, excluded) => {
+  const { consult, recordSpeech, messages, openManager } = await createConsult(excluded);
+  await recordSpeech(roles);
+  const beforeAdoption = await messages();
+  expect(beforeAdoption).toMatchObject([
+    { id: "keyed-consult-turn", message: consult },
+    ...roles.map((role) => ({
+      message: {
+        role,
+        content: [{ type: "text", text: speech[role] }],
+        provenance: { kind: "realtime_voice", sourceChannel: "talk" },
+      },
+    })),
+  ]);
 
-    const manager = openManager();
-    expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
-      entryId: "keyed-consult-turn",
-      message: consult,
-      anchor: { entryId: "keyed-consult-turn", idempotencyKey: consult.idempotencyKey },
-      appended: false,
-    });
-    expect(manager.getAppendParentId()).toBe(beforeAdoption.at(-1)?.id);
-    const answerId = manager.appendMessage(assistantMessage("You have one meeting tomorrow."));
-    expect(await messages()).toMatchObject([
-      ...beforeAdoption,
-      { id: answerId, parentId: beforeAdoption.at(-1)?.id },
-    ]);
-  },
-);
+  const manager = openManager();
+  expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
+    entryId: "keyed-consult-turn",
+    message: consult,
+    anchor: { entryId: "keyed-consult-turn", idempotencyKey: consult.idempotencyKey },
+    appended: false,
+  });
+  expect(manager.getAppendParentId()).toBe(beforeAdoption.at(-1)?.id);
+  const answerId = manager.appendMessage(assistantMessage("You have one meeting tomorrow."));
+  expect(await messages()).toMatchObject([
+    ...beforeAdoption,
+    { id: answerId, parentId: beforeAdoption.at(-1)?.id },
+  ]);
+});
 
 it.each([
   { boundary: "completed" },
