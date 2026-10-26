@@ -26,7 +26,6 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../../infra/system-events.js";
-import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
@@ -243,8 +242,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 0,
       });
       const reply = { ...sessionState(sessionKey, sessionEntry), storePath };
-      const logPath = path.join(tmp, "maintenance.log");
-      setLoggerOverride({ level: "debug", consoleLevel: "silent", file: logPath });
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
       const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
@@ -384,12 +381,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         delivery.resolve();
         await operation.ownerSettlement;
         await maintenance;
-        await flushLogger();
-        const diagnostic = await fs.readFile(logPath, "utf8");
-        expect(
-          runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger),
-          diagnostic,
-        ).toEqual(preempted || retiredGateway ? ["user"] : ["user", "memory"]);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(
+          preempted || retiredGateway ? ["user"] : ["user", "memory"],
+        );
         if (preempted || retiredGateway) {
           expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
         } else {
@@ -413,7 +407,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         onReplyOperationOwned.mock.calls[0]?.[0].complete();
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
-        setLoggerOverride(null);
       }
     },
   );
@@ -712,33 +705,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  function runRawTraceCase(
-    scope: {
-      sessionEntry: SessionEntry;
-      sessionFile: string;
-      storePath: string;
-    },
-    run: BaseRunOptions["run"],
-    commandBody: string,
-  ) {
-    const sessionKey = "main";
-    return channelRun("telegram", "chat:1", {
-      context: { CommandBody: commandBody },
-      run: {
-        agentId: "main",
-        sessionKey,
-        sessionFile: scope.sessionFile,
-        ...run,
-      },
-      reply: {
-        ...sessionState(sessionKey, scope.sessionEntry),
-        storePath: scope.storePath,
-      },
-    }).run();
-  }
-
-  it("appends raw trace payloads when trace raw is enabled", async () => {
-    const { tmp, storePath, sessionKey, sessionEntry, scope } = await storedSession({
+  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
+    const { tmp, storePath, sessionKey, sessionEntry, scope, reply } = await storedSession({
       traceLevel: "raw",
       compactionCount: 3,
     });
@@ -787,9 +755,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
       });
       return replyResult("Visible reply", {
         finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
+          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
         finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply</final>",
+        finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
         executionTrace: {
           winnerProvider: "anthropic",
           winnerModel: "claude",
@@ -830,11 +798,18 @@ describe("runReplyAgent Active Memory inline debug", () => {
       });
     });
 
-    const result = await runRawTraceCase(
-      { sessionEntry, sessionFile: sessionKey, storePath },
-      { reasoningLevel: "on", thinkLevel: "low", traceAuthorized: true },
-      "/trace raw show me everything",
-    );
+    const result = await channelRun("telegram", "chat:1", {
+      context: { CommandBody: "/trace raw show me everything" },
+      run: {
+        agentId: "main",
+        sessionKey,
+        sessionFile: sessionKey,
+        reasoningLevel: "on",
+        thinkLevel: "low",
+        traceAuthorized: true,
+      },
+      reply,
+    }).run();
 
     expect(Array.isArray(result)).toBe(true);
     expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
@@ -865,34 +840,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("Summary: winner=claude 🧠 low fallback=yes attempts=2");
     expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
     expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
-  });
-
-  // Unauthorized stored-raw delivery is covered by agent-runner-result-diagnostics.persistence.
-  it("escapes raw trace fences", async () => {
-    const { tmp, storePath, sessionEntry } = await storedSession({ traceLevel: "raw" });
-    const sessionFile = path.join(tmp, "session.jsonl");
-    await fs.writeFile(sessionFile, "", "utf-8");
-    runEmbeddedAgentMock.mockResolvedValueOnce(
-      replyResult("Visible reply", {
-        finalPromptText: "show me\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "assistant\n~~~\nresponse",
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 10, output: 2, total: 12 },
-        },
-      }),
-    );
-    const result = await runRawTraceCase(
-      { sessionEntry, sessionFile, storePath },
-      { reasoningLevel: "off", thinkLevel: "off", traceAuthorized: true },
-      "/trace raw",
-    );
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("show me\n\\~~~\nnot a fence");
-    expect(traceText).toContain("assistant\n\\~~~\nresponse");
+    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
+    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
   });
 });
 
