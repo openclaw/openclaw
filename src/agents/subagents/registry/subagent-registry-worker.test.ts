@@ -18,6 +18,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.test-support.js";
@@ -398,6 +399,141 @@ function holdFirstAck(onWrite = () => {}) {
   });
   return { reached, release };
 }
+
+it.each(["delivered", "lost"] as const)(
+  "publishes native registry receipts once without repeating their payload in the reply (%s)",
+  async (delivery) => {
+    const original = entry(`native-receipt-${delivery}`);
+    await register(original);
+    const replies: unknown[] = [];
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const reply = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        replies.push(reply);
+        if (delivery === "lost") {
+          throw new SqliteWorkerError("Synthetic lost registry ACK", "outcome-unknown");
+        }
+      }
+      return reply;
+    });
+    const notify = vi
+      .spyOn(sessionStateNotices, "enqueueSessionStateNotice")
+      .mockImplementation(() => {});
+    const published = vi.fn();
+    const stop = subscribeSubagentRunChanges("persistence", published);
+    const onPublished = vi.fn();
+    try {
+      const value = await mutateSubagentRuns(
+        [original.runId],
+        (rows) => ({
+          value: "updated",
+          postimages: new Map([
+            [original.runId, { ...rows.get(original.runId)!, label: "native receipt" }],
+          ]),
+          terminalEvents: [
+            {
+              input: {
+                event: {
+                  sessionKey: original.childSessionKey,
+                  agentId: "main",
+                  kind: "goal_changed",
+                  actorType: "system",
+                  summary: "Synthetic registry receipt notice",
+                  watcherSessionKeys: [original.requesterSessionKey],
+                },
+                now: Date.now(),
+              },
+            },
+          ],
+        }),
+        { onPublished },
+      );
+      expect(value).toBe("updated");
+      expect(subagentRuns.get(original.runId)?.label).toBe("native receipt");
+      expect(stored(original.runId)?.label).toBe("native receipt");
+      expect(published).toHaveBeenCalledOnce();
+      expect(onPublished).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledExactlyOnceWith({
+        watcherSessionKey: original.requesterSessionKey,
+        watcherStorePath: null,
+        targetSessionKey: original.childSessionKey,
+        lastSeenSequence: 0,
+        queueOnly: false,
+      });
+      expect(replies).toEqual([undefined]);
+    } finally {
+      stop();
+    }
+  },
+);
+
+it.each(["after acknowledgment", "lost acknowledgment", "missing receipt"] as const)(
+  "preserves the registry commit outcome and failure with %s",
+  async (fault) => {
+    const original = entry(`settlement-${fault}`);
+    await register(original);
+    const failure =
+      fault === "lost acknowledgment"
+        ? new SqliteWorkerError("Synthetic registry settlement failure", "outcome-unknown")
+        : new Error("Synthetic registry settlement failure");
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+      (context, operation, options) => {
+        let admission: operationAdmission.SqliteWorkerOperationAdmission | undefined;
+        const loseReceipt = () => {
+          expect(admission?.committed).toBeDefined();
+          Object.defineProperty(admission, "committed", { value: undefined });
+        };
+        return run(
+          context,
+          async (scope) => {
+            const value = await operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                if (
+                  command.type === "subagents.persistChanges" &&
+                  fault !== "after acknowledgment"
+                ) {
+                  loseReceipt();
+                  if (fault === "lost acknowledgment") {
+                    throw failure;
+                  }
+                }
+                return result;
+              },
+            });
+            if (fault === "after acknowledgment") {
+              loseReceipt();
+              throw failure;
+            }
+            return value;
+          },
+          {
+            ...options,
+            createAdmission: (nativeOperation) => {
+              const prepared = options!.createAdmission!(nativeOperation);
+              admission = prepared.admission;
+              return prepared;
+            },
+          },
+        );
+      },
+    );
+    const outcome = await change(original.runId, { label: "durably updated" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(stored(original.runId)?.label).toBe("durably updated");
+    expect(subagentRuns.get(original.runId)?.label).toBe(original.label);
+    expect(outcome).toMatchObject({
+      outcome: fault === "after acknowledgment" ? "committed" : "unknown",
+      cause:
+        fault === "missing receipt"
+          ? expect.objectContaining({ message: "Registry committed receipt is unavailable" })
+          : failure,
+    });
+  },
+);
 
 it("publishes overlapping durable and runtime-only mutations in FIFO order", async () => {
   await register({ ...entry("overlap"), cleanupHandled: false });

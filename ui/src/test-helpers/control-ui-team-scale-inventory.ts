@@ -50,11 +50,13 @@ export function createTeamScaleSessionInventory({
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;
     const running = index < 24;
+    const uuidPrefix =
+      offRosterSession && index === counts.sessions - counts.pinned ? "f00dcafe" : "00000000";
     const row: TeamScaleSession = {
       key:
         index === 0
           ? "agent:main:main"
-          : `agent:main:${pinned ? "dashboard" : "chat"}:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          : `agent:main:${pinned ? "dashboard" : "chat"}:${uuidPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ...(index === 0 ? { isMain: true } : {}),
       sessionId: `team-session-${index + 1}`,
       childOwnerSessionKeys: [],

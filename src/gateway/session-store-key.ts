@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
@@ -88,7 +89,7 @@ function resolveLogicalSessionStoreAgentId(cfg: OpenClawConfig, sessionKey: stri
 
 function resolveParsedSessionStoreKey(
   cfg: OpenClawConfig,
-  raw: string,
+  normalizedKey: string,
   parsed: ParsedAgentSessionKey,
   storeAgentId?: string,
 ): { agentId: string; sessionKey: string } {
@@ -102,7 +103,7 @@ function resolveParsedSessionStoreKey(
   ) {
     return {
       agentId: parsedAgentId,
-      sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
+      sessionKey: normalizedKey,
     };
   }
   const agentId = storeAgentId
@@ -113,12 +114,12 @@ function resolveParsedSessionStoreKey(
 
 function canonicalizeParsedSessionStoreKey(
   cfg: OpenClawConfig,
-  raw: string,
+  normalizedKey: string,
   parsed: ParsedAgentSessionKey,
   storeAgentId?: string,
   preserveQualifiedAddress = false,
 ): string {
-  const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, storeAgentId);
+  const resolved = resolveParsedSessionStoreKey(cfg, normalizedKey, parsed, storeAgentId);
   if (preserveQualifiedAddress && resolved.agentId === normalizeAgentId(parsed.agentId)) {
     return resolved.sessionKey;
   }
@@ -136,9 +137,15 @@ export function resolveSessionStoreKey(params: {
   storeAgentId?: string;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  const parsed = parseAgentSessionKey(raw);
+  const normalizedKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+  const parsed = parseAgentSessionKeyParts(normalizedKey);
   if (parsed) {
-    return canonicalizeParsedSessionStoreKey(params.cfg, raw, parsed, params.storeAgentId);
+    return canonicalizeParsedSessionStoreKey(
+      params.cfg,
+      normalizedKey,
+      parsed,
+      params.storeAgentId,
+    );
   }
 
   const rawLower = raw.toLowerCase();
@@ -182,10 +189,11 @@ export function resolveSessionStoreAgentId(
   canonicalKey: string,
   explicitAgentId?: string,
 ): string {
-  const parsed = parseAgentSessionKey(canonicalKey);
+  const normalizedKey = normalizeSessionKeyPreservingOpaquePeerIds(canonicalKey);
+  const parsed = parseAgentSessionKeyParts(normalizedKey);
   if (explicitAgentId) {
     const sessionKey = parsed
-      ? resolveParsedSessionStoreKey(cfg, canonicalKey, parsed, explicitAgentId).sessionKey
+      ? resolveParsedSessionStoreKey(cfg, normalizedKey, parsed, explicitAgentId).sessionKey
       : canonicalKey;
     return resolveSessionAgentId({ config: cfg, sessionKey, agentId: explicitAgentId });
   }
@@ -203,9 +211,10 @@ export function resolveSessionStoreIdentity(params: {
 }): { agentId: string; canonicalKey: string } {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   const requestedAgentId = normalizeOptionalString(params.agentId);
-  const parsed = parseAgentSessionKey(raw);
+  const normalizedKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+  const parsed = parseAgentSessionKeyParts(normalizedKey);
   if (params.preserveQualifiedAddress && parsed) {
-    const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+    const canonicalKey = normalizedKey;
     return {
       agentId: resolveSessionAgentId({
         config: params.cfg,
@@ -216,7 +225,7 @@ export function resolveSessionStoreIdentity(params: {
     };
   }
   const sessionKey = parsed
-    ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, requestedAgentId).sessionKey
+    ? resolveParsedSessionStoreKey(params.cfg, normalizedKey, parsed, requestedAgentId).sessionKey
     : raw;
   const agentId = resolveSessionStoreAgentId(params.cfg, sessionKey, requestedAgentId);
   const canonicalKey = resolveSessionStoreKey({
@@ -241,11 +250,12 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   if (!raw || lowered === "global" || lowered === "unknown") {
     return lowered;
   }
-  const parsed = parseAgentSessionKey(raw);
+  const normalizedKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+  const parsed = parseAgentSessionKeyParts(normalizedKey);
   if (parsed) {
     return canonicalizeParsedSessionStoreKey(
       params.cfg,
-      raw,
+      normalizedKey,
       parsed,
       params.agentId,
       params.preserveQualifiedAddress,

@@ -72,7 +72,6 @@ type FixtureOptions = {
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
   dashboardWidgetFontUrl?: string;
-  historyStateReceipt?: boolean;
   dashboardPaintMarker?: boolean;
 };
 
@@ -188,27 +187,27 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     now,
     selectedSessionKey,
   );
-  const { messageIds, historyMessages, configuredHistory } = createTeamScaleHistoryFixture({
-    messageCount: counts.transcriptMessages,
-    inlineWidgets: counts.inlineWidgets,
-    now,
-    largeSnapshot: options.largeSnapshot,
-    rowFacts: options.rowFacts,
-    attachments: duplicateReads?.attachments,
-    sender: options.transcriptAvatars ? transcriptSender : undefined,
-    historyStateReceipt: options.historyStateReceipt,
-    sessionInfo: pinnedRows[0]!,
-  });
-  const historySnapshot = () => ({
-    sessionId: pinnedRows[0]!.sessionId,
-    sessionInfo: pinnedRows[0]!,
-    messages: historyMessages,
-  });
+  const models = [
+    { id: "gpt-5-mini", name: "Fixture reasoning model", provider: "openai", reasoning: true },
+  ];
   const inFlightRun = () => ({
     runId: TEAM_SCALE_LIVE_RUN_ID,
     text: "Synthetic streaming progress 0",
     startedAt: now,
     events: [],
+  });
+  const { messageIds, historyMessages, selectedHistory } = createTeamScaleHistoryFixture({
+    messageCount: counts.transcriptMessages,
+    inlineWidgets: counts.inlineWidgets,
+    now,
+    largeSnapshot: options.largeSnapshot,
+    rowFacts: options.rowFacts,
+    duplicateBootReads: options.duplicateBootReads,
+    sessionInfo: pinnedRows[0]!,
+    models,
+    inFlightRun: options.liveRun ? inFlightRun() : undefined,
+    attachments: duplicateReads?.attachments,
+    sender: options.transcriptAvatars ? transcriptSender : undefined,
   });
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
@@ -370,13 +369,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
-    models: [
-      { id: "gpt-5-mini", name: "Fixture reasoning model", provider: "openai", reasoning: true },
-    ],
     sessionKey: selectedSessionKey,
     ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
     presenceUsers: people,
+    models,
     historyMessages,
     sessionReactions: {
       [selectedSessionKey]: Object.fromEntries(
@@ -414,9 +411,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         : {}),
       "question.list": { questions: [] },
       ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
-      ...(configuredHistory
-        ? { "chat.startup": configuredHistory, "chat.history": configuredHistory }
-        : {}),
+      "chat.startup": selectedHistory,
+      "chat.history": selectedHistory,
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
@@ -697,7 +693,14 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarLiveChurn: options.sidebarLiveChurn
       ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
       : undefined,
-    liveHistory: options.liveRun ? { ...historySnapshot(), inFlightRun: inFlightRun() } : undefined,
+    liveHistory: options.liveRun
+      ? {
+          sessionId: pinnedRows[0]!.sessionId,
+          sessionInfo: pinnedRows[0]!,
+          messages: historyMessages,
+          inFlightRun: inFlightRun(),
+        }
+      : undefined,
     counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
   };

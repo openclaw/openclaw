@@ -19,7 +19,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
-import { fingerprintMessage } from "./prompt-cache-history.js";
+import { fingerprintMessage, messageFingerprints } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -320,6 +320,18 @@ describe("prompt cache history fingerprints", () => {
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
       await expect(request()).rejects.toThrow("changed fields: content[0].arguments");
     });
+  });
+
+  it("does not republish cached fingerprints when an unchanged history is observed again", () => {
+    const messages = Array.from({ length: 200 }, (_, timestamp) => {
+      const entry = { message: { role: "user" as const, content: "fixture", timestamp } };
+      normalizeTranscriptJsonValue(entry, "entry");
+      return entry.message;
+    });
+    const tracker = history("cached-history", messages);
+    const writes = vi.spyOn(messageFingerprints, "set");
+    expect(tracker.read()).toMatchObject(unchangedPrefix);
+    expect(writes).not.toHaveBeenCalled();
   });
 
   it("reuses owned content under mutable append envelopes across observers", async () => {

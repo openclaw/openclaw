@@ -33,8 +33,6 @@ import type {
   SkillRootApplyResult,
 } from "./workspace-types.js";
 
-export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
-
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
 const log = createSubsystemLogger("skills");
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
