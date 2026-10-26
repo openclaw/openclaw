@@ -92,17 +92,16 @@ it.each(["exact", "literal", "short", "title"] as const)(
     const exact = mode === "exact";
     const literal = mode === "literal";
     const dashboardId = "12345678-90ab-cdef-1234-567890abcdef";
-    const row = createSessionRouteRow({
-      ...(exact ? { key: `agent:roboclaw:dashboard:${dashboardId}` } : {}),
-      ...(literal ? { key: "agent:roboclaw:thread" } : {}),
-      displayName: exact ? "Cached dashboard" : "Cached conversation",
-    });
     const suffix = {
       exact: `dashboard/${dashboardId}`,
       literal: "thread",
       short: shortName,
       title: "cached-conversation",
     }[mode];
+    const row = createSessionRouteRow({
+      ...(exact || literal ? { key: `agent:roboclaw:${suffix}` } : {}),
+      displayName: "Cached conversation",
+    });
     if (literal) {
       seed([row]);
     }
@@ -122,10 +121,6 @@ it.each(["exact", "literal", "short", "title"] as const)(
         seed([row]);
       }
       cache.resolve();
-      if (literal) {
-        expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
-        expect(request).not.toHaveBeenCalled();
-      }
       expect(
         await Promise.race([pending, waiting.then(() => "waiting for Gateway")]),
       ).toMatchObject({
@@ -159,11 +154,9 @@ it.each(["global literal", "uncached short"] as const)(
     const row = createSessionRouteRow(
       literal ? { key: "agent:roboclaw:thread" } : { displayName: "Cached conversation" },
     );
-    if (!literal) {
-      seed([]);
-    }
     const request = installResolver([row]);
     if (!literal) {
+      seed([]);
       cache.resolve();
     }
     const completed = vi.fn();

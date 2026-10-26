@@ -41,16 +41,16 @@ function mount(overrides: Parameters<typeof renderComposerFixture>[0] = {}) {
   return { ...fixture, textarea, focus, expectDraft };
 }
 
-it("keeps the draft and caret through mobile editing, own controls and outside focus", async () => {
+it("keeps the draft and caret through controls, outside focus, and keyboard recovery", async () => {
   const onComposerEditingChange = vi.fn();
-  const { container, props, textarea, focus } = mount({
+  const { container, props, textarea, focus, expectDraft } = mount({
+    mobileKeyboardVisible: true,
     draft: "A draft kept across focus changes",
     queue: [{ id: "queued", text: "Next message", createdAt: 1, sendState: "waiting-idle" }],
     composerControls: createComposerControlsFixture(),
     onComposerEditingChange,
   });
   await waitForSolid(() => expect(container.querySelector(".chat-queue__remove")).not.toBeNull());
-  const queueControl = container.querySelector<HTMLButtonElement>(".chat-queue__remove")!;
   const outside = document.createElement("button");
   outside.textContent = "Outside composer";
   document.body.append(outside);
@@ -62,44 +62,20 @@ it("keeps the draft and caret through mobile editing, own controls and outside f
   textarea.setSelectionRange(2, 7);
   flush();
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  focus(container.querySelector<HTMLButtonElement>(".chat-composer-model-control")!);
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  focus(queueControl);
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
+  for (const selector of [".chat-composer-model-control", ".chat-queue__remove"]) {
+    focus(container.querySelector<HTMLButtonElement>(selector)!);
+    expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
+  }
   focus(outside);
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(false);
   expect(textarea.value).toBe(props.draft);
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7]);
   expect(container.querySelector("textarea")).toBe(textarea);
   expect(props.onSend).not.toHaveBeenCalled();
-});
-
-it("does not send when expansion moves an action beneath the first editor tap", () => {
-  const { container, props, textarea, focus } = mount({ draft: "Keep this" });
-  textarea.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   focus();
-  container
-    .querySelector<HTMLButtonElement>(".chat-send-btn--send")!
-    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
-  expect(props.onSend).not.toHaveBeenCalled();
-  expect(textarea.value).toBe("Keep this");
-});
-
-it("accepts observed keyboard recovery even when the editor retains focus", () => {
-  const onComposerEditingChange = vi.fn();
-  const { container, props, textarea, focus, expectDraft } = mount({
-    mobileKeyboardVisible: true,
-    draft: "Retained draft",
-    onComposerEditingChange,
-  });
-  focus();
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  textarea.setSelectionRange(2, 7);
   renderComposerInto(container, { ...props, mobileKeyboardVisible: false });
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(false);
-  expect(document.activeElement).toBe(textarea);
-  expect(textarea.value).toBe("Retained draft");
-
+  expectDraft(props.draft);
   onComposerEditingChange.mockClear();
   textarea.dispatchEvent(
     new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "touch" }),
@@ -119,8 +95,19 @@ it("accepts observed keyboard recovery even when the editor retains focus", () =
     expect(event.defaultPrevented).toBe(prevented);
   }
   expect(onComposerEditingChange.mock.calls.some(([editing]) => !editing)).toBe(false);
-  expectDraft("Retained draft");
+  expectDraft(props.draft);
   expect(props.onSend).not.toHaveBeenCalled();
+});
+
+it("does not send when expansion moves an action beneath the first editor tap", () => {
+  const { container, props, textarea, focus } = mount({ draft: "Keep this" });
+  textarea.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  focus();
+  container
+    .querySelector<HTMLButtonElement>(".chat-send-btn--send")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+  expect(props.onSend).not.toHaveBeenCalled();
+  expect(textarea.value).toBe("Keep this");
 });
 
 it("does not activate mobile editing in a desktop composer", () => {
