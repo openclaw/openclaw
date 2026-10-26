@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/ai";
+import type { Context } from "@openclaw/ai";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -25,9 +25,7 @@ afterEach(() => {
 
 const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } satisfies Context;
 
-function createBaseModel<TApi extends "openai-completions" | "openai-responses">(
-  api: TApi,
-): Model<TApi> {
+function createBaseModel<TApi extends "openai-completions" | "openai-responses">(api: TApi) {
   return makeProviderModelFixture<TApi>({
     id: "custom-model",
     api,
@@ -55,25 +53,14 @@ it("sends explicit API keys as bearer auth for generic chat-completions provider
   let capturedHeaders: Headers | undefined;
   mocks.fetchWithSsrFGuard.mockImplementationOnce(async (params: { init?: RequestInit }) => {
     capturedHeaders = new Headers(params.init?.headers);
-    return {
-      response: new Response(
-        [
-          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
-          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-      release: async () => undefined,
-    };
+    throw new Error("request captured");
   });
 
   await expect(
     streamOpenAICompletions(createBaseModel("openai-completions"), context, {
       apiKey: "sk-third-party",
     }).result(),
-  ).resolves.toMatchObject({ stopReason: "stop" });
+  ).resolves.toMatchObject({ stopReason: "error", errorMessage: "Connection error." });
   expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
 });
 

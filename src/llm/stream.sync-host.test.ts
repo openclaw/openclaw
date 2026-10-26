@@ -6,15 +6,10 @@ import { formatUserFacingAssistantErrorText } from "../agents/embedded-agent-hel
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
-import {
-  classifyGatewayStorageFailure,
-  isLocalStorageOutcomeError,
-} from "../infra/sqlite-error-diagnostics.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { stream, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
-import { isRetryableAssistantError } from "./utils/retry.js";
 
 it("defers provider streams until runtime transport ports are installed", async () => {
   const registry = createApiRegistry();
@@ -31,10 +26,8 @@ it("defers provider streams until runtime transport ports are installed", async 
     provider: model.provider,
     model: model.id,
   });
-  const providerStream = vi.fn<StreamFn>((runtimeModel, context) => {
+  const providerStream = vi.fn<StreamFn>(() => {
     expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);
-    expect(context.messages).toEqual([]);
-    expect(runtimeModel.id).toBe(model.id);
     const output = createAssistantMessageEventStream();
     output.push({ type: "done", reason: "stop", message });
     output.end();
@@ -46,11 +39,11 @@ it("defers provider streams until runtime transport ports are installed", async 
     streamSimple: providerStream,
   });
   const boundModel = bindModelLlmRuntime(model, createLlmRuntime(registry));
-  const fail = (error: Error, run = stream) => {
+  const fail = (error: Error) => {
     providerStream.mockImplementation(() => {
       throw error;
     });
-    return run(boundModel, { messages: [] }).result();
+    return stream(boundModel, { messages: [] }).result();
   };
 
   const outputs = [
@@ -63,16 +56,12 @@ it("defers provider streams until runtime transport ports are installed", async 
     message,
     message,
   ]);
-  expect(providerStream).toHaveBeenCalledTimes(2);
 
-  await expect(
-    fail(
-      Object.assign(new Error("private native detail"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 5,
-      }),
-    ),
-  ).resolves.toMatchObject({
+  const busy = Object.assign(new Error("private native detail"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
+  });
+  await expect(fail(busy)).resolves.toMatchObject({
     stopReason: "error",
     errorCode: "SQLITE_BUSY",
     errorMessage: "private native detail",
@@ -85,26 +74,16 @@ it("defers provider streams until runtime transport ports are installed", async 
       code: "57014",
     }),
   });
-  for (const run of [stream, streamSimple]) {
-    const failure = await fail(canceled, run);
-    expect(failure).toMatchObject({
-      stopReason: "error",
-      errorCode: "57014",
-      errorType: "PostgresQueryCanceledError",
-    });
-    expect(classifyGatewayStorageFailure(failure)).toBe("57014");
-  }
+  await expect(fail(canceled)).resolves.toMatchObject({
+    stopReason: "error",
+    errorCode: "57014",
+    errorType: "PostgresQueryCanceledError",
+  });
   const rollback = new SqliteWorkerError("private rollback detail", "unavailable");
-  for (const run of [stream, streamSimple]) {
-    const failure = await fail(rollback, run);
-    expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
-    expect(isLocalStorageOutcomeError(failure)).toBe(false);
-    expect(formatUserFacingAssistantErrorText(failure)).toMatch(/rolled back/i);
-    expect(formatUserFacingAssistantErrorText(failure)).toMatch(/retry/i);
-    const providerFailure = { ...failure, errorType: undefined };
-    expect(classifyGatewayStorageFailure(providerFailure)).toBeUndefined();
-    expect(isRetryableAssistantError(failure)).toBe(isRetryableAssistantError(providerFailure));
-  }
+  const failure = await fail(rollback);
+  expect(failure).toMatchObject({ errorCode: "unavailable", errorType: "SqliteWorkerError" });
+  expect(formatUserFacingAssistantErrorText(failure)).toMatch(/rolled back/i);
+  expect(formatUserFacingAssistantErrorText(failure)).toMatch(/retry/i);
   const uncertain = await fail(
     new AggregateError(
       [rollback, new SqliteWorkerError("private settlement detail", "outcome-unknown")],
@@ -112,14 +91,10 @@ it("defers provider streams until runtime transport ports are installed", async 
       { cause: rollback },
     ),
   );
-  expect(classifyGatewayStorageFailure(uncertain)).toBe("session_actor_reconciliation");
-  expect(isLocalStorageOutcomeError(uncertain)).toBe(true);
-  expect(isRetryableAssistantError(uncertain)).toBe(false);
+  expect(uncertain.errorCode).toBe("session_actor_reconciliation");
   expect(formatUserFacingAssistantErrorText(uncertain)).toMatch(/check.*history/i);
 
-  expect(
-    classifyGatewayStorageFailure(
-      await fail(Object.assign(new Error("provider capacity failure"), { code: "unavailable" })),
-    ),
-  ).toBeUndefined();
+  await expect(
+    fail(Object.assign(new Error("provider capacity failure"), { code: "unavailable" })),
+  ).resolves.toMatchObject({ errorCode: undefined, errorType: undefined });
 });

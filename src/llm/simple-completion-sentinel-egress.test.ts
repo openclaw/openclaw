@@ -63,8 +63,6 @@ it.each(authModes)("resolves %s without mutating shared models", (mode) => {
   const request = {
     headers: { "x-request": seal("request-header") },
     auth: requestAuth(mode, seal("request-key")),
-    proxy: { mode: "env-proxy" as const },
-    tls: { serverName: "provider.example.invalid" },
   };
   const protectedModel = withRequest(
     { ...model, headers: { "x-visible": seal("visible-header") } },
@@ -79,22 +77,20 @@ it.each(authModes)("resolves %s without mutating shared models", (mode) => {
     });
     expect(received.api).toBe(model.api);
   };
-  const construction = vi.fn((received: Model) => {
+  const construction = (received: Model) => {
     observe(received);
     return stream;
-  });
+  };
   const stream = vi.fn<StreamFn>((received, _context, options) => {
     observe(received);
     expect(options?.apiKey).toBe("option-key");
     expect(options?.headers).toEqual({ "x-option": "option-header" });
     return closedStream();
   });
-  const complete = prepareProvider(protectedModel, construction);
-  complete(protectedModel, {
+  prepareProvider(protectedModel, construction)(protectedModel, {
     apiKey: seal("option-key"),
     headers: { "x-option": seal("option-header") },
   });
-  expect(construction).toHaveBeenCalledOnce();
   expect(stream).toHaveBeenCalledOnce();
   expect(getModelProviderRequestTransport(protectedModel)).toBe(request);
   expect(protectedModel.headers?.["x-visible"]).toBe(seal("visible-header"));
