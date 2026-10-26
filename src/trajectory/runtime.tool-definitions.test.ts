@@ -25,7 +25,12 @@ describe("trajectory tool definition preparation", () => {
     const first = project();
     const expected = structuredClone(first);
     Object.assign(first[0]!.parameters ?? {}, { nested: { ordinary: "overwritten" } });
-    expect(project()).toEqual(expected);
+    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+    const repeated = project();
+    const descriptorReads = descriptors.mock.calls.length;
+    descriptors.mockRestore();
+    expect(repeated).toEqual(expected);
+    expect(descriptorReads).toBe(0);
     expect(digest).toHaveBeenCalledTimes(1);
 
     parameters.nested.ordinary = "changed";
@@ -120,6 +125,48 @@ describe("trajectory tool definition preparation", () => {
       nested: { ordinary: "kept", password: "synthetic-secret", toJSON },
     });
     expect(readNested).toHaveBeenCalledOnce();
+    const inheritedHook = Object.defineProperty({}, "__proto__", {
+      enumerable: true,
+      value: { toJSON },
+    });
+    expect(projectParameters(inheritedHook)).toEqual({});
+    expect(toJSON).not.toHaveBeenCalled();
+  });
+
+  it("preserves non-JSON leaves instead of aliasing them with JSON cache entries", () => {
+    for (const value of [undefined, Number.NaN, Infinity, -Infinity, -0, 1n, Symbol("fixture")]) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(projectParameters({ value: null })).toStrictEqual({ value: null });
+        expect(projectParameters({})).toStrictEqual({});
+        expect(projectParameters({ value: 0 })).toStrictEqual({ value: 0 });
+        expect(projectParameters({ value })).toStrictEqual({ value });
+      }
+    }
+  });
+
+  it("preserves opaque array truncation metadata without invoking serialization hooks", () => {
+    const toJSON = vi.fn(() => {
+      throw new Error("Unexpected serialization hook");
+    });
+    const entries = Array.from({ length: 64 }, () => 42);
+    for (const length of [Infinity, { valueOf: () => 65, toJSON }]) {
+      const parameters = new Proxy(entries, {
+        get(target, key, receiver) {
+          return key === "length" ? length : Reflect.get(target, key, receiver);
+        },
+      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(projectParameters(parameters)).toEqual([
+          ...entries,
+          {
+            truncated: true,
+            reason: "trajectory-array-size-limit",
+            originalLength: length,
+            limitItems: 64,
+          },
+        ]);
+      }
+    }
     expect(toJSON).not.toHaveBeenCalled();
   });
 });
