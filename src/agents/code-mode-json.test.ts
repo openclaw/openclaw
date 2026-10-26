@@ -11,6 +11,10 @@ import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result
 import { toolResultFitsBudget } from "./tool-result-limits.js";
 import { serializeToolSearchControlResult } from "./tool-search-control-result.js";
 
+function reference(bytes: number, preview: string, id = "result_synthetic") {
+  return { id, bytes, count: 1, shape: "object", preview, previewTruncated: true };
+}
+
 describe("Code Mode JSON normalization", () => {
   it.each(["output", "error"])("bounds serialization work for oversized %s", (channel) => {
     const text = "x".repeat(64_000);
@@ -60,26 +64,10 @@ describe("Code Mode JSON normalization", () => {
       return (seed >>> 0) % bound;
     };
     const alphabet = [
-      "a",
-      '"',
-      "\\",
-      "\n",
-      "\r",
-      "\b",
-      "\f",
-      "\t",
-      "\0",
-      "é",
-      "中",
-      "🌍",
+      ...Array.from('a"\\\n\r\b\f\t\0é中🌍'),
       "\ud800",
       "\udfff",
-      "·",
-      "꜀",
-      "ˇ",
-      "𝍠",
-      "𠀀",
-      "\u2028",
+      ...Array.from("·꜀ˇ𝍠𠀀\u2028"),
     ];
     for (let fixture = 0; fixture < 64; fixture++) {
       const text = Array.from({ length: 1 + next(128) }, () => alphabet[next(alphabet.length)]!)
@@ -96,14 +84,7 @@ describe("Code Mode JSON normalization", () => {
         valueGuidance: text.slice(0, next(64)),
         ...(fixture % 7 === 0
           ? {
-              reference: {
-                id: "result_synthetic",
-                bytes: Buffer.byteLength(text),
-                count: 1,
-                shape: "object",
-                preview: text.slice(0, next(128)),
-                previewTruncated: true,
-              },
+              reference: reference(Buffer.byteLength(text), text.slice(0, next(128))),
             }
           : {}),
       };
@@ -198,14 +179,7 @@ describe("Code Mode JSON normalization", () => {
               network,
               repeat === 37
                 ? () => ({
-                    reference: {
-                      id: "result_synthetic",
-                      bytes: input.length,
-                      count: 1,
-                      shape: "object",
-                      preview: input.slice(0, 80),
-                      previewTruncated: true,
-                    },
+                    reference: reference(input.length, input.slice(0, 80)),
                     release() {
                       released++;
                     },
@@ -246,14 +220,11 @@ describe("Code Mode JSON normalization", () => {
                   "Not retained: result-store capacity exceeded. Delete references or return less data.",
               }
             : {
-                reference: {
-                  id: "result_00000000-0000-0000-0000-000000000000",
-                  bytes: 4_011,
-                  count: 1,
-                  shape: "object",
-                  preview: "sample",
-                  previewTruncated: true,
-                },
+                reference: reference(
+                  4_011,
+                  "sample",
+                  "result_00000000-0000-0000-0000-000000000000",
+                ),
                 release,
               },
       );
