@@ -144,15 +144,32 @@ it(
             scope("owner").sessionKey,
             scope("participant").sessionKey,
           ]);
-          expect((await read("owner")).items).toMatchObject([
+          const ownerRead = await read("owner");
+          expect(ownerRead.items).toMatchObject([
             { type: "userMessage", text: "Allowed owner transcript" },
           ]);
-          expect((await read("participant")).items).toMatchObject([
+          const participantRead = await read("participant");
+          expect(participantRead.items).toMatchObject([
             { type: "userMessage", text: "participant" },
           ]);
           for (const denied of ["group-only", "mention", "unrelated", "other-group"]) {
             await expect(read(denied)).rejects.toThrow(/not visible|not shared/i);
           }
+          // Emit only synthetic fixture effects so hosted proof is inspectable without
+          // copying device identities, tokens, paths, or unbounded protocol frames.
+          console.info(
+            "[session-share-node] " +
+              JSON.stringify({
+                listed: host?.sessions.map(({ threadId }) => threadId),
+                delivered: [ownerRead, participantRead].map(({ items }) =>
+                  items.map(({ type, ...item }) => ({
+                    type,
+                    ...("text" in item ? { text: item.text } : {}),
+                  })),
+                ),
+                rejected: ["group-only", "mention", "unrelated", "other-group"],
+              }),
+          );
 
           for (const change of ["group", "owner"] as const) {
             const marker = `Withheld ${change} transcript`;
@@ -209,6 +226,15 @@ it(
               }),
             ]);
             expect(JSON.stringify(results)).not.toContain(marker);
+            console.info(
+              "[session-share-node] " +
+                JSON.stringify({
+                  revoked: change,
+                  receiver: "rejected",
+                  nodeResults: results.map((result) => (isRecord(result) ? result.ok : null)),
+                  heldTranscriptInNodeResult: JSON.stringify(results).includes(marker),
+                }),
+            );
           }
           expect(invocations.map(({ command }) => command)).toEqual(
             expect.arrayContaining(COMMANDS),
