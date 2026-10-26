@@ -24,8 +24,13 @@ function respond(...responses: unknown[]) {
   }
 }
 
-const requestBody = (index: number) =>
-  JSON.parse(String(fetcher.mock.calls[index]?.[1]?.body)) as unknown;
+function requestBody(index: number) {
+  const body = fetcher.mock.calls[index]?.[1]?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected a JSON request body");
+  }
+  return JSON.parse(body) as unknown;
+}
 
 const methods = () => fetcher.mock.calls.map(([, request]) => request?.method).join(" ");
 
