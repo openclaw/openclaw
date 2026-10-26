@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesGcResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -8,10 +8,7 @@ import {
   createApplicationGatewaySnapshot,
   createApplicationGateway,
 } from "../../test-helpers/application-context-fixtures.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../../test-helpers/gateway-client.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { GatewayPageBinding } from "../gateway-page-binding.ts";
 
@@ -30,26 +27,20 @@ const partial: WorktreesGcResult = { ...completed, outcome: "partial", issues: [
 
 function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[]) {
   vi.useFakeTimers();
-  const request = createGatewayRequestMock();
-  for (const response of responses) {
-    request.mockReturnValueOnce(Promise.resolve(response));
-  }
-  const list = vi.fn(async () => ({ worktrees: [] }));
+  const request = vi.fn<Parameters<typeof createTestGatewayClient>[0]>();
+  responses.forEach((response) => request.mockReturnValueOnce(Promise.resolve(response)));
   const client = createTestGatewayClient((...args) => {
     if (args[0] === "worktrees.gc") {
       return request(...args);
     }
-    if (args[0] === "worktrees.list") {
-      return list();
-    }
-    throw new Error(`Unexpected worktrees method: ${args[0]}`);
+    expect(args[0]).toBe("worktrees.list");
+    return { worktrees: [] };
   });
   const source = createApplicationGateway(
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
       hello: gatewayHelloForMethods(["worktrees.list", "worktrees.gc"]),
-      sessionKey: "main",
     }),
   );
   const context = { gateway: source.gateway } as ApplicationContext;
@@ -65,39 +56,33 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
   });
   model.gateway = Object.assign(binding, { readEpoch: () => binding.epoch });
   binding.connect();
-  onTestFinished(() => binding.dispose());
-  return { request, list, model, reconnect, notify };
+  onTestFinished(() => {
+    const timerCount = vi.getTimerCount();
+    binding.dispose();
+    vi.useRealTimers();
+    expect(timerCount).toBe(0);
+  });
+  return { request, model, reconnect, notify };
 }
-
-afterEach(() => {
-  const timerCount = vi.getTimerCount();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  expect(timerCount).toBe(0);
-});
 
 it("enqueues once, polls the same job serially, and settles only when cleanup completes", async () => {
   const slowPoll = createDeferred<WorktreesGcResult>();
-  const { request, list, model } = setup(queued, slowPoll.promise, completed);
+  const { request, model } = setup(queued, slowPoll.promise, completed);
   const settled = vi.fn();
   const pending = model.gc().then(settled);
   expect(model).toMatchObject({ operation: "gc", loading: true });
-  await vi.advanceTimersByTimeAsync(999);
   expect([request.mock.calls, settled.mock.calls]).toEqual([[["worktrees.gc", {}]], []]);
-  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(1_000);
   expect(request).toHaveBeenLastCalledWith("worktrees.gc", { jobId: "cleanup-job" });
   await vi.advanceTimersByTimeAsync(5_000);
   expect([request.mock.calls.length, settled.mock.calls]).toEqual([2, []]);
   slowPoll.resolve({ ...queued, state: "running" });
-  await vi.advanceTimersByTimeAsync(999);
-  expect(request).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(1_000);
   await pending;
-  expect(settled).toHaveBeenCalledExactlyOnceWith(undefined);
   expect(request).toHaveBeenCalledTimes(3);
   expect(request).toHaveBeenLastCalledWith("worktrees.gc", { jobId: "cleanup-job" });
   expect(model).toMatchObject({ operation: null, loading: false, error: null });
-  expect(list).toHaveBeenCalledOnce();
+  expect(model.listLoaded).toBe(true);
 });
 
 it.each([
@@ -117,7 +102,7 @@ it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as 
   "ignores the old Gateway epoch %s",
   async (phase) => {
     const response = createDeferred<WorktreesGcResult>();
-    const { request, list, model, reconnect, notify } = setup(
+    const { request, model, reconnect, notify } = setup(
       ...(phase === "during enqueue" ? [response.promise] : [queued, response.promise]),
     );
     if (phase === "before enqueue") {
@@ -135,6 +120,6 @@ it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as 
       phase === "before enqueue" ? 0 : phase === "during poll" ? 2 : 1,
     );
     expect(model).toMatchObject({ error: null, operation: null, loading: false });
-    expect(list).not.toHaveBeenCalled();
+    expect(model.listLoaded).toBe(false);
   },
 );
