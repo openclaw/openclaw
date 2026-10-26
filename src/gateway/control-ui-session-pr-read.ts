@@ -544,8 +544,7 @@ export function createControlUiSessionPrRead(params: {
                 (current.selected !== target.captured ||
                   current.selected.databaseFactsRevision !== target.factsRevision ||
                   current.cfg !== target.cfg ||
-                  (current.selected.materialized?.row.repository ?? null) !== target.repository ||
-                  projection.readTaskPublicationRevision() !== target.taskRevision)
+                  (current.selected.materialized?.row.repository ?? null) !== target.repository)
               ) {
                 // Enrichment can replace a row without changing its incarnation or PR source.
                 if (current.selected.generation !== target.captured?.generation) {
@@ -568,11 +567,12 @@ export function createControlUiSessionPrRead(params: {
               target.target.assertCurrent?.();
               validated = current;
               if (!original) {
+                // Lineage changes revalidate the audience without rebuilding the root's source.
+                target.taskRevision = projection.readTaskPublicationRevision();
                 if (refreshedRow) {
                   target.captured = refreshedRow;
                   target.factsRevision = refreshedRow.databaseFactsRevision;
                   target.cfg = current.cfg;
-                  target.taskRevision = projection.readTaskPublicationRevision();
                   target.repository = refreshedRow.materialized.row.repository ?? null;
                 }
                 return;
