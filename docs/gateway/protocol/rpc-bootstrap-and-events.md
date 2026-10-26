@@ -484,8 +484,12 @@ or protocol-version change.
   It reaches every operator connection admitted to read cron, including readers
   who can no longer see a retargeted job. It contains no job ID, session, or job
   content; clients refresh only their own authorized inventory. Normal runtime
-  `started`, `finished`, and `scheduled` events do not invalidate inventory,
-  except when a run disables a job. Known jobs can consume those runtime facts
+  `started`, `finished`, and `scheduled` events do not invalidate inventory.
+  State-only `updated` publications and unchanged declarative saves also stay
+  quiet. A run that actually disables a job publishes a definition invalidation;
+  completing an already-disabled job does not. The same committed-definition
+  comparison gates `sessions.changed` with reason `cron-binding`, including
+  both old and new bound sessions on retarget. Known jobs consume runtime facts
   locally; unrelated unknown job IDs do not require a list read.
   Support is advertised in `hello-ok.features.events`. Clients using this
   contract debounce invalidations, share inventory reads by connection and query,

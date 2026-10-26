@@ -88,7 +88,6 @@ import { createGatewayCronPublisher } from "./server-cron-publication.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
-  invalidateSessionAutomationIndex,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
@@ -547,10 +546,8 @@ export function buildGatewayCronService(params: {
       getChildLogger({ module: "cron", storeKey: storePath }),
       getResolvedLoggerSettings().level,
     ),
+    onDefinitionChange: publishCronInventoryChange,
     onEvent: (evt) => {
-      // Any job/store change can alter session automation bindings, including
-      // in-place enable flips during runs; the index publishes only binding deltas.
-      invalidateSessionAutomationIndex();
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       if (legacyMonitorJobs.has(evt.jobId)) {
         legacyProjectionRevision += 1;
@@ -613,7 +610,6 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(toPluginCronChangedEvent(evt, jobSnapshot));
       // Re-arm / cancel scheduler-owned process watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
-        publishCronInventoryChange(evt);
         void reconcileExitWatchers();
         // cron.update and cron.add (including declarative convergence) route
         // lifecycle after the mutation. Ignoring state-only update events keeps
@@ -632,7 +628,6 @@ export function buildGatewayCronService(params: {
         // Fully deleted jobs emit their own "removed" event instead.
         const finishedJob = evt.job ?? cron.getJob(evt.jobId);
         if (finishedJob?.enabled === false) {
-          publishCronInventoryChange(evt);
           void routeStreamWatcherMutation(evt.jobId, "finished").catch((err: unknown) => {
             cronLogger.warn(
               { err: formatErrorMessage(err), jobId: evt.jobId },

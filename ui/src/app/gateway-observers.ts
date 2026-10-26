@@ -146,6 +146,9 @@ export function createGatewayMetadataObserver(
           return false;
         }
       }
+      if (next.client && next.hello && next.phase === "connected") {
+        bindCronInventory(next.client, next.hello);
+      }
       if (
         !next.client ||
         !next.hello ||
@@ -155,7 +158,6 @@ export function createGatewayMetadataObserver(
         return true;
       }
       const { client, hello } = next;
-      bindCronInventory(client, hello);
       const scope: ModelCatalogReadScope | undefined =
         target && !("shortId" in target)
           ? target.sessionKey

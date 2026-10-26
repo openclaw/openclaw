@@ -69,6 +69,7 @@ async function fixture(page: Page, supported = true) {
   await row(held.name).waitFor();
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
+  await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
   return { gateway, details, row, settled };
 }
 
@@ -92,50 +93,80 @@ function runtime(job: CronJob, action: "started" | "finished", revision: number)
 
 suite.define(() => {
   it.each([
-    { mode: "advertised", supported: true, tabs: 3 },
-    { mode: "unadvertised", supported: false, tabs: 1 },
-  ])("handles unrelated cron churn with an $mode inventory event", async ({ supported, tabs }) => {
-    await suite.withPage(pageOptions, async ({ page, context }) => {
-      const clients = [];
-      for (let index = 0; index < tabs; index += 1) {
-        clients.push(await fixture(index === 0 ? page : await context.newPage(), supported));
-      }
-      const counts = [];
-      for (const { gateway, row, settled } of clients) {
-        const before = (await gateway.getRequests("cron.list")).length;
-        for (let index = 0; index < 60; index += 1) {
-          const reads = (await gateway.getRequests("cron.list", { sessionKey })).length;
-          await gateway.emitGatewayEvent(
-            "cron",
-            runtime(other, index % 2 ? "finished" : "started", index + 2),
-          );
-          if (!supported) {
-            await gateway.waitForRequest("cron.list", { after: reads, match: { sessionKey } });
-          }
-          await settled();
+    { mode: "advertised", supported: true, tabs: 3, stateOnly: false },
+    { mode: "unadvertised", supported: false, tabs: 1, stateOnly: false },
+    { mode: "advertised state-only", supported: true, tabs: 3, stateOnly: true },
+    { mode: "unadvertised state-only", supported: false, tabs: 1, stateOnly: true },
+  ])(
+    "handles unrelated cron churn with an $mode inventory event",
+    async ({ supported, tabs, stateOnly }) => {
+      await suite.withPage(pageOptions, async ({ page, context }) => {
+        const clients = [];
+        for (let index = 0; index < tabs; index += 1) {
+          clients.push(await fixture(index === 0 ? page : await context.newPage(), supported));
         }
-        const current = row(held.name);
-        await gateway.emitGatewayEvent("cron", runtime(held, "started", 100));
-        await current.locator(".session-run-spinner").waitFor();
-        await gateway.emitGatewayEvent("cron", runtime(held, "finished", 101));
-        await current.locator(".session-run-spinner").waitFor({ state: "detached" });
-        await current.getByText("Every 10 minutes", { exact: true }).waitFor();
-        await settled();
-        const additional = (await gateway.getRequests("cron.list")).length - before;
-        counts.push({ startup: before, runtimeEvents: 60, additional });
-        expect(additional).toBe(supported ? 0 : 60);
-      }
-      console.log(JSON.stringify({ cronInventoryEvents: supported, clients: counts }));
-      if (supported) {
-        await page.reload();
-        const details = await openChatDetails(page);
-        await details.getByRole("link", { name: /Held automation/ }).waitFor();
-        expect((await clients[0]!.gateway.getRequests("cron.list")).length).toBeLessThanOrEqual(
-          counts[0]!.startup,
-        );
-      }
-    });
-  });
+        const counts = [];
+        for (const { gateway, row, settled } of clients) {
+          const before = (await gateway.getRequests("cron.list")).length;
+          const sessionsBefore = (await gateway.getRequests("sessions.list")).length;
+          for (let index = 0; index < 60; index += 1) {
+            const reads = (await gateway.getRequests("cron.list", { sessionKey })).length;
+            const sessionReads = (await gateway.getRequests("sessions.list")).length;
+            await gateway.emitGatewayEvent("cron", {
+              ...runtime(other, index % 2 ? "finished" : "started", index + 2),
+              ...(stateOnly ? { action: "updated" } : {}),
+            });
+            // The server regression proves state-only commits no longer publish this old companion.
+            if (stateOnly && !supported) {
+              await gateway.emitGatewayEvent("sessions.changed", {
+                sessionKey,
+                reason: "cron-binding",
+                ts: now + index,
+              });
+              await gateway.waitForRequest("sessions.list", { after: sessionReads });
+            }
+            if (!supported) {
+              await gateway.waitForRequest("cron.list", { after: reads, match: { sessionKey } });
+            }
+            await settled();
+          }
+          const current = row(held.name);
+          await gateway.emitGatewayEvent("cron", runtime(held, "started", 100));
+          await current.locator(".session-run-spinner").waitFor();
+          await gateway.emitGatewayEvent("cron", runtime(held, "finished", 101));
+          await current.locator(".session-run-spinner").waitFor({ state: "detached" });
+          await current.getByText("Every 10 minutes", { exact: true }).waitFor();
+          await settled();
+          const additional = (await gateway.getRequests("cron.list")).length - before;
+          const additionalSessions =
+            (await gateway.getRequests("sessions.list")).length - sessionsBefore;
+          counts.push({
+            startup: before,
+            sessionsStartup: sessionsBefore,
+            runtimeEvents: 60,
+            additional,
+            additionalSessions,
+          });
+          if (stateOnly && !supported) {
+            expect(additional).toBeGreaterThanOrEqual(60);
+            expect(additionalSessions).toBeGreaterThanOrEqual(60);
+          } else {
+            expect(additional).toBe(supported ? 0 : 60);
+            expect(additionalSessions).toBe(0);
+          }
+        }
+        console.log(JSON.stringify({ cronInventoryEvents: supported, stateOnly, clients: counts }));
+        if (supported) {
+          await page.reload();
+          const details = await openChatDetails(page);
+          await details.getByRole("link", { name: /Held automation/ }).waitFor();
+          expect((await clients[0]!.gateway.getRequests("cron.list")).length).toBeLessThanOrEqual(
+            counts[0]!.startup,
+          );
+        }
+      });
+    },
+  );
 
   it("refreshes definitions and removes a retargeted job using only content-free invalidations", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {

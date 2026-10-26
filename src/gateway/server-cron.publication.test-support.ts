@@ -104,8 +104,13 @@ export function registerGatewayCronPublicationTests({
           sessionTarget: `session:${newSession}`,
           name: "Private replacement name",
         });
-        expect(former.frames).toEqual([
+        expect(former.frames.filter((frame) => frame.event !== "sessions.changed")).toEqual([
           { type: "event", event: "cron.inventory.changed", seq: expect.any(Number) },
+        ]);
+        expect(former.frames.filter((frame) => frame.event === "sessions.changed")).toEqual([
+          expect.objectContaining({
+            payload: expect.objectContaining({ sessionKey: oldSession, reason: "cron-binding" }),
+          }),
         ]);
         const lastSequence = former.frames[0]!.seq;
         const enabledJob = await state.cron.update(job.id, { enabled: true });
@@ -117,12 +122,9 @@ export function registerGatewayCronPublicationTests({
         await state.cron.remove(job.id);
         expect(invalidations(reader)).toHaveLength(5);
         expect(invalidations(former)).toHaveLength(4);
-        expect(invalidations(former).map(({ seq }) => seq)).toEqual([
-          lastSequence,
-          lastSequence + 1,
-          lastSequence + 2,
-          lastSequence + 3,
-        ]);
+        expect(former.frames.map(({ seq }) => seq)).toEqual(
+          Array.from({ length: former.frames.length }, (_, index) => lastSequence + index),
+        );
         for (const frame of invalidations(reader)) {
           expect(frame).not.toHaveProperty("payload");
         }
@@ -130,6 +132,67 @@ export function registerGatewayCronPublicationTests({
           expect(invalidations(peer)).toEqual([]);
           expect(peer.frames.filter((frame) => frame.event === "cron")).toEqual([]);
         }
+      },
+      { broadcast },
+    );
+  });
+
+  it("does not invalidate inventories or bindings for unchanged runs and state-only persistence", async () => {
+    const cfg = createCronConfig("server-cron-unchanged-runs");
+    const broadcast = vi.fn();
+    await withCronService(
+      cfg,
+      async (state) => {
+        for (const enabled of [true, false]) {
+          const job = await addAgentTurnJob(state, "Unchanged recurring job", "synthetic run", {
+            agentId: "main",
+            sessionKey: "agent:main:probe",
+            enabled,
+            schedule: { kind: "every", everyMs: 600_000 },
+          });
+          broadcast.mockClear();
+          for (let index = 0; index < 3; index += 1) {
+            await state.cron.update(job.id, { state: { streamDroppedBatches: index + 1 } });
+            expect(await state.cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
+            expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+          }
+          expect(
+            broadcast.mock.calls.filter(([event]) => event === "cron.inventory.changed"),
+          ).toEqual([]);
+          expect(
+            broadcast.mock.calls.filter(
+              ([event, payload]) =>
+                event === "sessions.changed" && payload?.reason === "cron-binding",
+            ),
+          ).toEqual([]);
+        }
+      },
+      { broadcast },
+    );
+  });
+
+  it("publishes an enabled flip committed by a one-shot run", async () => {
+    const broadcast = vi.fn();
+    await withCronService(
+      createCronConfig("server-cron-run-disable"),
+      async (state) => {
+        const job = await addAgentTurnJob(state, "One-shot job", "synthetic run", {
+          agentId: "main",
+          sessionKey: "agent:main:probe",
+          deleteAfterRun: false,
+        });
+        broadcast.mockClear();
+        expect(await state.cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
+        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+        expect(
+          broadcast.mock.calls.filter(([event]) => event === "cron.inventory.changed"),
+        ).toHaveLength(1);
+        expect(
+          broadcast.mock.calls.filter(
+            ([event, payload]) =>
+              event === "sessions.changed" && payload?.reason === "cron-binding",
+          ),
+        ).toHaveLength(1);
       },
       { broadcast },
     );
