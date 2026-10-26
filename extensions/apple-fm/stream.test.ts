@@ -20,13 +20,7 @@ const model: Model<"openai-completions"> = {
 const context: Context = {
   systemPrompt: "Only propose actions through the supplied tool.",
   messages: [{ role: "user", content: "Connect Telegram.", timestamp: 0 }],
-  tools: [
-    {
-      name: "openclaw",
-      description: "Set up OpenClaw",
-      parameters: Type.Object({ action: Type.Literal("connect_channel"), channel: Type.String() }),
-    },
-  ],
+  tools: [{ name: "openclaw", description: "Set up OpenClaw", parameters: Type.Object({}) }],
 };
 const call = {
   id: "call-1",
@@ -35,6 +29,7 @@ const call = {
 };
 const schema = (value: object) => ({ type: "object", properties: { value }, required: ["value"] });
 const emptyResult: AppleFmResult = { text: "", toolCalls: [], inputTokens: 10, outputTokens: 10 };
+const run = createAppleFmStream(native);
 function respond(result: Partial<AppleFmResult>) {
   native.run.mockResolvedValue({ ...emptyResult, ...result });
 }
@@ -43,7 +38,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("Apple Foundation Models native transport", () => {
   it("returns a typed tool call with measured usage", async () => {
     respond({ toolCalls: [call], inputTokens: 3995, outputTokens: 18 });
-    const stream = await createAppleFmStream(native)(model, context);
+    const stream = await run(model, context);
     const events = [];
     for await (const event of stream) {
       events.push(event.type);
@@ -73,7 +68,7 @@ describe("Apple Foundation Models native transport", () => {
     "rejects %s before publishing despite replaced native constraints",
     async (name, value, text) => {
       respond({ text });
-      const stream = await createAppleFmStream(native)(model, context, {
+      const stream = await run(model, context, {
         responseFormat: schema(value),
         onPayload: () => ({
           messages: context.messages,
@@ -107,10 +102,7 @@ describe("Apple Foundation Models native transport", () => {
       required: ["value", "integer", "fraction", "notes"],
     };
     respond({ text });
-    const stream = await createAppleFmStream(native)(model, context, {
-      responseFormat,
-      maxTokens: 128,
-    });
+    const stream = await run(model, context, { responseFormat, maxTokens: 128 });
     expect(await stream.result()).toMatchObject({
       stopReason: "stop",
       content: [{ type: "text", text }],
@@ -127,7 +119,7 @@ describe("Apple Foundation Models native transport", () => {
       abort.abort();
       return { ...emptyResult, toolCalls: [call] };
     });
-    const stream = await createAppleFmStream(native)(model, context, { signal: abort.signal });
+    const stream = await run(model, context, { signal: abort.signal });
     expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });
   });
 });

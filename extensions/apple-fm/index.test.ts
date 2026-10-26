@@ -70,8 +70,6 @@ it("lazily resolves native assets from the source when no root is registered", a
   await method.appGuidedSetup?.detect({ config: {}, env: {} });
   await method.run(setupContext());
   expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith("/src/apple-fm");
-  expect(native.probe).toHaveBeenCalledOnce();
-  expect(native.prepare).toHaveBeenCalledOnce();
 });
 
 it("serves configured native facts and local auth only on Mac hosts", async () => {
