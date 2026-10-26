@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as directoryWalker from "@openclaw/fs-safe/walk";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.js";
 import { AsyncTempCaseFactory } from "../../security/test-temp-cases.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./workspace-audit.js";
 
@@ -65,16 +64,6 @@ describe("security audit workspace skill path escape findings", () => {
   afterAll(() => tempCases.cleanup());
   afterEach(() => vi.restoreAllMocks());
 
-  it("evaluates workspace skill path escape findings", async () => {
-    const findings = await audit(await makeWorkspace());
-    expect(findings.map((entry) => entry.checkId)).not.toContain("skills.workspace.symlink_escape");
-    if (!isWindows) {
-      const workspaceDir = await makeWorkspace([]);
-      const outsideSkillPath = await linkOutsideSkill(workspaceDir);
-      expectWarning(await audit(workspaceDir), "symlink_escape", outsideSkillPath);
-    }
-  });
-
   it("audits nested escapes through a symlinked skills root without revisiting cycles", async () => {
     const workspaceDir = await fs.realpath(await makeWorkspace([]));
     const skillsRoot = path.resolve(workspaceDir, "../shared-skills");
@@ -100,26 +89,25 @@ describe("security audit workspace skill path escape findings", () => {
   });
 
   it.runIf(!isWindows)("audits explicit workspaces despite malformed defaults", async () => {
-    const workspaceA = await makeWorkspace([]);
-    const workspaceB = await makeWorkspace([]);
-    const outsideA = await linkOutsideSkill(workspaceA);
-    const outsideB = await linkOutsideSkill(workspaceB);
-    const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        entries: {
-          alpha: { default: true, workspace: workspaceA },
-          beta: { default: true, workspace: workspaceB },
-        },
-      },
+    const entries = {
+      alpha: { default: true, workspace: await makeWorkspace([]) },
+      beta: { default: true, workspace: await makeWorkspace([]) },
     };
-
-    const findings = await collectWorkspaceSkillSymlinkEscapeFindings({ cfg });
-    expectWarning(findings, "symlink_escape", outsideA);
-    expectWarning(findings, "symlink_escape", outsideB);
+    const targets = await Promise.all(
+      Object.values(entries).map(({ workspace }) => linkOutsideSkill(workspace)),
+    );
+    const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+      cfg: { agents: { entries } },
+    });
+    for (const target of targets) {
+      expectWarning(findings, "symlink_escape", target);
+    }
   });
 
-  it("warns on an unresolvable skill realpath", async () => {
+  it("accepts an in-workspace skill but warns when its realpath becomes unresolvable", async () => {
     const workspaceDir = await makeWorkspace();
+    const findings = await audit(workspaceDir);
+    expect(findings.map((entry) => entry.checkId)).not.toContain("skills.workspace.symlink_escape");
 
     // Rejection and timeout both resolve to null; keep workspace-root resolution working.
     vi.spyOn(fs, "realpath").mockImplementation(async (p: unknown): Promise<string> => {
@@ -136,23 +124,18 @@ describe("security audit workspace skill path escape findings", () => {
     ["file cap", "file", 2_001, true],
     ["exact file cap with excluded directories", "file", 2_000, false],
   ] as const)("reports scan completeness for %s", async (_name, kind, count, truncated) => {
-    const workspaceDir = await makeWorkspace([
-      "a/SKILL.md",
-      ".hidden/SKILL.md",
-      "node_modules/SKILL.md",
-    ]);
+    const workspaceDir = await makeWorkspace(
+      ["a", ".hidden", "node_modules"].map((dir) => `${dir}/SKILL.md`),
+    );
     vi.mocked(directoryWalker.walkDirectory).mockImplementationOnce(async (root, options) => {
       const scan = await actualWalk(root);
-      const sample = scan.entries.find(
-        (entry) => entry.kind === kind && entry.name !== ".hidden" && entry.name !== "node_modules",
-      )!;
+      const ignored = scan.entries.filter(({ name }) => [".hidden", "node_modules"].includes(name));
+      const sample = scan.entries.find((entry) => entry.kind === kind && !ignored.includes(entry))!;
       const visit = kind === "directory" ? options?.descend : options?.include;
       for (let index = 0; index < count; index += 1) {
         await visit?.(sample);
       }
-      for (const entry of scan.entries.filter(
-        (candidate) => candidate.name === ".hidden" || candidate.name === "node_modules",
-      )) {
+      for (const entry of ignored) {
         await options?.descend?.(entry);
       }
       return { ...scan, entries: [] };
