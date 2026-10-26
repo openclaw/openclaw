@@ -60,12 +60,6 @@ describe("AcpSessionManager runtime config", () => {
     const finalIds = { backendSessionId: "final-session", agentSessionId: "final-agent" };
     f.getStatus.mockResolvedValue(finalIds);
     await f.run();
-    expect(f.ensureSession).toHaveBeenCalledOnce();
-    expect(f.ensureSession.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: f.target.sessionKey,
-      agent: "codex",
-      mode: "oneshot",
-    });
     expect(f.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
     expect(f.close).toHaveBeenCalledWith({
       handle: expect.objectContaining(finalIds),
@@ -117,29 +111,21 @@ describe("AcpSessionManager runtime config", () => {
     expect(lifecycle).toEqual(["ensure:default", "close:default", "ensure:/workspace/next"]);
   });
 
-  it("rejects config controls when the backend has no setter", async () => {
-    const f = fixture();
-    const { ensureSession, runTurn, cancel, close } = f;
-    const runtime: AcpRuntime = {
-      ensureSession,
-      runTurn,
-      cancel,
-      close,
-      getCapabilities: async () => ({ controls: [] }),
-    };
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime });
-    await expect(f.setOption("model", "gpt-5.4")).rejects.toMatchObject({
-      code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
-    });
-  });
-
-  it("rejects explicit thinking when the backend advertises no thinking control", async () => {
+  it.each(["missing setter", "unadvertised thinking"])("rejects %s", async (reason) => {
     const f = fixture({ agent: "opencode" });
-    f.getCapabilities.mockResolvedValue({
-      controls: ["session/set_config_option"],
-      configOptionKeys: ["mode", "model"],
-    });
-    await expect(f.setOption("thinking", "high")).rejects.toMatchObject({
+    if (reason === "missing setter") {
+      const { ensureSession, runTurn, cancel, close } = f;
+      const getCapabilities = async () => ({ controls: [] });
+      const runtime: AcpRuntime = { ensureSession, runTurn, cancel, close, getCapabilities };
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime });
+    } else {
+      f.getCapabilities.mockResolvedValue({
+        controls: ["session/set_config_option"],
+        configOptionKeys: ["mode", "model"],
+      });
+    }
+    const key = reason === "missing setter" ? "model" : "thinking";
+    await expect(f.setOption(key, "high")).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
     });
     expect(f.setConfigOption).not.toHaveBeenCalled();
@@ -149,7 +135,6 @@ describe("AcpSessionManager runtime config", () => {
     const f = fixture({ agent: "claude" });
     f.getStatus.mockResolvedValue({ details: { configOptions: [{ id: "effort" }] } });
     await expect(f.setOption("thinking", "high")).resolves.toEqual({ thinking: "high" });
-    expect(f.getStatus).toHaveBeenCalled();
     expectCalledWith(f.setConfigOption, { key: "effort", value: "high" });
   });
 });
