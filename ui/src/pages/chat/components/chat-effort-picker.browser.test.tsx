@@ -174,7 +174,14 @@ describe("effort selection", () => {
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await userEvent.keyboard("{Tab}");
+    // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
+    await userEvent.keyboard(
+      navigator.platform.includes("Mac") &&
+        navigator.userAgent.includes("AppleWebKit") &&
+        !navigator.userAgent.includes("Chrome")
+        ? "{Alt>}{Tab}{/Alt}"
+        : "{Tab}",
+    );
     await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
@@ -325,6 +332,10 @@ it("plays Ultra feedback only when entering Ultra, including an uncommitted drag
   await emulateOverlayMedia({ reducedMotion: "reduce" });
   onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
   await expect.poll(() => matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+  // WebKit delivers changes to existing MediaQueryLists after the emulation response.
+  await expect
+    .poll(() => host!.querySelector(".chat-controls__effort-value")!.getAnimations().length)
+    .toBe(0);
   await fixture(["low", "high", "ultra"], "high");
   preview("2");
   expect(feedback()).toBeUndefined();
