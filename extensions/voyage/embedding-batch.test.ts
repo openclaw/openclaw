@@ -163,6 +163,7 @@ it.each(["output", "error"] as const)("preserves real batch %s requests", async 
 
   const paths = ["files", "batches", "batches/batch-0", `files/${kind}-0/content`];
   expect(received.map(([path]) => path)).toEqual(paths);
+  assert(received[1], "expected batch submission request");
   expect(received[1][1]).toMatchObject({
     endpoint: "/v1/embeddings",
     request_params: { model: "voyage-3", input_type: "document" },

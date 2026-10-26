@@ -165,12 +165,16 @@ describe("DeepSeek search execution", () => {
           snippet: "UI fallback",
           date: null,
           site_name: null,
+          content: "Full content must not escape",
+          authority: 3,
+          rerank_score: 2.4,
         },
         { title: "Second", url: "https://two.example", summary: "Second summary" },
         { title: "Third", url: "https://three.example" },
       ]),
     );
     const result = await searchTool().execute({ query: "fallback snippets", count: 2 });
+    expect(requestBody()).toEqual({ query: "fallback snippets", count: 2, need_content: false });
     expect(result.results).toEqual(
       [
         { title: "First", url: "https://one.example/", snippet: "UI fallback" },

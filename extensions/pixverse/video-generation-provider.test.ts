@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -94,7 +95,10 @@ describe("pixverse video generation provider", () => {
     expect(post).toHaveBeenCalledOnce();
     expect(poll).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-    expect(release.mock.invocationCallOrder[0]).toBeLessThan(poll.mock.invocationCallOrder[0]);
+    const [releasedAt] = release.mock.invocationCallOrder;
+    const [polledAt] = poll.mock.invocationCallOrder;
+    assert(releasedAt !== undefined && polledAt !== undefined);
+    expect(releasedAt).toBeLessThan(polledAt);
     expect(poll.mock.calls[0]?.[0]).toBe(`${baseUrl}/video/result/123`);
     expect(result).toEqual({
       videos: [

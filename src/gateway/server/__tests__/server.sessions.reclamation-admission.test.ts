@@ -4,17 +4,19 @@ import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import * as db from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { retainSessionListForegroundWork } from "../../session-projection-work.js";
-import { writeSessionStore } from "../../test-helpers.js";
+import { rpcReq, writeSessionStore } from "../../test-helpers.js";
 import * as fixtures from "../../test/server-sessions.test-helpers.js";
 
 const reclamation = vi.hoisted(() => ({
   gate: undefined as SharedArrayBuffer | undefined,
   databasePath: undefined as string | undefined,
   exitCodes: [] as number[],
+  invalidateAtStart: undefined as string | undefined,
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -22,11 +24,24 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
-      constructor(filename: string | URL, options: WorkerOptions = {}) {
-        const { workerData: data, execArgv = [] } = options;
-        const gate = reclamation.gate;
+      constructor(filename: string | URL, initialOptions: WorkerOptions = {}) {
+        let options = initialOptions;
+        if (
+          reclamation.invalidateAtStart !== undefined &&
+          options.workerData?.operation === "reclaim" &&
+          options.workerData.databaseOptions.path === reclamation.invalidateAtStart
+        ) {
+          // Expire executor preparation before the reclaimer opens its native handle.
+          invalidateOpenClawAgentDatabaseValidation(reclamation.invalidateAtStart);
+          reclamation.invalidateAtStart = undefined;
+        }
+        const gate =
+          options.workerData?.operation === "reclaim" || reclamation.databasePath
+            ? reclamation.gate
+            : undefined;
         const observed = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-        const preload = `
+        if (gate) {
+          const preload = `
             import { realpathSync } from 'node:fs';
             import { DatabaseSync } from 'node:sqlite';
             import { workerData } from 'node:worker_threads';
@@ -38,10 +53,12 @@ vi.mock("node:worker_threads", async (importOriginal) => {
             DatabaseSync.prototype.prepare = function (sql) {
               const statement = prepare.call(this, sql);
               const integrityCheck = sql.startsWith('PRAGMA integrity_check') || sql.startsWith('PRAGMA quick_check');
-              if (!integrityCheck && !sql.startsWith('PRAGMA foreign_key_check')) return statement;
-              if (!prepare.call(this, 'PRAGMA database_list').all().some(
+              const foreignKeyCheck = sql.startsWith('PRAGMA foreign_key_check');
+              if (!integrityCheck && !foreignKeyCheck) return statement;
+              const target = prepare.call(this, 'PRAGMA database_list').all().some(
                 (row) => row.name === 'main' && row.file && realpathSync(row.file) === databasePath,
-              )) return statement;
+              );
+              if (!target) return statement;
               const database = this;
               if (integrityCheck) {
                 const all = statement.all.bind(statement);
@@ -66,25 +83,23 @@ vi.mock("node:worker_threads", async (importOriginal) => {
               return statement;
             };
           `;
-        super(
-          filename,
-          gate
-            ? {
-                ...options,
-                workerData: {
-                  ...data,
-                  reclamationTestGate: gate,
-                  reclamationTestObserved: observed.buffer,
-                  reclamationTestDatabasePath: reclamation.databasePath,
-                },
-                execArgv: [
-                  ...execArgv,
-                  "--import",
-                  `data:text/javascript,${encodeURIComponent(preload)}`,
-                ],
-              }
-            : options,
-        );
+          options = {
+            ...options,
+            workerData: {
+              ...options.workerData,
+              reclamationTestGate: gate,
+              reclamationTestObserved: observed.buffer,
+              reclamationTestDatabasePath:
+                reclamation.databasePath ?? options.workerData.databaseOptions.path,
+            },
+            execArgv: [
+              ...(options.execArgv ?? []),
+              "--import",
+              `data:text/javascript,${encodeURIComponent(preload)}`,
+            ],
+          };
+        }
+        super(filename, options);
         if (gate) {
           this.once("exit", (code) => {
             if (Atomics.load(observed, 0)) {
@@ -97,17 +112,35 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
-const { createSessionStoreDir } = fixtures.setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient } = fixtures.setupGatewaySessionsTestHarness();
+
+async function seedSession(sessionId: string, ...otherIds: string[]) {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = `agent:main:${sessionId}`;
+  await writeSessionStore({
+    storePath,
+    entries: Object.fromEntries(
+      [sessionId, ...otherIds].map((id) => [`agent:main:${id}`, fixtures.sessionStoreEntry(id)]),
+    ),
+  });
+  const scope = { agentId: "main", sessionKey, sessionId, storePath };
+  // Empty transcripts bypass reclamation validation.
+  await fixtures.seedLinearSessionTranscript({ ...scope, contents: ["retained transcript"] });
+  const { path } = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+  const read = () => sessions.loadSessionEntry(scope);
+  return { scope, options: { agentId: "main", path }, read };
+}
 
 afterEach(async () => {
   await db.closeOpenClawAgentDatabasesAsync();
   reclamation.gate = undefined;
   reclamation.databasePath = undefined;
   reclamation.exitCodes = [];
+  reclamation.invalidateAtStart = undefined;
   db.closeOpenClawAgentDatabasesForTest();
 });
 
-function holdReclamationValidation(databasePath: string) {
+function holdReclamationValidation(databasePath?: string, afterClose?: () => void) {
   const gate = new Int32Array(new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT));
   reclamation.gate = gate.buffer;
   reclamation.databasePath = databasePath;
@@ -143,26 +176,65 @@ function holdReclamationValidation(databasePath: string) {
       release();
       await Promise.allSettled(pending);
       await db.closeOpenClawAgentDatabasesAsync();
+      afterClose?.();
     },
   };
 }
 
+test("sessions.delete admits same-store patches during validation", async ({ signal }) => {
+  const unrelatedKey = "agent:main:validation-patch";
+  const { scope, options, read } = await seedSession("validation-delete", "validation-patch");
+  const { sessionKey: targetKey, storePath } = scope;
+  const { ws } = await openClient();
+  await db.closeOpenClawAgentDatabaseByPathAsync(options.path, "main");
+  db.openOpenClawAgentDatabase(options);
+  await using validation = holdReclamationValidation(undefined, () => ws.close());
+  expect(await rpcReq(ws, "sessions.patch", { key: unrelatedKey, label: "warm" })).toMatchObject({
+    ok: true,
+  });
+  reclamation.invalidateAtStart = options.path;
+  const deletion = validation.own(rpcReq(ws, "sessions.delete", { key: targetKey }));
+  await validation.entered(deletion, signal);
+  expect(read()?.sessionId).toBe("validation-delete");
+
+  const missingSession = "deleted session cannot accept new work";
+  const assertTargetExists = () => assert(read(), missingSession);
+  const admission = validation.own(
+    beginSessionEffect({
+      scope: storePath,
+      identities: [targetKey, "validation-delete"],
+      assertAllowed: assertTargetExists,
+      revalidateAllowed: assertTargetExists,
+    }).then((lease) => lease.release()),
+  );
+  const settled = vi.fn();
+  void admission.then(settled, settled);
+  const patch = validation.own(
+    rpcReq(ws, "sessions.patch", { key: unrelatedKey, label: "progressed" }),
+  );
+  await expect(patch).resolves.toMatchObject({ ok: true });
+  expect(sessions.loadSessionEntry({ sessionKey: unrelatedKey, storePath })?.label).toBe(
+    "progressed",
+  );
+  expect(settled).not.toHaveBeenCalled();
+  expect(Atomics.load(validation.gate, 2)).toBe(0);
+
+  validation.release();
+  await expect(deletion).resolves.toMatchObject({ ok: true, payload: { deleted: true } });
+  await expect(admission).rejects.toThrow(missingSession);
+  expect(read()).toBeUndefined();
+  expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
+  expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
+  expect(reclamation.exitCodes).toEqual([]);
+  await db.closeOpenClawAgentDatabasesAsync();
+  expect(reclamation.exitCodes).toEqual([0]);
+});
+
 test("sessions.delete rejects revoked authority before repair", async ({ signal }) => {
   // This test invokes the lifecycle owner directly instead of the foreground RPC dispatcher.
   onTestFinished(retainSessionListForegroundWork());
-  const { storePath } = await createSessionStoreDir();
-  const sessionId = "validation-revoked";
-  const sessionKey = `agent:main:${sessionId}`;
-  const scope = { agentId: "main", sessionKey, sessionId, storePath };
-  await writeSessionStore({
-    storePath,
-    entries: { [sessionKey]: fixtures.sessionStoreEntry(sessionId) },
-  });
-  // Empty transcripts bypass reclamation validation.
-  await fixtures.seedLinearSessionTranscript({ ...scope, contents: ["retained transcript"] });
-  const { path } = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-  const options = { agentId: "main", path };
-  const read = () => sessions.loadSessionEntry(scope);
+  const { scope, options, read } = await seedSession("validation-revoked");
+  const { sessionKey, storePath } = scope;
   const originalEntry = read();
   const originalTranscript = await fixtures.loadSeededTranscriptEvents(scope);
   await db.closeOpenClawAgentDatabaseByPathAsync(options.path, "main");

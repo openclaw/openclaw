@@ -8,7 +8,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
@@ -27,20 +27,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function measure<T>(db: DatabaseSync, operation: () => T) {
   const counter = trackSqliteStatementExecutions(db, ["all"], () => "all");
   const reads = observeSqliteReadSql(StatementSync.prototype);
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-  const forbiddenRead =
-    /(?:^select .* from "session_progress_cards"|sqlite_schema|sqlite_master)/iu;
   try {
     const result = operation();
     expect.soft(counter.rowCounts.all).toBeGreaterThan(0);
     expect.soft(counter.textBytes.all).toBeLessThan(256);
-    expect.soft(reads.queries.filter((sql) => forbiddenRead.test(sql))).toEqual([]);
-    expect.soft(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
+    expect
+      .soft(reads.queries.some((sql) => /^select .* from "session_progress_cards"/iu.test(sql)))
+      .toBe(false);
     return result;
   } finally {
     counter.restore();
     reads.restore();
-    exec.mockRestore();
   }
 }
 
@@ -52,9 +49,14 @@ describe("session progress card store", () => {
   const read = () => readSessionProgressCard(db, SESSION_KEY);
   const reset = () => clearSessionProgressCardForReset(db, SESSION_KEY);
   const stored = () => db.prepare("SELECT * FROM session_progress_cards").get();
+  const facts = () => getAdmittedSqliteSchemaFacts(db);
   const setSteps = (json: string) =>
     db.prepare("UPDATE session_progress_cards SET steps_json = ?").run(json);
   const cardAt = (revision: number) => ({ card: expect.objectContaining({ revision }) });
+  const dropLazyTable = () => {
+    db.exec("DROP TABLE session_progress_cards");
+    admitSqliteSchema(db);
+  };
   const expectStored = (
     revision: number,
     updated_at: number,
@@ -121,6 +123,7 @@ describe("session progress card store", () => {
     }
     clock.mockReturnValue(4000);
     expect(runSqliteImmediateTransactionSync(db, () => measure(db, reset))).toBe(true);
+    expectStored(8, 4000);
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
     db = openNodeSqliteDatabase(dbPath);
@@ -138,15 +141,46 @@ describe("session progress card store", () => {
     ).toBeUndefined();
   });
 
+  it("creates lazy storage once and retains admitted facts across warm writes and reads", () => {
+    dropLazyTable();
+    expect(facts()?.tables.has("session_progress_cards")).toBe(false);
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    write({ markdown: "First" });
+    expect(exec.mock.calls.filter(([sql]) => /CREATE TABLE/iu.test(sql))).toHaveLength(1);
+    const admittedFacts = facts();
+    expect(admittedFacts?.tables.has("session_progress_cards")).toBe(true);
+    using sibling = openNodeSqliteDatabase(dbPath, { readOnly: true });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    admitSqliteSchema(sibling);
+    const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
+    exec.mockClear();
+    reads.queries.length = 0;
+    write({ markdown: "Second" });
+    expect(read()).toMatchObject({ markdown: "Second", revision: 2 });
+    write({});
+    write({ markdown: "Next task" });
+    expect(reset()).toBe(true);
+    expect(read()).toBeNull();
+    expect(facts()).toBe(admittedFacts);
+    expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
+    expect(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
+    expect(reads.queries.filter((sql) => /sqlite_schema|sqlite_master/iu.test(sql))).toEqual([]);
+  });
+
   it("recreates lazy storage after rolling back its first write", () => {
-    db.exec("DROP TABLE session_progress_cards");
-    admitSqliteSchema(db);
+    dropLazyTable();
+    let transactionalFacts: ReturnType<typeof getAdmittedSqliteSchemaFacts>;
     expect(() =>
       runSqliteImmediateTransactionSync(db, () => {
         write({ markdown: "Rolled back" });
+        transactionalFacts = facts();
+        expect(transactionalFacts?.tables.has("session_progress_cards")).toBe(true);
         throw new Error("synthetic rollback");
       }),
     ).toThrow("synthetic rollback");
+    const rolledBackFacts = facts();
+    expect(rolledBackFacts).not.toBe(transactionalFacts);
+    expect(rolledBackFacts?.tables.has("session_progress_cards")).toBe(false);
     expect(read()).toBeNull();
     write({ markdown: "Retried" });
     expect(read()).toMatchObject({ markdown: "Retried", revision: 1 });
@@ -155,12 +189,16 @@ describe("session progress card store", () => {
   it("observes managed schema publication before recreating lazy storage", () => {
     admitSqliteSchema(db);
     write({ markdown: "Before foreign DDL" });
+    const admittedFacts = facts();
     {
       using foreign = openNodeSqliteDatabase(dbPath);
       foreign.exec("DROP TABLE session_progress_cards");
     }
+    const reads = observeSqliteReadSql(StatementSync.prototype);
     write({ markdown: "After foreign DDL" });
     expect(read()).toMatchObject({ markdown: "After foreign DDL", revision: 1 });
+    expect(facts()).not.toBe(admittedFacts);
+    expect(reads.queries.some((sql) => /sqlite_schema/iu.test(sql))).toBe(true);
   });
 
   it("deletes the card when its owning session node is deleted", () => {
@@ -170,15 +208,17 @@ describe("session progress card store", () => {
   });
 
   it("dismisses the card only at its expected revision", () => {
-    write({ steps: STEPS });
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const steps = STEPS;
+    write({ steps });
     setSteps("{");
     const malformed = stored();
     expect(() => write({ expectedRevision: 2 })).toThrow(SyntaxError);
     expect(stored()).toEqual(malformed);
-    setSteps(JSON.stringify(STEPS));
+    setSteps(JSON.stringify(steps));
 
     expect(write({ expectedRevision: 2 })).toEqual(cardAt(1));
-    expect(read()).toMatchObject({ steps: STEPS, revision: 1 });
+    expect(read()).toMatchObject({ steps, revision: 1 });
     expect(write({ expectedRevision: 1 })).toEqual({ cleared: true });
     expect(read()).toBeNull();
     expect(write({ expectedRevision: 2 })).toEqual({ card: null });

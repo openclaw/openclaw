@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { loginChutes, refreshChutesOAuthCredential as refreshChutes } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
@@ -87,6 +87,13 @@ const stored: OAuthCredential = {
 afterEach(() => {
   waitForLocalOAuthCallbackMock.mockReset();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+  vi.resetModules();
 });
 
 it("uses an IPv6 loopback callback without changing the OAuth redirect URI", async () => {

@@ -157,7 +157,7 @@ it.each([
   [undefined, 5],
   [1, 1],
 ])("resolves maxResults %s with count-scoped caching", async (maxResults, count) => {
-  fetchMock.mockResolvedValue(searchResponse(Array.from({ length: 10 }, () => ({}))));
+  fetchMock.mockImplementation(async () => searchResponse(Array.from({ length: 10 }, () => ({}))));
   const tool = searchTool({ maxResults });
   expect(await tool.execute({ query })).toMatchObject({ count });
   expect(await requestBody()).toEqual({ text_query: query, limit: count });
