@@ -359,9 +359,10 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
+  const presentation = createMemo(() => props.presentationIdentity);
   // Reopening or replacing the presentation resets only the local reveal count.
   const [shown, setShown] = createSignal(() => {
-    void props.presentationIdentity;
+    presentation();
     presented();
     sessionKey();
     return 10;
