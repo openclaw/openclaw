@@ -98,8 +98,7 @@ export function modelOptionSearchRow(
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const runtimeLabel =
-    formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId)?.label ?? "";
+  const runtimeLabel = formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId)?.label ?? "";
   const resetsPin = entry.isDefault && options.sessionModelPinned;
   const onModelSetup = optionNeedsAuth(entry) ? options.onModelSetup : undefined;
   return {
