@@ -94,10 +94,7 @@ test.each([1, 32])(
       const retained = await read("after");
       expect(project).not.toHaveBeenCalled();
       expect(retained).toEqual(after);
-      const readyParams = {
-        readPolicy: "ready" as const,
-        sessionEntry: sessionEntry("after"),
-      };
+      const readyParams = { readPolicy: "ready" as const, sessionEntry: sessionEntry("after") };
       await harness.read();
       expect(await harness.startup(readyParams)).toBeDefined();
       current = false;

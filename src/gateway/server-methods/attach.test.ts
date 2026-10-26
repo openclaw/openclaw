@@ -21,6 +21,10 @@ vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal
 
 const grant = expectDefined(attachHandlers["attach.grant"], "attach.grant handler");
 const revoke = expectDefined(attachHandlers["attach.revoke"], "attach.revoke handler");
+type Grant = NonNullable<ReturnType<typeof resolveAttachGrant>> & {
+  mcpConfig: unknown;
+  env: Record<string, string>;
+};
 
 async function request(params: Record<string, unknown>, handler = grant, config = {}) {
   const respond = vi.fn<RespondFn>();
@@ -42,12 +46,7 @@ afterEach(closeMcpLoopbackServer);
 it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
   const [ok, payload] = await request({ sessionKey: "agent:main:attach-method" });
   expect(ok).toBe(true);
-  const body = payload as {
-    token: string;
-    sessionKey: string;
-    mcpConfig: unknown;
-    env: Record<string, string>;
-  };
+  const body = payload as Grant;
   expect(body.sessionKey).toBe("agent:main:attach-method");
   expect(body.token).toMatch(/^[0-9a-f]{64}$/);
   expect(body.mcpConfig).toBeTruthy();
@@ -64,8 +63,7 @@ it("uses an explicit agent for an omitted session key", async () => {
     agents: { ownership: "explicit", entries: { research: {}, other: {} } },
   });
   expect(ok).toBe(true);
-  const result = payload as { sessionKey?: string } | undefined;
-  expect(result?.sessionKey).toBe("agent:research:main");
+  expect(payload).toMatchObject({ sessionKey: "agent:research:main" });
 });
 it.each([
   ["reserved", undefined, false],
@@ -83,9 +81,8 @@ it.each([
   const [ok, payload, error] = await request({ sessionKey });
   expect(ok).toBe(allowed);
   if (allowed) {
-    const response = payload as { token: string } | undefined;
-    expect(response).toBeDefined();
-    expect(resolveAttachGrant(response?.token ?? "")?.sessionKey).toBe(sessionKey);
+    const response = expectDefined(payload, "attach grant") as Grant;
+    expect(resolveAttachGrant(response.token)?.sessionKey).toBe(sessionKey);
   } else {
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",
@@ -102,7 +99,7 @@ it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async (
 
   const [errOk, , err] = await request({}, revoke);
   expect(errOk).toBe(false);
-  expect((err as { code: string }).code).toBe("INVALID_REQUEST");
+  expect(err).toMatchObject({ code: "INVALID_REQUEST" });
 });
 
 it("applies a positive ttlMs and falls back to the default for an invalid one", async () => {

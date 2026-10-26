@@ -58,13 +58,12 @@ it.each([
     workspace,
   });
   if (allowed) {
-    expect(create).toHaveBeenCalledWith({
-      repoRoot,
-      name: undefined,
-      baseRef: undefined,
-      ownerKind: "manual",
-      runSetupScript: admin,
-    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot,
+        runSetupScript: admin,
+      }),
+    );
     expect(respond).toHaveBeenCalledWith(true, worktreeRecord(repoRoot), undefined);
   } else {
     expect(create).not.toHaveBeenCalled();

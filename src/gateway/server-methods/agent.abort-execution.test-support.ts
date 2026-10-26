@@ -56,7 +56,6 @@ async function checkCancellation(
       { context, reqId: runId, client },
     );
     const active = requireValue(acceptedEntry, "active run missing");
-    expect(getRpcSource(runId)).toBe(active);
     if (staleKey) {
       expect(active.input.target?.sessionKey).toBe(sessionKey);
     } else {

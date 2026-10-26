@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -6,6 +7,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
+  profileSessionEntry,
 } from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -19,9 +21,7 @@ export function upsertDefaultSuggestionSession(
   return upsertSessionEntryCore(
     { agentId: "main", sessionKey: key },
     {
-      sessionId: "session-main",
-      updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "owner" },
+      ...profileSessionEntry("session-main", 1, "owner"),
       visibility: "suggest",
       ...patch,
     },
@@ -91,10 +91,7 @@ export function requests(
 
 export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {
   const payload = result.responses[0]?.[1] as { suggestion?: { id?: string } } | undefined;
-  if (!payload?.suggestion?.id) {
-    throw new Error("suggestion response id missing");
-  }
-  return payload.suggestion.id;
+  return expectDefined(payload?.suggestion?.id || undefined, "suggestion response id missing");
 }
 
 export function registerSessionSuggestionTestLifecycle(mocks: {
