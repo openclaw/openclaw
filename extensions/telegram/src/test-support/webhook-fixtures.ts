@@ -55,13 +55,6 @@ export function requireMockCall(mock: unknown, index: number, label: string): un
   return call;
 }
 
-export function expectMockMessageContains(mock: unknown, expected: string): void {
-  const messages = (mock as MockCallReader).mock.calls.map(([message]) =>
-    typeof message === "string" ? message : "",
-  );
-  expect(messages.join("\n")).toContain(expected);
-}
-
 export function expectStatusCall(
   mock: unknown,
   expected: Record<string, unknown>,

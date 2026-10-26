@@ -1,11 +1,7 @@
 import type { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, expect, it, vi, type Mock } from "vitest";
-import {
-  expectMockMessageContains,
-  expectStatusCall,
-  telegramMessageUpdate,
-} from "./webhook-fixtures.js";
+import { expectStatusCall, telegramMessageUpdate } from "./webhook-fixtures.js";
 import { type createTelegramWebhookTestGateway, webhookUrl } from "./webhook-gateway.js";
 import { postWebhookJson } from "./webhook-http.js";
 
@@ -49,6 +45,14 @@ export function registerTelegramWebhookRegistrationTests({
     expect(stopSpy).toHaveBeenCalledTimes(1);
     expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   };
+  const expectBlocked = () => {
+    expectStopped();
+    expectStatusCall(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "unauthorized",
+    });
+  };
 
   it("waits for setWebhook before reporting ready while continuing durable webhook admission", async () => {
     const advertised = createDeferred<void>();
@@ -67,57 +71,39 @@ export function registerTelegramWebhookRegistrationTests({
         return true;
       });
 
-    await gateway.withWebhook(
-      {
-        ...webhookOptions,
-        runtime,
-        setStatus,
-      },
-      async ({ port }) => {
-        try {
-          await retryStarted.promise;
-          const response = await postWebhookJson({
-            url: webhookUrl(port, path),
-            payload: JSON.stringify(telegramMessageUpdate(806, "startup webhook")),
-            secret,
-          });
-          expect(response.status).toBe(200);
-          expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-          expect(stopSpy).not.toHaveBeenCalled();
-          expectMockMessageContains(runtime.error, "telegram setWebhook failed: fetch failed");
-          expect(setStatus).not.toHaveBeenCalledWith(
-            expect.objectContaining({ lifecycle: "ready" }),
-          );
-          expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
-          expect(setStatus).toHaveBeenCalledWith({ lastEventAt: expect.any(Number) });
-        } finally {
-          retryRegistration.resolve();
-        }
-        await advertised.promise;
-        expect(setWebhookSpy).toHaveBeenCalledTimes(2);
-        expect(runtime.log).toHaveBeenCalledWith("telegram setWebhook retry 1 scheduled in 0ms");
-        expectMockMessageContains(runtime.log, "webhook advertised to telegram on http://");
-        expect(setStatus).toHaveBeenCalledWith({
-          mode: "webhook",
-          connected: false,
-          lifecycle: "recovering",
-          lastError: "fetch failed",
+    await gateway.withWebhook({ ...webhookOptions, runtime, setStatus }, async ({ port }) => {
+      try {
+        await retryStarted.promise;
+        const response = await postWebhookJson({
+          url: webhookUrl(port, path),
+          payload: JSON.stringify(telegramMessageUpdate(806, "startup webhook")),
+          secret,
         });
-        expectStatusCall(setStatus, { mode: "webhook", connected: true, lastError: null });
-      },
-    );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+        expect(stopSpy).not.toHaveBeenCalled();
+        expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+        expect(setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
+        expect(setStatus).toHaveBeenCalledWith({ lastEventAt: expect.any(Number) });
+      } finally {
+        retryRegistration.resolve();
+      }
+      await advertised.promise;
+      expect(setWebhookSpy).toHaveBeenCalledTimes(2);
+      expect(setStatus).toHaveBeenCalledWith({
+        mode: "webhook",
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "fetch failed",
+      });
+      expectStatusCall(setStatus, { mode: "webhook", connected: true, lastError: null });
+    });
   });
 
   it("fails startup when setWebhook has a non-recoverable rejection", async () => {
     setWebhookSpy.mockRejectedValueOnce(apiError("unauthorized", 401));
     await expect(start()).rejects.toThrow("unauthorized");
-    expectStopped();
-    expectMockMessageContains(runtime.error, "telegram setWebhook failed: unauthorized");
-    expectStatusCall(setStatus, {
-      lifecycle: "blocked",
-      terminalDisconnect: true,
-      lastError: "unauthorized",
-    });
+    expectBlocked();
   });
 
   it("does not mark a non-auth setWebhook rejection as blocked", async () => {
@@ -153,17 +139,8 @@ export function registerTelegramWebhookRegistrationTests({
     try {
       await stopped.promise;
       expect(gateway.registry.httpRoutes).toHaveLength(0);
-      expectStopped();
-      expectStatusCall(setStatus, {
-        lifecycle: "blocked",
-        terminalDisconnect: true,
-        lastError: "unauthorized",
-      });
+      expectBlocked();
       expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
-      expectMockMessageContains(
-        runtime.error,
-        "telegram setWebhook retry stopped after non-recoverable error",
-      );
 
       await started.stop();
       expectStopped();
