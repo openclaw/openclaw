@@ -38,7 +38,8 @@ import {
   type AuthorizedDreamingSidecar,
   detailPluginStartupTrace,
   preparePluginLoadRecord,
-  validatePluginConfig,
+  prepareRuntimePluginConfig,
+  type PreparedPluginConfig,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
@@ -54,7 +55,6 @@ import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
-import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import {
@@ -81,35 +81,6 @@ export type PluginLoadLoopState = {
   pluginLoadAttemptCount: number;
 };
 
-export type PreparedPluginConfig = {
-  input: string | undefined;
-  validation?: ReturnType<typeof validatePluginConfig>;
-};
-
-export function prepareRuntimePluginConfig(
-  params: Pick<
-    Parameters<typeof loadRuntimePluginCandidate>[0],
-    "candidate" | "manifestRecord" | "context" | "preparedConfig"
-  >,
-) {
-  const { candidate, manifestRecord, context, preparedConfig } = params;
-  if (!preparedConfig.validation) {
-    const policyId = normalizePluginPolicyId(manifestRecord.id);
-    preparedConfig.validation = validatePluginConfig({
-      origin: candidate.origin,
-      schema: manifestRecord.configSchema,
-      cacheKey: manifestRecord.schemaCacheKey,
-      value: context.normalized.entries[policyId]?.config,
-      sourceValue: manifestRecord.configContracts?.secretInputs
-        ? context.activationSource.plugins.entries[policyId]?.config
-        : undefined,
-    });
-    // Snapshot before plugin code can mutate the settings passed through its API.
-    preparedConfig.input = JSON.stringify(preparedConfig.validation);
-  }
-  return preparedConfig.validation;
-}
-
 export function* loadRuntimePluginCandidate(params: {
   pendingStateMigration?: DeferredPluginMigration;
   candidate: PluginCandidate;
@@ -124,7 +95,9 @@ export function* loadRuntimePluginCandidate(params: {
   logger: PluginLogger;
   state: PluginLoadLoopState;
   preparedConfig: PreparedPluginConfig;
-}): Generator<() => Promise<void>, void> {
+}): Generator<(() => Promise<void>) | undefined, void> {
+  // Undefined steps serialize publication and policy that depends on earlier registrations;
+  // preparation functions may run ahead without evaluating plugin code.
   const { candidate, manifestRecord, context, state } = params;
   const cliMetadata = params.options.mode === "cli-metadata";
   const { registry } = params.registryBuilder;
@@ -154,6 +127,7 @@ export function* loadRuntimePluginCandidate(params: {
   if (enableState.enabled && params.pendingStateMigration && !recovery) {
     // Doctor's separate contract loader owns repair; neither full nor fallback CLI
     // metadata entrypoints may evaluate against data that has not migrated yet.
+    yield;
     const message = recordPluginConfiguredUnavailable({
       registry,
       record,
@@ -175,6 +149,7 @@ export function* loadRuntimePluginCandidate(params: {
   if (enableState.enabled && degradedPlugin) {
     // Startup verification owns this boot-stable quarantine. Return before
     // artifact resolution so no top-level plugin code can execute this boot.
+    yield;
     recordPluginConfiguredUnavailable({
       registry,
       record,
@@ -221,6 +196,7 @@ export function* loadRuntimePluginCandidate(params: {
     packageBuild: candidate.packageManifest?.build,
   });
   if (blockUntrustedLocalScopedChannelSetupImport) {
+    yield;
     markPluginActivationDisabled(
       record,
       activationState.reason ??
@@ -255,6 +231,7 @@ export function* loadRuntimePluginCandidate(params: {
     cliMetadata,
   });
   if (!registrationPlan) {
+    yield;
     markPluginActivationDisabled(record, enableState.reason);
     finish();
     return;
@@ -277,6 +254,7 @@ export function* loadRuntimePluginCandidate(params: {
     (compareOpenClawReleaseVersions(packageVersion, minimumCompatibleVersion) ?? 0) < 0
   ) {
     // A broad pluginApi range cannot prove lazy SDK imports from an older runtime still work.
+    yield;
     record.activated = false;
     pushPluginLoadError(
       `Official runtime plugin ${pluginId} ${packageVersion} is incompatible with OpenClaw ${hostVersion} ` +
@@ -288,6 +266,7 @@ export function* loadRuntimePluginCandidate(params: {
   }
 
   if (record.format === "bundle") {
+    yield;
     if (cliMetadata) {
       registry.plugins.push(record);
     } else {
@@ -312,6 +291,7 @@ export function* loadRuntimePluginCandidate(params: {
   ) {
     // Skip bundled memory modules already disabled by slot policy. The authorized
     // dreaming sidecar remains loadable alongside the selected memory plugin.
+    yield;
     const earlyMemoryDecision = memoryDecisionFor(manifestRecord.kind);
     if (!earlyMemoryDecision.enabled) {
       disableMemoryPlugin(earlyMemoryDecision.reason);
@@ -319,10 +299,12 @@ export function* loadRuntimePluginCandidate(params: {
     }
   }
   if (!manifestRecord.configSchema) {
+    yield;
     pushPluginLoadError("missing config schema");
     return;
   }
   if (!context.shouldLoadModules && registrationPlan.runRuntimeCapabilityPolicy) {
+    yield;
     const memoryDecision = memoryDecisionFor(record.kind);
     if (!memoryDecision.enabled && !isDreamingSidecar) {
       disableMemoryPlugin(memoryDecision.reason);
@@ -338,6 +320,7 @@ export function* loadRuntimePluginCandidate(params: {
   const validatedConfig = prepareRuntimePluginConfig(params);
   const configValidationMs = performance.now() - beforeConfigValidation;
   if (!validatedConfig.ok) {
+    yield;
     params.logger.error(
       `[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`,
     );
@@ -345,6 +328,7 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
   if (!context.shouldLoadModules) {
+    yield;
     finish();
     return;
   }
@@ -364,6 +348,7 @@ export function* loadRuntimePluginCandidate(params: {
   };
   const catalogRequest = params.options.capabilityCatalog;
   if (catalogRequest && manifestRecord.capabilityCatalogSource !== undefined) {
+    yield;
     try {
       if (!manifestRecord.capabilityCatalogSource) {
         throw new Error("entry must resolve inside the selected plugin root");
@@ -458,6 +443,7 @@ export function* loadRuntimePluginCandidate(params: {
     const source = resolveCliMetadataEntrySource(candidate.rootDir, candidate.source);
     // Bundled metadata must never initialize a heavy runtime entry just to render CLI help.
     if (!source && candidate.origin === "bundled") {
+      yield;
       finish();
       return;
     }
@@ -488,6 +474,7 @@ export function* loadRuntimePluginCandidate(params: {
       rejectHardlinks,
     });
     if (!opened.ok) {
+      yield;
       pushPluginLoadError(
         describeRootFileOpenFailure({
           failure: opened,
@@ -509,13 +496,6 @@ export function* loadRuntimePluginCandidate(params: {
   const beforeModuleLoad = performance.now();
   const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
   try {
-    // Top-level code may execute before module evaluation throws, so record the
-    // import attempt before invoking the loader.
-    if (!cliMetadata) {
-      recordImportedPluginId(record.id);
-    }
-    state.pluginLoadAttemptCount++;
-    params.logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
     const moduleOwner = {
       record,
       rootDir: moduleRoot,
@@ -527,17 +507,27 @@ export function* loadRuntimePluginCandidate(params: {
         context.installRecords,
       ),
     };
-    if (!recovery && candidate.origin !== "bundled") {
-      // Host callers await acquisition after selection and policy checks. Synchronous
-      // CLI consumers skip this step and use the same loader's inline acquisition.
-      yield async () => {
-        const started = performance.now();
-        try {
-          await params.loadPluginModule.prepare(safeSource, moduleOwner);
-        } finally {
-          modulePreparationMs = performance.now() - started;
-        }
-      };
+    try {
+      if (!recovery && candidate.origin !== "bundled") {
+        // Host callers await acquisition after selection and policy checks. Synchronous
+        // CLI consumers skip this step and use the same loader's inline acquisition.
+        yield async () => {
+          const started = performance.now();
+          try {
+            await params.loadPluginModule.prepare(safeSource, moduleOwner);
+          } finally {
+            modulePreparationMs = performance.now() - started;
+          }
+        };
+      }
+    } finally {
+      // Failed acquisition is still a load attempt. Publish it in manifest order,
+      // before evaluation can run top-level code or throw.
+      if (!cliMetadata) {
+        recordImportedPluginId(record.id);
+      }
+      state.pluginLoadAttemptCount++;
+      params.logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
     }
     const loadPluginModule = (source: string) => {
       if (recovery) {

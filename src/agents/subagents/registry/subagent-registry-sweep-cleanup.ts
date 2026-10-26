@@ -6,6 +6,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { assertionSucceeds } from "../../../shared/assertion.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   resolveSubagentChildAgentId,
@@ -54,14 +55,7 @@ export function createSubagentSweepReadScope(
       throw new Error("Subagent sweep read lost its Gateway owner");
     }
   };
-  const isHostCurrent = () => {
-    try {
-      assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isHostCurrent = () => assertionSucceeds(assertCurrent);
   return {
     gatewayResolver,
     assertCurrent,
@@ -172,7 +166,8 @@ export function mutateCleanup(
       if (!isCleanupCurrent(current, entry) || !ready(current)) {
         return { value: undefined };
       }
-      const draft = structuredClone(current);
+      // Cleanup changes only top-level bookkeeping and the frozen execution record.
+      const draft = { ...current, execution: { ...current.execution } };
       const next = update(draft) === null ? null : draft;
       return { value: next, postimages: new Map([[entry.runId, next]]) };
     },

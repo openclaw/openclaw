@@ -97,7 +97,12 @@ async function placement(
 
 function onReply(kind: string, run: () => void | Promise<void>, once = true) {
   boundary.afterReply = async (reply) => {
-    if (isWorkerReply(reply, kind)) {
+    if (
+      isRecord(reply) &&
+      reply.ok === true &&
+      isRecord(reply.value) &&
+      reply.value.kind === kind
+    ) {
       if (once) {
         boundary.afterReply = undefined;
       }
@@ -113,12 +118,10 @@ function pauseRead(phase: "registry" | "inventory") {
     entered.resolve();
     return resume.promise;
   };
-  let restore: () => void;
   if (phase === "registry") {
     const prepare = registry.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
-    const spy = vi
-      .spyOn(registry, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")
-      .mockImplementationOnce((...args) => {
+    vi.spyOn(registry, "prepareOpenClawAgentDatabaseRegistrySnapshotRead").mockImplementationOnce(
+      (...args) => {
         const prepared = prepare(...args);
         return {
           ...prepared,
@@ -127,23 +130,12 @@ function pauseRead(phase: "registry" | "inventory") {
             return prepared.read();
           },
         };
-      });
-    restore = () => spy.mockRestore();
+      },
+    );
   } else {
     onReply("session-target-inventory", wait);
-    restore = () => {
-      boundary.afterReply = undefined;
-    };
   }
-  return {
-    entered: entered.promise,
-    resume: () => resume.resolve(),
-    restore,
-  };
-}
-
-function isWorkerReply(reply: unknown, kind: string): boolean {
-  return isRecord(reply) && reply.ok === true && isRecord(reply.value) && reply.value.kind === kind;
+  return { entered: entered.promise, resume: () => resume.resolve() };
 }
 
 function writeSession(
@@ -165,7 +157,15 @@ async function resolveEvidence(subject: Awaited<ReturnType<typeof placement>>) {
 }
 
 function withState<T>(run: Parameters<typeof withOpenClawTestState<T>>[1]): Promise<T> {
-  return withOpenClawTestState({ scenario: "minimal" }, run);
+  return withOpenClawTestState({ scenario: "minimal" }, (state) => {
+    setRuntimeConfigSnapshot({});
+    return run(state);
+  });
+}
+
+async function configuredPlacement(cfg: OpenClawConfig) {
+  setRuntimeConfigSnapshot(cfg, cfg);
+  return placement();
 }
 
 async function withDiscoveryPause(
@@ -180,7 +180,6 @@ async function withDiscoveryPause(
   } finally {
     gate.resume();
     await pending;
-    gate.restore();
   }
 }
 
@@ -188,7 +187,6 @@ it.for(["discovery", "identity"] as const)(
   "cancels placement evidence during %s admission without abandoning its writer",
   (phase, { signal }) =>
     withState(async () => {
-      setRuntimeConfigSnapshot({});
       const subject = await placement();
       await writeMemorySession(subject);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -239,7 +237,6 @@ it.each(["path", "root", "agent"] as const)(
   "revokes unresolved discovery before a %s close can finish",
   (selection) =>
     withState(async () => {
-      setRuntimeConfigSnapshot({});
       const subject = await placement();
       writeSession(subject);
       const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -264,9 +261,7 @@ it.each([false, true])(
   (close) =>
     withState(async (state) => {
       const store = state.statePath("custom", "shared.json");
-      const cfg: OpenClawConfig = { session: { store } };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = await placement();
+      const subject = await configuredPlacement({ session: { store } });
       openOpenClawAgentDatabase({
         agentId: "other",
         path: state.statePath("custom", "shared.sqlite"),
@@ -284,35 +279,31 @@ it.each([false, true])(
     }),
 );
 
-it("captures config, environment, cwd and placement identity before discovery yields", () =>
+it("captures config, state directory and placement identity before discovery yields", () =>
   withState(async (state) => {
-    const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
+    const store = "captured.sqlite";
     const cfg: OpenClawConfig = { session: { store } };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const subject = await placement();
-    writeSession({ ...subject, storePath: store });
+    const subject = await configuredPlacement(cfg);
+    writeSession({ ...subject, storePath: state.statePath(store) });
     const gate = pauseRead("registry");
-    const pending = createResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
     const cwd = vi.spyOn(process, "cwd");
     try {
-      await gate.entered;
-      cwd.mockReturnValue(state.stateDir);
-      cfg.session!.store = state.statePath("successor.sqlite");
-      process.env.OPENCLAW_STATE_DIR = state.statePath("other-root");
-      gate.resume();
-      const resolve = await pending;
-      expect(await resolve(subject)).toBe("current");
-      subject.sessionId = "mutated-subject";
-      expect(await resolve(subject)).toBe("unknown");
-      expect(fs.existsSync(cfg.session!.store)).toBe(false);
-      expect(fs.existsSync(process.env.OPENCLAW_STATE_DIR)).toBe(false);
+      await withDiscoveryPause(subject, gate, async (pending) => {
+        cwd.mockReturnValue(state.stateDir);
+        cfg.session!.store = state.statePath("successor.sqlite");
+        process.env.OPENCLAW_STATE_DIR = state.statePath("other-root");
+        gate.resume();
+        const resolve = await pending;
+        expect(await resolve(subject)).toBe("current");
+        subject.sessionId = "mutated-subject";
+        expect(await resolve(subject)).toBe("unknown");
+        expect(fs.existsSync(cfg.session!.store)).toBe(false);
+        expect(fs.existsSync(process.env.OPENCLAW_STATE_DIR)).toBe(false);
+      });
     } finally {
       process.env.OPENCLAW_STATE_DIR = originalRoot;
       cwd.mockRestore();
-      gate.resume();
-      await pending;
-      gate.restore();
     }
   }));
 
@@ -324,9 +315,7 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
       const alias = state.statePath("alias.sqlite");
       openOpenClawAgentDatabase({ agentId: "main", path: physical });
       fs.symlinkSync(physical, alias);
-      const cfg: OpenClawConfig = { session: { store: alias } };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const subject = await placement();
+      const subject = await configuredPlacement({ session: { store: alias } });
       // A fixed shared store is selected only for agents with persisted scoped rows.
       writeSession({ ...sessionIdentity("anchor"), storePath: physical });
       const replacement = state.statePath("replacement.sqlite");
@@ -376,7 +365,6 @@ it.each(["evidence write", "settlement write", "alias retarget"] as const)(
 
 it("transfers a Windows-normalized environment through inventory and evidence workers", () =>
   withState(async () => {
-    setRuntimeConfigSnapshot({});
     const subject = await placement();
     writeSession(subject);
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
@@ -387,19 +375,12 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
       }),
     );
     expect(() => structuredClone(normalized)).toThrow();
-    const clone = vi
-      .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
-      .mockReturnValueOnce(normalized);
-    try {
-      expect(await resolveEvidence(subject)).toBe("current");
-    } finally {
-      clone.mockRestore();
-    }
+    using _ = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockReturnValueOnce(normalized);
+    expect(await resolveEvidence(subject)).toBe("current");
   }));
 
 it("reads memory evidence after an in-process write completes during disk work", () =>
   withState(async () => {
-    setRuntimeConfigSnapshot({});
     const disk = await placement("disk-current");
     const incognito = await placement(
       "private-created",
@@ -417,13 +398,9 @@ it("reads memory evidence after an in-process write completes during disk work",
       await writeMemorySession(incognito, 2);
       wrote = true;
     });
-    try {
-      const resolve = await createResolver([disk, incognito]);
-      expect(wrote).toBe(true);
-      expect(await Promise.all([disk, incognito].map(resolve))).toEqual(["current", "current"]);
-    } finally {
-      boundary.afterReply = undefined;
-    }
+    const resolve = await createResolver([disk, incognito]);
+    expect(wrote).toBe(true);
+    expect(await Promise.all([disk, incognito].map(resolve))).toEqual(["current", "current"]);
   }));
 
 it("keeps the fixed physical owner and current precedence across canonical and malformed legacy rows", () =>

@@ -91,10 +91,11 @@ function normalizeSnapshotFields(record: Record<string, unknown>): ChromeMcpSnap
   };
 }
 
-function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
-  const rootRecord = asNullableRecord(value);
+export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
+  const structured = extractStructuredContent(result);
+  const rootRecord = asNullableRecord(structured.snapshot);
   if (!rootRecord) {
-    return null;
+    throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
   }
   const root = normalizeSnapshotFields(rootRecord);
   const pending = [{ record: rootRecord, node: root }];
@@ -116,15 +117,6 @@ function normalizeSnapshotNode(value: unknown): ChromeMcpSnapshotNode | null {
     current.node.children = children;
   }
   return root;
-}
-
-export function extractSnapshot(result: ChromeMcpToolResult): ChromeMcpSnapshotNode {
-  const structured = extractStructuredContent(result);
-  const snapshot = normalizeSnapshotNode(structured.snapshot);
-  if (!snapshot) {
-    throw new Error("Chrome MCP snapshot response was missing structured snapshot data.");
-  }
-  return snapshot;
 }
 
 function extractMessageText(result: ChromeMcpToolResult): string {

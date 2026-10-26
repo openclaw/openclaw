@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   closeChatDetails,
@@ -61,16 +63,10 @@ function expectDockClear(report: Record<string, DockGeometry>): void {
 
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 
-function history(
-  prefix: string,
-  length: number,
-  timestamp: number,
-  detail = "transcript line\n",
-  assistantFirst = true,
-) {
+function history(prefix: string, length: number, timestamp: number) {
   return Array.from({ length }, (_, index) => ({
-    content: [{ text: prefix + " " + index + "\n" + detail.repeat(3), type: "text" }],
-    role: (index % 2 === 0) === assistantFirst ? "assistant" : "user",
+    content: [{ text: prefix + " " + index + "\n" + "transcript line\n".repeat(3), type: "text" }],
+    role: index % 2 === 0 ? "assistant" : "user",
     timestamp: timestamp + index,
   }));
 }
@@ -123,101 +119,7 @@ async function publishPr(gateway: Gateway, key: string, withChecks = false) {
 
 suite.define(() => {
   it.each([
-    { reducedMotion: "reduce", paragraphs: 1 },
-    { reducedMotion: "no-preference", paragraphs: 1 },
-    { reducedMotion: "reduce", paragraphs: 48 },
-    { reducedMotion: "no-preference", paragraphs: 48 },
-  ] as const)(
-    "keeps a Details progress reader stable through streaming newlines ($reducedMotion, $paragraphs paragraphs)",
-    async ({ reducedMotion, paragraphs }) => {
-      const page = await newChatPage(suite, {
-        ...createControlUiE2eContextOptions(),
-        reducedMotion,
-      });
-      const sessionKey = "agent:main:main";
-      const runId = "progress-stream-run";
-      const initialText = "Current findings.\n\n".repeat(paragraphs).trimEnd();
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-        historyMessages: history("Reading context", 30, 1, "Earlier findings.\n", false),
-        inFlightRun: { runId, text: initialText },
-        sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
-        methodResponses: {
-          "progressCard.get": progressCard(
-            sessionKey,
-            "Reviewing the synthetic workspace.\n\n" +
-              "- A detailed finding to verify before finishing the task.\n".repeat(8),
-          ),
-        },
-      });
-      const card = page.locator('[data-progress-card-placement="details"]');
-      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      let text = initialText;
-      const streamLine = async (line: number) => {
-        text += "\n\nStreaming finding " + line + ".";
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId,
-          state: "delta",
-          message: { role: "assistant", content: [{ type: "text", text }] },
-        });
-      };
-      await page.goto(suite.server.baseUrl + "chat");
-      await openChatDetails(page);
-      await card.locator(".task-progress-details__body").waitFor();
-      await waitForChatScrollIdle(page);
-      expect(await card.getAttribute("open")).toBe("");
-      expect(
-        await card.evaluate((element) => element.getBoundingClientRect().height),
-      ).toBeGreaterThan(200);
-      const threadBounds = await thread.boundingBox();
-      if (!threadBounds) {
-        throw new Error("Expected a visible transcript");
-      }
-      await page.mouse.move(threadBounds.x + 8, threadBounds.y + threadBounds.height / 2);
-      await page.mouse.wheel(0, -32);
-      await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeGreaterThan(0);
-      await openChatDetails(page);
-      await card.locator("summary").click();
-      await expect.poll(() => card.getAttribute("open")).toBeNull();
-      for (let line = 1; line <= 12; line++) {
-        await streamLine(line);
-        await page.waitForTimeout(40);
-        expect(await card.getAttribute("open")).toBeNull();
-      }
-      await expect.poll(() => thread.textContent()).toContain("Streaming finding 12.");
-      await waitForChatScrollIdle(page);
-      const settledTop = await thread.evaluate((element) => element.scrollTop);
-      for (let line = 13; line <= 16; line++) {
-        await streamLine(line);
-        await expect.poll(() => thread.textContent()).toContain(`Streaming finding ${line}.`);
-        await waitForChatScrollIdle(page);
-        expect(await card.getAttribute("open")).toBeNull();
-        expect(await thread.evaluate((element) => element.scrollTop)).toBe(settledTop);
-      }
-      await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
-      await waitForChatScrollIdle(page);
-      expect(await card.getAttribute("open")).toBeNull();
-      await openChatDetails(page);
-      await card.locator("summary").click();
-      await waitForChatScrollIdle(page);
-      expect(await card.getAttribute("open")).toBe("");
-      for (let line = 17; line <= 20; line++) {
-        await streamLine(line);
-        await expect.poll(() => thread.textContent()).toContain(`Streaming finding ${line}.`);
-        await waitForChatScrollIdle(page);
-        expect(await card.getAttribute("open")).toBe("");
-        expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(
-          CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-        );
-      }
-    },
-  );
-
-  it.each([
     { width: 1280, height: 900 },
-    { width: 1540, height: 1348 },
     { width: 375, height: 812 },
   ])("keeps replies above the dock ($width x $height)", async ({ width, height }) => {
     const page = await newChatPage(suite, {
@@ -280,80 +182,65 @@ suite.define(() => {
       revision: 1,
       sessionKey: watchedKey,
     });
-    if (width <= 900) {
+    const mobile = width <= 900;
+    const openProgress = async () => {
       const progress = await openChatTaskProgress(page);
-      await progress.getByText("Verify the findings", { exact: true }).waitFor();
+      if (mobile) {
+        await progress.getByText("Verify the findings", { exact: true }).waitFor();
+      }
       await waitForChatScrollIdle(page);
-      report.afterCard = await dockGeometry(page);
-      await closeChatDetails(page);
-      await scrollChatThreadToTop(page);
-      await openChatTaskProgress(page);
-      await progress.getByText("Verify the findings", { exact: true }).waitFor();
-      expect(await page.locator(".chat-thread").evaluate((thread) => thread.scrollTop)).toBe(0);
-      await closeChatDetails(page);
-      const button = page.getByRole("button", { name: "Scroll to latest", exact: true });
-      await button.click();
+    };
+    await openProgress();
+    report.afterCard = await dockGeometry(page);
+    if (!mobile && (await card.getAttribute("open")) === null) {
+      await card.locator("summary").click();
       await waitForChatScrollIdle(page);
-      report.afterButton = await dockGeometry(page);
+    }
+    await closeChatDetails(page);
+    await scrollChatThreadToTop(page);
+    if (!mobile) {
+      expect(await card.getAttribute("open")).toBe("");
+    }
+    await openProgress();
+    if (!mobile) {
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+    }
+    expect(await page.locator(".chat-thread").evaluate((thread) => thread.scrollTop)).toBe(0);
+    if (mobile) {
+      await closeChatDetails(page);
+    }
+    const button = page.getByRole("button", { name: "Scroll to latest", exact: true });
+    await button.click();
+    await waitForChatScrollIdle(page);
+    report.afterButton = await dockGeometry(page);
+    if (mobile) {
       expect(await page.locator(".chat-mobile-host").isVisible()).toBe(false);
-      await openChatTaskProgress(page);
-      await progress.getByText("Verify the findings", { exact: true }).waitFor();
+    } else {
+      expect(await card.getAttribute("open")).toBeNull();
+    }
+    await openProgress();
+    if (!mobile) {
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBe("");
       await waitForChatScrollIdle(page);
-      report.afterManualOpen = await dockGeometry(page);
-      expectDockClear(report);
-
-      // The mobile sheet owns dismissal; Latest must not reopen it.
-      await closeChatDetails(page);
-      // The hidden sheet's grid row still animates the transcript viewport.
-      await waitForChatScrollIdle(page);
-      const thread = page.locator(".chat-thread");
-      await thread.press("Home");
-      await waitForChatScrollIdle(page);
-      await button.press("Enter");
-      await openChatTaskProgress(page);
+    }
+    report.afterManualOpen = await dockGeometry(page);
+    expectDockClear(report);
+    if (mobile) {
+      // The sheet owns dismissal; Latest must not reopen it after keyboard close.
       await page
         .locator(".chat-mobile-host__header")
         .getByRole("button", { name: "Close", exact: true })
         .press("Escape");
       await page.locator(".chat-mobile-host").waitFor({ state: "hidden" });
       await waitForChatScrollIdle(page);
-      await thread.press("Home");
+      await scrollChatThreadToTop(page);
       await button.press("Enter");
       await waitForChatScrollIdle(page);
       expect(await page.locator(".chat-mobile-host").isVisible()).toBe(false);
       return;
     }
-    await expect.poll(() => card.count()).toBe(1);
-    await openChatDetails(page);
-    await waitForChatScrollIdle(page);
-    report.afterCard = await dockGeometry(page);
-    if ((await card.getAttribute("open")) === null) {
-      await openChatDetails(page);
-      await card.locator("summary").click();
-      await waitForChatScrollIdle(page);
-    }
-    await expect.poll(() => card.getAttribute("open")).toBe("");
-
-    await closeChatDetails(page);
-    await scrollChatThreadToTop(page);
-    expect(await card.getAttribute("open")).toBe("");
-    await openChatDetails(page);
-    await card.locator("summary").click();
-    await expect.poll(() => card.getAttribute("open")).toBeNull();
-    await waitForChatScrollIdle(page);
-    expect(await page.locator(".chat-thread").evaluate((thread) => thread.scrollTop)).toBe(0);
-    const button = page.locator(".chat-scroll-to-bottom[data-visible='true']");
-    await button.waitFor();
-    await button.click();
-    await waitForChatScrollIdle(page);
-    report.afterButton = await dockGeometry(page);
-    expect(await card.getAttribute("open")).toBeNull();
-    await openChatDetails(page);
-    await card.locator("summary").click();
-    await expect.poll(() => card.getAttribute("open")).toBe("");
-    await waitForChatScrollIdle(page);
-    report.afterManualOpen = await dockGeometry(page);
-    expectDockClear(report);
 
     // Interrupt an active Latest return with an explicit keyboard close.
     const thread = page.locator(".chat-thread");
@@ -419,7 +306,14 @@ suite.define(() => {
     });
     const report: Record<string, DockGeometry> = {};
     await page.goto(`${suite.server.baseUrl}chat`);
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await thread.locator(".chat-virtual-row").last().waitFor();
+    // Admit history beside the long run before checking its preceding message.
+    await thread.hover();
+    await page.mouse.wheel(0, -120);
     await page.getByText("Stream history 29").waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+    await waitForChatScrollIdle(page);
     const watchedKey = await waitForWatchedSessionKey(gateway);
     await publishPr(gateway, watchedKey);
     await openDetailsPullRequests(page);

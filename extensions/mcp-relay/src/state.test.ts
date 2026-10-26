@@ -1,5 +1,5 @@
 import { beforeEach, expect, it } from "vitest";
-import { CLIENT, createStateFixture } from "./relay.test-helpers.js";
+import { CLIENT, createStateFixture, grantFixture } from "./relay.test-helpers.js";
 
 let f: ReturnType<typeof createStateFixture>;
 let state: ReturnType<typeof f.open>;
@@ -50,16 +50,7 @@ it.each(["code", "approval"] as const)("revokes pending %s on restart", async (s
   const creating =
     source === "code"
       ? create("pending-grant", "pending-code-hash")
-      : state.approveGrant(
-          {
-            grantId: "pending-grant",
-            clientId: CLIENT.id,
-            clientName: CLIENT.name,
-            createdAt: 0,
-            ...owner,
-          },
-          () => {},
-        );
+      : state.approveGrant(grantFixture({ grantId: "pending-grant" }), () => {});
   await entered.promise;
   const revoking = state.revoke("pending-grant");
   persist.resolve();

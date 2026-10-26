@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -7,7 +8,10 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  holdMemoryTestOperation as hold,
+} from "./manager-index.test-support.js";
 import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
 type LifecycleFields = {
@@ -126,17 +130,16 @@ describe("memory index", () => {
     trackManager(second);
 
     const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
-    expect(cachedBeforeProbe?.ok).toBe(true);
-    expect(cachedBeforeProbe?.checked).toBe(true);
-    expect(cachedBeforeProbe?.cached).toBe(true);
-    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
-    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
-    if (
-      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
-      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
-    ) {
-      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(30_000);
-    }
+    expect(cachedBeforeProbe).toMatchObject({
+      ok: true,
+      checked: true,
+      cached: true,
+      checkedAtMs: expect.any(Number),
+      cacheExpiresAtMs: expect.any(Number),
+    });
+    expect((cachedBeforeProbe?.cacheExpiresAtMs ?? 0) - (cachedBeforeProbe?.checkedAtMs ?? 0)).toBe(
+      30_000,
+    );
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
       checked: true,
@@ -145,9 +148,6 @@ describe("memory index", () => {
       cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
     });
     expect(providerFixture.embedQueryCalls).toBe(1);
-
-    const cached = second.getCachedEmbeddingAvailability?.();
-    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
@@ -183,9 +183,7 @@ describe("memory index", () => {
       if (mode === "retry") {
         fields.resetProviderInitializationForRetry();
       } else {
-        if (!fields.provider) {
-          throw new Error("Expected a test embedding provider");
-        }
+        assert.ok(fields.provider, "Expected a test embedding provider");
         fields.provider.id = "local";
         fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       }
@@ -229,9 +227,7 @@ describe("memory index", () => {
       fallback: "fallback-provider",
     });
     const releaseProviderClose = holdProviderClose();
-    if (!fields.provider?.close) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(fields.provider?.close, "Expected a test embedding provider");
     const providerCloseStarted = createDeferred<void>();
     const closeProvider = fields.provider.close.bind(fields.provider);
     fields.provider.close = () => {
@@ -271,9 +267,7 @@ describe("memory index", () => {
     );
     const fields = fieldsOf(manager);
     await fields.ensureProviderInitialized();
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(fields.provider, "Expected a test embedding provider");
     const indexedProvider = fields.provider;
     indexedProvider.id = "local";
     fields.providerKey = fields.computeProviderKey();
@@ -283,22 +277,16 @@ describe("memory index", () => {
     await fs.writeFile(path.join(fixture.paths.memory, "generation-race-first.md"), firstContent);
     await fs.writeFile(path.join(fixture.paths.memory, "generation-race-second.md"), secondContent);
 
-    const firstEmbeddingGate = createDeferred<void>();
-    const secondEmbeddingGate = createDeferred<void>();
-    const firstEmbeddingStarted = createDeferred<void>();
-    const secondEmbeddingStarted = createDeferred<void>();
+    const firstEmbedding = hold(() => {});
+    const secondEmbedding = hold(() => {});
     indexedProvider.embedBatch = async (texts) => {
-      if (texts.some((text) => (typeof text === "string" ? text : text.text).includes("First"))) {
-        firstEmbeddingStarted.resolve();
-        await firstEmbeddingGate.promise;
-      } else {
-        secondEmbeddingStarted.resolve();
-        await secondEmbeddingGate.promise;
-      }
+      const first = texts.some((text) =>
+        (typeof text === "string" ? text : text.text).includes("First"),
+      );
+      await (first ? firstEmbedding : secondEmbedding).run();
       return texts.map(() => [1, 0, 0, 0]);
     };
-    const publicationGate = createDeferred<void>();
-    const publicationStarted = createDeferred<void>();
+    const publication = hold(() => {});
     const ensureVectorReady = fields.ensureVectorReady.bind(manager);
     let publicationCalls = 0;
     fields.ensureVectorReady = async (dimensions) => {
@@ -306,8 +294,7 @@ describe("memory index", () => {
       if (publicationCalls === 1) {
         return await ensureVectorReady(dimensions);
       }
-      publicationStarted.resolve();
-      await publicationGate.promise;
+      await publication.run();
       return await ensureVectorReady(dimensions);
     };
 
@@ -328,31 +315,28 @@ describe("memory index", () => {
     const secondIndexPromise = index("generation-race-second.md", secondContent);
     let fallbackPromise: Promise<boolean> | null = null;
     try {
-      const embeddingsStarted = Promise.all([
-        firstEmbeddingStarted.promise,
-        secondEmbeddingStarted.promise,
-      ]);
+      const embeddingsStarted = Promise.all([firstEmbedding.entered, secondEmbedding.entered]);
       await fields.withTimeout(embeddingsStarted, 5_000, "concurrent embeddings did not start");
       fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
       await vi.waitFor(() => expect(fields.provider).toBeNull());
       fallbackPromise = fields.activateFallbackProvider("local worker exited");
-      firstEmbeddingGate.resolve();
+      firstEmbedding.release();
       await firstIndexPromise;
       expect(providerFixture.providerCloseCalls).toBe(0);
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeFallback);
 
-      secondEmbeddingGate.resolve();
-      await fields.withTimeout(publicationStarted.promise, 5_000, "publication did not start");
+      secondEmbedding.release();
+      await fields.withTimeout(publication.entered, 5_000, "publication did not start");
       expect(providerFixture.providerCloseCalls).toBe(0);
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeFallback);
 
-      publicationGate.resolve();
+      publication.release();
       await secondIndexPromise;
       await expect(fallbackPromise).resolves.toBe(true);
     } finally {
-      firstEmbeddingGate.resolve();
-      secondEmbeddingGate.resolve();
-      publicationGate.resolve();
+      firstEmbedding.release();
+      secondEmbedding.release();
+      publication.release();
       await Promise.allSettled([
         firstIndexPromise,
         secondIndexPromise,

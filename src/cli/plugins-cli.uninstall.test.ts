@@ -16,6 +16,7 @@ const {
   createTestInstalledPluginIndex: createIndex,
   restorePersistedInstalledPluginIndexIfCurrentMock: restoreIndexMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock: writeRecordsMock,
+  expectNoPluginCliCalls: expectNoCalls,
 } = cli;
 
 let alphaInstallPath: string;
@@ -23,13 +24,7 @@ let actual: typeof import("../plugins/uninstall.js");
 let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
 const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const uninstall = (...args: string[]) => cli.runPluginsCommand(["plugins", "uninstall", ...args]);
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
+const uninstall = (...args: string[]) => cli.runPluginCli("uninstall", ...args);
 
 function setPluginSnapshot(
   ...plugins: Array<
@@ -140,6 +135,17 @@ it("shows uninstall dry-run preview without mutating config or acquiring write m
   expectNoCalls(cli.configWriteMock, cli.refreshPluginRegistryMock);
   expectRuntimeLogIncludes("Dry run, no changes made.");
   expectRuntimeLogIncludes("context engine slot");
+});
+
+it("escapes terminal controls from the installed manifest name in the preview", async () => {
+  configureAlphaInstall();
+  setPluginSnapshot({ id: "alpha", name: "alpha\u001b[31m\nforged-row" });
+
+  await uninstall("alpha", "--dry-run");
+
+  const output = cli.pluginsCliRuntimeLogs.join("\n");
+  expect(output).not.toContain("\u001b");
+  expect(output).toContain("Plugin: alpha\\nforged-row (alpha)");
 });
 
 it("forwards online --keep-files without deleting files or writing config locally", async () => {

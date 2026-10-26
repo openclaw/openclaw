@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compareSessionRowsByUpdatedAt } from "../lib/sessions/navigation.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
@@ -27,12 +28,17 @@ function makeRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewayS
   return { key, kind: "direct", ...fields };
 }
 
-function project(roots: GatewaySessionRow[], rows = roots) {
+function project(
+  roots: GatewaySessionRow[],
+  rows = roots,
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
+) {
   return projectSessionTree({
     roots,
     rowsByKey: new Map(rows.map((row) => [row.key, row])),
     mainSessionKeys: new Set([homeKey]),
     loadingChildKeys: new Set<string>(),
+    compareSessions,
     resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
     toSidebarSession: present,
   });
@@ -135,4 +141,20 @@ it("promotes a child without rewriting origin or moving its own descendants", ()
   expect(tree[0]?.childSessionKeys).toEqual([]);
   expect(tree[1]?.children.map((row) => row.key)).toEqual([grandchild.key]);
   expect(child).toMatchObject({ parentSessionKey: parent.key, spawnedBy: parent.key });
+});
+
+it("sorts each parent's children, including run-folded ones, with the root comparator", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(conversationKey, { spawnedBy: homeKey, updatedAt: 20 }),
+    makeRow(workerKey, { spawnedBy: homeKey }),
+    makeRow("folded", { spawnedBy: workerKey, updatedAt: 30 }),
+  ];
+  const childIds = (tree: SidebarRecentSession[]) => tree[0]?.children.map((row) => row.key);
+
+  expect(childIds(project([rows[0]!], rows))).toEqual([conversationKey, "folded"]);
+  expect(childIds(project([rows[0]!], rows, compareSessionRowsByUpdatedAt))).toEqual([
+    "folded",
+    conversationKey,
+  ]);
 });

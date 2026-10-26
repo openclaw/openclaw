@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireQaCredentialLease,
@@ -8,10 +8,7 @@ import {
 
 type CredentialPayload = { groupId: string; driverToken: string; sutToken: string };
 const brokerUrl = "https://qa-cred.example.convex.site";
-const ciEnv = {
-  OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
-  OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
-};
+const ciEnv = { OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl, OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret" };
 const maintainerEnv = {
   OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
   OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
@@ -27,6 +24,30 @@ const credentials = { groupId: "-100123", driverToken: "driver", sutToken: "sut"
 
 function acquireCi(fetchImpl: typeof fetch, env: NodeJS.ProcessEnv = ciEnv) {
   return acquireQaCredentialLease({ ...ciOptions, env, fetchImpl });
+}
+
+function acquireTimed(fetchImpl: typeof fetch, parsePayload = () => ({})) {
+  return acquireQaCredentialLease({ ...ciOptions, fetchImpl, parsePayload });
+}
+
+function acquireMaintainer(
+  overrides: Partial<Parameters<typeof acquireQaCredentialLease<CredentialPayload>>[0]> = {},
+  env: NodeJS.ProcessEnv = {},
+) {
+  return acquireQaCredentialLease({
+    ...convexOptions,
+    role: "maintainer",
+    ...overrides,
+    env: { ...maintainerEnv, ...env },
+  });
+}
+
+function acquireWithEnv(env: NodeJS.ProcessEnv, fetchImpl: typeof fetch) {
+  return acquireMaintainer({ fetchImpl }, env);
+}
+
+function brokerOperation(url: Parameters<typeof fetch>[0]) {
+  return new URL(url instanceof Request ? url.url : url).pathname.split("/").at(-1)!;
 }
 
 function acquired(payload: unknown, credentialId = "owned", leaseToken = "synthetic") {
@@ -63,96 +84,27 @@ function retryClock() {
   };
 }
 
-function startHeartbeat(heartbeat: () => Promise<void>, retryDelaysMs?: number[]) {
-  return startQaCredentialLeaseHeartbeat(
-    { source: "convex", kind: "telegram", heartbeatIntervalMs: 50, heartbeat },
-    { intervalMs: 50, retryDelaysMs },
-  );
-}
-
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
+function startHeartbeat(heartbeat: () => Promise<void>) {
+  return startQaCredentialLeaseHeartbeat({
+    source: "convex",
+    kind: "telegram",
+    heartbeatIntervalMs: 50,
+    heartbeat,
   });
 }
 
 type FetchMock = { mock: { calls: Parameters<typeof fetch>[] } };
 
-function fetchUrl(fetchImpl: FetchMock, index = 0): string {
-  const url = fetchImpl.mock.calls[index]?.[0];
-  if (typeof url !== "string") {
-    throw new Error(`expected fetch call ${index} URL`);
-  }
-  return url;
+function expectOperations(fetchImpl: FetchMock, ...operations: string[]) {
+  expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(
+    operations.map((operation) => `${brokerUrl}/qa-credentials/v1/${operation}`),
+  );
 }
 
-function fetchInit(fetchImpl: FetchMock, index = 0): RequestInit {
-  const init = fetchImpl.mock.calls[index]?.[1];
-  if (!init || typeof init !== "object") {
-    throw new Error(`expected fetch call ${index} init`);
-  }
-  return init;
-}
-
-async function startStreamingFailureBroker() {
-  const chunkBytes = 64 * 1024;
-  const totalBytes = 4 * 1024 * 1024;
-  let bytesWritten = 0;
-  let requestCount = 0;
-  const closed = Promise.withResolvers<void>();
-
-  const server = createServer((_req, res) => {
-    requestCount += 1;
-    res.writeHead(500, { "content-type": "text/plain" });
-    const interval = setInterval(() => {
-      if (bytesWritten >= totalBytes || res.destroyed) {
-        clearInterval(interval);
-        if (!res.destroyed) {
-          res.end();
-        }
-        return;
-      }
-      const nextBytes = Math.min(chunkBytes, totalBytes - bytesWritten);
-      bytesWritten += nextBytes;
-      res.write("x".repeat(nextBytes));
-    }, 1);
-    res.on("close", () => {
-      clearInterval(interval);
-      closed.resolve();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected streaming broker address");
-  }
-  return {
-    closePromise: closed.promise,
-    getBytesWritten: () => bytesWritten,
-    getRequestCount: () => requestCount,
-    totalBytes,
-    url: `http://127.0.0.1:${address.port}`,
-    stop: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    },
-  };
+function expectAuthorization(fetchImpl: FetchMock, token: string) {
+  expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+    `Bearer ${token}`,
+  );
 }
 
 describe("credential lease runtime", () => {
@@ -161,57 +113,44 @@ describe("credential lease runtime", () => {
     vi.useRealTimers();
   });
 
-  it("releases a credential whose TTL expires while the host monotonic clock is paused", async () => {
+  it("releases leases that expire while the monotonic clock is paused", async () => {
     vi.useFakeTimers();
     vi.spyOn(performance, "now").mockReturnValue(42);
     const operations: string[] = [];
     await expect(
-      acquireQaCredentialLease({
-        ...ciOptions,
-        kind: "discord",
-        resolveEnvPayload: () => ({}),
-        parsePayload: () => {
-          vi.setSystemTime(Date.now() + 101);
-          return {};
-        },
-        fetchImpl: async (url) => {
-          const operation = new URL(url instanceof Request ? url.url : url).pathname
-            .split("/")
-            .at(-1)!;
+      acquireTimed(
+        async (url) => {
+          const operation = brokerOperation(url);
           operations.push(operation);
           return jsonResponse(
             operation === "acquire" ? { ...acquired({}), leaseTtlMs: 100 } : { status: "ok" },
           );
         },
-      }),
+        () => {
+          vi.setSystemTime(Date.now() + 101);
+          return {};
+        },
+      ),
     ).rejects.toThrow("could not be confirmed before use");
     expect(performance.now()).toBe(42);
     expect(operations).toEqual(["acquire", "release"]);
   });
 
-  it("cannot renew an expired lease or retain authority during a pending release", async () => {
+  it("rejects renewal after expiry and revokes authority before release settles", async () => {
     vi.useFakeTimers();
     const heartbeatReply = Promise.withResolvers<Response>();
     const releaseReply = Promise.withResolvers<Response>();
     const operations: string[] = [];
-    const lease = await acquireQaCredentialLease({
-      ...ciOptions,
-      kind: "slack",
-      resolveEnvPayload: () => ({}),
-      parsePayload: () => ({}),
-      fetchImpl: async (url) => {
-        const operation = new URL(url instanceof Request ? url.url : url).pathname
-          .split("/")
-          .at(-1)!;
-        operations.push(operation);
-        if (operation === "heartbeat") {
-          return heartbeatReply.promise;
-        }
-        if (operation === "release") {
-          return releaseReply.promise;
-        }
-        return jsonResponse({ ...acquired({}), leaseTtlMs: 100 });
-      },
+    const lease = await acquireTimed(async (url) => {
+      const operation = brokerOperation(url);
+      operations.push(operation);
+      if (operation === "heartbeat") {
+        return heartbeatReply.promise;
+      }
+      if (operation === "release") {
+        return releaseReply.promise;
+      }
+      return jsonResponse({ ...acquired({}), leaseTtlMs: 100 });
     });
     const renewal = lease.heartbeat();
     vi.setSystemTime(Date.now() + 101);
@@ -238,73 +177,67 @@ describe("credential lease runtime", () => {
     });
 
     expect(lease.source).toBe("env");
-    expect(lease.payload).toEqual({
-      groupId: "-100123",
-      driverToken: "driver",
-      sutToken: "sut",
-    });
+    expect(lease.payload).toEqual(credentials);
   });
 
   it("acquires, heartbeats, and releases convex credentials", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          status: "ok",
-          credentialId: "cred-1",
-          leaseToken: "lease-1",
-          payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-          leaseTtlMs: 1_200_000,
-          heartbeatIntervalMs: 30_000,
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ status: "ok" }))
-      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
-
-    const lease = await acquireQaCredentialLease({
-      ...convexOptions,
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+    const fetchImpl = replies(
+      {
+        ...acquired(credentials, "cred-1", "lease-1"),
+        leaseTtlMs: 1_200_000,
+        heartbeatIntervalMs: 30_000,
       },
-      fetchImpl,
-    });
-
-    expect(lease.source).toBe("convex");
-    expect(lease.credentialId).toBe("cred-1");
-    expect(lease.payload.groupId).toBe("-100123");
-
+      { status: "ok" },
+      { status: "ok" },
+    );
+    const lease = await acquireMaintainer({ fetchImpl, role: undefined });
+    expect(lease).toMatchObject({ source: "convex", credentialId: "cred-1", payload: credentials });
     await lease.heartbeat();
     await lease.release();
-
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(fetchUrl(fetchImpl)).toContain("/qa-credentials/v1/acquire");
-    const firstInit = fetchInit(fetchImpl);
-    const headers = firstInit?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer maintainer-secret");
+    expectOperations(fetchImpl, "acquire", "heartbeat", "release");
+    expectAuthorization(fetchImpl, "maintainer-secret");
   });
 
   it("cancels a streaming convex broker failure body after the response cap", async () => {
-    const broker = await startStreamingFailureBroker();
-    try {
-      await expect(
-        acquireQaCredentialLease({
-          ...convexOptions,
-          role: "maintainer",
-          env: {
-            OPENCLAW_QA_CONVEX_SITE_URL: broker.url,
-            OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-            OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-          },
-        }),
-      ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+    const chunk = Buffer.alloc(64 * 1024, "x");
+    const totalBytes = 4 * 1024 * 1024;
+    let bytesWritten = 0;
+    let requestCount = 0;
+    const closed = Promise.withResolvers<void>();
 
-      await broker.closePromise;
-      expect(broker.getRequestCount()).toBe(1);
-      expect(broker.getBytesWritten()).toBeLessThan(broker.totalBytes);
-    } finally {
-      await broker.stop();
-    }
+    await withServer(
+      (_req, res) => {
+        requestCount += 1;
+        res.writeHead(500, { "content-type": "text/plain" });
+        const interval = setInterval(() => {
+          if (bytesWritten >= totalBytes || res.destroyed) {
+            clearInterval(interval);
+            if (!res.destroyed) {
+              res.end();
+            }
+            return;
+          }
+          bytesWritten += chunk.length;
+          res.write(chunk);
+        }, 1);
+        res.on("close", () => {
+          clearInterval(interval);
+          closed.resolve();
+        });
+      },
+      async (baseUrl) => {
+        await expect(
+          acquireWithEnv(
+            { OPENCLAW_QA_CONVEX_SITE_URL: baseUrl, OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1" },
+            fetch,
+          ),
+        ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+
+        await closed.promise;
+        expect(requestCount).toBe(1);
+        expect(bytesWritten).toBeLessThan(totalBytes);
+      },
+    );
   });
 
   it("hydrates chunked convex credential payloads after acquire", async () => {
@@ -317,14 +250,9 @@ describe("credential lease runtime", () => {
 
     const lease = await acquireCi(fetchImpl);
 
-    expect(lease.payload).toEqual({
-      groupId: "-100123",
-      driverToken: "driv\u00e9r",
-      sutToken: "sut",
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/payload-chunk`);
-    const chunkRequestBody = fetchInit(fetchImpl, 1).body;
+    expect(lease.payload).toEqual({ ...credentials, driverToken: "driv\u00e9r" });
+    expectOperations(fetchImpl, "acquire", "payload-chunk", "payload-chunk");
+    const chunkRequestBody = fetchImpl.mock.calls[1]?.[1]?.body;
     expect(chunkRequestBody).toBeTypeOf("string");
     const chunkRequest: unknown = JSON.parse(chunkRequestBody as string);
     expect(chunkRequest).toMatchObject({
@@ -334,27 +262,22 @@ describe("credential lease runtime", () => {
     });
   });
 
-  it("rejects chunked convex payload markers above the configured chunk cap", async () => {
-    const fetchImpl = replies(chunked(1, 3, "many-chunks"), { status: "ok" });
-
-    await expect(
-      acquireCi(fetchImpl, { ...ciEnv, OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS: "2" }),
-    ).rejects.toThrow("Chunked credential payload marker exceeds 2 chunks.");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
-  });
-
-  it("rejects chunked convex payload markers above the configured byte cap", async () => {
-    const fetchImpl = replies(chunked(33, 1, "large-payload"), { status: "ok" });
-
-    await expect(
-      acquireCi(fetchImpl, { ...ciEnv, OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES: "32" }),
-    ).rejects.toThrow("Chunked credential payload marker exceeds 32 bytes.");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
-  });
+  it.each([
+    [1, 3, "CHUNKS", "2", "2 chunks"],
+    [33, 1, "BYTES", "32", "32 bytes"],
+  ] as const)(
+    "rejects oversized chunks (%i bytes, %i chunks)",
+    async (bytes, chunks, key, cap, error) => {
+      const fetchImpl = replies(chunked(bytes, chunks, "capped"), { status: "ok" });
+      await expect(
+        acquireCi(fetchImpl, {
+          ...ciEnv,
+          [`OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_${key}`]: cap,
+        }),
+      ).rejects.toThrow(`Chunked credential payload marker exceeds ${error}.`);
+      expectOperations(fetchImpl, "acquire", "release");
+    },
+  );
 
   it("stops chunked convex payload hydration when chunk data exceeds the marker", async () => {
     const fetchImpl = replies(
@@ -367,184 +290,86 @@ describe("credential lease runtime", () => {
       "Chunked credential payload exceeded declared byteLength.",
     );
 
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/payload-chunk`);
-    expect(fetchUrl(fetchImpl, 2)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
+    expectOperations(fetchImpl, "acquire", "payload-chunk", "release");
   });
 
   it("defaults convex credential role to ci when CI=true", async () => {
     const fetchImpl = replies(acquired(credentials, "cred-ci-default", "lease-ci-default"));
 
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      env: { ...ciEnv, CI: "true" },
-      fetchImpl,
-    });
+    await acquireQaCredentialLease({ ...convexOptions, env: { ...ciEnv, CI: "true" }, fetchImpl });
 
-    const firstInit = fetchInit(fetchImpl);
-    const headers = firstInit?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer ci-secret");
+    expectAuthorization(fetchImpl, "ci-secret");
   });
 
-  it("retries convex acquire while the pool is exhausted", async () => {
-    const exhausted = { status: "error", code: "POOL_EXHAUSTED", message: "wait" };
-    const fetchImpl = replies(
-      exhausted,
-      exhausted,
-      acquired(
-        { groupId: "-100456", driverToken: "driver-2", sutToken: "sut-2" },
-        "cred-2",
-        "lease-2",
-      ),
-    );
+  it.each(["pool exhausted", "transport failure"])("retries acquire after %s", async (failure) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const attempts = failure === "pool exhausted" ? 2 : 1;
+    for (let i = 0; i < attempts; i++) {
+      if (failure === "pool exhausted") {
+        fetchImpl.mockResolvedValueOnce(
+          jsonResponse({ status: "error", code: "POOL_EXHAUSTED", message: "wait" }),
+        );
+      } else {
+        fetchImpl.mockRejectedValueOnce(
+          new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
+        );
+      }
+    }
+    fetchImpl.mockResolvedValueOnce(jsonResponse(acquired(credentials, "retried")));
     const clock = retryClock();
-
-    const lease = await acquireQaCredentialLease({
-      ...convexOptions,
-      env: {
-        ...maintainerEnv,
-        OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
-      },
-      fetchImpl,
-      ...clock,
-    });
-
-    expect(lease.credentialId).toBe("cred-2");
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(clock.sleeps.length).toBe(2);
-    expect(clock.sleeps[0]).toBeGreaterThanOrEqual(100);
-    expect(clock.sleeps[1]).toBeGreaterThan(clock.sleeps[0] ?? 0);
+    const lease = await acquireMaintainer({ fetchImpl, ...clock, role: undefined });
+    expect(lease.credentialId).toBe("retried");
+    expect(fetchImpl).toHaveBeenCalledTimes(attempts + 1);
+    expect(clock.sleeps).toHaveLength(attempts);
+    if (attempts === 2) {
+      expect(clock.sleeps[0]).toBeGreaterThanOrEqual(100);
+      expect(clock.sleeps[1]).toBeGreaterThan(clock.sleeps[0] ?? 0);
+    }
   });
 
-  it("retries transient convex acquire transport failures", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockRejectedValueOnce(
-        new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse(
-          acquired(
-            { groupId: "-100789", driverToken: "test", sutToken: "test" },
-            "cred-after-timeout",
-            "test",
-          ),
-        ),
-      );
-    const clock = retryClock();
-
-    const lease = await acquireQaCredentialLease({
-      ...convexOptions,
-      env: {
-        ...maintainerEnv,
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "test",
-        OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
-      },
-      fetchImpl,
-      ...clock,
-    });
-
-    expect(lease.credentialId).toBe("cred-after-timeout");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(clock.sleeps).toHaveLength(1);
+  it.each([
+    [{ OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site" }, "must use https://"],
+    [
+      { OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example" },
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path",
+    ],
+    [{ OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "" }, "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER"],
+  ])("rejects unsafe or unauthenticated broker config %j", async (env, error) => {
+    await expect(acquireMaintainer({}, env)).rejects.toThrow(error);
   });
 
-  it("rejects non-https convex site URLs unless local insecure opt-in is enabled", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        env: {
-          ...maintainerEnv,
-          OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site",
-        },
-      }),
-    ).rejects.toThrow("must use https://");
-  });
-
-  it("allows loopback http URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse({
-        status: "ok",
-        credentialId: "cred-local",
-        leaseToken: "lease-local",
-        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-      }),
-    );
-
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      role: "maintainer",
-      env: {
+  it("allows explicitly opted-in loopback HTTP", async () => {
+    const fetchImpl = replies(acquired(credentials));
+    await acquireWithEnv(
+      {
         OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
         OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
       },
       fetchImpl,
-    });
-
-    expect(fetchUrl(fetchImpl)).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
+    );
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
   });
 
   it("caps oversized convex HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse({
-        status: "ok",
-        credentialId: "cred-timeout",
-        leaseToken: "lease-timeout",
-        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-      }),
+    const fetchImpl = replies(acquired(credentials));
+    await acquireWithEnv(
+      { OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER) },
+      fetchImpl,
     );
 
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      role: "maintainer",
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-        OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
-      },
-      fetchImpl,
-    });
-
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchInit(fetchImpl).signal).toBe(timeoutController.signal);
-  });
-
-  it("rejects unsafe endpoint prefix overrides", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        env: {
-          ...maintainerEnv,
-          OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example",
-        },
-      }),
-    ).rejects.toThrow("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path");
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
   });
 
   it("releases acquired lease when payload parsing fails", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          status: "ok",
-          credentialId: "cred-parse-fail",
-          leaseToken: "lease-parse-fail",
-          payload: { broken: true },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    const fetchImpl = replies(acquired({ broken: true }, "cred-parse-fail", "lease-parse-fail"), {
+      status: "ok",
+    });
 
     await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        role: "maintainer",
-        env: {
-          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-        },
+      acquireMaintainer({
         fetchImpl,
         parsePayload: () => {
           throw new Error("bad payload shape");
@@ -552,34 +377,23 @@ describe("credential lease runtime", () => {
       }),
     ).rejects.toThrow("bad payload shape");
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(
-      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
-    );
+    expectOperations(fetchImpl, "acquire", "release");
   });
 
-  it("fails convex mode when auth secret is missing", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        role: "maintainer",
-        env: {
-          OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
-        },
-      }),
-    ).rejects.toThrow("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
-  });
-
-  it("captures heartbeat failures for fail-fast checks", async () => {
+  it.each([
+    ["heartbeat-down", 55, 1],
+    ["fetch failed | ETIMEDOUT", 50 + 1_000 + 3_000 + 5_000, 4],
+  ] as const)("fails closed on heartbeat error %s", async (message, elapsed, attempts) => {
     vi.useFakeTimers();
-    const heartbeat = startHeartbeat(async () => {
-      throw new Error("heartbeat-down");
+    const request = vi.fn(async () => {
+      throw new Error(message);
     });
-
-    await vi.advanceTimersByTimeAsync(55);
+    const heartbeat = startHeartbeat(request);
+    await vi.advanceTimersByTimeAsync(elapsed);
+    expect(request).toHaveBeenCalledTimes(attempts);
     expect(heartbeat.getFailure()).toBeInstanceOf(Error);
-    expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
-    expect((await heartbeat.whenFailed).message).toContain("heartbeat-down");
+    expect(() => heartbeat.throwIfFailed()).toThrow(message);
+    expect((await heartbeat.whenFailed).message).toContain(message);
     await heartbeat.stop();
   });
 
@@ -591,28 +405,15 @@ describe("credential lease runtime", () => {
         new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
       )
       .mockResolvedValueOnce(undefined);
-    const heartbeat = startHeartbeat(heartbeatRequest, [10]);
+    const heartbeat = startHeartbeat(heartbeatRequest);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(heartbeatRequest).toHaveBeenCalledTimes(1);
     expect(heartbeat.getFailure()).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(heartbeatRequest).toHaveBeenCalledTimes(2);
     expect(heartbeat.getFailure()).toBeNull();
-    await heartbeat.stop();
-  });
-
-  it("fails closed after transient heartbeat retries are exhausted", async () => {
-    vi.useFakeTimers();
-    const heartbeatRequest = vi.fn(async () => {
-      throw new Error("fetch failed | ETIMEDOUT");
-    });
-    const heartbeat = startHeartbeat(heartbeatRequest, [10, 20]);
-
-    await vi.advanceTimersByTimeAsync(80);
-    expect(heartbeatRequest).toHaveBeenCalledTimes(3);
-    expect(() => heartbeat.throwIfFailed()).toThrow("ETIMEDOUT");
     await heartbeat.stop();
   });
 });

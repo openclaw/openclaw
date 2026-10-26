@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
@@ -356,6 +356,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Pinned child",
+          createdAt: 5,
           updatedAt: 2,
           pinned: true,
           hasActiveRun: true,
@@ -368,6 +369,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Running child",
+          createdAt: 4,
           updatedAt: 2,
           hasActiveRun: true,
           status: "running",
@@ -379,6 +381,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Queued child",
+          createdAt: 3,
           updatedAt: 2,
           hasActiveRun: true,
           hasActiveSubagentRun: true,
@@ -389,6 +392,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Open PR child",
+          createdAt: 2,
           updatedAt: 2,
           hasActiveRun: true,
           status: "queued",
@@ -405,6 +409,7 @@ describe("AppSidebar session indicators", () => {
           spawnedBy: parentKey,
           kind: "direct",
           label: "Merged PR child",
+          createdAt: 1,
           updatedAt: 2,
           worktree: { id: "wt-merged", branch: "feature/merged", repoRoot: "/repo" },
         },

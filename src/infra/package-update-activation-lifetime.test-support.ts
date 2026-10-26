@@ -27,6 +27,23 @@ import { createPackageIntegrityReader } from "./package-update-integrity.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 
+export function snapshotActivationFiles(directory: string) {
+  return fs
+    .readdirSync(directory)
+    .toSorted()
+    .map((name) => {
+      const file = path.join(directory, name);
+      const { dev, ino, mode, mtimeNs } = fs.lstatSync(file, { bigint: true });
+      return {
+        name,
+        identity: `${dev}:${ino}`,
+        mode,
+        mtime: mtimeNs,
+        bytes: fs.readFileSync(file),
+      };
+    });
+}
+
 export function createPackageActivationLifetimeFixture() {
   const lifetime = createFixtureLifetime();
   const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
@@ -120,35 +137,20 @@ export function createPackageActivationLifetimeFixture() {
         INSERT INTO pressure SELECT id, 'committed', zeroblob(8192) FROM rows;
       `);
       }
-      return spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `import { DatabaseSync } from 'node:sqlite';
+      const script = `import { DatabaseSync } from 'node:sqlite';
          const database = new DatabaseSync(process.argv[1]);
          database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; UPDATE package_activation SET phase = 'publication-complete'; UPDATE pressure SET value = 'uncommitted';");
-         process.kill(process.pid, 'SIGKILL');`,
-          journalPath,
-        ],
-        {
-          env: childGuardEnv({ ...process.env, HOME: root, USERPROFILE: root }),
-          encoding: "utf8",
-          timeout: 10_000,
-          killSignal: "SIGKILL",
-        },
-      );
+         process.kill(process.pid, 'SIGKILL');`;
+      return spawnSync(process.execPath, ["--input-type=module", "-e", script, journalPath], {
+        env: childGuardEnv({ ...process.env, HOME: root, USERPROFILE: root }),
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      });
     },
 
     snapshotControl(this: void, anchor: string) {
-      return fs
-        .readdirSync(resolvePackageActivationControl(anchor))
-        .toSorted()
-        .map((name) => {
-          const file = path.join(resolvePackageActivationControl(anchor), name);
-          const { ino, mode } = fs.lstatSync(file);
-          return { name, ino, mode, bytes: fs.readFileSync(file) };
-        });
+      return snapshotActivationFiles(resolvePackageActivationControl(anchor));
     },
 
     async writePostCoreCapability(this: void, packageRoot: string) {

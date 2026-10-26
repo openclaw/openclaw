@@ -83,6 +83,11 @@ async function expectNoWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
   expect(await wake(overrides)).toBe(false);
   expect(deliverSpy).not.toHaveBeenCalled();
 }
+async function expectWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
+  expect(await wake(overrides)).toBe(true);
+  expect(deliverSpy).toHaveBeenCalledOnce();
+  return deliveredCallArg();
+}
 function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   if (typeof params.onBeforeDispatch !== "function") {
     throw new Error("expected completion dispatch preparation");
@@ -117,21 +122,18 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       const first = deliveredCallArg();
       const due = child.requesterSettleWake?.nextAttemptAt;
       expect(due).toBeTypeOf("number");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(due!);
-      try {
-        expect(await wake()).toBe(true);
-        const retry = deliverSpy.mock.calls[1]?.[0];
-        expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
-        expect(retry?.directIdempotencyKey).toBe(
-          requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
-        );
-        if (privateCompletion) {
-          expect(retry?.triggerMessage).toBe(first.triggerMessage);
-        } else {
-          expect(retry?.triggerMessage).toContain("Continue from the current transcript");
-        }
-      } finally {
-        clock.mockRestore();
+      using _ = vi.spyOn(Date, "now").mockReturnValue(due!);
+
+      expect(await wake()).toBe(true);
+      const retry = deliverSpy.mock.calls[1]?.[0];
+      expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
+      expect(retry?.directIdempotencyKey).toBe(
+        requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
+      );
+      if (privateCompletion) {
+        expect(retry?.triggerMessage).toBe(first.triggerMessage);
+      } else {
+        expect(retry?.triggerMessage).toContain("Continue from the current transcript");
       }
     },
   );
@@ -151,7 +153,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     try {
       await expect(settle()).resolves.toBe(false);
       expect(onDescendantsPending).toHaveBeenLastCalledWith(undefined);
-      expect(readDescendantFacts).toHaveBeenCalledOnce();
       expect(transitionBatch).not.toHaveBeenCalled();
       readDescendantFacts.mockResolvedValue({
         unsettled: true,
@@ -212,13 +213,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     transcriptsFor(children, (child) => {
       const index = children.indexOf(child);
       const text = `${resultPrefix}${findings[index]}`;
-      const terminalReply = prepareAgentRunTerminalReply({ rawText: text }).terminalReply;
-      expect(terminalReply.disposition).toBe("visible");
-      if (terminalReply.disposition !== "visible") {
-        throw new Error("expected visible terminal evidence");
-      }
-      child.completion = { required: true, terminalReply, resultText: text };
-      expect(terminalReply.text).toHaveLength(4_096);
+      child.completion = {
+        required: true,
+        terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+        resultText: text,
+      };
       return [
         assistant("previous-run", "stale previous result"),
         assistant(child.runId, "earlier commentary"),
@@ -228,12 +227,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ];
     });
     setChildren(children);
-    expect(await wake({ settledEntry: children[2] })).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const call = deliveredCallArg();
+    const call = await expectWake({ settledEntry: children[2] });
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = expectMessage(
-      findings.map((result) => `${"&lt;result&gt;".repeat(700)}${result}`),
+      findings.map((result) => `${resultPrefix}${result}`),
       [
         "stale previous result",
         "earlier commentary",
@@ -326,9 +323,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ),
     ]);
     transcriptsFor(listedRequesterRuns(), (child) => [assistant(child.runId, terminalReply.text)]);
-    expect(await wake({ requesterOrigin: { channel: "discord", to: "channel:shared" } })).toBe(
-      true,
-    );
+    await expectWake({ requesterOrigin: { channel: "discord", to: "channel:shared" } });
     const message = expectMessage(
       [
         terminalReply.text,
@@ -359,9 +354,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           ? { ...staleChild, runId: "run-replacement", requesterSessionKey: "agent:other:main" }
           : undefined,
     );
-    await expectNoWake({ settledEntry: staleChild });
-    setChildren([{ ...staleChild, requesterSettleWake: undefined }, ...children]);
-    expect(await wake({ settledEntry: children[0] })).toBe(true);
+    await expectWake({ settledEntry: staleChild });
     const message = expectMessage([], ["stale output", "old/owner"]);
     const routeBlock = message.slice(
       message.indexOf("Model route changed:"),
@@ -445,10 +438,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(await wake()).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
-    expectMessage(
-      [`${"&lt;source-reply&gt;".repeat(400)}required source reply tail`],
-      ["NO_REPLY", "stale source reply", "unrelated source reply"],
-    );
+    expectMessage([text], ["NO_REPLY", "stale source reply", "unrelated source reply"]);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

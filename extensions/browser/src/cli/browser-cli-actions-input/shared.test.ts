@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -54,17 +54,84 @@ it("throws descriptive error on empty fields", async () => {
   await expect(readFields({ fields: "" })).rejects.toThrow("fields are required");
 });
 
-it("preserves oversized fields files that normalize to a small request", async () => {
-  await withInput(`[${" ".repeat(1_048_577)}{"ref":"1","value":"ok"}]`, async (fieldsFile) => {
-    const fields = await readFields({ fieldsFile });
-    expect(fields).toEqual([{ ref: "1", type: "text", value: "ok" }]);
-  });
-});
+it.each([false, true])(
+  "preserves oversized Unicode fields files (symlink: %s)",
+  async (symlink) => {
+    await withInput(`[${" ".repeat(1_048_577)}{"ref":"1","value":"合法 😀"}]`, async (file) => {
+      if (symlink) {
+        await fs.symlink(file, `${file}.link`);
+      }
+      const fields = await readFields({ fieldsFile: symlink ? `${file}.link` : file });
+      expect(fields).toEqual([{ ref: "1", type: "text", value: "合法 😀" }]);
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32").each([false, true])(
+  "rejects FIFO fields files (symlink: %s)",
+  async (symlink) => {
+    await withTempDir("openclaw-browser-fields-", async (tempDir) => {
+      const fifoPath = path.join(tempDir, "fields.pipe");
+      execFileSync("mkfifo", [fifoPath]);
+      if (symlink) {
+        await fs.symlink(fifoPath, `${fifoPath}.link`);
+      }
+      // A writer lets a regressed reader finish instead of stranding the test runner.
+      const writer = spawn(
+        process.execPath,
+        ["-e", "require('node:fs').writeFileSync(process.argv[1], '[]')", fifoPath],
+        { stdio: "ignore" },
+      );
+      const writerClosed = new Promise((resolve) => {
+        writer.once("close", resolve);
+      });
+      try {
+        await expect(
+          readFields({ fieldsFile: symlink ? `${fifoPath}.link` : fifoPath }),
+        ).rejects.toThrow("regular file");
+      } finally {
+        writer.kill("SIGKILL");
+        await writerClosed;
+      }
+    });
+  },
+);
 const maxBytes = 1_000_000;
 const tooLarge = {
   code: "too-large",
   message: expect.stringContaining("Split the batch plan into smaller files"),
 };
+it.each(["at limit", "overflow", "malformed UTF-8"] as const)(
+  "validates stdin bytes: %s",
+  async (kind) => {
+    const bytes =
+      kind === "malformed UTF-8"
+        ? Buffer.from([0xff])
+        : Buffer.alloc(maxBytes + (kind === "overflow" ? 1 : 0), 0x20);
+    const iterator = vi.spyOn(process.stdin, Symbol.asyncIterator);
+    iterator.mockImplementationOnce(async function* () {
+      yield bytes;
+      return undefined;
+    });
+    // The iterator fixture must not destroy the runner's actual stdin on overflow.
+    const destroy = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
+    try {
+      const result = readActionsPayload({ actionsFile: "-" });
+      if (kind === "at limit") {
+        expect(await result).toBe(bytes.toString("utf8"));
+      } else {
+        await expect(result).rejects.toMatchObject(
+          kind === "overflow"
+            ? tooLarge
+            : { message: "--actions-file - stdin must be valid UTF-8." },
+        );
+      }
+    } finally {
+      iterator.mockRestore();
+      destroy.mockRestore();
+    }
+  },
+);
 it("bounds action files with the same byte limit as stdin", async () => {
   await expect(readActionFile(maxBytes + 1)).rejects.toMatchObject(tooLarge);
   expect(Buffer.byteLength(await readActionFile(maxBytes))).toBe(maxBytes);

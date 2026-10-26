@@ -48,7 +48,6 @@ const codexAppServerServiceTierSchema = z
   .optional();
 const codexAppServerCyberFailoverSchema = z.strictObject({
   mode: z.enum(["auto", "off"]).optional(),
-  model: z.string().trim().min(1).optional(),
   cooloffMs: z.number().positive().optional(),
 });
 const codexAppServerExperimentalSchema = z.strictObject({
@@ -75,6 +74,7 @@ const codexPluginEntryConfigSchema = z.strictObject({
   enabled: z.boolean().optional(),
   marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
   pluginName: z.string().trim().min(1).optional(),
+  read_only: z.boolean().optional(),
   allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
 });
 
@@ -298,6 +298,7 @@ export function resolveCodexPluginsPolicy(
           marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
+          ...(entry.read_only === true ? { readOnly: true } : {}),
           ...resolveCodexPluginDestructivePolicy(
             entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
           ),

@@ -8,7 +8,6 @@ import { doctorCommand } from "../../commands/doctor.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import * as doctorContributions from "../../flows/doctor-health-contributions.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as devUpdateTarget from "../../infra/update-dev-target.js";
@@ -40,7 +39,14 @@ import {
   createStage,
   registerOriginalCaptureTests,
 } from "./update-command-fresh-preview.test-support.js";
-import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import {
+  expectFreshStatePreserved,
+  expectNoFreshCalls,
+  denyFreshLeaseRelease,
+  installFreshUpdateFixture,
+  targetMetadata,
+  writeFreshJson,
+} from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -63,17 +69,10 @@ vi.mock("@clack/prompts", async (original) => ({
 const { fixture, dirs } = installFreshUpdateFixture();
 const inheritedRunIds = ["  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ", " \t "] as const;
 
-function expectFreshStatePreserved() {
-  expect(fs.existsSync(fixture.databasePath)).toBe(false);
-  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
-}
-
 function writeConfig(config: unknown) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH!;
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config));
-  return configPath;
+  return writeFreshJson(configPath, config);
 }
 
 function writeStoredChannel(channel: "stable" | "beta" | "dev") {
@@ -82,6 +81,18 @@ function writeStoredChannel(channel: "stable" | "beta" | "dev") {
 
 function runUpdate(opts: shared.UpdateCommandOptions = {}) {
   return updateCommand({ yes: true, json: true, restart: false, ...opts });
+}
+
+function stageUpdate(root = fixture.root) {
+  const stage = createStage(root);
+  vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
+  return stage;
+}
+
+function expectUnactivated(stage: ReturnType<typeof createStage>) {
+  expect(stage.close).toHaveBeenCalledOnce();
+  expect(stage.run).not.toHaveBeenCalled();
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
 }
 
 function expectJson(result: unknown) {
@@ -108,17 +119,12 @@ function expectMetadataFailure(
 
 function createArtifact(version: string, schema: number | undefined, node?: string) {
   const candidate = dirs.make("openclaw-artifact-");
-  fs.writeFileSync(
-    path.join(candidate, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version,
-      ...(node ? { engines: { node } } : {}),
-      ...(schema === undefined
-        ? {}
-        : { openclaw: { schemaVersions: { state: schema, agent: 19 } } }),
-    }),
-  );
+  writeFreshJson(path.join(candidate, "package.json"), {
+    name: "openclaw",
+    version,
+    ...(node ? { engines: { node } } : {}),
+    ...(schema === undefined ? {} : { openclaw: { schemaVersions: { state: schema, agent: 19 } } }),
+  });
   vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
   return candidate;
 }
@@ -130,10 +136,7 @@ function prepareCurrentUpdate() {
   writeConfig({ plugins: { enabled: false }, gateway: { mode: "local" } });
   openOpenClawStateDatabase();
   allowPackageRuntime();
-  fs.writeFileSync(
-    path.join(fixture.root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
-  );
+  writeFreshJson(path.join(fixture.root, "package.json"), { name: "openclaw", version: VERSION });
   vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: VERSION });
   vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({
     tag: "latest",
@@ -154,7 +157,7 @@ describe("update command admission with fresh state", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
     expectJson({ status: "skipped", reason: "downgrade-confirmation-required" });
     expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
-    expectFreshStatePreserved();
+    expectFreshStatePreserved(fixture);
   });
 
   it("cancels a fresh downgrade without a ledger and exits only after release", async () => {
@@ -173,7 +176,7 @@ describe("update command admission with fresh state", () => {
     });
     expect(leases).toEqual(["absent"]);
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expectFreshStatePreserved();
+    expectFreshStatePreserved(fixture);
   });
 
   it.each([
@@ -194,7 +197,6 @@ describe("update command admission with fresh state", () => {
       vi.spyOn(devUpdateTarget, "readDevUpdateTarget").mockImplementation(() => {
         throw new Error("fixture invalid dev target");
       });
-      const triage = vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage");
       const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
         throw new ExitError(code);
       });
@@ -226,8 +228,7 @@ describe("update command admission with fresh state", () => {
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
         expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
       } else {
-        expect(triage).not.toHaveBeenCalled();
-        expectFreshStatePreserved();
+        expectFreshStatePreserved(fixture);
       }
       expect(exit).not.toHaveBeenCalled();
       expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
@@ -238,8 +239,7 @@ describe("update command admission with fresh state", () => {
 
   it("closes the stage when successful initialization is followed by legacy release failure", async () => {
     allowPackageRuntime();
-    const staged = createStage(fixture.root);
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       createSelectedTargetStateDatabase(fixture.databasePath);
     });
@@ -281,15 +281,6 @@ describe("update command admission with fresh state", () => {
         throw new Error(`fixture CLI exit ${code}`);
       });
       let admittedRun: shared.UpdateCommandOptions["run"];
-      let triagePrepared = false;
-      const prepareTriage = commandTriage.prepareUpdateCommandFailureTriage;
-      vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage").mockImplementation(
-        async (...args) => {
-          const handler = await prepareTriage(...args);
-          triagePrepared = true;
-          return handler;
-        },
-      );
       let leaseAtPublication: string | undefined;
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
         leaseAtPublication = createManagedHandoffLeaseStore().read(fixture.root).kind;
@@ -307,18 +298,7 @@ describe("update command admission with fresh state", () => {
             throw new Error("fixture stage cleanup failed");
           }
           if (fault === "release-failure") {
-            const filename = path.join(
-              tempRoot.resolvePreferredOpenClawTmpDir(),
-              "managed-update-handoffs.sqlite",
-            );
-            const db = new DatabaseSync(filename);
-            try {
-              db.exec(
-                "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
-              );
-            } finally {
-              db.close();
-            }
+            denyFreshLeaseRelease("fixture final lease delete denied");
           }
         }),
       };
@@ -331,7 +311,6 @@ describe("update command admission with fresh state", () => {
         // The installation work is complete; keep its real terminal publisher,
         // ledger, executor, and outer staged-package cleanup to prove ordering.
         admittedRun = params.opts.run;
-        expect(triagePrepared).toBe(true);
         const result = updateResult({ root: fixture.root });
         const publish = async (failure?: unknown) => {
           const settled = await resolveSettledUpdateCommandResult(
@@ -354,7 +333,6 @@ describe("update command admission with fresh state", () => {
         (error: unknown) => error,
       );
 
-      expect(initialization.initializeUpdateStateFromTarget).toHaveBeenCalledOnce();
       assert(admittedRun);
       expect(admittedRun.runId).toBe(executorRunId);
       expect(admittedRun.runId.trim()).not.toBe("");
@@ -387,7 +365,7 @@ describe("update command admission with fresh state", () => {
       switchToGit: true,
     });
     expect(vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0]).toHaveProperty("run", undefined);
-    expectFreshStatePreserved();
+    expectFreshStatePreserved(fixture);
   });
 
   it("previews an older stable without runtime state despite an inherited run", async () => {
@@ -400,7 +378,7 @@ describe("update command admission with fresh state", () => {
       targetVersion: "2026.9.2",
       downgradeRisk: true,
     });
-    expectFreshStatePreserved();
+    expectFreshStatePreserved(fixture);
   });
 
   it.each([{ channel: "stable" }, { tag: "latest" }])(
@@ -415,7 +393,7 @@ describe("update command admission with fresh state", () => {
       await expect(runUpdate(target)).rejects.toMatchObject({ code: 1 });
 
       expectMetadataFailure({ code: "target-registry-dist-tag" }, { status: "error" });
-      expectFreshStatePreserved();
+      expectFreshStatePreserved(fixture);
     },
   );
 
@@ -423,7 +401,7 @@ describe("update command admission with fresh state", () => {
     const shellConfigPath = writeStoredChannel("stable");
     const serviceStateDir = dirs.make("openclaw-update-managed-profile-");
     const serviceConfigPath = path.join(serviceStateDir, "openclaw.json");
-    fs.writeFileSync(serviceConfigPath, JSON.stringify({ update: { channel: "beta" } }));
+    writeFreshJson(serviceConfigPath, { update: { channel: "beta" } });
     const serviceEnv = {
       ...process.env,
       OPENCLAW_STATE_DIR: serviceStateDir,
@@ -447,14 +425,13 @@ describe("update command admission with fresh state", () => {
     expect(fs.existsSync(resolveOpenClawStateSqlitePath(serviceEnv))).toBe(false);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(shellConfigPath);
     expectJson({ status: "error", reason: "node-runtime-preflight" });
-    expectFreshStatePreserved();
+    expectFreshStatePreserved(fixture);
   });
 
   it("accepts target Doctor config changes that preserve the selected stored channel", async () => {
     const configPath = writeStoredChannel("stable");
     allowPackageRuntime();
-    const staged = createStage(fixture.root);
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
     const migrated = {
       update: { channel: "stable" },
       gateway: { mode: "local" },
@@ -464,7 +441,7 @@ describe("update command admission with fresh state", () => {
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(
       async (params) => {
         await params.checkSchemas();
-        fs.writeFileSync(configPath, JSON.stringify(migrated));
+        writeFreshJson(configPath, migrated);
         await params.checkSchemas();
         throw afterDoctor;
       },
@@ -473,9 +450,7 @@ describe("update command admission with fresh state", () => {
     await expect(runUpdate()).rejects.toBe(afterDoctor);
 
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(migrated);
-    expect(staged.close).toHaveBeenCalledOnce();
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnactivated(staged);
   });
 
   it("keeps fresh staging releasable for a supervised handoff before package activation", async () => {
@@ -492,12 +467,8 @@ describe("update command admission with fresh state", () => {
       }),
     );
     allowPackageRuntime();
-    const staged = {
-      root: fixture.root,
-      run: vi.fn().mockRejectedValue(new Error("Unexpected package activation")),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
+    staged.run.mockRejectedValue(new Error("Unexpected package activation"));
     const handoffStop = new Error("Fixture stopped after successful preflight handoff release");
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       assert(fence);
@@ -509,9 +480,7 @@ describe("update command admission with fresh state", () => {
       updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: true }),
     ).rejects.toBe(handoffStop);
 
-    expect(staged.close).toHaveBeenCalledOnce();
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnactivated(staged);
     expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
   });
 });
@@ -542,9 +511,7 @@ it.each([
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       return staged;
     });
-    const runtime = vi
-      .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
-      .mockResolvedValue({ ok: true, value: {} });
+    const runtime = allowPackageRuntime();
     const doctor = vi
       .spyOn(initialization, "initializeUpdateStateFromTarget")
       .mockImplementation(async (params) => {
@@ -571,8 +538,7 @@ it.each([
     expect(privateState).toBeDefined();
     expect(fs.existsSync(path.dirname(privateState!))).toBe(false);
     if (code) {
-      expect(doctor).not.toHaveBeenCalled();
-      expect(admission).not.toHaveBeenCalled();
+      expectNoFreshCalls(doctor, admission);
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       expectMetadataFailure({ code, message: expect.stringContaining("openclaw update --tag") });
     } else {
@@ -582,12 +548,8 @@ it.each([
         expect.objectContaining({ target: { version: "2026.9.2", nodeEngine: ">=22" } }),
       );
       expect(admission).toHaveBeenCalledOnce();
-      const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(fixture.databasePath, { readOnly: true });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
     }
   },
 );
@@ -616,9 +578,7 @@ it.each(["node", "concurrent-state"] as const)(
     expectJson({
       reason: fault === "node" ? "node-runtime-preflight" : "database-schema-preflight",
     });
-    expect(doctor).not.toHaveBeenCalled();
-    expect(admission).not.toHaveBeenCalled();
-    expect(stage.run).not.toHaveBeenCalled();
+    expectNoFreshCalls(doctor, admission, stage.run);
     expect(stage.close).toHaveBeenCalledOnce();
     if (previous) {
       expect(fs.readFileSync(fixture.databasePath)).toEqual(previous);
@@ -630,8 +590,7 @@ it.each(["node", "concurrent-state"] as const)(
 
 it("requires confirmation for an inspected older artifact without a TTY", async () => {
   const candidate = createArtifact("2026.9.2", 16);
-  const stage = createStage(candidate);
-  vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
+  const stage = stageUpdate(candidate);
   allowPackageRuntime();
   const doctor = vi
     .spyOn(initialization, "initializeUpdateStateFromTarget")
@@ -641,8 +600,7 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
     () => undefined,
   );
   expectJson({ status: "skipped", reason: "downgrade-confirmation-required" });
-  expect(doctor).not.toHaveBeenCalled();
-  expect(admission).not.toHaveBeenCalled();
+  expectNoFreshCalls(doctor, admission);
   expect(stage.close).toHaveBeenCalledOnce();
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
 });
@@ -732,8 +690,10 @@ it("Doctor sees an already-current update's completed history after original-sta
     await expect(readHistory.mock.results[activeRead]!.value).resolves.toEqual([]);
     const completedRead = readHistory.mock.calls.findIndex(([input]) => input?.active !== true);
     await expect(readHistory.mock.results[completedRead]!.value).resolves.toContainEqual(finished);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Pre-repair state retained for manual recovery"),
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Recovery copy saved before repair. No action needed. For manual recovery:",
+      ),
     );
     expect(runtime.error.mock.calls.flat().join("\n")).not.toContain("remains recorded as running");
   } finally {

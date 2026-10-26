@@ -27,6 +27,7 @@ import type { SessionRowProjection } from "../gateway/session-row-projection.js"
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../infra/heartbeat-summary-snapshot.js";
 import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
@@ -50,7 +51,7 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { buildStatusCliProjection } from "./cli-projection.js";
+import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 import {
   prepareStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
@@ -115,7 +116,6 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
@@ -163,25 +163,26 @@ async function prepareSessionStatusDetails(
       const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
       const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
       const model = resolvedModel.model ?? configuredSessionModel;
-      const lookupModel =
-        resolveStatusModelLookupRef({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        }) ?? resolvedModel;
-      const lookupModelId = lookupModel.model ?? model;
-      const selectedModelLabel =
-        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-      const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        model: configuredSessionModel,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+      const selectedLookupModel = resolveStatusModelLookupRef({
         provider: resolvedModel.provider,
         model,
         defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
       });
+      const lookupModel = selectedLookupModel ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredLookupModel = resolveStatusModelLookupRef({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const configuredSessionModelComparisonLabel = configuredLookupModel
+        ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+        : null;
+      const selectedModelComparisonLabel = selectedLookupModel
+        ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+        : null;
       const runtimeMatchesConfiguredModel =
         selectedModelComparisonLabel != null &&
         configuredSessionModelComparisonLabel != null &&
@@ -336,14 +337,13 @@ export async function prepareStatusSummary(
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (await readHeartbeatSummarySnapshot(cfg)).toReversed().map((job) => [job.agentId, job]),
-  );
+  const heartbeat = await readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg));
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     return agentList.agents.map((agent) => {
       const job = heartbeatJobs.get(agent.id);
-      const summary = projectHeartbeatSummary(job);
+      const summary = projectHeartbeatSummary(job, heartbeat.selectionWarning);
       let routeTarget:
         | {
             storePath: string;
@@ -526,7 +526,22 @@ export async function prepareStatusSummary(
               }
             : {}),
           ...(options.includeCliProjection
-            ? { cliProjection: buildStatusCliProjection(cfg, publishedAgentList) }
+            ? {
+                cliProjection: {
+                  agents: {
+                    defaultId: publishedAgentList.selectionRequired
+                      ? null
+                      : (publishedAgentList.defaultId ?? null),
+                    ownership: publishedAgentList.ownership,
+                    selectionRequired: publishedAgentList.selectionRequired,
+                    rows: publishedAgentList.agents.map(({ id, name }) =>
+                      name ? { id, name } : { id },
+                    ),
+                  },
+                  updateChannel: cfg.update?.channel ?? null,
+                  memoryPlugin: resolveMemoryPluginStatus(cfg),
+                },
+              }
             : {}),
           sqliteWal:
             sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
@@ -545,7 +560,10 @@ export async function prepareStatusSummary(
           },
           channelSummary,
           queuedSystemEvents,
-          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
+          startupMigrationWarning:
+            [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
+              .filter(Boolean)
+              .join("\n") || undefined,
           startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,

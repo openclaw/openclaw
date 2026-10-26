@@ -57,18 +57,15 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
   });
 
   it("caps aggregate timeout before scheduling", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const result = await waitForRetry({
-        waitForCompactionRetry: async () => {},
-        aggregateTimeoutMs: Number.MAX_SAFE_INTEGER,
-      });
-      expect(result.timedOut).toBe(false);
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+    using timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = await waitForRetry({
+      waitForCompactionRetry: async () => {},
+      aggregateTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(result.timedOut).toBe(false);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([

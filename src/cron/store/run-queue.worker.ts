@@ -14,13 +14,19 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import {
+  getPluginCommandRunBudgetError,
+  isPluginCommandCronJob,
+  rebindPluginCommandSchedule,
+  retirePluginCommandJob,
+} from "../plugin-command-schedule.js";
+import {
   isProactiveJobMigrationPending,
   readDefaultProactiveJobReceiptInDatabase,
 } from "../proactive-job-receipt.kernel.js";
 import { CRON_ADMISSION_DEFERRED_RECEIPT_ERROR } from "../service/admission-deferred.js";
 import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
@@ -79,6 +85,7 @@ function skipRequest(
   nowMs: number,
   error: string,
   status: "skipped" | "superseded" = "skipped",
+  previousEnabled?: boolean,
 ): CronSkippedRequest {
   finishCronRunReceiptInDatabase({
     database: db,
@@ -99,7 +106,7 @@ function skipRequest(
       delete job.state.runningReceiptId;
       delete job.state.runningScheduleChangeId;
     }
-    updateCronRuntimeRow(db, handle.storeKey, job);
+    updateCronRuntimeRow(db, handle.storeKey, job, previousEnabled);
   }
   if (status === "skipped") {
     recordSkippedCronRequestInDatabase(db, {
@@ -140,7 +147,7 @@ export function requestCronRunsInWorker(
 function requestCronRunsInDatabase(
   db: EngineConnection,
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
-  jobs: Map<string, CronJob>,
+  jobs: Map<string, CronStoredJob>,
   persistQueuedState = true,
 ): CronRunQueueOperations["cron.requestRuns"]["output"] {
   const result: CronRunQueueOperations["cron.requestRuns"]["output"] = {
@@ -180,7 +187,8 @@ function requestCronRunsInDatabase(
       reason = job ? "already-running" : "job-removed";
     } else if (
       resolveCronJobConfigRevision(job) !== request.configRevision ||
-      (!isJobEnabled(job) && request.mode !== "force") ||
+      // Disabling a command schedule withdraws its unattended authority, including force runs.
+      (!isJobEnabled(job) && (request.mode !== "force" || isPluginCommandCronJob(job))) ||
       (request.mode === "on-exit" && !matchingExit(job, request)) ||
       (request.mode === "scheduled" &&
         (!timed ||
@@ -319,38 +327,37 @@ export function drainCronQueueInWorker(
 function drainCronQueueInDatabase(
   db: EngineConnection,
   input: CronRunQueueOperations["cron.drainQueue"]["input"],
-  jobs: Map<string, CronJob>,
+  jobs: Map<string, CronStoredJob>,
   receiptSchema: CronRunReceiptWriteSchema,
   freshReceipts?: Set<string>,
 ): CronRunQueueOperations["cron.drainQueue"]["output"] {
   const contexts = new Map(input.requests.map((request) => [request.receiptId, request]));
   const jobOrder = new Map([...jobs.keys()].map((jobId, index) => [jobId, index]));
-  const cancelled =
-    input.requests.length === 0
-      ? []
-      : executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("cron_run_receipts")
-            .selectAll()
-            .where("store_key", "=", input.storeKey)
-            .where("status", "=", "skipped")
-            .where("receipt_id", "in", [...contexts.keys()]),
-        ).rows.map((row) => ({
-          job: jobs.get(row.job_id),
-          runReceipt: receiptHandle(receiptFromRow(row)),
-          error: row.error_text ?? "cron: queued request was cancelled",
-        }));
-  const receipts = executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     db,
     query(db)
       .selectFrom("cron_run_receipts")
       .selectAll()
       .where("store_key", "=", input.storeKey)
-      .where("status", "=", "running")
+      .where((eb) =>
+        contexts.size === 0
+          ? eb("status", "=", "running")
+          : eb.or([
+              eb("status", "=", "running"),
+              eb.and([eb("status", "=", "skipped"), eb("receipt_id", "in", [...contexts.keys()])]),
+            ]),
+      )
       .orderBy("started_at_ms")
       .orderBy("job_id"),
-  ).rows.map(receiptFromRow);
+  ).rows;
+  const cancelled = rows
+    .filter((row) => row.status === "skipped")
+    .map((row) => ({
+      job: jobs.get(row.job_id),
+      runReceipt: receiptHandle(receiptFromRow(row)),
+      error: row.error_text ?? "cron: queued request was cancelled",
+    }));
+  const receipts = rows.filter((row) => row.status === "running").map(receiptFromRow);
   let activeCount = receipts.filter((receipt) => {
     const state = jobs.get(receipt.jobId)?.state;
     return state?.runningReceiptId === receipt.receiptId && state.runningAtMs !== undefined;
@@ -395,7 +402,9 @@ function drainCronQueueInDatabase(
       : tryResolveCronJobEffectiveAgentId(job, input.defaultAgentId);
     const error = fresh
       ? undefined
-      : (!isJobEnabled(job) && context.mode !== "force" && context.mode !== "on-exit") ||
+      : (!isJobEnabled(job) &&
+            ((context.mode !== "force" && context.mode !== "on-exit") ||
+              isPluginCommandCronJob(job))) ||
           (context.mode === "on-exit" && !matchingExit(job, context))
         ? "cron: queued job is no longer eligible"
         : !agentId ||
@@ -427,6 +436,38 @@ function drainCronQueueInDatabase(
     ) {
       continue;
     }
+    // Restart continuity shares the claim transaction with the budget check and the charge.
+    rebindPluginCommandSchedule(job, input.nowMs, input.hostProcessId, input.pluginCommandHosts);
+    const budgetError = getPluginCommandRunBudgetError(job, input.nowMs, input.hostProcessId);
+    if (budgetError) {
+      // Retire with the terminal receipt, before any attempt is spent, so it never wakes again.
+      const previousEnabled = job.enabled ?? true;
+      retirePluginCommandJob(job, input.nowMs);
+      result.skipped.push(
+        skipRequest(
+          db,
+          receiptSchema,
+          handle,
+          job,
+          input.nowMs,
+          budgetError,
+          "skipped",
+          previousEnabled,
+        ),
+      );
+      continue;
+    }
+    const previousEnabled = job.enabled ?? true;
+    if (job.pluginCommand) {
+      // The guard, receipt activation, and monotonic charge share this transaction.
+      // Recovery never refunds a launch whose execution outcome may be unknown.
+      job.state.pluginCommandRuns = (job.state.pluginCommandRuns ?? 0) + 1;
+      if (job.state.pluginCommandRuns >= job.pluginCommand.maxRuns) {
+        // The final attempt still runs under the retired definition its receipt records;
+        // the job cannot be scheduled or forced again.
+        retirePluginCommandJob(job, input.nowMs);
+      }
+    }
     // Payload edits take effect while queued; active runs keep this committed snapshot.
     const migrationPending = isProactiveJobMigrationPending(
       readDefaultProactiveJobReceiptInDatabase(db, input.storeKey, agentId),
@@ -453,7 +494,7 @@ function drainCronQueueInDatabase(
     job.state.runningAtMs = input.nowMs;
     job.state.runningReceiptId = runReceipt.receiptId;
     delete job.state.runningScheduleChangeId;
-    updateCronRuntimeRow(db, input.storeKey, job);
+    updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
     result.launches.push({ job, runReceipt, migrationPending });
     activeCount += 1;
   }
@@ -466,9 +507,14 @@ export function requestAndDrainCronRunsInWorker(
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
   queue: Pick<
     CronRunQueueOperations["cron.drainQueue"]["input"],
-    "requests" | "maxConcurrentRuns" | "schedulingPaused" | "preparingAgentIds"
+    | "requests"
+    | "maxConcurrentRuns"
+    | "schedulingPaused"
+    | "preparingAgentIds"
+    | "hostProcessId"
+    | "pluginCommandHosts"
   >,
-  jobs: Map<string, CronJob>,
+  jobs: Map<string, CronStoredJob>,
 ): CronRunQueueOperations["cron.requestRuns"]["output"] &
   CronRunQueueOperations["cron.drainQueue"]["output"] {
   return runOpenClawStateWriteTransaction(

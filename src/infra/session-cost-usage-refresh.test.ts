@@ -216,11 +216,14 @@ const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
 });
 
-test("refreshes each dirty session once after its own quiet gap and parks when clean", async ({
-  usage: { files, refresh, dirty },
+test("refreshes dirty sessions after their own quiet gaps without flushing unrelated reads", async ({
+  signal,
+  usage: { files, refresh, dirty, read },
 }) => {
   refresh.mockResolvedValue("refreshed");
   dirty(files[0]);
+  await withinTest(read(files[1]), signal);
+  expect(refresh).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(20_000);
   dirty(files[0]);
   dirty(files[1]);
@@ -260,18 +263,6 @@ test("preserves oldest dirty age across turns and refreshes overdue work in the 
   } finally {
     releaseAgentRunContext("usage-batch-turn", claim);
   }
-});
-
-test("does not flush unrelated dirty sessions for a keyed read", async ({
-  signal,
-  usage: { files, refresh, read, dirty },
-}) => {
-  refresh.mockResolvedValue("refreshed");
-  dirty();
-  await withinTest(read(files[1]), signal);
-  expect(refresh).not.toHaveBeenCalled();
-  await tick(30_000, 1);
-  expect(refresh.mock.calls[0]?.[0].sessionFiles).toEqual([files[0]]);
 });
 
 test("wakes a busy retry when an overlapping turn becomes idle", async ({

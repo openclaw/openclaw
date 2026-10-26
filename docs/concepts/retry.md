@@ -33,9 +33,11 @@ off exponentially from 2000 ms to a 30000 ms cap, with no jitter.
 
 ### Model providers
 
-Agent runs automatically recover from temporary rate limits, overloads, and provider failures before showing a terminal error. Each consecutive outage allows up to 10 total attempts for rate limits; other transient failures allow eight retries within a 90-second retry window. A completed successful model response resets the retry count, backoff, and outage window, so useful model work between failures does not exhaust recovery for a later outage. Partial streams, failed responses, and tool activity alone do not reset these budgets. The outer recovery-loop guard also resets only after a completed successful model response; the existing per-attempt timeout and any independent outer deadline are unchanged. A progressing turn can exceed one attempt budget in aggregate. Backoff starts around one second, increases exponentially, and adds jitter to spread concurrent retries. Provider pacing, including `retry-after`, `retry-after-ms`, and “Please try again in …” hints, sets the minimum wait even beyond the 30-second backoff cap. User cancellation and independently imposed whole-run deadlines still stop recovery.
+Agent runs automatically recover from temporary rate limits, overloads, and provider failures before showing a terminal error. Each consecutive outage allows up to 16 total attempts (15 retries) for rate limits; other transient failures allow eight retries within a 90-second retry window. A completed successful model response resets the retry count, backoff, and outage window, so useful model work between failures does not exhaust recovery for a later outage. Partial streams, failed responses, and tool activity alone do not reset these budgets. The outer recovery-loop guard also resets only after a completed successful model response; the existing per-attempt timeout and any independent outer deadline are unchanged. A progressing turn can exceed one attempt budget in aggregate. Backoff starts around one second, grows exponentially with jitter, and caps at 60 seconds for rate limits and 30 seconds for other transient failures. Provider timing sets the minimum wait; a longer provider floor is still honored, subject to `retry.provider.maxRetryDelayMs`. Provider timing includes `retry-after`, `retry-after-ms`, “Please try again in …” and “retry in …” hints, and Google `RetryInfo.retryDelay`. User cancellation and independently imposed whole-run deadlines still stop recovery.
 
-On HTTP 429 responses, exhausted token, project-token, or request buckets also contribute their quota-reset wait. OpenClaw takes the longest applicable reset and explicit retry hint. Cloud workers preserve this timing separately from shortened error text; available quota and non-429 responses do not introduce a quota-reset wait. This does not change native harness transport or add shared quota admission.
+On HTTP 429 responses without an explicit retry time, an exhausted bucket's reset time applies. This covers OpenAI token, project-token, and request buckets (`x-ratelimit-reset-*`) and Anthropic request and token buckets (`anthropic-ratelimit-*-reset`). An explicit `Retry-After` or `retry-after-ms` header, a retry hint in the error text, or Google `RetryInfo` outranks those full-refill times. Cloud workers preserve this timing separately from shortened error text; available quota and non-429 responses do not introduce a quota-reset wait. This does not change native harness transport or add shared quota admission.
+
+The same provider timing is the only source of cross-turn rate-limit cooldowns. See [Cooldowns](/concepts/model-failover#cooldowns).
 
 Recovery continues the existing transcript with an instruction to preserve completed work and inspect interrupted actions before deciding whether to repeat them. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
 
@@ -102,7 +104,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 Discord and Telegram channel retry timings are built in and are not configurable in `openclaw.json`.
 
-The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local native harnesses: Codex, Copilot, and Muse. `0` disables these retries; rate limits remain capped at 10 total attempts per consecutive outage. Without an explicit setting, the harness's existing retry count or OpenClaw's default applies.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local native harnesses: Codex, Copilot, and Muse. `0` disables these retries; rate limits remain capped at 16 total attempts (15 retries) per consecutive outage. Without an explicit setting, the harness's existing retry count or OpenClaw's default applies.
 
 This is a `settings.json` setting, not an `openclaw.json` key. OpenClaw merges agent-global settings, enabled bundle settings, and project settings from the effective workspace, subject to the existing project-settings trust policy. Prepared sessions retain that snapshot until a new session or explicit invalidation.
 
@@ -121,6 +123,11 @@ The Gateway checks for unfinished outbound deliveries once at startup. New
 durable enqueues wake recovery after their database transaction commits. Recovery
 keeps retrying while unfinished deliveries remain and stops waking when the queue
 is empty; an idle Gateway does not poll an empty outbound queue.
+
+Background recovery runs up to four independent channel/account groups at once,
+so a slow account does not block every healthy account. Attempts within each
+group remain sequential, including startup and reconnect recovery. Recovery
+shares the existing replay pacing and leaves normal foreground sends independent.
 
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease

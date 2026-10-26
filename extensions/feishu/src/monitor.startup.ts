@@ -10,12 +10,6 @@ import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
 
-type FetchBotOpenIdOptions = {
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  allowCachedFallback?: boolean;
-};
-
 export type FeishuMonitorBotIdentity = {
   botOpenId?: string;
   source?: "provider" | "cache";
@@ -23,7 +17,11 @@ export type FeishuMonitorBotIdentity = {
 
 export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+  options: {
+    runtime?: RuntimeEnv;
+    abortSignal?: AbortSignal;
+    allowCachedFallback?: boolean;
+  } = {},
 ): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
     return {};
@@ -61,7 +59,7 @@ export async function fetchBotIdentityForMonitor(
         botName: result.botName,
       });
     } catch {
-      options.runtime?.log?.(
+      options.runtime?.log(
         `feishu[${account.accountId}]: bot identity cache write failed; continuing startup`,
       );
     }
@@ -100,12 +98,12 @@ export async function fetchBotIdentityForMonitor(
     if (!cached) {
       return {};
     }
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh check is unavailable`,
     );
     return { botOpenId: cached.botOpenId, source: "cache" };
   } catch {
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: bot identity cache read failed; continuing without cached identity`,
     );
     return {};

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolvePreviewPython } from "../../scripts/lib/docs-preview-python.mjs";
+import { files } from "./docs-fixture.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -11,14 +12,12 @@ const run = (...args: string[]) =>
   spawnSync(process.execPath, [wrapper, ...args], { encoding: "utf8" });
 function makeSite(installed = false) {
   const site = createTempDir("openclaw-docs-site-");
-  fs.writeFileSync(
-    path.join(site, "package.json"),
-    JSON.stringify({ scripts: { "docs:build:preview": "node preview.cjs" } }),
-  );
+  const { write } = files(site);
+  write("package.json", JSON.stringify({ scripts: { "docs:build:preview": "node preview.cjs" } }));
   if (installed) {
     fs.mkdirSync(path.join(site, "node_modules"));
-    fs.writeFileSync(
-      path.join(site, "preview.cjs"),
+    write(
+      "preview.cjs",
       `require("node:fs").writeFileSync("args.json", JSON.stringify(process.argv.slice(2)));`,
     );
   }

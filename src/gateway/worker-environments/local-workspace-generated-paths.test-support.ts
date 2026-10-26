@@ -28,6 +28,7 @@ const retainedWorker = ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/
 const cache = ".cache/vitest/results.json";
 const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const packageCaches = [
+  ".openclaw/tmp/toolchain/node/bin/node",
   ".local/share/pnpm/store/v11/files/10/package-content",
   ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
   ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
@@ -169,8 +170,8 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   const accepted = (await readLocalWorkspaceProjection(owner.worktree.id))!;
   expect(accepted).toMatchObject({
     pending_ref: null,
-    baseline_json: after.raw,
-    baseline_ref: after.ref,
+    baseline_json: null,
+    checkpoint_json: null,
   });
   // The next ordinary turn must parse the accepted byte/digest pair and synchronize both copies.
   await withLocalWorkspaceProjection(owner, (state) => state.prepare());
@@ -197,6 +198,22 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   await fs.writeFile(path.join(canonical, "source.txt"), "guest source edit\n");
   await withLocalWorkspaceProjection(owner, (state) => state.settle());
   await expectWorkspaceFiles(canonical, { "source.txt": "next guest edit\n" });
+
+  const scratch = ".openclaw/tmp/toolchain/node/bin/node";
+  await fs.truncate(path.join(projection, scratch), 100 * 1024 * 1024);
+  await fs.writeFile(path.join(projection, "source.txt"), "edit after toolchain download\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+  await closeOpenClawStateDatabaseAsync();
+  await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  await expectWorkspaceFiles(canonical, {
+    "source.txt": "edit after toolchain download\n",
+    [scratch]: "local cache churn\n",
+  });
+  expect((await fs.stat(path.join(projection, scratch))).size).toBe(100 * 1024 * 1024);
+  expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+    pending_ref: null,
+    pending_target: null,
+  });
 
   if (!copied) {
     const invalidRef = workerWorkspaceResultRef("unexpected-artifact");

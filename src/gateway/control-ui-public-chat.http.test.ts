@@ -128,15 +128,18 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.getBody()).toContain("Published answer");
   });
 
-  it("reloads the exact Incognito address produced by in-app navigation", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+  it("reloads the exact short-session address produced by new-session navigation", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey,
       navigationKey: sessionKey,
+      focusComposer: true,
       fallbackAgentId: "main",
       basePath: "/control",
     });
+    expect(target.options.search).toContain("__openclawSessionKey=");
+    expect(target.options.search).toContain("__openclawComposerFocus=1");
     const response = await sendRequest(server(), {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",
@@ -145,6 +148,38 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("<openclaw-app>");
     expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("reloads a new bot while its preferred chat face is still resolving", async () => {
+    const agentId = "bot-11111111-2222-4333-8444-555555555555";
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: `agent:${agentId}:main`,
+      fallbackAgentId: agentId,
+      basePath: "/control",
+      preferenceDerivedFace: true,
+    });
+    const requestPath = target.options.pathname + (target.options.search ?? "");
+    resolveSession.mockResolvedValue(null);
+    const instance = server();
+    const local = await sendRequest(instance, {
+      path: requestPath,
+      host: "gateway.lan:18789",
+      remoteAddress: "192.168.1.25",
+    });
+    expect(local.res.statusCode).toBe(200);
+    expect(local.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    const privateChat = await request(instance, requestPath);
+    expect(privateChat.res.statusCode).toBe(404);
+    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
+    expect(privateChat.getBody()).not.toContain("Published answer");
+    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: requestPath })}`;
+    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
+    const app = await request(instance, entry);
+    expect(app.res.statusCode).toBe(200);
+    expect(app.getBody()).toContain("<openclaw-app>");
     expect(reader).not.toHaveBeenCalled();
   });
 

@@ -91,6 +91,22 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+it("finishes settled admissions without traversing empty pending decisions", () => {
+  const admission = admissionFixture();
+  admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
+  const iterate = vi.spyOn(Set.prototype, Symbol.iterator);
+  try {
+    admission.finish();
+    admission.finish();
+    expect(iterate).not.toHaveBeenCalled();
+  } finally {
+    iterate.mockRestore();
+  }
+  expect(admission.settlement).toEqual({ kind: "completed" });
+  expect(admission.failure).toBeUndefined();
+  expect(() => admission.observeRequests(() => {})).toThrow("closed");
+});
+
 it("preserves nested finish order and error precedence on repeated calls", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
@@ -237,7 +253,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
   const revoked = new Error("Database owner revoked");
   let current = true;
   const release = vi.fn();
-  const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release }));
+  const assertCurrent = vi.fn();
+  const acquireSchema = vi.fn(() => ({ assertCurrent, release }));
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
   const admission = admissionFixture(admit);
   bindAuthority(admission, databasePath, {
@@ -265,6 +282,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
     expect(requestSchema(databasePath)).toBe(true);
     requestAdmission({ stage: "transaction", facts: "ordinary write" });
     current = false;
+    expect(() => requestSchema(databasePath)).toThrow("SQLite transaction admission was refused");
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
     expect(() => requestAdmission({ stage: "commit", facts: "revoked write" })).toThrow(
       "SQLite transaction admission was refused",
     );
@@ -559,7 +578,7 @@ it.each(
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
-    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
     expect(rows()).toEqual([{ value: 1 }]);

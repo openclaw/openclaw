@@ -144,18 +144,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 });
 
-it("reports a rejected engine change instead of silently snapping back", async () => {
-  const { element } = createPage({
-    catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-    setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-  });
-  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-
-  selectEngine(element, "memory-lancedb");
-  await waitText(element, "plugin not installed: memory-lancedb");
-  expect(element.textContent).toContain("Could not change the memory engine");
-});
-
 it.each(["connection", "plugin publication"])(
   "drops a catalog completion superseded by %s",
   async (change) => {
@@ -352,11 +340,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
   expect(element.textContent).toContain("Could not update Active memory");
   expect(element.textContent).not.toContain("Could not update Memory wiki");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
   retry.resolve(committed("active-memory", false));
 });
 

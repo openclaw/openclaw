@@ -1,8 +1,8 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
-import { createCronJob, cronJobsListResponse } from "../../lib/cron/cron.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createCronJob, cronJobsListResponse } from "../../test-helpers/cron.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -113,9 +113,10 @@ it.each([1, 2])("keeps inspection focus and retires %i disconnected jobs", async
   expect(controller.card).toBe(card);
   expect(document.activeElement).toBe(anchor);
   source.publish({ ...source.gateway.snapshot, phase: "offline", client: null });
-  flush();
-  expect(card.textContent).not.toContain(instruction);
-  expect(card.textContent).toContain("Automations unavailable for this session.");
+  await vi.waitFor(() => {
+    expect(card.textContent).not.toContain(instruction);
+    expect(card.textContent).toContain("Automations unavailable for this session.");
+  });
   await tabTo(trigger, true);
   expect(controller.card).toBeNull();
 });

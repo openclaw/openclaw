@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page, type Request } from "playwright";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
@@ -26,6 +26,7 @@ import {
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -62,9 +63,17 @@ describe("public-session post-deploy app handoff", () => {
 
   beforeAll(async () => {
     fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
-    for (const build of [buildA, buildB]) {
-      await buildProductionControlUiE2e(path.join(fixture, build), build);
+    const sharedBuildRoot = inject("controlUiE2eBuildRoot");
+    if (sharedBuildRoot) {
+      await cp(sharedBuildRoot, path.join(fixture, buildA), { recursive: true });
+      await refreshProductionControlUiE2e(path.join(fixture, buildA), buildA);
+    } else {
+      // Focused runs without a bundled consumer have no invocation-wide build.
+      await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
     }
+    // Release identity lives in HTML and the worker; both builds use the same compiled source.
+    await cp(path.join(fixture, buildA), path.join(fixture, buildB), { recursive: true });
+    await refreshProductionControlUiE2e(path.join(fixture, buildB), buildB);
     state = await createOpenClawTestState({
       scenario: "minimal",
       label: "post-deploy-session-entry",

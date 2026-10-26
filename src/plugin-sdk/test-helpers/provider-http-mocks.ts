@@ -10,6 +10,7 @@ import type {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../provider-http.js";
+import { omitNullRequestHeaders } from "../provider-request-headers.js";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
@@ -52,9 +53,7 @@ interface ProviderHttpMocks {
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
   >;
-  resolveProviderRequestHeadersMock: Mock<
-    (params: ResolveProviderRequestHeadersParams) => Record<string, string> | undefined
-  >;
+  resolveProviderRequestHeadersMock: Mock<typeof resolveProviderRequestHeaders>;
 }
 
 const providerHttpMocks = vi.hoisted(() => ({
@@ -79,7 +78,7 @@ const providerHttpMocks = vi.hoisted(() => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork:
       (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
-    headers: new Headers(params.defaultHeaders),
+    headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
     dispatcherPolicy: undefined,
   })),
   resolveProviderRequestHeadersMock: vi.fn((params: ResolveProviderRequestHeadersParams) => {
@@ -161,8 +160,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       providerHttpMocks.fetchWithTimeoutMock(...args),
     );
   };
-  // A completed submission can download directly without first installing polling mocks.
-  installTimeoutTransportMock();
   const installTransportMocks = () => {
     installTimeoutTransportMock();
     vi.spyOn(guardedTransport, "fetchWithSsrFGuard").mockImplementation(async (params) => ({
@@ -176,6 +173,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       release: async () => {},
     }));
   };
+  // Completed submissions can download directly without first installing polling mocks.
+  installTransportMocks();
   providerHttpMocks.readProviderJsonResponseMock.mockImplementation(
     actual.readProviderJsonResponse,
   );

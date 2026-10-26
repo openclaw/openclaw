@@ -1,10 +1,21 @@
 import type { Event, Filter } from "nostr-tools";
 import { vi } from "vitest";
 
+export const createBuzzRelayInfoFetchMock = (self: string) =>
+  vi.fn(async () => Response.json({ self, software: "https://github.com/block/buzz" }));
+
 type Handlers = {
   onevent: (event: Event) => void;
   oneose?: () => void;
   onclose: (reason: string) => void;
+};
+type PrepareSubscription = (
+  filters: Filter[],
+  handlers: Handlers,
+) => {
+  id: string;
+  close: ReturnType<typeof vi.fn>;
+  closed: boolean;
 };
 
 export const relayMocks = {
@@ -31,7 +42,7 @@ export const relayMocks = {
   }>,
 };
 
-export const mockBuzzRelay = () => ({
+export const mockBuzzRelay = (prepare?: PrepareSubscription) => ({
   Relay: class {
     onauth?: (template: unknown) => Promise<unknown>;
     idleSince: number | undefined;
@@ -47,6 +58,9 @@ export const mockBuzzRelay = () => ({
     scheduleIdleClose = vi.fn();
 
     prepareSubscription(filters: Filter[], handlers: Handlers) {
+      if (prepare) {
+        return prepare(filters, handlers);
+      }
       const state = relayMocks;
       const filter = filters[0] ?? {};
       const close = vi.fn();

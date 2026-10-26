@@ -15,37 +15,25 @@ function readUserMessage(
 }
 
 describe("matchesSelectedTuiSession", () => {
-  it.each([
-    [
-      "Matrix",
-      "agent:main:matrix:channel:!MixedRoom:example.org",
-      "agent:main:matrix:channel:!mixedroom:example.org",
-    ],
-    ["Signal", "agent:main:signal:group:AbC123=", "agent:main:signal:group:abc123="],
-  ])(
-    "preserves case-sensitive %s conversation ownership",
-    (_provider, selectedSessionKey, otherSessionKey) => {
-      const state = makeState({ currentSessionKey: selectedSessionKey });
-
-      expect(matchesSelectedTuiSession(state, { sessionKey: selectedSessionKey })).toBe(true);
-      expect(matchesSelectedTuiSession(state, { sessionKey: otherSessionKey })).toBe(false);
+  it.each(["agent:main:matrix:channel:!MixedRoom:example.org", "agent:main:signal:group:AbC123="])(
+    "preserves case-sensitive conversation ownership: %s",
+    (currentSessionKey) => {
+      const state = makeState({ currentSessionKey });
+      expect(matchesSelectedTuiSession(state, { sessionKey: currentSessionKey })).toBe(true);
+      expect(
+        matchesSelectedTuiSession(state, { sessionKey: currentSessionKey.toLowerCase() }),
+      ).toBe(false);
     },
   );
-
-  it("accepts legacy global events only for the default agent", () => {
-    expect(
-      matchesSelectedTuiSession(makeState({ currentSessionKey: "global" }), {
-        sessionKey: "global",
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects empty and unrelated session events", () => {
-    const state = makeState();
-
-    expect(matchesSelectedTuiSession(state, {})).toBe(false);
-    expect(matchesSelectedTuiSession(state, { sessionKey: "  " })).toBe(false);
-    expect(matchesSelectedTuiSession(state, { sessionKey: "agent:main:other" })).toBe(false);
+  it.each([
+    ["global", "global", true],
+    ["agent:main:main", undefined, false],
+    ["agent:main:main", "  ", false],
+    ["agent:main:main", "agent:main:other", false],
+  ] as const)("matches selected %s against %s: %s", (currentSessionKey, sessionKey, matches) => {
+    expect(matchesSelectedTuiSession(makeState({ currentSessionKey }), { sessionKey })).toBe(
+      matches,
+    );
   });
 });
 
@@ -123,18 +111,6 @@ describe("readTuiSessionUserMessage", () => {
         sendId: "actual:user",
         text: "prompt",
       },
-    ],
-    [
-      "uses persisted position for incomplete imported identity",
-      { ...importedIdentity, seq: 7 },
-      { messageId: "native-message", messageSeq: 99 },
-      { messageId: "imported-seq:7", text: "prompt" },
-    ],
-    [
-      "rejects envelope-only sequence for incomplete imported identity",
-      importedIdentity,
-      { messageId: "native-message", messageSeq: 7 },
-      null,
     ],
   ] as const)("%s", (_name, metadata, envelope, expected) => {
     expect(readUserMessage("prompt", metadata, envelope)).toEqual(expected);

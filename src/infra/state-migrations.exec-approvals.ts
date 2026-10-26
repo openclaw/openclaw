@@ -409,9 +409,6 @@ async function migrateWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const sourcePath = params.detected.sourcePath;
   const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
@@ -444,12 +441,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    params.beforeVerify?.();
     await source.verify(snapshot, "legacy exec approvals changed after migration loaded them");
     await source.claim({
       snapshot,
       mismatchMessage: "legacy exec approvals changed before migration could claim them",
-      beforeClaim: params.beforeClaim,
     });
   } catch (error) {
     const restoreError = await source.restore();
@@ -516,7 +511,6 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   try {
     await source.remove({
-      removeSource: params.removeSource,
       sourceReappearedMessage: "legacy exec approvals reappeared during migration cleanup",
       remainingMessage: "legacy exec approvals remain after migration cleanup",
     });
@@ -554,9 +548,6 @@ export async function migrateLegacyExecApprovals(params: {
   detected?: LegacyExecApprovalsDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   const detected = params.detected;
   if (!detected?.hasLegacy) {

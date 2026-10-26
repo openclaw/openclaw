@@ -1,5 +1,12 @@
-import type { ConfigValidationIssue } from "../../config/types.js";
+import { expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
+import type {
+  ConfigFileSnapshot,
+  ConfigValidationIssue,
+  OpenClawConfig,
+} from "../../config/types.js";
 import { OpenClawStateOwnershipMetadataError } from "../../infra/sqlite-lifecycle-errors.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 export type RuntimeDotEnvLoadResult = {
   dotenvPresentKeys: string[];
@@ -32,7 +39,6 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
   const unavailable = Object.assign(new Error("configuration storage unavailable"), {
     code: "ENOSPC",
   });
-  const ownership = new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid");
   return [
     {
       label: "rejected final read",
@@ -51,9 +57,61 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
     },
     {
       label: "restart ownership refusal",
-      failure: ownership,
+      failure: new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid"),
       stage: "runtime",
       expected: { message: "__exit__:78" },
     },
   ];
+}
+export function completeGatewayRunSnapshot(
+  config: OpenClawConfig,
+  overrides: Partial<ConfigFileSnapshot> = {},
+) {
+  return {
+    ...createTestConfigSnapshot(config),
+    parsed: config,
+    raw: JSON.stringify(config),
+    ...overrides,
+  } satisfies ConfigFileSnapshot;
+}
+
+export function registerInvalidConfigResetTests(configState: {
+  snapshot: Record<string, unknown>;
+}) {
+  it.each([null, "raw", "path"] as const)("guards invalid-config dev reset: %s", async (change) => {
+    const { clearGatewayRunConfigEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunReset } =
+      await import("./pre-bootstrap.js");
+    const env = { OPENCLAW_SERVICE_MARKER: undefined, OPENCLAW_PROFILE: "dev" };
+    await withEnvAsync(env, async () => {
+      clearGatewayRunConfigEnvironment();
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const params = { opts: { dev: true, reset: true, allowUnconfigured: true }, runtime };
+      const snapshot: Record<string, unknown> = {
+        ...failedGatewayRunConfigSnapshot(),
+        raw: "{ invalid config",
+      };
+      delete snapshot.sourceConfig;
+      configState.snapshot = snapshot;
+      try {
+        await expect(prepareGatewayRunBootstrap(params)).resolves.toBe(false);
+        configState.snapshot = {
+          ...snapshot,
+          ...(change === "raw" ? { raw: "{ a different invalid config" } : {}),
+          ...(change === "path" ? { path: "/tmp/other.json" } : {}),
+        };
+        await expect(recheckGatewayRunReset(params)).resolves.toBe(change === null);
+        if (change) {
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("selected config or state target changed during startup"),
+          );
+        } else {
+          expect(runtime.error).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
+        }
+      } finally {
+        clearGatewayRunConfigEnvironment();
+      }
+    });
+  });
 }

@@ -26,10 +26,8 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
@@ -71,6 +69,7 @@ import {
   withSessionsSendRequesterSource,
 } from "./sessions-send-session-source.js";
 import {
+  buildSessionsSendAgentParams,
   callSessionsSendGateway,
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
@@ -424,7 +423,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         );
       }
       const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
-      if (mode === "notify" && expectedSessionId) {
+      // A durable parent's binding is not temporary, but explicit invocation ceilings remain.
+      const persistentChildAccess =
+        access.basis === "parent-lineage" && opts?.expectedTargetSessionId === undefined;
+      if (mode === "notify" && expectedSessionId && !persistentChildAccess) {
         return sendFailure(
           "forbidden",
           "Notifications cannot outlive an exact-session access grant. Use steer or followup.",
@@ -502,6 +504,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 watch: params.watch === true,
                 requesterOwned: visibleSession.requesterOwned,
                 authorizationTargetSessionKey: authorizationTargetKey,
+                controllerOnly: access.basis === "live-controller",
                 expectedSessionId,
               },
               assertSourceCurrent: opts?.assertSourceCurrent,
@@ -513,7 +516,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 visibleSession.missing ||
                 (allowMissingKey && (sessionKey === "main" || sessionKey === mainKey))
                   ? async (assertCurrent) => {
-                      const created = await createConfiguredAgentMainSession({
+                      await createConfiguredAgentMainSession({
                         mode,
                         inheritedToolPolicySource: opts?.inheritedToolPolicySource,
                         callGateway: sendGatewayCall,
@@ -523,9 +526,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                         useTrustedInProcessCreation: opts?.callGateway === undefined,
                         assertCurrent,
                       });
-                      if (!created.ok) {
-                        throw new Error(created.error);
-                      }
                       targetSession = await readSession(resolvedKey, targetAgentId);
                       targetSessionEntry = targetSession.store[targetSession.canonicalKey];
                       targetAcpMeta = await readAcpSessionMetaForEntryAsync({
@@ -558,17 +558,14 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 assertCurrent: communication.assertCurrent,
               });
             }
-            const sendParams = {
+            const sendParams = buildSessionsSendAgentParams({
               message: dispatchMessage,
               agentId: targetAgentId,
               sessionKey: resolvedKey,
               idempotencyKey: runId,
-              deliver: false,
-              sourceReplyDeliveryMode: "message_tool_only" as const,
-              channel: INTERNAL_MESSAGE_CHANNEL,
-              lane: resolveNestedAgentLaneForSession(resolvedKey),
+              nativeChild: targetIsSubagent && !targetAcpMeta,
               inputProvenance,
-            };
+            });
             if (
               mode === "resume" ||
               (mode === undefined &&
@@ -607,10 +604,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               callDurableGateway: communication.callDurableGateway,
               sendParams,
               sourceOrigin: sameSession ? requesterOrigin : undefined,
-              sessionKey: mode || ownChild ? resolvedKey : displayKey,
+              sessionKey: resolvedKey,
               sessionStoreTarget: targetSession,
-              deliveryTimeoutMs: replyTimeoutMs,
-              allowActiveRunQueueDelivery: timeoutSeconds === 0,
+              allowActiveRunQueueDelivery: !sameSession && timeoutSeconds === 0,
               expectedSessionId,
               preparedTargetSessionId: targetSessionEntry?.sessionId,
               assertSendCurrent: communication.assertCurrent,
@@ -664,6 +660,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               await dispatchSessionsSendFollowup(startParams, replyContext, {
                 message,
                 ownChild,
+                persistentChildAccess,
                 nativeChild: !targetAcpMeta,
                 requesterSessionKey: requesterSession.canonicalKey,
                 requesterAgentId,
@@ -676,6 +673,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               start,
               completion,
               registryCompletion,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               watchField,
               replyContext,
               targetSession,

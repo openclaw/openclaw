@@ -276,6 +276,7 @@ export function createPersonalGitHubPublicationCoordinator(
     try {
       return await executeGitHubPublication<PersonalGitHubPublicationRow>({
         initial: execution.row,
+        requesterProfileId: () => action.owner,
         validateAuthority: () => {
           assertCurrent();
           return execution.ownsExecution();

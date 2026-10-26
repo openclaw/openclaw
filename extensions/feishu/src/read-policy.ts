@@ -46,14 +46,7 @@ function normalizeFeishuAllowlist(entries: Array<string | number> | undefined): 
   return (entries ?? []).map((entry) => normalizeFeishuAllowEntry(String(entry))).filter(Boolean);
 }
 
-function readContextFields(ctx: FeishuReadContext): {
-  accountId?: string;
-  currentChannelId?: string;
-  currentProvider?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  directOperator: boolean;
-} {
+function readContextFields(ctx: FeishuReadContext) {
   if (isActionContext(ctx)) {
     return {
       accountId: normalizeOptionalString(ctx.accountId),

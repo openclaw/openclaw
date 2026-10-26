@@ -31,6 +31,15 @@ import {
 type State = Awaited<ReturnType<typeof createOpenClawTestState>>;
 type Registry = ReturnType<typeof createPluginRegistryFixture>["registry"];
 type Context = { state: State; nodeId: string; gatewayToken: string; gatewayUrl: string };
+type NodeInvokeFrame = {
+  id: string;
+  nodeId: string;
+  command: string;
+  paramsJSON: string | null;
+  timeoutMs: number;
+  idempotencyKey: string;
+};
+type Invocation = Omit<NodeInvokeFrame, "id" | "paramsJSON"> & { params: unknown };
 
 /** Paired-node transport shared by the Canvas and exact-file-approval proofs. */
 export async function withNodeGateway(
@@ -43,11 +52,15 @@ export async function withNodeGateway(
     caps: string[];
     commands: string[];
     config: (context: Context) => OpenClawConfig | Promise<OpenClawConfig>;
-    onInvoke: (client: GatewayClient | undefined, frame: unknown, nodeId: string) => void;
-    beforeCleanup?: () => Promise<unknown>;
+    onInvoke: (frame: NodeInvokeFrame) => string | Promise<string>;
   },
   run: (
-    context: Context & { config: OpenClawConfig; registry: Registry; operator: GatewayClient },
+    context: Context & {
+      config: OpenClawConfig;
+      registry: Registry;
+      operator: GatewayClient;
+      invocations: Invocation[];
+    },
   ) => Promise<void>,
 ) {
   const state = await createOpenClawTestState({
@@ -72,6 +85,9 @@ export async function withNodeGateway(
   let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let operator: GatewayClient | undefined;
   let node: GatewayClient | undefined;
+  const invocations: Invocation[] = [];
+  const responses: Promise<void>[] = [];
+  const handlerErrors: unknown[] = [];
   try {
     const identity = (name: string) =>
       loadOrCreateDeviceIdentity({
@@ -126,6 +142,37 @@ export async function withNodeGateway(
       requestTimeoutMs: 60_000,
       timeoutMs: 60_000,
     };
+    const respond = async (value: unknown) => {
+      const frame = value as Partial<NodeInvokeFrame>;
+      if (
+        !node ||
+        typeof frame.id !== "string" ||
+        frame.nodeId !== context.nodeId ||
+        typeof frame.command !== "string" ||
+        typeof frame.timeoutMs !== "number" ||
+        typeof frame.idempotencyKey !== "string" ||
+        !(frame.paramsJSON === null || typeof frame.paramsJSON === "string")
+      ) {
+        throw new Error(`invalid node invocation: ${JSON.stringify(frame)}`);
+      }
+      const { id, nodeId, command, paramsJSON, timeoutMs, idempotencyKey } = frame;
+      invocations.push({
+        nodeId,
+        command,
+        timeoutMs,
+        idempotencyKey,
+        params: paramsJSON === null ? null : JSON.parse(paramsJSON),
+      });
+      const payloadJSON = await options.onInvoke({
+        id,
+        nodeId,
+        command,
+        paramsJSON,
+        timeoutMs,
+        idempotencyKey,
+      });
+      await node.request("node.invoke.result", { id, nodeId, ok: true, payloadJSON });
+    };
     operator = await connectGatewayClient({
       ...connection,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
@@ -149,7 +196,11 @@ export async function withNodeGateway(
       deviceIdentity: nodeIdentity,
       onEvent: (event) => {
         if (event.event === "node.invoke.request") {
-          options.onInvoke(node, event.payload, context.nodeId);
+          responses.push(
+            respond(event.payload).catch((error: unknown) => {
+              handlerErrors.push(error);
+            }),
+          );
         }
       },
     });
@@ -167,9 +218,9 @@ export async function withNodeGateway(
       },
       { timeout: 15_000, interval: 100 },
     );
-    await run({ ...context, config, registry, operator });
+    await run({ ...context, config, registry, operator, invocations });
   } finally {
-    await options.beforeCleanup?.();
+    await Promise.all(responses);
     if (node) {
       await disconnectGatewayClient(node);
     }
@@ -183,4 +234,5 @@ export async function withNodeGateway(
     restoreActivePluginRegistrySnapshot(previousRegistry);
     await state.cleanup();
   }
+  expect(handlerErrors).toEqual([]);
 }

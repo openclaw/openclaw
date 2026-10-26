@@ -225,7 +225,9 @@ export function prepareComparisonClaimsFromStores(params: {
       }
       try {
         const result = await reader.read({ operation: "comparison-claims", store, keys: targeted });
-        claims.push(...result.claims.map((claim) => ({ store, claim })));
+        for (const claim of result.claims) {
+          claims.push({ store, claim });
+        }
       } catch (error) {
         unreadable(store, error);
       }

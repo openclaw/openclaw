@@ -55,12 +55,8 @@ type TelegramGroupPolicyBlockReason =
   | "group-chat-not-allowed";
 
 type TelegramGroupPolicyAccessResult =
-  | { allowed: true; groupPolicy: "open" | "disabled" | "allowlist" }
-  | {
-      allowed: false;
-      reason: TelegramGroupPolicyBlockReason;
-      groupPolicy: "open" | "disabled" | "allowlist";
-    };
+  | { allowed: true }
+  | { allowed: false; reason: TelegramGroupPolicyBlockReason };
 
 export const resolveTelegramRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
@@ -98,19 +94,18 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   enforceAllowlistAuthorization: boolean;
   allowEmptyAllowlistEntries: boolean;
 }): TelegramGroupPolicyAccessResult => {
-  const groupPolicy = resolveTelegramEffectiveGroupPolicy(params);
-
   if (!params.isGroup) {
-    return { allowed: true, groupPolicy };
+    return { allowed: true };
   }
+  const groupPolicy = resolveTelegramEffectiveGroupPolicy(params);
   if (groupPolicy === "disabled") {
-    return { allowed: false, reason: "group-policy-disabled", groupPolicy };
+    return { allowed: false, reason: "group-policy-disabled" };
   }
   // Check chat-level allowlist first so that groups explicitly listed in the
   // `groups` config are not blocked by the sender-level "empty allowlist" guard.
   const groupAllowlist = params.resolveGroupPolicy(params.chatId, params.cfg);
   if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
-    return { allowed: false, reason: "group-chat-not-allowed", groupPolicy };
+    return { allowed: false, reason: "group-chat-not-allowed" };
   }
   // A wildcard enables the group but does not bypass sender-level filtering.
   const chatExplicitlyAllowed =
@@ -125,14 +120,14 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
       (chatExplicitlyAllowed && !params.effectiveGroupAllow.hasEntries) ||
       isSenderIdAllowed(params.effectiveGroupAllow, senderId, true);
     if (!senderId) {
-      return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };
+      return { allowed: false, reason: "group-policy-allowlist-no-sender" };
     }
     if (!allowlistConfigured) {
-      return { allowed: false, reason: "group-policy-allowlist-empty", groupPolicy };
+      return { allowed: false, reason: "group-policy-allowlist-empty" };
     }
     if (!allowlistMatched) {
-      return { allowed: false, reason: "group-policy-allowlist-unauthorized", groupPolicy };
+      return { allowed: false, reason: "group-policy-allowlist-unauthorized" };
     }
   }
-  return { allowed: true, groupPolicy };
+  return { allowed: true };
 };

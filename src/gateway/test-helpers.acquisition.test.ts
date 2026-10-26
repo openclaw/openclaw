@@ -86,6 +86,20 @@ type PeerBehavior =
   | "reply";
 
 type AcquisitionPeer = Awaited<ReturnType<typeof createAcquisitionPeer>>;
+const failureOf = (work: Promise<unknown>) =>
+  work.then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+
+const acquisitionCases = [
+  ["tracked", "hold upgrade", "timeout waiting for ws open", 5_000, "upgrade"],
+  ["tracked", "upgrade then transport error", "invalid opcode 3", 0, "upgrade"],
+  ["shared auth", "no challenge", "missing connect.challenge nonce", 2_000, "challenge"],
+  ["webchat", "transport error", "invalid opcode 3", 0, "response"],
+  ["webchat", "hello then transport error", "invalid opcode 3", 0, "response"],
+  ["device request", "no response", "timeout", 5_000, "response"],
+] as const;
 
 async function createAcquisitionPeer(behavior: PeerBehavior) {
   const clients: WebSocket[] = [];
@@ -94,8 +108,7 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   const unownedErrors: Error[] = [];
   const transportFailure = createDeferred<Error>();
   const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
-  // Observe the real dependency; keep otherwise-unhandled errors local to this case.
-  // Counting the remaining listeners makes a removed owner handler observable.
+  // Count owner handlers while keeping native errors local to this case.
   acquisitionFixture.observeClient = (client) => {
     clients.push(client);
     client.once("close", () => closed.add(client));
@@ -110,7 +123,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   const connectReceived = createDeferred();
-  let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on("connection", (socket) => {
@@ -118,7 +130,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
     socket.once("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket, head) => {
-    receivedUpgrade = true;
     if (behavior === "hold upgrade") {
       return;
     }
@@ -152,20 +163,21 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
           socket.uncork();
           return;
         }
-        if (behavior !== "no response") {
-          ws.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: !rejectAuth,
-              ...(rejectAuth
-                ? { error: { code: "UNAUTHORIZED", message: "synthetic auth rejection" } }
-                : { payload: buildMinimalGatewayHelloOkPayload() }),
-            }),
-          );
-          if (behavior === "reject auth without close") {
-            ws.pause();
-          }
+        if (behavior === "no response") {
+          return;
+        }
+        ws.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: !rejectAuth,
+            ...(rejectAuth
+              ? { error: { code: "UNAUTHORIZED", message: "synthetic auth rejection" } }
+              : { payload: buildMinimalGatewayHelloOkPayload() }),
+          }),
+        );
+        if (behavior === "reject auth without close") {
+          ws.pause();
         }
       });
     });
@@ -194,7 +206,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
       errors,
       unownedErrors,
       requests,
-      receivedUpgrade: () => receivedUpgrade,
       waitForUpgrade: (signal: AbortSignal) => once(server, "upgrade", { signal }),
       waitForOpen: async (signal: AbortSignal) => {
         await once(server, "upgrade", { signal });
@@ -252,8 +263,7 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     getTailscaleIngressEndpoint: () => undefined,
   } satisfies import("./server.js").GatewayServer;
   acquisitionFixture.port = peer.port;
-  // This peer already owns the socket; exercise client acquisition and cleanup
-  // without asking the real reservation owner to bind a second listener.
+  // The peer owns the listener; reserve without binding it again.
   acquisitionFixture.reserve.mockResolvedValue({
     port: peer.port,
     start: async (run: () => Promise<unknown>) => run(),
@@ -283,10 +293,7 @@ async function verifyAcquisitionTimeout(
       : phase === "challenge"
         ? peer.waitForOpen(readinessSignal)
         : peer.waitForConnect(readinessSignal);
-  const failure = acquire().then(
-    () => undefined,
-    (reason: unknown) => reason,
-  );
+  const failure = failureOf(acquire());
   // Observe settlement before the clock driver can process later native cleanup.
   const checked = failure.then(verifyFailure);
   void checked.catch(() => {});
@@ -394,13 +401,13 @@ export async function verifyCompositeAcquisition({
         if (shutdown === "rejected") {
           expect(result).toBeInstanceOf(AggregateError);
           expect(result).toHaveProperty("errors", [originalError, closeError]);
-          expect(process.env[selector]).toBe(ownedSelector);
-          expect(peer.isListening()).toBe(true);
         } else {
           expect(result).toBe(originalError);
-          expect(process.env[selector]).toBe(previousSelector);
-          expect(peer.isListening()).toBe(false);
         }
+        expect(process.env[selector]).toBe(
+          shutdown === "rejected" ? ownedSelector : previousSelector,
+        );
+        expect(peer.isListening()).toBe(shutdown === "rejected");
       } finally {
         release.resolve();
         await acquisition;
@@ -426,16 +433,9 @@ describe("raw Gateway helper acquisition ownership", async () => {
     2 * 1024 * 1024,
   );
 
-  it.for([
-    { helper: "tracked", behavior: "hold upgrade", error: "timeout waiting for ws open" },
-    { helper: "tracked", behavior: "upgrade then transport error", error: "invalid opcode 3" },
-    { helper: "shared auth", behavior: "no challenge", error: "missing connect.challenge nonce" },
-    { helper: "webchat", behavior: "transport error", error: "invalid opcode 3" },
-    { helper: "webchat", behavior: "hello then transport error", error: "invalid opcode 3" },
-    { helper: "device request", behavior: "no response", error: "timeout" },
-  ] as const)(
-    "$helper owns cleanup after $behavior",
-    async ({ helper, behavior, error }, context) => {
+  it.for(acquisitionCases)(
+    "%s owns cleanup after %s",
+    async ([helper, behavior, error, timeoutMs, phase], context) => {
       await withPeerState("raw-acquisition", behavior, async (peer) => {
         const { openTrackedWs } = await import("./device-authz.test-helpers.js");
         const { openAuthenticatedGatewayWs } = await import("./shared-auth.test-helpers.js");
@@ -470,14 +470,9 @@ describe("raw Gateway helper acquisition ownership", async () => {
           }
           expect(peer.unownedErrors).toEqual([]);
           expect(failure).toBeInstanceOf(Error);
-          expect(failure).toMatchObject({ message: expect.stringContaining(error) });
-          if (behavior === "hold upgrade") {
-            expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
-          }
-          if (behavior === "no response") {
-            expect(failure).toMatchObject({ message: "timeout" });
-          }
-          expect(peer.isListening(), "a failed socket cannot close its borrowed server").toBe(true);
+          expect(failure).toMatchObject({
+            message: behavior === "no response" ? "timeout" : expect.stringContaining(error),
+          });
           if (behavior === "no response") {
             expect(peer.requests).toHaveLength(1);
             expect(peer.requests[0]).toMatchObject({
@@ -485,27 +480,21 @@ describe("raw Gateway helper acquisition ownership", async () => {
               params: { auth: { token: "synthetic-token" } },
             });
           }
+          expect(peer.isListening(), "a failed socket cannot close its borrowed server").toBe(true);
           const client = expectClosedClient(peer);
           expect(client.listenerCount("open")).toBe(0);
         };
-        if (behavior === "hold upgrade") {
-          await verifyAcquisitionTimeout(peer, 5_000, context.signal, acquire, verifyFailure);
-        } else if (behavior === "no challenge" || behavior === "no response") {
+        if (timeoutMs) {
           await verifyAcquisitionTimeout(
             peer,
-            behavior === "no response" ? 5_000 : 2_000,
+            timeoutMs,
             context.signal,
             acquire,
             verifyFailure,
-            behavior === "no challenge" ? "challenge" : "response",
+            phase,
           );
         } else {
-          verifyFailure(
-            await acquire().then(
-              () => undefined,
-              (reason: unknown) => reason,
-            ),
-          );
+          verifyFailure(await failureOf(acquire()));
         }
       });
     },

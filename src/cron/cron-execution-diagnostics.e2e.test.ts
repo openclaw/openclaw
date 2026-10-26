@@ -90,7 +90,6 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
         cronConfig: { triggers: { enabled: true } },
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         onEvent: (event) => events.push(structuredClone(event)),
         runIsolatedAgentJob: async (runParams) =>
           await runCronIsolatedAgentTurn({

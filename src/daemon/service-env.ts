@@ -16,14 +16,6 @@ import {
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 
-type MinimalServicePathOptions = {
-  platform?: NodeJS.Platform;
-  extraDirs?: string[];
-  home?: string;
-  env?: Record<string, string | undefined>;
-  includeMissingUserBinDefaults?: boolean;
-};
-
 export const SERVICE_PROXY_ENV_KEYS = [
   "OPENCLAW_PROXY_URL",
   "HTTP_PROXY",
@@ -195,7 +187,13 @@ function resolveUserBinDirs(
 }
 
 export function getMinimalServicePathPartsFromEnv(
-  options: MinimalServicePathOptions = {},
+  options: {
+    platform?: NodeJS.Platform;
+    extraDirs?: string[];
+    home?: string;
+    env?: Record<string, string | undefined>;
+    includeMissingUserBinDefaults?: boolean;
+  } = {},
 ): string[] {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -288,7 +286,7 @@ export function buildNodeServiceEnvironment(
     // launchd manager variables outlive the installer. Worker snapshots scope
     // this host fence by the canonical managed-node service identity.
     NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
-    ...resolveNodeServiceIdentityEnvironment(),
+    ...resolveNodeServiceIdentityEnvironment(env),
   };
 }
 
@@ -312,9 +310,8 @@ function buildCommonServiceEnvironment(
 ): Record<string, string | undefined> {
   const env = omitSecretEgressProxyEnvironment(invocationEnv, platform);
   const tmpDir = resolveServiceTmpDir(env, platform);
-  // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
-  // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
-  // works correctly when running as a LaunchAgent without extra user configuration.
+  // On macOS, launchd services don't inherit the shell environment, so default
+  // NODE_USE_SYSTEM_CA to read the macOS trust store when running as a LaunchAgent.
   // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
   const startupTlsEnv = resolveNodeStartupTlsEnvironment({
     env,
@@ -343,7 +340,7 @@ function buildCommonServiceEnvironment(
   // Match the installing shell's probed SQLite library; wrappers hide the runtime.
   if (
     platform === "darwin" &&
-    (runtime === "bun" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
+    (runtime === "bun" || runtime === "standalone" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
   ) {
     const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
     const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);

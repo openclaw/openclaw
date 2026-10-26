@@ -6,6 +6,7 @@ import type {
   GatewayClientOptions as BaseGatewayClientOptions,
   GatewayClientRequestOptions,
 } from "../../packages/gateway-client/src/client.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -211,7 +212,8 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {

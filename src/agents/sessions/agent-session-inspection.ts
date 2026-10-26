@@ -5,13 +5,14 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import type { Model, AssistantMessage } from "../../llm/types.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import {
   type ThinkingLevel,
   calculateContextTokens,
@@ -23,7 +24,6 @@ import {
   extractTextContent,
   hasPersistedAssistantContent,
 } from "./agent-session-utils.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ContextUsage } from "./extensions/index.js";
 import type { ExtensionRunner } from "./extensions/runner.js";
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
@@ -237,14 +237,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
       manager,
       runner,
       assertCurrent,
-      isCurrent: () => {
-        try {
-          assertCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      },
+      isCurrent: () => assertionSucceeds(assertCurrent),
       run: <T>(operation: () => Promise<T>): Promise<T> => {
         const write = () => withSessionManagerAppend(manager, operation);
         return target ? withSessionTranscriptWriteAssertion(target, assertCurrent, write) : write();
@@ -258,7 +251,8 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
 
   private getThinkingLevelForModelSwitch(): ThinkingLevel {
     if (!this.supportsThinking()) {
-      return this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
+      /** Default thinking level for sessions that do not specify a model-specific override. */
+      return this.settingsManager.getDefaultThinkingLevel() ?? "medium";
     }
     return this.thinkingLevel;
   }

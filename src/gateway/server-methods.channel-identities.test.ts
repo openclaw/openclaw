@@ -19,6 +19,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const identity = { channelId: "discord", accountId: "team-bot", senderId: "100000000000000001" };
 function createRequests(profileId: string, expectedProfileId?: string, cfg: OpenClawConfig = {}) {
@@ -37,12 +38,7 @@ function createRequests(profileId: string, expectedProfileId?: string, cfg: Open
       isWebchatConnect: () => false,
       client: authorizationClient("channel-identity-test", scopes, {
         authenticatedUserId: "admin@example.test",
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "Admin",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile(profileId, "Admin"),
       }),
       context: {
         getRuntimeConfig: () => cfg,

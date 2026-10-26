@@ -11,7 +11,6 @@ export function maybeLoadShellEnvForGenerationProviders(providerIds: string[]): 
     return;
   }
   loadShellEnvFallback({
-    enabled: true,
     env: process.env,
     expectedKeys,
     logger: { warn: (message: string) => console.warn(message) },

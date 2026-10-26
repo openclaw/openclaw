@@ -29,11 +29,7 @@ export function createPromptRequest(
   text: string,
   meta: Record<string, unknown> = {},
 ): PromptRequest {
-  return {
-    sessionId,
-    prompt: [{ type: "text", text }],
-    _meta: meta,
-  } as unknown as PromptRequest;
+  return { sessionId, prompt: [{ type: "text", text }], _meta: meta } as unknown as PromptRequest;
 }
 
 export function createSetSessionModeRequest(
@@ -51,7 +47,10 @@ export function createSetSessionConfigOptionRequest(
   return { sessionId, configId, value, _meta: {} } as unknown as SetSessionConfigOptionRequest;
 }
 
-export function createToolEvent(params: {
+export function createToolEvent({
+  sessionKey,
+  ...data
+}: {
   sessionKey: string;
   phase: "start" | "update" | "result";
   toolCallId: string;
@@ -61,22 +60,7 @@ export function createToolEvent(params: {
   result?: unknown;
   isError?: boolean;
 }): EventFrame {
-  return {
-    event: "agent",
-    payload: {
-      sessionKey: params.sessionKey,
-      stream: "tool",
-      data: {
-        phase: params.phase,
-        toolCallId: params.toolCallId,
-        name: params.name,
-        args: params.args,
-        partialResult: params.partialResult,
-        result: params.result,
-        isError: params.isError,
-      },
-    },
-  } as unknown as EventFrame;
+  return { event: "agent", payload: { sessionKey, stream: "tool", data } } as unknown as EventFrame;
 }
 
 export function createChatFinalEvent(sessionKey: string): EventFrame {
@@ -96,9 +80,10 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
     /maximum allowed size/i,
   );
   expect(requestMock.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-  const session = sessionStore.getSession(params.sessionId);
-  expect(session?.activeRunId).toBeNull();
-  expect(session?.abortController).toBeNull();
+  expect(sessionStore.getSession(params.sessionId)).toMatchObject({
+    activeRunId: null,
+    abortController: null,
+  });
 }
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -115,11 +100,9 @@ export function expectConfigOption(options: unknown, id: string, fields: Record<
   const option = (options as Array<Record<string, unknown>>).find(
     (candidate) => candidate.id === id,
   );
-  if (!option) {
-    throw new Error(`Expected config option ${id}`);
-  }
+  expect(option, `config option ${id}`).toBeDefined();
   for (const [field, value] of Object.entries(fields)) {
-    expect(option[field]).toEqual(value);
+    expect(option?.[field]).toEqual(value);
   }
 }
 

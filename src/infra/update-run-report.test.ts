@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { isReportableUpdateRun } from "../shared/update-outcome.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
@@ -10,11 +11,11 @@ import {
 } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
+type ReportRecord = Parameters<typeof renderUpdateRunReport>[0] &
+  Pick<UpdateRunRecord, "runId" | "trigger">;
+function run(patch: Partial<ReportRecord> = {}): ReportRecord {
   return {
     runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-    createdAtMs: 1,
-    updatedAtMs: 301,
     trigger: "cli",
     phase: "finished",
     status: "succeeded",
@@ -26,19 +27,17 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
     steps: [{ step: "staging", status: "completed", startedAtMs: 1, endedAtMs: 301 }],
     verification: {},
     repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 301,
     downtimeMs: null,
     ...patch,
   };
 }
 
-function failed(patch: Partial<UpdateRunRecord> = {}) {
+function failed(patch: Partial<ReportRecord> = {}) {
   return run({ status: "failed", ...patch });
 }
 
 function failureReport(
-  record: UpdateRunRecord,
+  record: ReportRecord,
   result: Partial<UpdateRunResult> = {},
   recorded = true,
 ) {
@@ -59,25 +58,14 @@ function resultStep(
   return { name, command: name, cwd: "/fixture", durationMs: 0, exitCode: 0, ...patch };
 }
 
-function failedStep(
-  step: string,
-  patch: Partial<UpdateRunRecord["steps"][number]> = {},
-): UpdateRunRecord["steps"][number] {
+type Step = UpdateRunRecord["steps"][number];
+function failedStep(step: string, patch: Partial<Step> = {}): Step {
   return { step, status: "failed", ...patch };
 }
 
 function expectChatBudget(markdown: string) {
   expect(markdown.length).toBeLessThanOrEqual(1500);
   expect(Buffer.from(markdown).toString("utf8")).toBe(markdown);
-}
-
-function expectText(text: string, contains: string[], excludes: string[] = []) {
-  for (const part of contains) {
-    expect(text).toContain(part);
-  }
-  for (const part of excludes) {
-    expect(text).not.toContain(part);
-  }
 }
 
 const recoveryStep = {
@@ -99,10 +87,7 @@ function serving(version: string, reason: RecoveryReason) {
   };
 }
 
-function renderRecord(
-  record: UpdateRunRecord,
-  options?: Parameters<typeof renderUpdateRunReport>[1],
-) {
+function renderRecord(record: ReportRecord, options?: Parameters<typeof renderUpdateRunReport>[1]) {
   const saved = structuredClone(record);
   record.steps.forEach(Object.freeze);
   Object.freeze(record.steps);
@@ -111,7 +96,7 @@ function renderRecord(
   expect(record).toEqual(saved);
   return report;
 }
-function render(patch: Partial<UpdateRunRecord>) {
+function render(patch: Partial<ReportRecord>) {
   return renderRecord(run(patch));
 }
 
@@ -195,11 +180,11 @@ it.each([true, false])("separates saved and current health (responding=%s)", (re
   expect(report.markdown.includes("Historical recovery advice:")).toBe(responding);
   if (responding) {
     expect(report.lines).not.toContain(record.origin.nextAction);
-    expect(report.markdown).toContain("supersedes saved claims that the Gateway is stopped");
-    expect(report.markdown.endsWith(record.origin.nextAction!)).toBe(false);
-    expect(report.markdown).toContain(
+    expectText(report.markdown, [
+      "supersedes saved claims that the Gateway is stopped",
       "Keep the candidate installed and do not roll back code alone.",
-    );
+    ]);
+    expect(report.markdown.endsWith(record.origin.nextAction!)).toBe(false);
   }
   expect(report.headline).not.toContain("gateway is running");
   expect(report.markdown).not.toContain("chat");
@@ -345,16 +330,9 @@ it.each([
   });
   const record = failed({
     ...(observed ? { steps: [recoveryStep] } : {}),
-    verification: {
-      versionMatch: observed,
-      port: 19123,
-      ...(observed
-        ? {
-            ...verified(version),
-            recovery: healthy(version),
-          }
-        : {}),
-    },
+    verification: observed
+      ? { port: 19123, ...verified(version), recovery: healthy(version) }
+      : { port: 19123, versionMatch: false },
   });
   const report = await failureReport(record);
   expect(report.body).toContain(
@@ -459,7 +437,7 @@ it("bounds chat failures but preserves full CLI guidance", () => {
 const originAction = "Run `openclaw --profile work triage` to repair this installation.";
 const selectedAction = "Run `openclaw --profile team triage` to repair this installation.";
 type RecoveryCase = [
-  string | Partial<UpdateRunRecord>,
+  string | Partial<ReportRecord>,
   string[],
   string[]?,
   Parameters<typeof renderUpdateRunReport>[1]?,
@@ -679,10 +657,7 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
 ])("keeps %s headline despite failed children (%s)", (status, reason, headline) => {
   const record = run({ status, reason, phase: "verifying" });
   expect(renderUpdateRunReport(record).headline).toBe(headline);
-  const report = renderUpdateRunReport({
-    ...record,
-    steps: [failedStep("finalize:doctor")],
-  });
+  const report = renderUpdateRunReport({ ...record, steps: [failedStep("finalize:doctor")] });
   expect(report.headline).toBe(headline);
   expect(report.headline).not.toContain("finalize:doctor");
 });

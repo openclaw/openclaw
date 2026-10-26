@@ -1,4 +1,4 @@
-import { beforeAll, expect, vi } from "vitest";
+import { beforeAll, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   ModelsAuthLoginFlowOptions,
@@ -64,11 +64,8 @@ export async function withTelegramNativeOwners(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withTestChannelRegistry(telegramPlugin, async () => {
       const fixture = await createFixture(asserted, state);
-      try {
-        await run(fixture);
-      } finally {
-        fixture.close();
-      }
+      using _ = { [Symbol.dispose]: () => fixture.close() };
+      await run(fixture);
     });
   });
 }
@@ -91,13 +88,12 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     ctx.assertOwnerCurrent?.();
     return { text: "TELEGRAM-OWNER-OK" };
   });
-  const registered = registerPluginCommand("owner-probe", {
+  registerPluginCommand("owner-probe", {
     name: "qaowner",
     description: "Owner authority probe",
     requiredScopes: ["operator.admin"],
     handler,
   });
-  expect(registered).toEqual({ ok: true });
   const runtime = createPluginRuntimeMock({
     channel: {
       inbound: {

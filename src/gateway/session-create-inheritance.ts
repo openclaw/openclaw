@@ -34,7 +34,12 @@ export function inheritSessionCreateParentFields(params: {
   selectedModel?: string;
   overrides: Pick<
     CreateGatewaySessionParams,
-    "catalogTarget" | "model" | "toolOverrides" | "fastMode" | "communication"
+    | "catalogTarget"
+    | "model"
+    | "toolOverrides"
+    | "fastMode"
+    | "communication"
+    | "cyberAccessProgram"
   >;
 }): Partial<InternalSessionEntry> {
   const { parent, overrides } = params;
@@ -44,6 +49,9 @@ export function inheritSessionCreateParentFields(params: {
       : inheritSessionSelection(parent);
   if (overrides.toolOverrides !== undefined) {
     delete inherited.toolOverrides;
+  }
+  if (overrides.cyberAccessProgram !== undefined) {
+    delete inherited.cyberAccessProgram;
   }
   if (overrides.fastMode !== undefined) {
     // Explicit choices have already been validated by the canonical patch owner.
@@ -57,6 +65,12 @@ export function inheritSessionCreateParentFields(params: {
   // Main groups dashboard roots; it must not supply their reply-time model.
   if (params.newDashboardRoot && !params.selectedModel) {
     inherited.modelOverrideSource = "default";
+  }
+  // A dashboard root is a direct chat with its operator, whichever turn path
+  // (chat.send, sessions_send, cron) first runs it. Memory audience resolution
+  // reads this durable root fact; each turn still decides owner status.
+  if (params.newDashboardRoot) {
+    inherited.chatType = "direct";
   }
   return inherited;
 }

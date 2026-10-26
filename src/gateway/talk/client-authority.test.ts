@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -10,7 +10,6 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
-import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { bindReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -37,6 +36,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function clientAuthority(client: ReturnType<typeof sharingPolicyClient>) {
+  return {
+    ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+    operatorAuthority: createAdmittedRunOperatorAuthority({
+      profileId: "talk-requester",
+      scopes: client.connect.scopes ?? [],
+      assertCurrent: () => {},
+    }),
+  };
+}
+
 // Normal reply preparation, not a fabricated FollowupRun/hash, supplies this baseline.
 it.each([true, false])(
   "steers a GA chat-owned Talk run captured before backend publication=%s",
@@ -62,14 +72,7 @@ it.each([true, false])(
       });
       client.connect.caps = ["tool-events", "task-suggestions"];
       const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
-      const authority = {
-        ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
-        operatorAuthority: createAdmittedRunOperatorAuthority({
-          profileId: "talk-requester",
-          scopes: client.connect.scopes ?? [],
-          assertCurrent: () => {},
-        }),
-      };
+      const authority = clientAuthority(client);
       const runId = "talk-authority-run";
       const registration = registerChatAbortController({
         runId,
@@ -85,135 +88,109 @@ it.each([true, false])(
         timeoutMs: 60_000,
         kind: "chat-send",
       });
-      if (!registration.registered) {
-        throw new Error("Missing Gateway run registration");
-      }
+      assert(registration.registered, "Missing Gateway run registration");
       const queueMessage = vi.fn(async () => undefined);
-      let executionError: unknown;
+      const reply = { text: "Original GA task completed." };
       vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
-        try {
-          const {
-            preparedRunAdmission,
-            replyOperation: operation,
-            provider,
-            model: modelId,
-            sessionFile,
-          } = params;
-          if (!preparedRunAdmission || !operation || !provider || !modelId || !sessionFile) {
-            throw new Error("Missing real reply admission");
-          }
-          updateRpcSourceSessionId(registration.entry, params.sessionId);
-          const admittedRunContext = await preparedRunAdmission.admit("embedded", "talk-chat-test");
-          return await withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: operation },
-            { ...params, provider, modelId, sessionFile },
-            undefined,
-            async (prepared) => {
-              const handle = {
-                ...createEmbeddedRunHandle({
-                  runId: params.runId,
-                  toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                  queueMessage,
-                }),
-                messageInjectionV2: {
-                  version: 2,
-                  isAvailable: () => true,
-                  queueMessage: async (_text, _options, assertCurrent) => {
-                    assertCurrent();
-                    await queueMessage();
-                  },
+        const {
+          preparedRunAdmission,
+          replyOperation: operation,
+          provider,
+          model: modelId,
+          sessionFile,
+        } = params;
+        assert(
+          preparedRunAdmission && operation && provider && modelId && sessionFile,
+          "Missing real reply admission",
+        );
+        updateRpcSourceSessionId(registration.entry, params.sessionId);
+        const admittedRunContext = await preparedRunAdmission.admit("embedded", "talk-chat-test");
+        return await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext, replyOperation: operation },
+          { ...params, provider, modelId, sessionFile },
+          undefined,
+          async (prepared) => {
+            const handle = {
+              ...createEmbeddedRunHandle({
+                runId: params.runId,
+                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                queueMessage,
+              }),
+              messageInjectionV2: {
+                version: 2,
+                isAvailable: () => true,
+                queueMessage: async (_text, _options, assertCurrent) => {
+                  assertCurrent();
+                  await queueMessage();
                 },
-                kind: "embedded" as const,
-                cancel: () => {},
-              } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
-              const captureTarget = () =>
-                resolveOwnedActiveTalkRunTarget({
-                  clientConnId: "talk-authority-client",
-                  sessionTarget,
-                  scope: { kind: "session" },
-                });
-              const queuedTarget = beforePublication ? captureTarget() : undefined;
-              operation.attachBackend(handle);
-              operation.setPhase("running");
-              expect(registration.entry.input.claim?.operation).toBe(operation);
-              setActiveEmbeddedRun(
-                params.sessionId,
-                handle,
-                params.sessionKey,
-                params.sessionFile,
-                params.agentId,
-                operation,
-              );
-              const runTarget = beforePublication ? queuedTarget : captureTarget();
-              expect(runTarget?.isCurrent(params.sessionId)).toBe(true);
-              const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
-                controlRealtimeVoiceAgentRun({
-                  sessionKey: sessionTarget.canonicalKey,
-                  runTarget,
-                  text: "use the release branch",
-                  getToolAuthorityOverlay: () => {
-                    const overlay = prepareTalkClientControlAuthority({
-                      config,
-                      sessionTarget,
-                      authority: current,
-                      source,
-                      agentRuntime: createPluginRuntime().agent,
-                    });
-                    if (source !== "reply") {
-                      expect(overlay.traceAuthorized).toBe(false);
-                    }
-                    return overlay;
-                  },
-                });
-              try {
-                // This is the old direct-voice overlay; it truthfully lacks GA trace/reviewer/client facts.
-                await expect(steer("attempt")).resolves.toMatchObject({
-                  queued: false,
-                  reason: "tool_authority_mismatch",
-                });
-                await expect(steer(runTarget?.toolAuthoritySource)).resolves.toMatchObject({
-                  queued: true,
-                });
-                const weaker = sharingPolicyClient({
-                  user: "talk-requester",
-                  deviceId: "caller-device",
-                  scopes: ["operator.read"],
-                });
-                await expect(
-                  steer(runTarget?.toolAuthoritySource, {
-                    ...resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
-                    operatorAuthority: createAdmittedRunOperatorAuthority({
-                      profileId: "talk-requester",
-                      scopes: weaker.connect.scopes ?? [],
-                      assertCurrent: () => {},
-                    }),
-                  }),
-                ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
-                expect(queueMessage).toHaveBeenCalledOnce();
-              } finally {
-                clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-              }
-              return {
-                payloads: [{ text: "Original GA task completed." }],
-                meta: { durationMs: 1 },
-              };
-            },
-          );
-        } catch (error) {
-          executionError = error;
-          throw error;
-        }
+              },
+              kind: "embedded" as const,
+              cancel: () => {},
+            } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+            const captureTarget = () =>
+              resolveOwnedActiveTalkRunTarget({
+                clientConnId: "talk-authority-client",
+                sessionTarget,
+                scope: { kind: "session" },
+              });
+            const queuedTarget = beforePublication ? captureTarget() : undefined;
+            operation.attachBackend(handle);
+            operation.setPhase("running");
+            expect(registration.entry.input.claim?.operation).toBe(operation);
+            setActiveEmbeddedRun(
+              params.sessionId,
+              handle,
+              params.sessionKey,
+              params.sessionFile,
+              params.agentId,
+              operation,
+            );
+            const runTarget = beforePublication ? queuedTarget : captureTarget();
+            expect(runTarget?.isCurrent(params.sessionId)).toBe(true);
+            const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
+              controlRealtimeVoiceAgentRun({
+                sessionKey: sessionTarget.canonicalKey,
+                runTarget,
+                text: "use the release branch",
+                getToolAuthorityOverlay: () => {
+                  const overlay = prepareTalkClientControlAuthority({
+                    config,
+                    sessionTarget,
+                    authority: current,
+                    source,
+                    agentRuntime: createPluginRuntime().agent,
+                  });
+                  if (source !== "reply") {
+                    expect(overlay.traceAuthorized).toBe(false);
+                  }
+                  return overlay;
+                },
+              });
+            try {
+              // This is the old direct-voice overlay; it truthfully lacks GA trace/reviewer/client facts.
+              await expect(steer("attempt")).resolves.toMatchObject({
+                queued: false,
+                reason: "tool_authority_mismatch",
+              });
+              await expect(steer(runTarget?.toolAuthoritySource)).resolves.toMatchObject({
+                queued: true,
+              });
+              const weaker = sharingPolicyClient({
+                user: "talk-requester",
+                deviceId: "caller-device",
+                scopes: ["operator.read"],
+              });
+              await expect(
+                steer(runTarget?.toolAuthoritySource, clientAuthority(weaker)),
+              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+              expect(queueMessage).toHaveBeenCalledOnce();
+            } finally {
+              clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+            }
+            return { payloads: [reply], meta: { durationMs: 1 } };
+          },
+        );
       });
-      const replyOptions: InternalGetReplyOptions = {
-        toolsAllow: authority.toolsAllow,
-        operatorAuthority: authority.operatorAuthority,
-        turnAdoptionLifecycle: bindReplySourceInput(
-          { onAdopted: () => {} },
-          registration.entry.input,
-        ),
-        runId,
-        abortSignal: registration.controller.signal,
-      };
       const result = await getReplyFromConfig(
         finalizeInboundContext({
           ...authority.replyCaller,
@@ -225,15 +202,21 @@ it.each([true, false])(
           CommandInterpretationSuppressed: true,
           InputProvenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
         }),
-        replyOptions,
+        {
+          toolsAllow: authority.toolsAllow,
+          operatorAuthority: authority.operatorAuthority,
+          turnAdoptionLifecycle: bindReplySourceInput(
+            { onAdopted: () => {} },
+            registration.entry.input,
+          ),
+          runId,
+          abortSignal: registration.controller.signal,
+        },
         config,
       ).finally(registration.cleanup);
-      if (executionError) {
-        throw new Error("GA reply test execution failed", { cause: executionError });
-      }
-      expect([result].flat()).toContainEqual(
-        expect.objectContaining({ text: "Original GA task completed." }),
-      );
+      // Reply recovery may consume backend failures; still surface every assertion above.
+      await vi.mocked(runEmbeddedAgent).mock.results[0]?.value;
+      expect([result].flat()).toContainEqual(expect.objectContaining(reply));
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     });
   },

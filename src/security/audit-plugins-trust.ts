@@ -1,7 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -21,11 +20,7 @@ import {
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
-function readChannelCommandSetting(
-  cfg: OpenClawConfig,
-  channelId: string,
-  key: "native" | "nativeSkills",
-): unknown {
+function readChannelCommandSetting(cfg: OpenClawConfig, channelId: string): unknown {
   const channelCfg = cfg.channels?.[channelId as keyof NonNullable<OpenClawConfig["channels"]>];
   if (!channelCfg || typeof channelCfg !== "object" || Array.isArray(channelCfg)) {
     return undefined;
@@ -34,7 +29,7 @@ function readChannelCommandSetting(
   if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
     return undefined;
   }
-  return (commands as Record<string, unknown>)[key];
+  return (commands as Record<string, unknown>).nativeSkills;
 }
 
 async function isChannelPluginConfigured(
@@ -133,40 +128,6 @@ function resolveEnabledExtensionPluginIds(params: {
   return enabled;
 }
 
-function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }): string[] {
-  const out: string[] = [];
-  if (Array.isArray(config?.allow)) {
-    out.push(...config.allow);
-  }
-  if (Array.isArray(config?.alsoAllow)) {
-    out.push(...config.alsoAllow);
-  }
-  return out
-    .map((entry) => normalizeOptionalLowercaseString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-function hasExplicitPluginAllow(params: {
-  allowEntries: string[];
-  enabledPluginIds: Set<string>;
-}): boolean {
-  return params.allowEntries.some(
-    (entry) => entry === "group:plugins" || params.enabledPluginIds.has(entry),
-  );
-}
-
-function hasProviderPluginAllow(params: {
-  byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
-  enabledPluginIds: Set<string>;
-}): boolean {
-  return Object.values(params.byProvider ?? {}).some((policy) =>
-    hasExplicitPluginAllow({
-      allowEntries: collectAllowEntries(policy),
-      enabledPluginIds: params.enabledPluginIds,
-    }),
-  );
-}
-
 function isPinnedRegistrySpec(spec: string): boolean {
   const value = spec.trim();
   if (!value) {
@@ -259,16 +220,16 @@ export async function collectPluginsTrustFindings(params: {
   if (pluginDirs.length > 0) {
     const allow = params.cfg.plugins?.allow;
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
+    const pluginIndex = loadPluginRegistrySnapshot({
+      config: params.cfg,
+      stateDir: params.stateDir,
+    });
+    const normalizePluginId = createPluginRegistryIdNormalizer(pluginIndex);
 
     if (allowConfigured) {
       const installedPluginIds = new Set(pluginDirs.map((dir) => path.basename(dir).toLowerCase()));
-      const pluginIndex = loadPluginRegistrySnapshot({
-        config: params.cfg,
-        stateDir: params.stateDir,
-      });
       // Allowlist entries may use aliases/canonical ids. Normalize against the
       // current registry before treating an entry as phantom.
-      const normalizePluginId = createPluginRegistryIdNormalizer(pluginIndex);
       const indexedPluginIds = new Set(
         pluginIndex.plugins.map((plugin) => plugin.pluginId.toLowerCase()),
       );
@@ -315,7 +276,7 @@ export async function collectPluginsTrustFindings(params: {
             }
             return resolveNativeSkillsEnabled({
               providerId: plugin.id,
-              providerSetting: readChannelCommandSetting(params.cfg, plugin.id, "nativeSkills") as
+              providerSetting: readChannelCommandSetting(params.cfg, plugin.id) as
                 | "auto"
                 | boolean
                 | undefined,
@@ -346,19 +307,33 @@ export async function collectPluginsTrustFindings(params: {
     });
     if (enabledExtensionPluginIds.length > 0) {
       const [
+        { resolveConfiguredToolPolicies },
         { resolveSandboxConfigForAgent },
-        { resolveSandboxToolPolicyForAgent },
         { isToolAllowedByPolicies },
-        { resolveToolProfilePolicy },
-        { pickSandboxToolPolicy },
+        { buildPluginToolGroups, expandPolicyWithPluginGroups },
       ] = await Promise.all([
+        import("../agents/agent-tools.policy.js"),
         import("../agents/sandbox/config.js"),
-        import("../agents/sandbox/tool-policy.js"),
         import("../agents/tool-policy-match.js"),
         import("../agents/tool-policy.js"),
-        import("../agents/sandbox-tool-policy.js"),
       ]);
-      const enabledPluginSet = new Set(enabledExtensionPluginIds);
+      const declaredTools = new Map(
+        pluginIndex.plugins.map((plugin) => [
+          normalizePluginId(plugin.pluginId).toLowerCase(),
+          plugin.contributions?.contracts.tools,
+        ]),
+      );
+      const pluginGroups = buildPluginToolGroups({
+        tools: enabledExtensionPluginIds.flatMap((id) => {
+          const pluginId = normalizePluginId(id).toLowerCase();
+          // Older installed indexes can lack tool contracts. Include their probes
+          // in the groups so explicit plugin grants still reach the audit.
+          return (declaredTools.get(pluginId) ?? [`__openclaw_plugin_probe_${pluginId}__`]).map(
+            (name) => ({ name, pluginId }),
+          );
+        }),
+        toolMeta: (tool) => ({ pluginId: tool.pluginId }),
+      });
       const contexts: Array<{
         label: string;
         agentId?: string;
@@ -377,41 +352,15 @@ export async function collectPluginsTrustFindings(params: {
 
       const permissiveContexts: string[] = [];
       for (const context of contexts) {
-        const profile = context.tools?.profile ?? params.cfg.tools?.profile;
-        const profilePolicy = resolveToolProfilePolicy(profile);
-        const restrictiveProfile = Boolean(profilePolicy);
         const sandboxMode = resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
-        // Probe with a synthetic plugin tool id: broad allow policies will allow
-        // it, while restrictive profiles or explicit allowlists should not.
-        const policies: Array<SandboxToolPolicy | undefined> = [
-          profilePolicy,
-          pickSandboxToolPolicy(params.cfg.tools ?? undefined),
-          pickSandboxToolPolicy(context.tools),
-        ];
-        if (sandboxMode === "all") {
-          policies.push(resolveSandboxToolPolicyForAgent(params.cfg, context.agentId));
-        }
-        const broadPolicy = isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
-        const explicitPluginAllow =
-          !restrictiveProfile &&
-          (hasExplicitPluginAllow({
-            allowEntries: collectAllowEntries(params.cfg.tools),
-            enabledPluginIds: enabledPluginSet,
-          }) ||
-            hasProviderPluginAllow({
-              byProvider: params.cfg.tools?.byProvider,
-              enabledPluginIds: enabledPluginSet,
-            }) ||
-            hasExplicitPluginAllow({
-              allowEntries: collectAllowEntries(context.tools),
-              enabledPluginIds: enabledPluginSet,
-            }) ||
-            hasProviderPluginAllow({
-              byProvider: context.tools?.byProvider,
-              enabledPluginIds: enabledPluginSet,
-            }));
-
-        if (broadPolicy || explicitPluginAllow) {
+        const policies = resolveConfiguredToolPolicies({
+          cfg: params.cfg,
+          agentTools: context.tools,
+          sandboxMode,
+          agentId: context.agentId,
+        }).map((policy) => expandPolicyWithPluginGroups(policy, pluginGroups));
+        // Provider policies only narrow these base layers at runtime.
+        if (pluginGroups.all.some((tool) => isToolAllowedByPolicies(tool, policies))) {
           permissiveContexts.push(context.label);
         }
       }

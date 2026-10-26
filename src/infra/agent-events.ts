@@ -48,7 +48,6 @@ const AGENT_EVENT_ROUTING_FIELDS = [
   ["projectSessionLifecycle", "projectSessionLifecycle"],
   ["projectSessionMessages", "projectSessionMessages"],
   ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
-  ["isHeartbeat", "isHeartbeat"],
   ["verboseLevel", "verboseLevel"],
   ["registeredAt", "registeredAt"],
 ] as const;
@@ -513,17 +512,18 @@ function enrichAgentEvent(
       },
     });
   }
-  Object.defineProperties(enriched, {
-    terminalPersistence: {
-      value:
-        terminalPersistence ??
-        (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
-          ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
-          : undefined),
-      enumerable: false,
-    },
-    assistantSource: { value: assistantSource, enumerable: false },
-    assistantProjection: { value: assistantProjection, enumerable: false },
+  Object.defineProperty(enriched, "terminalPersistence", {
+    value:
+      terminalPersistence ??
+      (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
+        ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
+        : undefined),
+    enumerable: false,
+  });
+  Object.defineProperty(enriched, "assistantSource", { value: assistantSource, enumerable: false });
+  Object.defineProperty(enriched, "assistantProjection", {
+    value: assistantProjection,
+    enumerable: false,
   });
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into

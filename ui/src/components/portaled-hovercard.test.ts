@@ -34,36 +34,35 @@ function keydown(target: EventTarget, key: string, cancelable = true) {
   return event;
 }
 
-it.each(["Tab", "Escape"])("enters registered controls and returns focus on %s", (key) => {
-  const { controller, trigger } = fixture();
-  trigger.href = "#trigger";
-  const card = createPortaledHovercard("keyboard-preview", "preview");
-  const unrelated = document.createElement("button");
-  const first = document.createElement("button");
-  const last = document.createElement("button");
-  card.append(unrelated, first, last);
-  const controls = controlsForHovercard(card);
-  const releaseFirst = controls.registerSource(() => [first]);
-  const releaseLast = controls.registerSource(() => [last]);
-  controller.mount(trigger, card, "vertical", true, () => {
-    releaseFirst();
-    releaseLast();
-  });
-  trigger.addEventListener("keydown", controller.handleTriggerKeyDown);
-  trigger.focus();
-  const enter = keydown(trigger, "Tab");
-  expect(enter.defaultPrevented).toBe(true);
-  expect(document.activeElement).toBe(first);
-
-  const interior = keydown(first, "Tab");
-  expect(interior.defaultPrevented).toBe(false);
-  last.focus();
-  const exit = keydown(last, key);
-  expect(exit.defaultPrevented).toBe(true);
-  expect(controller.card).toBeNull();
-  expect(document.activeElement).toBe(trigger);
-  document.body.append(card);
-  expect(controls.read()).toEqual([]);
+it("allocates presentation observation only once a hovercard has an active trigger", async () => {
+  vi.useFakeTimers();
+  const NativeMutationObserver = MutationObserver;
+  const created: MutationObserver[] = [];
+  vi.stubGlobal(
+    "MutationObserver",
+    class extends NativeMutationObserver {
+      constructor(callback: MutationCallback) {
+        super(callback);
+        created.push(this);
+      }
+    },
+  );
+  const controllers = Array.from({ length: 100 }, () => createPortaledHovercardOwner(vi.fn()));
+  expect(created).toHaveLength(0);
+  const trigger = document.body.appendChild(document.createElement("a"));
+  const open = vi.fn();
+  controllers[0]!.scheduleOpen(100, open, trigger);
+  expect(created).toHaveLength(1);
+  const disconnect = vi.spyOn(created[0]!, "disconnect");
+  controllers[0]!.reset();
+  expect(disconnect).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(open).not.toHaveBeenCalled();
+  controllers[0]!.scheduleOpen(100, open, trigger);
+  expect(created).toHaveLength(1);
+  controllers.forEach((controller) => controller.reset());
+  await vi.advanceTimersByTimeAsync(100);
+  expect(open).not.toHaveBeenCalled();
 });
 
 it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
@@ -71,10 +70,8 @@ it("keeps a Solid card open while its links hold focus and closes after focus le
   const { controller, trigger, dismiss } = fixture();
   const card = createPortaledHovercard("solid-preview", "preview");
   const content = document.createElement("div");
-  const first = document.createElement("a");
-  first.href = "#first";
-  const second = document.createElement("a");
-  second.href = "#second";
+  const first = Object.assign(document.createElement("a"), { href: "#first" });
+  const second = Object.assign(document.createElement("a"), { href: "#second" });
   content.append(first, second);
   const controls = controlsForHovercard(card);
   onTestFinished(controls.registerSource(() => [first]));
@@ -129,8 +126,12 @@ it.each([false, true])(
 it("retires card listeners before an animated card is replaced", () => {
   vi.useFakeTimers();
   const { controller, mount, trigger, dismiss } = fixture();
-  mount();
-  const previous = controller.card!;
+  const previous = createPortaledHovercard("previous", "preview");
+  const control = previous.appendChild(document.createElement("button"));
+  const controls = controlsForHovercard(previous);
+  const release = controls.registerSource(() => [control]);
+  controller.mount(trigger, previous, "vertical", true, release);
+  expect(controls.read()).toEqual([control]);
   controller.reset(100);
   controller.markTrigger(trigger);
   mount();
@@ -139,6 +140,9 @@ it("retires card listeners before an animated card is replaced", () => {
   expect(dismiss).not.toHaveBeenCalled();
   expect(controller.card?.isConnected).toBe(true);
   expect(previous.isConnected).toBe(false);
+  document.body.append(previous);
+  expect(controls.read()).toEqual([]);
+  previous.remove();
 
   keydown(controller.card!, "Escape", false);
   expect(dismiss).toHaveBeenCalledOnce();

@@ -61,11 +61,13 @@ const registerRun = (
     ...overrides,
   });
 
-it.for(["complete", "reject undefined"] as const)(
-  "coalesces fresh refresh batches in the enclosing scope before %s",
+it.for(["complete", "reject undefined", "native failure"] as const)(
+  "coalesces or retires refresh batches in the enclosing scope before %s",
   async (completion, { signal }) => {
     const rootKey = "agent:main:subagent:refresh-root";
     const sharedRawKey = completion === "complete";
+    const nativeFailure = completion === "native failure";
+    const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
     if (sharedRawKey) {
       const cfg = getRuntimeConfig();
       setRuntimeConfigSnapshot({
@@ -84,6 +86,7 @@ it.for(["complete", "reject undefined"] as const)(
       registerRun("refresh-" + id, key(id), id === "root" ? owner : rootKey, {
         childAgentId: agentId(id),
         requesterDisplayKey: "main",
+        ...(nativeFailure && id === "root" ? { controllerSessionKey: undefined } : {}),
       });
     for (const id of ["root", "first", "second"]) {
       await writeSession("refresh-" + id, key(id), agentId(id));
@@ -93,8 +96,8 @@ it.for(["complete", "reject undefined"] as const)(
     const ready = createDeferred<KillScope>();
     const finishRun = createDeferred();
     const runFinishing = createDeferred();
-    const entered = Array.from({ length: 3 }, () => createDeferred());
-    const gates = Array.from({ length: 3 }, () => createDeferred());
+    const entered = Array.from({ length: 2 }, () => createDeferred());
+    const gates = Array.from({ length: 2 }, () => createDeferred());
     const contexts: Array<string | undefined> = [];
     const accepted: Array<Promise<number>> = [];
     let observing = false;
@@ -120,7 +123,10 @@ it.for(["complete", "reject undefined"] as const)(
           if (index >= 0 && index < gates.length) {
             entered[index]!.resolve();
             await gates[index]!.promise;
-            if (index === 2) {
+            if (nativeFailure && index === 0) {
+              throw failure;
+            }
+            if (index === 1) {
               finalReadSettled = true;
             }
           }
@@ -147,7 +153,7 @@ it.for(["complete", "reject undefined"] as const)(
           ready.resolve(scope);
           await finishRun.promise;
           runFinishing.resolve();
-          if (completion === "reject undefined") {
+          if (completion !== "complete") {
             const rejected = createDeferred<never>();
             rejected.reject();
             return await rejected.promise;
@@ -176,28 +182,36 @@ it.for(["complete", "reject undefined"] as const)(
         firstSettled = true;
         return count;
       });
+      void first.catch(() => {});
       await withinTest(entered[0]!.promise, signal);
+      if (nativeFailure) {
+        const results = Promise.allSettled([first, refresh("queued caller")]);
+        gates[0]!.resolve();
+        expect(await withinTest(results, signal)).toEqual([
+          { status: "rejected", reason: failure },
+          { status: "rejected", reason: failure },
+        ]);
+        expect(await Promise.allSettled([refresh("later caller")])).toEqual([
+          { status: "rejected", reason: failure },
+        ]);
+        expect(contexts).toEqual(["kill-scope"]);
+        finishRun.resolve();
+        await expect(stopped).rejects.toBeInstanceOf(AggregateError);
+        await expect(stopped).rejects.toMatchObject({ errors: [undefined, failure] });
+        await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
+        expect(contexts).toHaveLength(1);
+        return;
+      }
       await register("first");
-      let middleSettled = false;
-      const middle = Promise.all(
-        ["second caller", "third caller", "fourth caller"].map(refresh),
-      ).then((counts) => {
-        middleSettled = true;
-        return counts;
-      });
+      await register("second");
+      const tail = Promise.all([refresh("second caller"), refresh("third caller")]);
       gates[0]!.resolve();
       await withinTest(entered[1]!.promise, signal);
       expect(firstSettled, "the first batch must not wait for its held successor").toBe(true);
       expect(await first).toBe(1);
-      await register("second");
-      const tail = Promise.all([refresh("fifth caller"), refresh("sixth caller")]);
-      gates[1]!.resolve();
-      await withinTest(entered[2]!.promise, signal);
-      expect(middleSettled, "each completed batch settles independently").toBe(true);
-      expect(await middle).toEqual([2, 2, 2]);
       finishRun.resolve();
       await withinTest(runFinishing.promise, signal);
-      gates[2]!.resolve();
+      gates[1]!.resolve();
       expect(await withinTest(tail, signal)).toEqual([3, 3]);
       expect(await outcome).toEqual(
         completion === "complete"
@@ -205,7 +219,7 @@ it.for(["complete", "reject undefined"] as const)(
           : { ok: false, error: undefined },
       );
       await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
-      expect(contexts).toEqual(["kill-scope", "kill-scope", "kill-scope"]);
+      expect(contexts).toEqual(["kill-scope", "kill-scope"]);
       expect([publishedBeforeJoin, releasedBeforeJoin]).toEqual([false, false]);
     } finally {
       release();
@@ -215,89 +229,6 @@ it.for(["complete", "reject undefined"] as const)(
     }
   },
 );
-
-it("retires queued refreshes after an escaping native failure and an undefined caller rejection", async ({
-  signal,
-}) => {
-  const rootKey = "agent:main:subagent:refresh-failure";
-  await writeSession("refresh-failure", rootKey);
-  await registerRun("refresh-failure", rootKey, owner, {
-    controllerSessionKey: undefined,
-    requesterDisplayKey: "main",
-  });
-  const ready = createDeferred<KillScope>();
-  const entered = createDeferred();
-  const finishRun = createDeferred();
-  const releaseRead = createDeferred();
-  const failure = new SqliteWorkerError("discovery outcome unknown", "outcome-unknown");
-  const accepted: Array<Promise<number>> = [];
-  let observing = false;
-  let reads = 0;
-  const release = () => {
-    finishRun.resolve();
-    releaseRead.resolve();
-  };
-  signal.addEventListener("abort", release, { once: true });
-  const read = registryState.withSubagentRunReadSnapshot;
-  vi.spyOn(registryState, "withSubagentRunReadSnapshot").mockImplementation(
-    (runs, select, consume, scope) => {
-      const index =
-        observing &&
-        scope !== "all" &&
-        "sessionKeys" in scope &&
-        scope.sessionKeys.includes(rootKey)
-          ? ++reads
-          : 0;
-      return read(runs, select, consume, scope).then(async (result) => {
-        if (index === 1) {
-          entered.resolve();
-          await releaseRead.promise;
-          throw failure;
-        }
-        return result;
-      });
-    },
-  );
-  const stopped = killScope.withSubagentKillScope(
-    { cfg: getRuntimeConfig(), runs: [subagentRuns.get("refresh-failure")!] },
-    async (scope) => {
-      observing = true;
-      ready.resolve(scope);
-      await finishRun.promise;
-      const rejected = createDeferred<never>();
-      rejected.reject();
-      return await rejected.promise;
-    },
-  );
-  void stopped.catch(() => {});
-  try {
-    const scope = await withinTest(ready.promise, signal);
-    const first = scope.refresh();
-    accepted.push(first);
-    void first.catch(() => {});
-    await withinTest(entered.promise, signal);
-    accepted.push(scope.refresh());
-    const results = Promise.allSettled(accepted);
-    releaseRead.resolve();
-    expect(await withinTest(results, signal)).toEqual([
-      { status: "rejected", reason: failure },
-      { status: "rejected", reason: failure },
-    ]);
-    const later = scope.refresh();
-    accepted.push(later);
-    expect(await Promise.allSettled([later])).toEqual([{ status: "rejected", reason: failure }]);
-    expect(reads, "native uncertainty retires the accepted successor batch").toBe(1);
-    finishRun.resolve();
-    await expect(stopped).rejects.toBeInstanceOf(AggregateError);
-    await expect(stopped).rejects.toMatchObject({ errors: [undefined, failure] });
-    await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
-    expect(reads).toBe(1);
-  } finally {
-    release();
-    await Promise.allSettled([...accepted, stopped]);
-    signal.removeEventListener("abort", release);
-  }
-});
 
 it("retains a captured child prefix when the next child's session preparation fails", async () => {
   const rootKey = "agent:main:subagent:prefix-root";

@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -9,8 +9,12 @@ import {
   type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionText as waitText } from "./session-ui.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI session transcript search" });
+const suite = createControlUiE2eSuite({
+  name: "Control UI session transcript search",
+  trackBrowserContexts: true,
+});
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
 const searchScope = {
@@ -20,11 +24,10 @@ const searchScope = {
   includeUnknown: false,
   configuredAgentsOnly: true,
 };
-let context: BrowserContext | undefined;
 let page: Page | undefined;
 
 async function newPage(height = 800, width = 1200, proof = false, light = false) {
-  context = await suite.newBrowserContext({
+  const context = await suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height, width },
@@ -106,14 +109,6 @@ async function resolveDeferredAndDrain(
 }
 
 suite.define(() => {
-  afterEach(async () => {
-    if (context) {
-      await suite.closeBrowserContext(context);
-    }
-    context = undefined;
-    page = undefined;
-  });
-
   it("searches once on submit, shows provenance, and opens the matching chat", async () => {
     page = await newPage(900, 1440, true, true);
     const gateway = await installMockGateway(page, {
@@ -211,7 +206,7 @@ suite.define(() => {
     const { input } = await openSearch(page);
     await input.fill("Release notes");
     await input.press("Enter");
-    await page.getByText("Release notes from the active task.", { exact: true }).waitFor();
+    await waitText(page, "Release notes from the active task.");
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toMatchObject({
       scope: {
         agentId: "main",
@@ -228,7 +223,7 @@ suite.define(() => {
       )
       .click();
     await expect.poll(() => new URL(page!.url()).searchParams.get("status")).toBe("archived");
-    await page.locator(".session-data-row").getByText("Archived task", { exact: true }).waitFor();
+    await waitText(page.locator(".session-data-row"), "Archived task");
     await captureUiProof("filter-scope.png");
     expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
     expect(await input.inputValue()).toBe("Release notes");
@@ -238,9 +233,7 @@ suite.define(() => {
     expect((await gateway.getRequests("sessions.search"))[1]?.params).toMatchObject({
       scope: { agentId: "main", archived: true },
     });
-    await page
-      .getByText("No transcript messages match that search.", { exact: true })
-      .waitFor({ state: "visible" });
+    await waitText(page, "No transcript messages match that search.");
     expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
   });
 
@@ -280,7 +273,7 @@ suite.define(() => {
     await input.press("Enter");
 
     const match = page.locator(".sessions-transcript-search__result");
-    await match.getByText("the recovered launch code", { exact: true }).waitFor();
+    await waitText(match, "the recovered launch code");
     expect(await match.textContent()).toContain("Earlier launch planning");
     expect(await gateway.getRequests("sessions.search")).toHaveLength(1);
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
@@ -306,9 +299,7 @@ suite.define(() => {
     const { search, input } = await openSearch(page);
     const submit = search.getByRole("button", { name: "Search transcripts" });
     const empty = page.getByText("No transcript messages match that search.", { exact: true });
-    const indexing = page.getByText(
-      "The transcript index is still updating. Retry to include recent messages.",
-    );
+    const indexing = page.getByText("Results may be incomplete — search again shortly.");
     const retry = page.getByRole("button", { name: "Retry" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -328,6 +319,7 @@ suite.define(() => {
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
     await input.press("Enter");
     await indexing.waitFor({ state: "visible", timeout: 10_000 });
+    await captureUiProof("04-search-completeness-unconfirmed.png");
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
 

@@ -18,6 +18,15 @@ type ExecApprovalResult =
     };
 
 const EXEC_COMPLETED_RE = /^exec completed:\s*([\s\S]*)$/i;
+const EXEC_METADATA_PREFIXES = [
+  ["denied", "exec denied (", ":"],
+  ["finished", "exec finished (", "\n"],
+  ["outcome-unknown", "exec outcome unknown (", "\n"],
+  ["not-dispatched", "exec not dispatched (", "\n"],
+] as const;
+const EXEC_METADATA_PREFIX_MAX_LENGTH = Math.max(
+  ...EXEC_METADATA_PREFIXES.map(([, prefix]) => prefix.length),
+);
 
 // Approval-system-generated wrappers always start with either `gateway id=` or
 // `node=` inside the parenthesized metadata (see bash-tools.exec-host-gateway.ts,
@@ -29,16 +38,9 @@ const APPROVAL_METADATA_SOURCE_RE = /^(?:gateway\s+id=|node=)/i;
 
 function parseExecApprovalResultWithMetadata(
   raw: string,
-  prefix: string,
+  metadataStart: number,
   bodySeparator: ":" | "\n",
 ): { metadata: string; body: string } | null {
-  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
-  const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
-  if (!normalizedRaw.startsWith(normalizedPrefix)) {
-    return null;
-  }
-
-  const metadataStart = prefix.length;
   let depth = 1;
   let metadataEnd = -1;
   for (let index = metadataStart; index < raw.length; index += 1) {
@@ -82,15 +84,12 @@ export function parseExecApprovalResultText(resultText: string): ExecApprovalRes
     return { kind: "other", raw };
   }
 
-  for (const [kind, prefix, separator] of [
-    ["denied", "Exec denied (", ":"],
-    ["finished", "Exec finished (", "\n"],
-    ["outcome-unknown", "Exec outcome unknown (", "\n"],
-    ["not-dispatched", "Exec not dispatched (", "\n"],
-  ] as const) {
-    const result = parseExecApprovalResultWithMetadata(raw, prefix, separator);
-    if (result) {
-      return { kind, raw, ...result };
+  // Only the fixed wrapper prefix is case-insensitive, never the command output.
+  const normalizedPrefix = raw.slice(0, EXEC_METADATA_PREFIX_MAX_LENGTH).toLowerCase();
+  for (const [kind, prefix, separator] of EXEC_METADATA_PREFIXES) {
+    if (normalizedPrefix.startsWith(prefix)) {
+      const result = parseExecApprovalResultWithMetadata(raw, prefix.length, separator);
+      return result ? { kind, raw, ...result } : { kind: "other", raw };
     }
   }
 

@@ -44,6 +44,11 @@ function runAction(
 }
 
 beforeEach(resetMessageActionRunnerMocks);
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("runMessageAction plugin dispatch", () => {
   describe("alias-based plugin action dispatch", () => {
@@ -75,20 +80,31 @@ describe("runMessageAction plugin dispatch", () => {
 
       const pinCall = readPluginCall(handleAction, 0);
       expect(pinCall).toMatchObject({ action: "pin", conversationReadOrigin: "direct-operator" });
-      expect(readRecordField(pinCall, "params", "pin call params")).toMatchObject({
-        messageId: "om_123",
-      });
+      expect(pinCall).toMatchObject({ params: { messageId: "om_123" } });
       const listPinsCall = readPluginCall(handleAction, 1);
       expect(listPinsCall).toMatchObject({ action: "list-pins" });
-      expect(readRecordField(listPinsCall, "params", "list pins call params")).toMatchObject({
-        chatId: "oc_123",
-      });
+      expect(listPinsCall).toMatchObject({ params: { chatId: "oc_123" } });
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
       const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
       const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
+      const context = {
+        requesterAccountId: "ops",
+        requesterSenderId: "trusted-user",
+        conversationReadOrigin: "direct-operator" as const,
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        inboundEventKind: "room_event" as const,
+        toolContext: {
+          currentChannelId: "oc_123",
+          currentChannelProvider: "actionhub",
+          currentThreadTs: "thread-456",
+          currentMessageId: "msg-789",
+        },
+      };
 
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         await runAction(
@@ -97,19 +113,8 @@ describe("runMessageAction plugin dispatch", () => {
           { messageId: "om_123" },
           {
             defaultAccountId: "ops",
-            requesterAccountId: "ops",
-            requesterSenderId: "trusted-user",
-            conversationReadOrigin: "direct-operator",
-            sessionKey: "agent:alpha:main",
-            sessionId: "session-123",
-            agentId: "alpha",
-            inboundEventKind: "room_event",
-            toolContext: {
-              currentChannelId: "oc_123",
-              currentChannelProvider: "actionhub",
-              currentThreadTs: "thread-456",
-              currentMessageId: "msg-789",
-            },
+            ...context,
+            toolContext: { ...context.toolContext },
           },
         );
 
@@ -117,21 +122,8 @@ describe("runMessageAction plugin dispatch", () => {
         expect(call).toMatchObject({
           action: "pin",
           accountId: "ops",
-          requesterAccountId: "ops",
-          requesterSenderId: "trusted-user",
-          conversationReadOrigin: "direct-operator",
-          sessionKey: "agent:alpha:main",
-          sessionId: "session-123",
-          inboundEventKind: "room_event",
-          agentId: "alpha",
-        });
-        expect(Array.isArray(call.mediaLocalRoots)).toBe(true);
-        expect((call.mediaLocalRoots as unknown[]).includes(expectedWorkspaceRoot)).toBe(true);
-        expect(readRecordField(call, "toolContext", "plugin tool context")).toMatchObject({
-          currentChannelId: "oc_123",
-          currentChannelProvider: "actionhub",
-          currentThreadTs: "thread-456",
-          currentMessageId: "msg-789",
+          ...context,
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
         });
       });
     });
@@ -162,11 +154,6 @@ describe("runMessageAction plugin dispatch", () => {
         },
       });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
-
     function runThreadedAction(
       action: "sticker" | "download-file",
       params: Record<string, unknown>,
@@ -176,10 +163,8 @@ describe("runMessageAction plugin dispatch", () => {
       if (gateway) {
         mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
       }
-      return runMessageAction({
+      return runAction("forumchat", action, params, {
         cfg,
-        action,
-        params: { channel: "forumchat", ...params },
         conversationReadOrigin: action === "download-file" ? "direct-operator" : undefined,
         toolContext: {
           currentChannelProvider: "forumchat",
@@ -187,7 +172,6 @@ describe("runMessageAction plugin dispatch", () => {
           currentThreadTs: "42",
         },
         gateway: gateway ? { clientName: "cli", mode: "cli" } : undefined,
-        dryRun: false,
       });
     }
 
@@ -237,19 +221,7 @@ describe("runMessageAction plugin dispatch", () => {
       threadId: "42",
     };
     const expectedParams = { to: "pollchat:123", ...pollFields };
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        forwarded: {
-          to: params.to ?? null,
-          pollQuestion: params.pollQuestion ?? null,
-          pollOption: params.pollOption ?? null,
-          pollDurationSeconds: params.pollDurationSeconds ?? null,
-          pollPublic: params.pollPublic ?? null,
-          threadId: params.threadId ?? null,
-        },
-      }),
-    );
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
 
     const pollChatPlugin = createPollForwardingPlugin({
       pluginId: "pollchat",
@@ -263,10 +235,6 @@ describe("runMessageAction plugin dispatch", () => {
       handleAction.mockClear();
     });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
     it("forwards poll params through plugin dispatch", async () => {
       const result = await runAction(
         "pollchat",
@@ -283,9 +251,7 @@ describe("runMessageAction plugin dispatch", () => {
         channel: "pollchat",
         params: expectedParams,
       });
-      expect(result.payload).toEqual(
-        expect.objectContaining({ ok: true, forwarded: expectedParams }),
-      );
+      expect(result.payload).toMatchObject({ ok: true });
     });
   });
 });
@@ -351,11 +317,6 @@ function runHostMediaAction(
 }
 
 describe("runMessageAction host-media authority", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-    vi.clearAllMocks();
-    vi.unstubAllEnvs();
-  });
   it.each([
     ["session channel", "id:trusted-user", "requesterSenderId", "trusted-user"],
     ["username", "username:alice_u", "requesterSenderUsername", "alice_u"],

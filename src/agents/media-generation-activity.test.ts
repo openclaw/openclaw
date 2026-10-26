@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../infra/agent-run-registry.js";
+import * as sessionKeys from "../routing/session-key.js";
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
@@ -13,24 +14,63 @@ import {
 } from "./media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "./media-generation-activity.test-support.js";
 import { findDuplicateGuardImageGenerationTaskForSession } from "./media-generation-task-status.js";
+
+function createOperation(
+  taskId: string,
+  requesterSessionKey: string,
+  overrides: Partial<Parameters<typeof createMediaGenerationOperation>[0]> = {},
+) {
+  return createMediaGenerationOperation({
+    taskId,
+    runId: taskId,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    taskKind: "image_generation",
+    sourceId: "image_generate:test",
+    task: "draw a tree",
+    requestKey: "same-request",
+    status: "running",
+    ...overrides,
+  });
+}
+const findDuplicate = (
+  sessionKey: string,
+  prompt = "draw a tree",
+  requestKey = "same-request",
+  agentId = "main",
+) => findDuplicateGuardImageGenerationTaskForSession(sessionKey, { prompt, requestKey, agentId });
+
 afterEach(() => {
   resetGeneratedMediaTaskActivityForTests();
   vi.restoreAllMocks();
 });
 describe("native media operation lifetime", () => {
+  it("parses a shared session owner once while preserving explicit operation ownership", () => {
+    const key = "agent:main:dashboard:media-owner";
+    const matching = Array.from({ length: 16 }, (_, index) =>
+      createOperation(`image:${index}`, key, { requesterAgentId: undefined }),
+    );
+    const other = createOperation("image:other", key, { requesterAgentId: "other" });
+    const parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
+    expect(listMediaGenerationOperations(key)).toEqual(matching);
+    expect(parse).toHaveBeenCalledTimes(1);
+    parse.mockClear();
+    expect(listMediaGenerationOperations(key, "other")).toEqual([other]);
+    expect(parse).toHaveBeenCalledTimes(1);
+    parse.mockClear();
+    expect(Reflect.apply(listMediaGenerationOperations, undefined, [key, null])).toEqual(matching);
+    expect(parse).toHaveBeenCalledTimes(1);
+    rotateAgentRunRegistryLifecycleGeneration();
+    expect(listMediaGenerationOperations(key)).toEqual([]);
+  });
+
   it("keeps shared bare session keys agent-scoped and retires stale process ownership", async () => {
     const before = getGeneratedMediaTaskIdsForSessionKey("shared", "one");
     for (const agent of ["one", "two"]) {
-      createMediaGenerationOperation({
-        taskId: agent,
-        runId: agent,
-        requesterSessionKey: "shared",
+      createOperation(agent, "shared", {
         requesterAgentId: agent,
-        taskKind: "image_generation",
         sourceId: "image_generate:synthetic",
         task: "a synthetic lighthouse",
-        requestKey: "same-request",
-        status: "running",
       });
     }
     expect(listMediaGenerationOperations("shared")).toEqual([]);
@@ -45,38 +85,20 @@ describe("native media operation lifetime", () => {
     expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "two")).toBe(true);
     expect(getActiveMediaGenerationRunCount()).toBe(2);
     expect(
-      await findDuplicateGuardImageGenerationTaskForSession("shared", {
-        agentId: "one",
-        prompt: "a synthetic lighthouse",
-        requestKey: "same-request",
-      }),
+      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
     ).toMatchObject({ runId: "one", status: "running" });
     rotateAgentRunRegistryLifecycleGeneration();
     expect(isMediaGenerationOperationCurrent("one")).toBe(false);
     expect(getActiveMediaGenerationRunCount()).toBe(0);
     expect(listMediaGenerationOperations("shared", "one")).toEqual([]);
     expect(
-      await findDuplicateGuardImageGenerationTaskForSession("shared", {
-        agentId: "one",
-        prompt: "a synthetic lighthouse",
-        requestKey: "same-request",
-      }),
+      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
     ).toBeUndefined();
   });
   it("blocks duplicate provider work, retains attempt admission after completion, and releases restart custody", async () => {
     const sessionKey = "agent:main:cron:media:run:one";
     const before = getGeneratedMediaTaskIdsForSessionKey(sessionKey);
-    const operation = createMediaGenerationOperation({
-      taskId: "image:1",
-      runId: "image:1",
-      taskKind: "image_generation",
-      sourceId: "image_generate:test",
-      requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      task: "draw a tree",
-      requestKey: "same-request",
-      status: "running",
-    });
+    const operation = createOperation("image:1", sessionKey);
     expect(
       await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
         prompt: "draw a tree",
@@ -90,19 +112,9 @@ describe("native media operation lifetime", () => {
     expect(getActiveMediaGenerationRunCount()).toBe(0);
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
     expect(hasNewGeneratedMediaTaskForSessionKey(sessionKey, before)).toBe(true);
+    expect(await findDuplicate(sessionKey)).toBe(operation);
     expect(
-      await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
-        prompt: "draw a tree",
-        requestKey: "same-request",
-        agentId: "main",
-      }),
-    ).toBe(operation);
-    expect(
-      await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
-        prompt: "draw something different",
-        requestKey: "different-request",
-        agentId: "main",
-      }),
+      await findDuplicate(sessionKey, "draw something different", "different-request"),
     ).toBeUndefined();
   });
   it.each([
@@ -111,15 +123,7 @@ describe("native media operation lifetime", () => {
   ])("owns recent completion expiry at $age ms", async ({ age, retained }) => {
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
-    const operation = createMediaGenerationOperation({
-      taskId: "image:recent",
-      runId: "image:recent",
-      taskKind: "image_generation",
-      sourceId: "image_generate:test",
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      task: "draw a tree",
-      requestKey: "same-request",
+    const operation = createOperation("image:recent", "agent:main:main", {
       status: "succeeded",
       endedAt: now - age,
     });

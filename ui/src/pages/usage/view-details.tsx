@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -8,6 +9,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
@@ -26,8 +28,44 @@ export function SessionDetailPanel(props: {
 }) {
   const logsSource = createMemo(() => props.detail.sessionLogs);
   const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
-  const range = createMemo(() => prepareUsageDateRange(props.range));
-  const series = createMemo(() => deriveTimeSeries(props.detail, range(), props.session.usage));
+  const rangeInputs = createMemo(
+    () => ({
+      startDate: props.range.startDate,
+      endDate: props.range.endDate,
+      selectedDays: props.range.selectedDays,
+      timeZone: props.range.timeZone,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.startDate === next.startDate &&
+        previous.endDate === next.endDate &&
+        previous.selectedDays === next.selectedDays &&
+        previous.timeZone === next.timeZone,
+    },
+  );
+  const range = createMemo(() => prepareUsageDateRange(rangeInputs()));
+  const seriesInputs = createMemo(
+    () => ({
+      timeSeries: props.detail.timeSeries,
+      timeSeriesStatus: props.detail.timeSeriesStatus,
+      timeSeriesMode: props.detail.timeSeriesMode,
+      timeSeriesBreakdownMode: props.detail.timeSeriesBreakdownMode,
+      timeSeriesCursorStart: props.detail.timeSeriesCursorStart,
+      timeSeriesCursorEnd: props.detail.timeSeriesCursorEnd,
+      usage: props.session.usage,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.timeSeries === next.timeSeries &&
+        previous.timeSeriesStatus === next.timeSeriesStatus &&
+        previous.timeSeriesMode === next.timeSeriesMode &&
+        previous.timeSeriesBreakdownMode === next.timeSeriesBreakdownMode &&
+        previous.timeSeriesCursorStart === next.timeSeriesCursorStart &&
+        previous.timeSeriesCursorEnd === next.timeSeriesCursorEnd &&
+        previous.usage === next.usage,
+    },
+  );
+  const series = createMemo(() => deriveTimeSeries(seriesInputs(), range(), seriesInputs().usage));
   const intervalEntries = createMemo(() => {
     const { timeSeriesCursorStart: start, timeSeriesCursorEnd: end } = props.detail;
     if (start === null || end === null) {
@@ -169,20 +207,46 @@ function ContextPanel(props: {
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
+  const read = createUsageRead(
+    () => props.context.read,
+    () => props.context.status.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <ContextContent {...props} read={read} loading={loading()} />}
+    </UsagePending>
+  );
+}
+
+function ContextContent(props: {
+  context: UsageContextDetail;
+  usage: UsageSessionEntry["usage"];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  read: UsageRead;
+  loading: boolean;
+}) {
+  const status = () => (
+    <UsageReadStatus read={props.read}>
+      {() =>
+        renderUsageRefreshStatus(
+          props.context.status,
+          "usage.details.systemPromptBreakdown",
+          "context",
+        )
+      }
+    </UsageReadStatus>
+  );
   return (
     <Show
       when={props.context.weight}
       fallback={
         <div class="context-details-panel">
-          {renderUsageRefreshStatus(
-            props.context.status,
-            "usage.details.systemPromptBreakdown",
-            "context",
-          )}
+          {status()}
           {props.context.status.error ? undefined : (
             <div class="usage-empty-block">
               {t(
-                props.context.loading || props.context.status.awaitingGateway
+                props.loading || props.context.status.awaitingGateway
                   ? "usage.loading.badge"
                   : "usage.details.noContextData",
               )}
@@ -195,6 +259,7 @@ function ContextPanel(props: {
         <LoadedContextPanel
           weight={weight()}
           status={props.context.status}
+          readStatus={status}
           usage={props.usage}
           expanded={props.expanded}
           onToggleExpanded={props.onToggleExpanded}
@@ -207,6 +272,7 @@ function ContextPanel(props: {
 function LoadedContextPanel(props: {
   weight: NonNullable<UsageContextDetail["weight"]>;
   status: UsageContextDetail["status"];
+  readStatus: () => JSX.Element;
   usage: UsageSessionEntry["usage"];
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -297,7 +363,7 @@ function LoadedContextPanel(props: {
   });
   return (
     <div class="context-details-panel">
-      {renderUsageRefreshStatus(props.status, "usage.details.systemPromptBreakdown", "context")}
+      {props.readStatus()}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
         <Show when={state().hasMore}>
@@ -399,11 +465,30 @@ function SessionLogs(props: {
   entries: ParsedSessionLog[];
   intervalEntries: ParsedSessionLog[];
 }) {
+  const read = createUsageRead(
+    () => props.detail.sessionLogsRead,
+    () => props.detail.sessionLogsStatus.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <SessionLogsContent {...props} read={read} loading={loading()} />}
+    </UsagePending>
+  );
+}
+
+function SessionLogsContent(props: {
+  detail: UsageProps["detail"];
+  callbacks: UsageProps["callbacks"]["details"];
+  entries: ParsedSessionLog[];
+  intervalEntries: ParsedSessionLog[];
+  read: UsageRead;
+  loading: boolean;
+}) {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
+  const formatLogTimestamp = createMemo(() => createMsFormatter(undefined, t("common.na")));
   const state = createMemo(() => {
     const detail = props.detail;
     const {
-      sessionLogsLoading: loading,
       sessionLogsStatus: status,
       logFilters: filters,
       timeSeriesCursorStart: cursorStart,
@@ -411,7 +496,8 @@ function SessionLogs(props: {
     } = detail;
     const logs = detail.sessionLogs;
     const parsedEntries = props.entries;
-    const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
+    // Loaded logs must not join the pending lane during a background refresh.
+    const initialLoading = !status.hasLoaded && (props.loading || status.awaitingGateway);
     const initialError = status.error && !status.hasLoaded;
     const refreshStatus = initialLoading
       ? undefined
@@ -419,7 +505,6 @@ function SessionLogs(props: {
     const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
     const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-    const formatLogTimestamp = createMsFormatter();
     const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
     const toolOptions = Array.from(
       new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
@@ -452,7 +537,6 @@ function SessionLogs(props: {
       toolOptions,
       toolSelected,
       filteredEntries,
-      formatLogTimestamp,
       initialLoading,
       initialError,
       message,
@@ -479,7 +563,7 @@ function SessionLogs(props: {
                 : t("usage.details.expandAll")}
             </button>
           </div>
-          {state().refreshStatus}
+          <UsageReadStatus read={props.read}>{() => state().refreshStatus}</UsageReadStatus>
           <div class="usage-filters-inline session-log-filters">
             <select
               multiple
@@ -570,7 +654,7 @@ function SessionLogs(props: {
                   <div class={["session-log-entry", log.role === "user" ? "user" : "assistant"]}>
                     <div class="session-log-meta">
                       <span class="session-log-role">{roleLabel()}</span>
-                      <span>{state().formatLogTimestamp(log.timestamp)}</span>
+                      <span>{formatLogTimestamp()(log.timestamp)}</span>
                       {log.tokens ? (
                         <>
                           {" "}
@@ -607,7 +691,7 @@ function SessionLogs(props: {
       ) : (
         <div class="session-logs-compact">
           <div class="session-logs-header">{t("usage.details.conversation")}</div>
-          {state().refreshStatus}
+          <UsageReadStatus read={props.read}>{() => state().refreshStatus}</UsageReadStatus>
           {state().initialLoading || !state().initialError ? (
             <div class="usage-empty-block">{t(state().message)}</div>
           ) : undefined}

@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { nativePane } from "../test-helpers/chat-layout-menu.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 
 function visibleDetails(pane: Locator): Locator {
   return pane
@@ -121,30 +122,108 @@ export async function openChatDetailsPeople(page: Page | Locator): Promise<Locat
 
 /** Open publication review without invoking the publication action. */
 export async function openChatPublication(page: Page | Locator): Promise<Locator> {
-  const group = await openDetailsPullRequests(page);
-  const mobileEntry = group.locator('[data-details-destination="publication"]');
-  if (await group.evaluate((element) => element.closest(".chat-mobile-host") !== null)) {
-    await mobileEntry.click();
-    const review = visibleDetails(nativePane(page)).locator(
-      '.chat-mobile-details-page[data-details-page="publication"]',
-    );
+  const details = await openChatDetails(page);
+  if (await details.locator(".chat-mobile-host__details").count()) {
+    const group = await openDetailsPullRequests(page);
+    await group.locator('[data-details-destination="publication"]').click();
+    const review = details.locator('.chat-mobile-details-page[data-details-page="publication"]');
     await review.waitFor();
     return review;
   }
-  await group.locator(".chat-pr, .chat-pr__publication-history").first().waitFor();
-  const actions = group.locator('.chat-pr[data-state="branch"] .chat-pr__actions-trigger');
+  const environment = details.locator('[data-details-group="environment"]');
+  const summary = environment.locator(":scope > summary");
+  // Native open stays set during closing motion and is restored after initial layout.
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
+  const branch = environment.locator(".chat-environment__branch");
+  await branch.waitFor();
+  await branch.locator(".chat-pr__publication-actions").waitFor();
+  const actions = branch.locator(".chat-pr__actions-trigger");
   if (await actions.count()) {
-    if ((await actions.getAttribute("aria-expanded")) !== "true") {
-      await actions.click();
-    }
-    await group.locator(".chat-pr-branch-menu").waitFor();
-  } else {
-    const history = group.locator(".chat-pr__publication-history");
-    if ((await history.count()) > 0 && (await history.getAttribute("open")) === null) {
-      await history.locator(":scope > summary").click();
+    const observation = await environment.evaluateHandle((root) => {
+      const initialTrigger = root.querySelector(".chat-pr__actions-trigger");
+      const initialMenu = root.querySelector(".chat-pr-branch-menu");
+      const read = () => {
+        const trigger = root.querySelector(".chat-pr__actions-trigger");
+        const menu = root.querySelector(".chat-pr-branch-menu");
+        return {
+          environmentConnected: root.isConnected,
+          triggerConnected: trigger?.isConnected ?? false,
+          triggerReplaced: trigger !== initialTrigger,
+          triggerExpanded: trigger?.getAttribute("aria-expanded") === "true",
+          triggerInert: Boolean(trigger?.closest("[inert]")),
+          menuConnected: menu?.isConnected ?? false,
+          menuReplaced: menu !== initialMenu,
+          menuOpen: menu?.matches(":popover-open") ?? false,
+          menuInert: Boolean(menu?.closest("[inert]")),
+          menuState: menu?.getAttribute("data-state") ?? null,
+          menuPhase: menu?.getAttribute("data-phase") ?? null,
+        };
+      };
+      type Snapshot = ReturnType<typeof read>;
+      const before = read();
+      const events: Array<Snapshot & { type: string; defaultPrevented: boolean }> = [];
+      const types = [
+        "pointerdown",
+        "click",
+        "beforetoggle",
+        "toggle",
+        "overlay-show",
+        "overlay-after-show",
+        "overlay-hide",
+        "overlay-after-hide",
+      ];
+      const record = (event: Event) => {
+        const target = event.target;
+        if (!(target instanceof Element) || !root.contains(target) || events.length >= 16) {
+          return;
+        }
+        if (
+          !target.matches(".chat-pr-branch-menu") &&
+          !target.closest(".chat-pr__actions-trigger")
+        ) {
+          return;
+        }
+        const entry = { ...read(), type: event.type, defaultPrevented: event.defaultPrevented };
+        events.push(entry);
+        // Capture the final veto after all event listeners have run.
+        queueMicrotask(() => {
+          entry.defaultPrevented = event.defaultPrevented;
+        });
+      };
+      for (const type of types) {
+        root.ownerDocument.addEventListener(type, record, true);
+      }
+      return {
+        read: () => ({ before, events, after: read() }),
+        dispose: () => {
+          for (const type of types) {
+            root.ownerDocument.removeEventListener(type, record, true);
+          }
+        },
+      };
+    });
+    try {
+      if ((await actions.getAttribute("aria-expanded")) !== "true") {
+        await actions.click();
+      }
+      await environment.locator(".chat-pr-branch-menu").waitFor();
+    } catch (error) {
+      recordControlUiE2eFailureFacts(environment.page(), {
+        publicationMenu: await observation.evaluate((probe) => probe.read()),
+      });
+      throw error;
+    } finally {
+      try {
+        await observation.evaluate((probe) => probe.dispose());
+      } finally {
+        await observation.dispose();
+      }
     }
   }
-  return group;
+  return environment;
 }
 
 /** Navigate the desktop PR action menu while retaining the selected row's identity. */

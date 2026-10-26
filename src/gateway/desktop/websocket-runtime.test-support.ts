@@ -6,6 +6,7 @@ import { Duplex } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { handleDesktopObserveUpgrade, mintDesktopObserverToken } from "./observe-bridge.js";
 
@@ -121,7 +122,7 @@ async function nodeStream(kind: "desktop" | "portal") {
         ...binding,
         client: {
           connId: binding.connId,
-          socket: client,
+          socket: gatewayTestTextTransport(client),
           usesSharedGatewayAuth: false,
           connect: {
             minProtocol: 1,

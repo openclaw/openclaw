@@ -1,4 +1,15 @@
-import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  createStore,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -9,6 +20,8 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
+import type { ChatProcessShowRequest } from "./chat-details-types.ts";
+import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import {
   syncSessionPanelInputs,
   useSessionPanel,
@@ -20,6 +33,8 @@ import "./chat-processes-panel.css";
 
 export type ChatProcessesPanelProps = SessionPanelProps & {
   mobile: boolean;
+  showRequest?: () => ChatProcessShowRequest | undefined;
+  onBackToDetails?: () => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 export type ChatProcessesPanel = SolidBridgeElement<ChatProcessesPanelProps>;
@@ -30,6 +45,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const [finishedOpen, setFinishedOpen] = createSignal(false);
     let list!: HTMLDivElement;
 
+    let appliedRequest: ChatProcessesPanelProps["showRequest"];
     const listScrollState = useScrollState();
     const panel = useSessionPanel(
       host,
@@ -37,45 +53,68 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       ProcessesPanelData,
       (identityChanged) => {
         if (identityChanged) {
-          setNavigation(emptyNavigation());
+          setNavigation((draft) => {
+            Object.assign(draft, emptyNavigation());
+          });
           if (list) {
             list.scrollTop = 0;
           }
         }
+        const request = host.showRequest;
+        if (request !== appliedRequest) {
+          appliedRequest = request;
+          const target = request?.();
+          if (target) {
+            setNavigation((draft) => {
+              draft.selected = target.instanceId;
+              draft.fromDetails = target.fromDetails;
+              draft.returnInstance = null;
+            });
+          }
+        }
       },
     );
+    const presentation = createProcessesPresentation(panel);
     const data = () => panel().snapshot;
+    // Full Processes keeps its failed-read empty/loading states; compact Details retains rows.
+    const rows = () => (data().readError ? [] : data().rows);
+    const visibleError = (loading: boolean) =>
+      data().readError ? (loading ? null : data().readError) : data().error;
     // Only local return targets/offsets reset on denied access; output remains with the data owner.
     const emptyNavigation = (): {
       listTop: number;
       selected: string | null;
+      fromDetails: boolean;
       returnInstance: string | null;
       openers: Map<string, HTMLButtonElement>;
       outputPositions: Map<string, { left: number; top: number }>;
     } => ({
       listTop: 0,
       selected: null,
+      fromDetails: false,
       returnInstance: null,
       openers: new Map<string, HTMLButtonElement>(),
       outputPositions: new Map<string, { left: number; top: number }>(),
     });
-    const denied = createMemo(() => Boolean(data().error && !data().rows.length));
-    const [navigation, setNavigation] = createSignal<ReturnType<typeof emptyNavigation>>(
-      (previous) => (denied() ? emptyNavigation() : (previous ?? emptyNavigation())),
-    );
+    const denied = createMemo(() => Boolean(data().error && !rows().length));
+    const [navigation, setNavigation] = createStore<ReturnType<typeof emptyNavigation>>((draft) => {
+      if (denied()) {
+        Object.assign(draft, emptyNavigation());
+      }
+    }, emptyNavigation());
     // Rendered selection observes denial transitions even while the detail is closed.
-    const selected = () => navigation().selected;
+    const selected = () => navigation.selected;
     const open = (row: SessionProcessSummary) => {
-      setNavigation((previous) => ({
-        ...previous,
-        listTop: list.scrollTop,
-        returnInstance: row.instanceId,
-        selected: row.instanceId,
-      }));
+      setNavigation((draft) => {
+        draft.listTop = list.scrollTop;
+        draft.returnInstance = row.instanceId;
+        draft.selected = row.instanceId;
+        draft.fromDetails = false;
+      });
     };
-    const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
-    const running = createMemo(() => data().rows.filter((row) => row.status === "running"));
-    const finished = createMemo(() => data().rows.filter((row) => row.status !== "running"));
+    const selectedRow = createMemo(() => rows().find((row) => row.instanceId === selected()));
+    const running = createMemo(() => rows().filter((row) => row.status === "running"));
+    const finished = createMemo(() => rows().filter((row) => row.status !== "running"));
     const status = (row: SessionProcessSummary) =>
       t(
         data().stopping.has(row.instanceId)
@@ -86,40 +125,41 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       (row.status === "running" || row.endedAt !== undefined) && (
         <ElapsedTime startMs={row.startedAt} endMs={row.endedAt ?? null} />
       );
-    const stopButton = (row: SessionProcessSummary, detail = false) =>
-      row.status === "running" &&
-      row.canStop && (
-        <button
-          class={[
-            "chat-processes__stop",
-            {
-              "session-panel-rail__button session-panel-rail__button--labelled":
-                detail && !props.mobile,
-            },
-          ]}
-          type="button"
-          aria-label={t("chat.processesPanel.stop", { name: row.name })}
-          title={props.mobile ? undefined : t("chat.processesPanel.stop", { name: row.name })}
-          disabled={data().stopping.has(row.instanceId)}
-          onClick={() => void panel().stop(row)}
-        >
-          {detail && !props.mobile ? (
-            <span class="chat-processes__stop-mark" aria-hidden="true" />
-          ) : (
-            <Icon name="square" />
-          )}
-          {t(
-            data().stopping.has(row.instanceId)
-              ? "chat.processesPanel.stopping"
-              : "chat.runControls.stop",
-          )}
-        </button>
+    const StopButton = (stopProps: { row: SessionProcessSummary; detail?: boolean }) => {
+      const stop = presentation.createStop(() => stopProps.row);
+      return (
+        <Show when={stopProps.row.status === "running" && stopProps.row.canStop}>
+          <button
+            class={[
+              "chat-processes__stop",
+              {
+                "session-panel-rail__button session-panel-rail__button--labelled":
+                  stopProps.detail && !props.mobile,
+              },
+            ]}
+            type="button"
+            aria-label={t("chat.processesPanel.stop", { name: stopProps.row.name })}
+            title={
+              props.mobile ? undefined : t("chat.processesPanel.stop", { name: stopProps.row.name })
+            }
+            disabled={stop.stopping()}
+            onClick={() => void stop.stop()}
+          >
+            {stopProps.detail && !props.mobile ? (
+              <span class="chat-processes__stop-mark" aria-hidden="true" />
+            ) : (
+              <Icon name="square" />
+            )}
+            {t(stop.stopping() ? "chat.processesPanel.stopping" : "chat.runControls.stop")}
+          </button>
+        </Show>
       );
-    const error = () =>
-      data().error && (
+    };
+    const error = (loading: boolean, retry: () => void) =>
+      visibleError(loading) && (
         <div class="chat-processes__error" role="alert">
-          {data().error}
-          <button class="btn btn--sm" type="button" onClick={() => void panel().refresh()}>
+          {visibleError(loading)}
+          <button class="btn btn--sm" type="button" onClick={() => retry()}>
             {t("common.retry")}
           </button>
         </div>
@@ -135,7 +175,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const rowView = (row: () => SessionProcessSummary) => {
       onSettled(() => {
         const id = row().instanceId;
-        const initialOpeners = navigation().openers;
+        const initialOpeners = navigation.openers;
         return () => initialOpeners.delete(id);
       });
       return (
@@ -159,7 +199,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                   title={row().name}
                   aria-label={row().name}
                   ref={(element) => {
-                    navigation().openers.set(row().instanceId, element);
+                    navigation.openers.set(row().instanceId, element);
                   }}
                   onClick={() => open(row())}
                 >
@@ -189,7 +229,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                     {elapsed(row())}
                   </span>
                 )}
-                {stopButton(row())}
+                <StopButton row={row()} />
                 {row().status === "running" && !row().canStop && (
                   <span class="chat-processes__unavailable">
                     {t("chat.processesPanel.cannotStop")}
@@ -214,7 +254,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 type="button"
                 aria-label={row().name}
                 ref={(element) => {
-                  navigation().openers.set(row().instanceId, element);
+                  navigation.openers.set(row().instanceId, element);
                 }}
                 onClick={() => open(row())}
               >
@@ -228,7 +268,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                   <span>{elapsed(row())}</span>
                 </span>
               </button>
-              {stopButton(row())}
+              <StopButton row={row()} />
               <span class="chat-processes__chevron" aria-hidden="true">
                 <Icon name="chevronRight" />
               </span>
@@ -245,14 +285,14 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         )}
       </>
     );
-    const Detail = () => {
+    const Detail = (detailProps: { loading: boolean; retry: () => void }) => {
       let output!: HTMLDivElement;
       let back!: HTMLButtonElement;
       const titleScrollState = useScrollState(true, false);
       const savePosition = () => {
         const id = selected();
         if (id && output) {
-          navigation().outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
+          navigation.outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
         }
       };
       onSettled(() => {
@@ -261,7 +301,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       const Output = (outputProps: { row: SessionProcessSummary }) => {
         const scrollState = useScrollState();
         onSettled(() => {
-          const position = navigation().outputPositions.get(outputProps.row.instanceId);
+          const position = navigation.outputPositions.get(outputProps.row.instanceId);
           if (position) {
             output.scrollLeft = position.left;
             output.scrollTop = position.top;
@@ -287,6 +327,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               fallback={
                 <div class="chat-processes__output-empty">
                   <PanelEmptyState
+                    presentation="desktop"
                     icon={<Icon name="terminal" />}
                     heading={t("chat.processesPanel.noOutputTitle")}
                     description={t("chat.processesPanel.noOutput")}
@@ -318,19 +359,40 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 ref={(element) => {
                   back = element;
                 }}
-                aria-label={t("chat.processesPanel.back")}
-                title={props.mobile ? undefined : t("chat.processesPanel.back")}
+                aria-label={t(
+                  navigation.fromDetails
+                    ? "chat.processesPanel.backToDetails"
+                    : "chat.processesPanel.back",
+                )}
+                title={
+                  props.mobile
+                    ? undefined
+                    : t(
+                        navigation.fromDetails
+                          ? "chat.processesPanel.backToDetails"
+                          : "chat.processesPanel.back",
+                      )
+                }
                 onClick={() => {
                   savePosition();
-                  setNavigation((previous) => ({ ...previous, selected: null }));
+                  const fromDetails = navigation.fromDetails;
+                  setNavigation((draft) => {
+                    draft.selected = null;
+                    draft.fromDetails = false;
+                  });
+                  if (fromDetails) {
+                    props.onBackToDetails?.();
+                    return;
+                  }
                   onSettled(() => {
-                    const current = navigation();
-                    list.scrollTop = current.listTop;
-                    const opener = current.returnInstance
-                      ? current.openers.get(current.returnInstance)
+                    list.scrollTop = navigation.listTop;
+                    const opener = navigation.returnInstance
+                      ? navigation.openers.get(navigation.returnInstance)
                       : undefined;
                     (opener?.isConnected ? opener : list).focus({ preventScroll: true });
-                    current.returnInstance = null;
+                    setNavigation((draft) => {
+                      draft.returnInstance = null;
+                    });
                   });
                 }}
               >
@@ -354,7 +416,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                         { "session-panel-rail__group": !props.mobile },
                       ]}
                     >
-                      {stopButton(row(), true)}
+                      <StopButton row={row()} detail />
                     </span>
                   )}
                   {!props.mobile && row().status === "running" && !row().canStop && (
@@ -366,12 +428,12 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               )}
             </Show>
           </header>
-          {error()}
+          {error(detailProps.loading, detailProps.retry)}
           <Show
             when={selectedRow()}
             fallback={
               <Show
-                when={data().loading}
+                when={detailProps.loading}
                 fallback={
                   <div class="chat-processes__empty" role="status">
                     {t(
@@ -413,13 +475,13 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         </div>
       );
     };
-    return (
+    const Content = (contentProps: { loading: boolean; retry: () => void }) => (
       <div class="chat-processes__panel" data-mobile={props.mobile ? "true" : "false"}>
         <div
           class="chat-processes__list"
           hidden={Boolean(selected())}
           tabindex={-1}
-          aria-busy={data().loading ? "true" : "false"}
+          aria-busy={contentProps.loading ? "true" : "false"}
           ref={[
             (element) => {
               list = element;
@@ -428,26 +490,29 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             elementRef(props.onScrollPortRef),
           ]}
         >
-          {error()}
+          {error(contentProps.loading, contentProps.retry)}
           <Show
-            when={data().rows.length}
+            when={rows().length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !data().loading}
+                when={data().hasResult && !data().error && !contentProps.loading}
                 fallback={
                   <Show
-                    when={data().loading}
+                    when={contentProps.loading}
                     fallback={
                       <div class="chat-processes__empty" role="status">
-                        {!data().error ? t("chat.processesPanel.disconnected") : null}
+                        {!visibleError(contentProps.loading)
+                          ? t("chat.processesPanel.disconnected")
+                          : null}
                       </div>
                     }
                   >
-                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />
                   </Show>
                 }
               >
                 <PanelEmptyState
+                  presentation={props.mobile ? "mobile" : "desktop"}
                   icon={<Icon name="terminal" />}
                   heading={t("chat.processesPanel.emptyTitle")}
                   description={t("chat.processesPanel.empty")}
@@ -494,9 +559,39 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
           )}
         </div>
         <Show when={selected()}>
-          <Detail />
+          <Detail loading={contentProps.loading} retry={contentProps.retry} />
         </Show>
       </div>
+    );
+    const retry = () => void panel().refresh();
+    // Read fallbacks must not replace the retained content's navigation refs.
+    const ReadFallback = (fallbackProps: { loading: boolean; retry: () => void }) => (
+      <div class="chat-processes__panel" data-mobile={props.mobile ? "true" : "false"}>
+        <div class="chat-processes__list" aria-busy={fallbackProps.loading ? "true" : "false"}>
+          {error(fallbackProps.loading, fallbackProps.retry)}
+          <Show when={fallbackProps.loading}>
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />
+          </Show>
+        </div>
+      </div>
+    );
+    return (
+      <Errored
+        fallback={(_error, reset) => (
+          <ReadFallback
+            loading={isPending(presentation.read)}
+            retry={() => {
+              retry();
+              reset();
+            }}
+          />
+        )}
+      >
+        <Loading on={presentation.scope()} fallback={<ReadFallback loading retry={retry} />}>
+          {(latest(presentation.read), null)}
+          <Content loading={isPending(presentation.read)} retry={retry} />
+        </Loading>
+      </Errored>
     );
   },
   {
@@ -505,6 +600,8 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },
       presented: { default: true, type: Boolean },
+      showRequest: { default: undefined, attribute: false },
+      onBackToDetails: { default: undefined, attribute: false },
       mobile: { default: false, type: Boolean },
       onScrollPortRef: { default: undefined, attribute: false },
     },

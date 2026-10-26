@@ -11,7 +11,7 @@ const USER_DRIVER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)),
 // credential release, so every exit path deletes it under the same lease.
 async function ownTelegramFixture(
   credential,
-  { kind, evidenceKey, prepare, cleanup, runCommandImpl },
+  { kind, evidenceKey, prepare, cleanup, runCommandImpl, timeoutMs = 60_000 },
 ) {
   const evidence = { setup: { status: "started" }, cleanup: { status: "pending" } };
   credential[evidenceKey] = evidence;
@@ -25,7 +25,7 @@ async function ownTelegramFixture(
       {
         cwd: process.cwd(),
         env: { ...sanitizeChildEnvironment(), ...credential.driverEnv },
-        timeoutMs: 60_000,
+        timeoutMs,
       },
     );
     if (result.status !== 0 || result.timedOut) {
@@ -82,11 +82,15 @@ async function ownTelegramFixture(
   };
   try {
     evidence.setup = await run(prepare);
-    if (evidence.setup.ok !== true || !/^-\d+$/u.test(evidence.setup.groupId)) {
-      throw new Error(`Telegram ${kind} setup returned an invalid group identity.`);
+    const dmTopic = kind === "DM topic";
+    const chatId = dmTopic ? evidence.setup.chatId : evidence.setup.groupId;
+    if (evidence.setup.ok !== true || !(dmTopic ? /^[1-9]\d*$/u : /^-\d+$/u).test(chatId)) {
+      throw new Error(`Telegram ${kind} setup returned an invalid chat identity.`);
     }
-    credential.groupId = evidence.setup.groupId;
-    credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID = credential.groupId;
+    if (!dmTopic) {
+      credential.groupId = chatId;
+    }
+    credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID = chatId;
   } catch (error) {
     evidence.setup = { status: "failed", error: error.message };
     throw error;
@@ -119,4 +123,19 @@ export async function prepareTelegramTestForum(credential, { runCommandImpl = ru
     throw new Error("Telegram forum setup returned an invalid topic identity.");
   }
   return forum;
+}
+
+export async function prepareTelegramTestDmTopic(credential, { runCommandImpl = runCommand } = {}) {
+  const topic = await ownTelegramFixture(credential, {
+    kind: "DM topic",
+    evidenceKey: "testDmTopic",
+    prepare: ["prepare-dm-topic"],
+    cleanup: "cleanup-dm-topic",
+    runCommandImpl,
+    timeoutMs: 180_000,
+  });
+  if (!Number.isSafeInteger(topic.forumTopicId) || topic.forumTopicId < 1) {
+    throw new Error("Telegram DM topic setup returned an invalid topic identity.");
+  }
+  return topic;
 }

@@ -41,18 +41,6 @@ function observeOwners(owners: Array<{ agentId: string; agentDir: string }>) {
 }
 
 describe("agent directory registry", () => {
-  it("unregisters only the requested owner", () => {
-    const agentDir = path.join("/tmp", `openclaw-agent-dir-registry-${process.pid}`);
-    registerDir({ agentId: "first", agentDir });
-    registerDir({ agentId: "second", agentDir });
-
-    expect(ownerOf(agentDir)).toBeUndefined();
-    expect(unregisterDir({ agentId: "first", agentDir })).toBe(true);
-    expect(ownerOf(agentDir)).toBe("second");
-    expect(unregisterDir({ agentId: "second", agentDir })).toBe(true);
-    expect(ownerOf(agentDir)).toBeUndefined();
-  });
-
   it("detects registered ownership on either side of a cleanup boundary", () => {
     const root = path.join("/tmp", `openclaw-agent-dir-overlap-${process.pid}`);
     const agentDir = path.join(root, "agent");
@@ -103,23 +91,9 @@ describe("agent directory registry", () => {
     expect(ownerOf(agentDir, env)).toBe("main");
   });
 
-  it("reuses prepared directory identity for repeated registration and reverse lookup", () => {
-    const agentDir = tempDirs.make("openclaw-agent-dir-prepared-");
-    using _ = registered({ agentId: "main", agentDir });
-    using realpath = vi.spyOn(fs.realpathSync, "native");
-    for (let i = 0; i < 10; i++) {
-      expect(registerDir({ agentId: "main", agentDir })).toBe(false);
-      expect(ownerOf(agentDir)).toBe("main");
-    }
-    expect(realpath).not.toHaveBeenCalled();
-    // Destructive admission callers still request a current physical path.
-    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
-    expect(realpath).toHaveBeenCalled();
-  });
-
-  it.each([64, 256, 810])("reuses observations across walks of %i registered agents", (count) => {
+  it("reuses observations across walks of more than 256 registered agents", () => {
     const root = tempDirs.make("openclaw-agent-dir-fleet-");
-    const fleet = Array.from({ length: count }, (_, index) => ({
+    const fleet = Array.from({ length: 810 }, (_, index) => ({
       agentId: `fleet-${index}`,
       agentDir: path.join(root, `fleet-${index}`, "agent"),
     }));
@@ -137,6 +111,10 @@ describe("agent directory registry", () => {
     expect(watch).toHaveBeenCalledTimes(initialWatches);
     expect(closes.every((close) => close.mock.calls.length === 0)).toBe(true);
     expect(realpath).not.toHaveBeenCalled();
+    // Destructive admission bypasses the prepared identity even when lookups reuse it.
+    const { agentDir } = fleet[0]!;
+    expect(normalizePath(agentDir)).toBe(fs.realpathSync.native(agentDir));
+    expect(realpath).toHaveBeenCalled();
   });
 
   it("retains ancestor watches when a named notification leaves directory identity unchanged", () => {

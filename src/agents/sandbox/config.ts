@@ -103,7 +103,7 @@ function resolveSandboxDockerConfig(
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,
     setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,
-    pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit,
+    pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit ?? 1024,
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
     cpus: agentDocker?.cpus ?? globalDocker?.cpus,

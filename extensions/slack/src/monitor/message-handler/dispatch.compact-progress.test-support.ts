@@ -1,5 +1,7 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { requireRecord } from "./dispatch.preview.test-support.js";
 
 export function expectRecordFields(
   record: Record<string, unknown>,
@@ -70,14 +72,46 @@ export type SlackReplyOptionEvent =
   | { kind: "assistant_start" }
   | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
   | { kind: "reasoning_end" }
+  | { kind: "visible_work"; sessions: EventPayload<"onVisibleWorkSessions"> }
   | Checkpoint
   | ({ kind: "approval" } & Parameters<NonNullable<GetReplyOptions["onApprovalEvent"]>>[0]);
+
+export async function emitSlackToolProgressTestEvent(
+  reply: GetReplyOptions | undefined,
+  entry: Extract<SlackReplyOptionEvent, { kind: "command_output" | "tool_start" }>,
+  index: number,
+) {
+  if (entry.kind === "command_output") {
+    const { kind: _kind, explanation: _explanation, ...payload } = entry;
+    await reply?.onCommandOutput?.(payload);
+    if (entry.phase === "end") {
+      const item = projectAgentToolActivity({
+        toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
+        name: entry.name ?? "exec",
+        phase: "result",
+        isError: entry.exitCode == null ? undefined : entry.exitCode !== 0,
+        meta: entry.title,
+      });
+      await reply?.onItemEvent?.({ ...item, itemId: entry.itemId ?? item.itemId });
+    }
+    return;
+  }
+  const { kind: _kind, ...payload } = entry;
+  await reply?.onToolStart?.(payload);
+  const item = projectAgentToolActivity({
+    toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
+    name: entry.name,
+    phase: entry.phase === "update" ? "update" : "start",
+    args: entry.args,
+  });
+  await reply?.onItemEvent?.({ ...item, itemId: entry.itemId ?? item.itemId });
+}
 
 /** A model preamble stays visible while successful and failed work continues. */
 export async function emitCompactProgressScenario(reply: GetReplyOptions) {
   const plan = (steps: EventPayload<"onPlanUpdate">["steps"], explanation?: string) =>
     reply.onPlanUpdate?.({ phase: "update", steps, ...(explanation ? { explanation } : {}) });
-  const preamble = (itemId: string, progressText: string) =>
+  const emitPreamble = (itemId: string, progressText: string) =>
     reply.onItemEvent?.({ kind: "preamble", itemId, phase: "end", progressText });
   const command = (itemId: string, exitCode: number) =>
     reply.onCommandOutput?.({ itemId, name: "bash", phase: "end", title: "pnpm test", exitCode });
@@ -86,7 +120,7 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     { step: "Patch", status: "pending" },
     { step: "Verify", status: "pending" },
   ]);
-  await preamble("preamble-1", "Checking the current Slack behavior.");
+  await emitPreamble("preamble-1", "Checking the current Slack behavior.");
   await reply.onToolStart?.({
     itemId: "tool-1",
     name: "bash",
@@ -110,7 +144,153 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     deleted: [],
   });
   await plan([{ step: "Patch", status: "in_progress" }], "Running the checklist.");
-  await preamble("preamble-2", "The fix is ready; I’m checking the result.");
+  await emitPreamble("preamble-2", "The fix is ready; I’m checking the result.");
   await command("tool-2", 1);
   await plan([{ step: "Verify", status: "completed" }], "Finishing the checklist.");
+}
+
+export type TestReplyDispatchKind = "tool" | "block" | "final";
+export type TestReplyPayload = {
+  text?: string;
+  replyToId?: string;
+  replyToCurrent?: boolean;
+  isError?: boolean;
+  isReasoning?: boolean;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  audioAsVoice?: boolean;
+  spokenText?: string;
+  ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+  presentation?: { blocks: unknown[] };
+};
+export type TestDispatchCounts = Record<TestReplyDispatchKind, number>;
+export type TestDispatchSequenceEntry =
+  | {
+      kind: TestReplyDispatchKind;
+      payload: TestReplyPayload;
+    }
+  | { kind: "queued_followup" }
+  | { kind: "item"; progressText: string }
+  | { kind: "checkpoint"; run: () => Promise<void> };
+
+export function preamble(
+  progressText: string,
+  itemId: string,
+  phase?: string,
+): Extract<SlackReplyOptionEvent, { kind: "item" }> {
+  return { kind: "item", itemKind: "preamble", progressText, itemId, phase };
+}
+
+export function approval(
+  command: string,
+  approvalId = "approval-1",
+): Extract<SlackReplyOptionEvent, { kind: "approval" }> {
+  return { kind: "approval", phase: "requested", approvalId, command };
+}
+
+export function toolStart(
+  args?: Record<string, unknown>,
+  identity: { itemId?: string; toolCallId?: string } = {},
+): Extract<SlackReplyOptionEvent, { kind: "tool_start" }> {
+  return {
+    kind: "tool_start",
+    name: "bash",
+    phase: "start",
+    ...identity,
+    ...(args ? { args } : {}),
+  };
+}
+
+export function finalReply(payload: TestReplyPayload): TestDispatchSequenceEntry {
+  return { kind: "final", payload };
+}
+
+export function presentation(text: string, blocks: unknown[]) {
+  return { text, presentation: { blocks } };
+}
+
+export function planEvent(
+  step: string,
+  explanation?: string,
+): Extract<SlackReplyOptionEvent, { kind: "plan" }> {
+  return {
+    kind: "plan",
+    phase: "update",
+    ...(explanation === undefined ? {} : { explanation }),
+    steps: [{ step, status: "in_progress" }],
+  };
+}
+
+export function textReply(
+  text: string,
+  kind: TestReplyDispatchKind = "final",
+): TestDispatchSequenceEntry {
+  return { kind, payload: { text } };
+}
+
+export function section(text: string, plain = false) {
+  return {
+    type: "section",
+    text: { type: plain ? "plain_text" : "mrkdwn", text, ...(plain ? { emoji: false } : {}) },
+  };
+}
+
+export function workSession(id: number, label?: string) {
+  return {
+    sessionKey: `agent:agent-1:dashboard:work-${id}`,
+    url: `https://team.openclaw.ai/openclaw/chat/agent-1/work-${id}`,
+    ...(label ? { label } : {}),
+  };
+}
+
+export function ttsPayload(spokenText = "Spoken answer", visibleTextAlreadyDelivered?: boolean) {
+  return {
+    mediaUrl: "https://example.com/tts.mp3",
+    audioAsVoice: true,
+    spokenText,
+    ttsSupplement: {
+      spokenText,
+      ...(visibleTextAlreadyDelivered ? { visibleTextAlreadyDelivered: true } : {}),
+    },
+  };
+}
+
+export function expectNoCalls(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+export function expectCalls(count: number, ...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
+const noop = () => {};
+export const noopAsync = async () => {};
+export function createDraftStreamStub() {
+  return {
+    update: vi.fn(),
+    flush: vi.fn(noopAsync),
+    clear: vi.fn(noopAsync),
+    discardPending: vi.fn(noopAsync),
+    seal: vi.fn(noopAsync),
+    stop: vi.fn(noop),
+    forceNewMessage: vi.fn(),
+    dropDetachedMessages: vi.fn(noopAsync),
+    finalizeMessage: vi.fn(async (_messageId: string, editFinal: () => Promise<void>) => {
+      await editFinal();
+      return true;
+    }),
+    messageId: (): string | undefined => "171234.567",
+    channelId: () => "C123",
+  };
+}
+
+export function nativeChunks(calls: readonly (readonly unknown[])[]) {
+  return calls.flatMap(([input]) => {
+    const chunks = requireRecord(input, "native stream input").chunks;
+    return Array.isArray(chunks) ? chunks.map((chunk) => requireRecord(chunk, "native chunk")) : [];
+  });
 }

@@ -47,6 +47,8 @@ openclaw pairing approve feishu <CODE>
 
 Mentions of other people stay readable in the text sent to the agent,
 including when consecutive messages are combined.
+The receiving bot's own mention is kept as well. Command matching ignores addressing
+without removing it from the agent's context.
 
 ### Mentions in bot-started threads
 
@@ -156,6 +158,8 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 ```
 
 `channels.feishu.groupSenderAllowFrom` sets the same sender allowlist for all groups; a per-group `allowFrom` takes precedence.
+
+With command access groups enabled, group text commands also require authorization. A denied command receives a short explanation. Ask an admin to add your user ID to the selected Feishu account's `allowFrom` list or the group's `allowFrom` list to grant command access.
 
 ### Bot-authored messages
 

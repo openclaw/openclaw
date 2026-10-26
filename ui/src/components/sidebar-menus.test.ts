@@ -24,9 +24,10 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
-import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
+import { openSubmenu } from "../test-helpers/session-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { createSidebarMenus } from "./sidebar-menus.tsx";
 setupSidebarTest();
 afterEach(clearNativeGatewayTestState);
 
@@ -69,15 +70,16 @@ async function mountConnected(
   const mounted = await mountSidebar(gateway, sessions);
   mounted.sidebar.connected = true;
   await mounted.sidebar.updateComplete;
-  return mounted;
+  const find = (selector: string) => mounted.sidebar.querySelector<HTMLElement>(selector);
+  return { ...mounted, find };
 }
 
 it("closes the filter popup when the gateway viewer changes", async () => {
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
   gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
-  const { sidebar } = await mountConnected(gateway.gateway);
-  const trigger = () => sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!;
-  const popup = () => sidebar.querySelector(".sidebar-session-sort-menu");
+  const { find } = await mountConnected(gateway.gateway);
+  const trigger = () => find(".sidebar-session-sort")!;
+  const popup = () => find(".sidebar-session-sort-menu");
   trigger().click();
   await waitForSolid(() => expect(popup()).not.toBeNull());
 
@@ -97,11 +99,11 @@ it("keeps the catalog popup and row state live after provider replacement", asyn
   );
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({ hello: gatewayHelloForMethods(["sessions.catalog.list"]) });
-  const { sidebar, provider, context } = await mountConnected(gateway.gateway);
+  const { sidebar, provider, context, find } = await mountConnected(gateway.gateway);
   await vi.advanceTimersByTimeAsync(0);
   await sidebar.updateComplete;
-  const trigger = () => sidebar.querySelector<HTMLButtonElement>("[data-catalog-session-menu]")!;
-  const popup = () => sidebar.querySelector("openclaw-catalog-session-menu");
+  const trigger = () => find("[data-catalog-session-menu]")!;
+  const popup = () => find("openclaw-catalog-session-menu");
   const expectOpen = () => {
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
     expect(popup()!.querySelector('[data-value="viewer"]')).not.toBeNull();
@@ -149,9 +151,8 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
     };
     try {
       const gateway = createGatewayHarness(createTestGatewayClient(request));
-      const { sidebar, provider, context } = await mountConnected(gateway.gateway, sessions);
-      const trigger = () =>
-        sidebar.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!;
+      const { sidebar, provider, context, find } = await mountConnected(gateway.gateway, sessions);
+      const trigger = () => find("[data-sidebar-session-menu]")!;
       trigger().click();
       await waitForSolid(() => expect(worktrees).toHaveBeenCalledTimes(1));
 
@@ -172,14 +173,10 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
         trigger().click();
         await waitForSolid(() => expect(worktrees).toHaveBeenCalledTimes(2));
       }
-      await waitForSolid(() =>
-        expect(sidebar.querySelector("openclaw-session-menu")).not.toBeNull(),
-      );
-      const menu = sidebar.querySelector("openclaw-session-menu")!;
+      await waitForSolid(() => expect(find("openclaw-session-menu")).not.toBeNull());
+      const menu = find("openclaw-session-menu")!;
       const advanced = await openSubmenu(menu, "Advanced");
-      expect(menuItemLabels(advanced)).toContain("Open in");
       const openIn = await openSubmenu(advanced, "Open in");
-      expect(menuItemLabels(openIn)).toContain("New tab");
       expect(openIn.querySelector('[data-value="open-in:vscode"]')).toBeNull();
 
       retired.resolve(response);
@@ -201,6 +198,43 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
     } finally {
       retired.resolve({ worktrees: [] });
       current.resolve({ worktrees: [] });
+    }
+  },
+);
+
+it.each(["close", "disconnect"] as const)(
+  "does not load session work when the menu closes before its renderer loads (%s)",
+  async (action) => {
+    setNativeGatewayTestState("local");
+    const request = createGatewayRequestMock(async () => ({ worktrees: [] }));
+    const { sidebar } = await mountConnected(createGateway(createTestGatewayClient(request)));
+    const host = getAppSidebarOwner(sidebar.hostElement)!;
+    const menus = createSidebarMenus({
+      host,
+      element: sidebar.hostElement,
+      commit: async () => true,
+    });
+    const session = {
+      ...host.findSidebarMenuSessionByKey("agent:main:main")!,
+      worktreeId: "wt-1",
+    };
+    try {
+      menus.connect();
+      menus.openSessionMenu(session, 0, 0);
+      if (action === "close") {
+        menus.closeSessionMenu();
+      } else {
+        menus.disconnect();
+      }
+      await menus.preloadMenuRenderer();
+      expect(request).not.toHaveBeenCalledWith("worktrees.list", expect.anything());
+      menus.closeSessionMenu();
+      menus.connect();
+      menus.openSessionMenu(session, 0, 0);
+      await vi.dynamicImportSettled();
+      expect(request).toHaveBeenCalledWith("worktrees.list", {});
+    } finally {
+      menus.dispose();
     }
   },
 );

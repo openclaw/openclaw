@@ -5,7 +5,7 @@ import {
   type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store-scope.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
@@ -13,7 +13,7 @@ import type { QueuedChatSendResult } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readQueuedMessageById } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 const submissionActionIds = new WeakMap<Event, string>();

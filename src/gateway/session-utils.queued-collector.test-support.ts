@@ -36,7 +36,10 @@ import type {
   GatewayRequestContext as Context,
   GatewayRequestHandlerOptions,
 } from "./server-methods/types.js";
-import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection as getProjection,
+} from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
@@ -80,17 +83,14 @@ vi.mock(
 
 export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
+  const parent = { sessionKey: parentKey, sessionId: "parent-session", agentId: "main" };
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: SessionRowProjection;
   let cachedContext: Context | undefined;
   let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const launchedRunIds: string[] = [];
   const launchSignals = new Map<string, ReturnType<typeof createDeferred<void>>>();
-  const parentOperations: Array<{
-    cleanup: () => void;
-    operation: ReturnType<typeof createReplyOperation>;
-    release: () => void;
-  }> = [];
+  let cleanupParent: (() => void) | undefined;
 
   function waitForLaunch(runId: string) {
     if (launchedRunIds.includes(runId)) {
@@ -105,6 +105,7 @@ export function useQueuedCollectorFixture() {
     schedulerWork = observeSwarmSchedulerWork();
     lifecycleRequests.controller = new AbortController();
     cachedContext = undefined;
+    cleanupParent = undefined;
     resetGatewayWorkAdmission();
     await registry.resetSubagentRegistryForTests({ persist: false });
     resetAgentEventsForTest({ preserveListeners: true });
@@ -167,11 +168,7 @@ export function useQueuedCollectorFixture() {
     await flushPendingSessionsChangedEvents();
     launchedRunIds.splice(0).forEach((runId) => clearAgentRunContext(runId));
     launchSignals.clear();
-    for (const parent of parentOperations.splice(0)) {
-      parent.operation.complete();
-      parent.release();
-      parent.cleanup();
-    }
+    cleanupParent?.();
     await registry.resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
@@ -194,15 +191,9 @@ export function useQueuedCollectorFixture() {
       broadcastToConnIds: vi.fn(),
     }) as unknown as Context;
     const registration = registerChatAbortController({
-      target: captureRpcTargetForTest({
-        sessionKey: parentKey,
-        sessionId: "parent-session",
-        agentId: "main",
-      }),
+      target: captureRpcTargetForTest(parent),
       runId: "parent-turn",
-      sessionId: "parent-session",
-      sessionKey: parentKey,
-      agentId: "main",
+      ...parent,
       ownerConnId: "parent-requester",
       timeoutMs: 60_000,
     });
@@ -212,24 +203,20 @@ export function useQueuedCollectorFixture() {
       "parent controller turn",
     );
     const operation = createReplyOperation({
-      sessionKey: parentKey,
-      sessionId: "parent-session",
-      agentId: "main",
+      ...parent,
       resetTriggered: false,
       mailboxClaim: claim,
       target: entry.input.target,
     });
     markReplyOperationExecutionStarted(operation);
     operation.setPhase("running");
-    parentOperations.push({
-      cleanup: registration.cleanup,
-      operation,
-      release: () => {
-        if (!claim.released) {
-          releaseSessionControllerClaim(claim);
-        }
-      },
-    });
+    cleanupParent = () => {
+      operation.complete();
+      if (!claim.released) {
+        releaseSessionControllerClaim(claim);
+      }
+      registration.cleanup();
+    };
     cachedContext = context;
     return context;
   }
@@ -385,6 +372,33 @@ export function useQueuedCollectorFixture() {
     expect(respond.mock.calls[0]?.[1]?.sessionInfo.runtimeMs).toBeUndefined();
   }
 
+  function expectChanged(context: Context, payload: RpcParams) {
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining(payload),
+      new Set(["observer"]),
+      expect.any(Object),
+    );
+  }
+
+  function gateRowPreparation(context: Context, shouldHold: () => boolean, failure?: Error) {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const rows = expectDefined(getProjection(context), "session projection");
+    const prepare = rows.withPreparedExactRows.bind(rows);
+    const spy = vi.spyOn(rows, "withPreparedExactRows").mockImplementation(async (...args) => {
+      if (shouldHold()) {
+        entered.resolve();
+        await release.promise;
+        if (failure) {
+          throw failure;
+        }
+      }
+      return prepare(...args);
+    });
+    return { entered, release, spy };
+  }
+
   return {
     parentKey,
     launchedRunIds,
@@ -397,5 +411,7 @@ export function useQueuedCollectorFixture() {
     spawnCollector,
     createQueuedReservation,
     expectUnstartedChildHistory,
+    expectChanged,
+    gateRowPreparation,
   };
 }

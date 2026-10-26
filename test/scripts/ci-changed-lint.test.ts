@@ -25,6 +25,21 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptsConfig = "config/tsconfig/oxlint.scripts.json";
 const coreConfig = "config/tsconfig/oxlint.core.json";
 const rootTestConfig = "test/tsconfig/tsconfig.test.root.json";
+const centralLintSelection = {
+  files: [],
+  coreStripes: [],
+  extensionStripes: [],
+  groups: [],
+  fullGroups: ["scripts"],
+  central: true,
+} satisfies NonNullable<Parameters<typeof createChangedCheckPlan>[1]>["lintSelection"];
+const controllerCommand = (file: string, base: string, staged = false) =>
+  createChangedCheckPlan(detectChangedLanes([file]), {
+    lintOnly: true,
+    staged,
+    env: { ...process.env, CHECKOUT_BASE_SHA: base },
+    lintSelection: centralLintSelection,
+  }).commands.find(({ args }) => args[0] === "check:control-ui-controllers");
 
 function fixture(prefix: string) {
   const cwd = tempDirs.make(prefix);
@@ -186,7 +201,7 @@ describe("CI changed lint", () => {
     copyOxlintConfigFixture(cwd);
     copyFileSync(coreConfig, path.join(cwd, coreConfig));
     symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
-    mkdirSync(path.join(cwd, "scripts"));
+    mkdirSync(path.join(cwd, "scripts"), { recursive: true });
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
     for (const file of [
       "run-oxlint.mjs",
@@ -327,16 +342,12 @@ describe("CI changed lint", () => {
       ];
       const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
       expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
-      const full = createOxlintShards({
-        splitCore: true,
-        splitExtensions: true,
-        platform: "linux",
-      });
-      const fileScope = createOxlintFileScope(selectedFiles);
-      const expected = fileScope
-        .selectShards(full)
-        .flatMap(({ args }) => args.slice(2).map((target) => `${args[1]}:${target}`))
-        .toSorted();
+      const expected = [
+        `${coreConfig}:src/utils.ts`,
+        `${coreConfig}:ui/src/app-navigation.ts`,
+        "extensions/tsconfig.json:extensions/telegram/src/send.ts",
+        `${scriptsConfig}:scripts/lib/arg-utils.mts`,
+      ].toSorted();
       const actual = selections.flatMap((selection) => {
         const commands = createChangedCheckPlan(result, {
           lintOnly: true,
@@ -377,11 +388,11 @@ describe("CI changed lint", () => {
           expect(plan.central.extensionStripes).toEqual([]);
         }
       } else {
-        expect(plan.core).toEqual([]);
-        expect(plan.extensions).toEqual([]);
-        expect(actual).toContain(`${coreConfig}:src/utils.ts`);
-        expect(actual).toContain(`${scriptsConfig}:scripts/lib/arg-utils.mts`);
-        expect(plan.central.groups).toEqual(["core", "extensions", "scripts"]);
+        expect(plan).toMatchObject({
+          core: [],
+          extensions: [],
+          central: { groups: ["core", "extensions", "scripts"] },
+        });
       }
       for (const row of [...plan.core, ...plan.extensions]) {
         const selection = JSON.parse(row.lint_selection_json) as typeof plan.central;
@@ -414,32 +425,24 @@ describe("CI changed lint", () => {
     ).toBeNull(),
   );
 
-  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "retains the controller guard and staged scope when CI splits lint for %s",
-    (file) => {
-      for (const staged of [false, true]) {
-        const commands = createChangedCheckPlan(detectChangedLanes([file]), {
-          lintOnly: true,
-          staged,
-          env: { ...process.env, CHECKOUT_BASE_SHA: "unavailable-base" },
-          lintSelection: {
-            files: [],
-            coreStripes: [],
-            extensionStripes: [],
-            groups: [],
-            fullGroups: ["scripts"],
-            central: true,
-          },
-        }).commands;
-        expect(
-          commands.find(({ args }) => args[0] === "check:control-ui-controllers")?.args,
-        ).toEqual([
-          "check:control-ui-controllers",
-          ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
-        ]);
-      }
-    },
-  );
+  it.each([
+    "ui/src/app.ts",
+    ".oxlintrc.json",
+    "extensions/workboard/browser/pages/workboard/view.tsx",
+    "extensions/memory-core/browser/index.tsx",
+    "extensions/nostr/browser/controller.ts",
+    "extensions/whatsapp/browser/settings.tsx",
+    "extensions/clawrouter/src/control-ui.tsx",
+    "extensions/x/src/control-ui.tsx",
+    "config/plugin-ui-createEffect-baseline.txt",
+  ])("retains the controller guard and staged scope when CI splits lint for %s", (file) => {
+    for (const staged of [false, true]) {
+      expect(controllerCommand(file, "unavailable-base", staged)?.args).toEqual([
+        "check:control-ui-controllers",
+        ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
+      ]);
+    }
+  });
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
     "executes the generated controller guard against a depth-one merge checkout for %s",
@@ -466,8 +469,12 @@ describe("CI changed lint", () => {
         "flush",
         "getOwner",
         "runWithOwner",
+        "onCleanup",
+        "manualImport",
       ]) {
-        write(`config/control-ui-${pattern}-baseline.txt`, "");
+        for (const surface of ["control-ui", "plugin-ui"]) {
+          write(`config/${surface}-${pattern}-baseline.txt`, "");
+        }
       }
       git(source, ["init"]);
       git(source, ["add", "."]);
@@ -490,18 +497,7 @@ describe("CI changed lint", () => {
       expect(ancestry.error).toBeUndefined();
       expect(ancestry.status).toBe(1);
       const run = (preparedBase: string) => {
-        const command = createChangedCheckPlan(detectChangedLanes([file]), {
-          lintOnly: true,
-          env: { ...process.env, CHECKOUT_BASE_SHA: preparedBase },
-          lintSelection: {
-            files: [],
-            coreStripes: [],
-            extensionStripes: [],
-            groups: [],
-            fullGroups: ["scripts"],
-            central: true,
-          },
-        }).commands.find(({ args }) => args[0] === "check:control-ui-controllers");
+        const command = controllerCommand(file, preparedBase);
         expect(command).toBeDefined();
         return spawnSync(
           process.execPath,
@@ -546,21 +542,14 @@ describe("CI changed lint", () => {
     const semantic = commands.filter(
       ({ bin, args }) => bin === "node" && args[0] === "scripts/run-oxlint.mjs",
     );
-    expect(semantic.map(({ args }) => args)).toEqual([
-      ["scripts/run-oxlint.mjs", "--tsconfig", coreConfig, "src/utils.ts"],
-      [
+    expect(semantic.map(({ args }) => args)).toEqual(
+      [coreConfig, "extensions/tsconfig.json", scriptsConfig].map((config, i) => [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
-        "extensions/tsconfig.json",
-        "extensions/telegram/src/send.ts",
-      ],
-      [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        scriptsConfig,
-        "scripts/lib/ci-check-family-scope.mts",
-      ],
-    ]);
+        config,
+        paths[i],
+      ]),
+    );
     expect(commands.some(({ args }) => args.some((arg) => arg.startsWith("tsgo:")))).toBe(false);
     expect(
       commands.some(({ args }) =>

@@ -51,12 +51,12 @@ describe("chat queue order", () => {
     expect(segments.map((rows) => rows.map((row) => row.id))).toEqual([["a"], ["c"]]);
   });
 
-  it("cannot carry a row past a delivery-uncertain barrier", () => {
+  it("cannot carry a row past an attempted delivery", () => {
     // The drain stops on a locked head, so a move across it would deliver the
     // later message first. Reordering stays inside the row's own segment.
     const queue = [
       queued("a", 10),
-      queued("locked", 20, { sendState: "unconfirmed" }),
+      queued("locked", 20, { sendState: "waiting-reconnect", sendAttempts: 1 }),
       queued("b", 30),
       queued("c", 40),
     ];

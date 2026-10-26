@@ -8,18 +8,6 @@ import {
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionCorpus from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as diaries from "./dreaming-dreams-file.js";
@@ -34,18 +22,16 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { memoryOrigin } from "./memory-forget.suite.test-support.js";
+import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
 import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { executeSessionBackfillBatch } from "./session-backfill.js";
 import { appendSessionCorpusLines, appendSessionCorpusText } from "./session-ingestion.js";
 import { seedCanonicalTranscript } from "./session-ingestion.test-support.js";
 import * as promotion from "./short-term-promotion.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-} from "./test-helpers.js";
+import { resetMemoryCoreDreamingStateForTests } from "./test-helpers.js";
 
-const roots = useAutoCleanupTempDirTracker(afterAll);
-let stateDir: string;
+let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
 let workspace: string;
 const namespace = DREAMING_SESSION_INGESTION_FILES_NAMESPACE;
 const read = (file: string) => fs.readFile(file, "utf8");
@@ -63,29 +49,11 @@ function revocableOwner() {
     },
   };
 }
-const origin = (entryKey: string) => ({
-  entryKey,
-  agentId: "main",
-  sessionId: "synthetic-session",
-  sessionKey: "agent:main:synthetic-session",
-  originClass: "owner" as const,
-  observedAt: 1_000,
-});
+const origin = (entryKey: string) => memoryOrigin(entryKey, "synthetic-session");
 
 beforeAll(async () => {
-  stateDir = await fs.realpath(roots.make("openclaw-memory-mutation-authority-"));
-  workspace = path.join(stateDir, "workspace");
-  await fs.mkdir(workspace);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  await captureRuntimeConfigAsyncReader()();
-  await configureMemoryCoreDreamingStateForTests();
-  await fs.mkdir(path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main" })), {
-    recursive: true,
-  });
+  fixture = await createMemoryForgetFixture("openclaw-memory-mutation-authority-");
+  workspace = fixture.workspaceDir;
 });
 
 afterEach(() => {
@@ -94,12 +62,7 @@ afterEach(() => {
 
 afterAll(async () => {
   resetMemoryCoreDreamingStateForTests();
-  await closeOpenClawAgentDatabasesAsync(stateDir);
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  vi.unstubAllEnvs();
+  await fixture.cleanup();
 });
 
 describe("memory mutation authority at durable effects", () => {

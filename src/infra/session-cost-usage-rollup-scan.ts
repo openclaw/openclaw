@@ -1,6 +1,7 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
@@ -127,13 +128,26 @@ export async function scanMemoryUsageCostRollup(params: {
   pricingFingerprint: string;
   resolveCosts: UsageCostRollupScanInput["resolveCosts"];
 }): Promise<UsageCostRollupEntry> {
-  const records = params.events.map(({ eventJson }): unknown => JSON.parse(eventJson));
+  let anchorHash = sha256Base64Url("");
+  const records = params.events.map(({ eventJson }, index) => {
+    const event: unknown = JSON.parse(eventJson);
+    if (index === params.events.length - 1) {
+      anchorHash = hashUsageCostCheckpointEvent(event);
+    }
+    const record: Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null } = {
+      usageEntry: null,
+    };
+    if (isRecord(event)) {
+      record.usageEntry = parseUsageCostTranscriptRecord(event);
+      projectTranscriptNavigationFields(event, record);
+    }
+    return record;
+  });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
   await scan.addEntries(
-    selectVisibleTranscriptEvents(records).flatMap((record) => {
-      const entry = isRecord(record) ? parseUsageCostTranscriptRecord(record) : null;
-      return entry ? [entry] : [];
-    }),
+    selectVisibleTranscriptEvents(records).flatMap((record) =>
+      record.usageEntry ? [record.usageEntry] : [],
+    ),
   );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;
   return scan.finish({
@@ -142,8 +156,7 @@ export async function scanMemoryUsageCostRollup(params: {
     eventCount: params.file.eventCount ?? 0,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    anchorHash:
-      records.length > 0 ? hashUsageCostCheckpointEvent(records.at(-1)) : sha256Base64Url(""),
+    anchorHash,
     ...(visibleLeafId ? { visibleLeafId } : {}),
   });
 }

@@ -128,8 +128,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
           log.warn(`Gateway owner profile preparation failed: ${formatErrorMessage(error)}`);
         }
       }
-      // The initial roster must be usable before reconnecting clients can issue lists.
-      await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }

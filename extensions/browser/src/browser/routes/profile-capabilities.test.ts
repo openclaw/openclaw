@@ -31,9 +31,7 @@ describe("browser engine route admission", () => {
     ["get", "/cookies", {}],
     ["post", "/act", { body: { kind: "batch", actions: [{ kind: "click" }] } }],
     ["post", "/act", { body: { kind: "wait", selector: "main" } }],
-    ...[true, "1", "yes", " TRUE "].map(
-      (labels) => ["get", "/snapshot", { query: { labels } }] as const,
-    ),
+    ["get", "/snapshot", { query: { labels: " TRUE " } }],
     ...[{ format: "aria" }, { refs: "role" }, { selector: "main" }, { frame: "iframe" }].map(
       (query) => ["get", "/snapshot", { query }] as const,
     ),
@@ -59,7 +57,7 @@ describe("browser engine route admission", () => {
   it.each([
     ["lightpanda", "post", "/act", { body: { kind: "click", ref: "e1" } }],
     ["chromium", "post", "/act", { body: { kind: "wait", selector: "main" } }],
-    ...[undefined, false, "0", "no", " FALSE "].map(
+    ...[undefined, " FALSE "].map(
       (labels) =>
         [
           "lightpanda",

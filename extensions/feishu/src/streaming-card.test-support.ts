@@ -21,3 +21,7 @@ export function createStreamingSession(
   );
   return new FeishuStreamingSession(client, creds, log);
 }
+
+export function createStreamingTokenPayload() {
+  return { code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 };
+}

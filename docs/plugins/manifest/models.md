@@ -104,6 +104,8 @@ Top-level fields:
 | `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
 | `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
 
+`configuredEndpointDiscovery: ["provider-id"]` opts an owned `runtime` catalog into discovery from the operator-configured origin. Its hook must return inventory from that origin; without an override, the manifest provider URL supplies the default. Retained inventory from another origin is excluded. Static capability declarations remain scoped to their declared endpoints. Providers without this opt-in retain their existing endpoint policy, including runtime-selected account and regional endpoints.
+
 `modelsDev` opts an owned provider into models.dev metadata hydration when the hosted catalog is published. Declare the upstream provider once per OpenClaw provider, not once per model. Omission means no models.dev hydration; there is no central provider fallback. Keys are normalized as OpenClaw provider ids and source ids are trimmed. Empty or non-string source ids and mappings for unowned providers are ignored; an alias alone does not grant ownership. A mapping does not create catalog provider rows or relax their validation.
 
 Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. If models.dev is unreachable or its response is malformed, publication fails and the last published artifact stays intact. If only a mapped upstream provider is missing or malformed, that provider publishes its manifest rows without hydration and the run logs a warning naming it; other providers still update. Keep each mapping current when models.dev renames a provider. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
@@ -122,6 +124,7 @@ Provider fields:
 | `api`                 | `ModelApi`               | Optional default API adapter for models in this provider catalog.                                                                                                                                                 |
 | `headers`             | `Record<string, string>` | Optional static headers that apply to this provider catalog.                                                                                                                                                      |
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
+| `family`              | `string`                 | Optional [model family](#model-family) of every model in this catalog. Declare it only when one developer makes all of them; rows inherit it unless they declare their own.                                       |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
 Manifests do not author recommendations. Catalog v2 derives each provider's
@@ -169,6 +172,7 @@ Model fields:
 | `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
 | `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
 | `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `family`               | `string`                                                       | Optional [model family](#model-family) of this row; overrides the provider `family`. |
 | `mediaInput`           | `object`                                                       | Optional per-modality input config. `image` is the only modality.                    |
 | `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
 | `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
@@ -191,6 +195,34 @@ Suppression fields:
 Declare retirement only from affirmative provider evidence, never from a failed or empty discovery request. Scope account-route retirements with `when.baseUrlHosts`; matching those rules requires a concrete selected endpoint and leaves sibling endpoints untouched. Unconditional retirement rules do not require credentials. Malformed or empty retirement scopes are ignored rather than becoming global rules. Runtime blocks that retired route, while [`openclaw doctor --fix`](/cli/doctor) owns persistent replacement or override removal. Ordinary suppression and a model row's `deprecated` listing status do not authorize retirement repair. Manifest changes take effect after Gateway restart or the owning metadata reload.
 
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode/configuration#models-shipped-by-more-than-one-provider).
+
+### Model family
+
+`family` names the developer lineage of a model, using the provider id of that
+developer's own catalog: `anthropic` for Claude, `openai` for GPT, `google` for
+Gemini, and `moonshot` for Kimi. Every route serving the same model reports the
+same family. For example, `anthropic/claude-opus-5-5`, `github-copilot/claude-opus-5.5`
+and ClawRouter's `anthropic/claude-opus-5-5` are all `anthropic`. Values are lowercase,
+hyphen-separated tokens of at most 64 characters; malformed values are dropped.
+
+Declare the provider `family` only when one developer makes every model in the
+catalog. A host serving several developers' models declares `family` per row,
+or leaves it out. Declare only what you know: OpenClaw never infers a family from
+a model id or name, and a row without one reports no family. A hosted catalog
+overlay cannot add or change a family; it keeps the family of the bundled row
+with the same id.
+
+`family` is catalog metadata, not a `models.providers` config field. Onboarding
+writes catalog rows into config without it, and those configured rows take the
+catalog family again while they keep the catalog's route.
+
+Like other catalog facts, the family belongs to the catalog's route. A configured
+model that moves to another API or endpoint loses the catalog family, because that
+endpoint may serve a different model under the same id. Discovered rows keep the
+family only when they match a manifest row exactly. Provider plugins can also set
+`family` on the rows their catalog hooks return from provider metadata, such as
+GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in the
+[requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 

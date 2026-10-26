@@ -48,13 +48,10 @@ type ReadSlot<T> = {
   };
 };
 
-function gitEnvironmentKey(input: unknown): string {
-  return JSON.stringify([
-    input,
-    Object.entries(process.env)
-      .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  ]);
+function gitEnvironment() {
+  return Object.entries(process.env)
+    .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+    .toSorted(([left], [right]) => left.localeCompare(right));
 }
 
 function diffRevisionMissReason(previous: string, current: string): DiffReadCacheMissReason {
@@ -83,24 +80,17 @@ function diffRevisionMissReason(previous: string, current: string): DiffReadCach
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal, timing?: DiffReadTiming) => Promise<Output>,
-  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
-  revision?: (
-    input: Input,
-    signal: AbortSignal,
-    timing?: DiffReadTiming,
-    previous?: Output,
-  ) => Promise<string | null>,
-  keyOf: (input: Input) => string = JSON.stringify,
+  freshness: number | { milliseconds: number; joinPending?: true },
+  revision?: (input: Input, previous?: Output) => GitReadOperations["checkout.revision"]["input"],
   snapshot?: { empty: () => Output },
   // A numeric result retains an unavailable response until its next probe.
   retain: (value: Output) => boolean | number = () => true,
   maxEntries = MAX_CACHED_CHECKOUTS,
   polling?: { empty: () => Output },
-  revisionKeyOf?: (input: Input, previous?: Output) => string,
 ) {
   const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
   const joinPending = typeof freshness !== "number" && freshness.joinPending;
-  // Versioned reads retain only the current inputs/revision per checkout. LRU
+  // Versioned reads retain the current revision per request shape. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadSlot<Output>>();
   // Retain only the most recent capacity evictions; older misses become cold again.
@@ -137,26 +127,27 @@ function createReadCache<Input, Output>(
     using completedTiming = polling ? startDiffReadTiming("checkout.diff") : undefined;
     const timing = completedTiming ?? options.diffTiming;
     const validationStarted = timing ? performance.now() : 0;
-    const key = keyOf(input);
+    const environment = gitEnvironment();
+    const key = JSON.stringify([input, environment]);
     let entry = entries.get(key)?.entry;
     const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
     let currentRevision: string | null | undefined;
     if (revision && !waitingToRetry) {
       // Share only overlapping checks of identical inputs, never a settled revision.
-      const revisionInput =
-        revisionKeyOf?.(input, entry?.value) ??
-        (keyOf === gitEnvironmentKey ? key : gitEnvironmentKey(input));
-      let check = revisions.get(revisionInput);
+      const revisionInput = revision(input, entry?.value);
+      const revisionKey = JSON.stringify([revisionInput, environment]);
+      let check = revisions.get(revisionKey);
       if (!check) {
         const controller = new AbortController();
         const revisionTiming = timing ? { durations: {} } : undefined;
-        const promise = revision(input, controller.signal, revisionTiming, entry?.value).finally(
-          () => {
-            revisions.delete(revisionInput);
-          },
-        );
+        const promise = runGitWorkerOperation(
+          { type: "checkout.revision", input: revisionInput },
+          { signal: controller.signal, diffTiming: revisionTiming },
+        ).finally(() => {
+          revisions.delete(revisionKey);
+        });
         check = { controller, promise, timing: revisionTiming };
-        revisions.set(revisionInput, check);
+        revisions.set(revisionKey, check);
       }
       currentRevision = await racePromiseWithAbortSignal(check.promise, options.signal, (signal) =>
         toErrorObject(signal.reason, "Git read aborted"),
@@ -171,7 +162,7 @@ function createReadCache<Input, Output>(
     }
     const retainedFreshnessMs =
       typeof freshness !== "number" && typeof currentRevision === "string"
-        ? (freshness.versionedMilliseconds ?? freshnessMs)
+        ? Number.POSITIVE_INFINITY
         : freshnessMs;
     const revisionKey = waitingToRetry ? entry!.revision : JSON.stringify([input, currentRevision]);
     options.signal?.throwIfAborted();
@@ -328,7 +319,7 @@ function createReadCache<Input, Output>(
         }
         return polling.empty();
       };
-      const key = keyOf(input);
+      const key = JSON.stringify([input, gitEnvironment()]);
       const slot = entries.get(key) ?? {};
       if (slot.poll && !slot.poll.pending && slot.poll.expiresAt <= Date.now()) {
         releasePoll(key, slot);
@@ -445,20 +436,11 @@ function createDiffReadCache(
     (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
       runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
     freshness,
-    (input, signal, diffTiming, previous) =>
-      runGitWorkerOperation(
-        {
-          type: "checkout.revision",
-          input: revisionInput(input, previous),
-        },
-        { signal, diffTiming },
-      ),
-    gitEnvironmentKey,
+    revisionInput,
     undefined,
     (value) => (value.unavailableReason === "not_git" ? 1_000 : !value.unavailableReason),
     maxEntries,
     { empty: () => ({ files: [], additions: 0, deletions: 0, computing: true }) },
-    (input, previous) => gitEnvironmentKey(revisionInput(input, previous)),
   );
 }
 
@@ -470,12 +452,7 @@ function createReadCaches() {
     (input, signal) =>
       runGitWorkerOperation({ type: "pull-request.branch-comparison", input }, { signal }),
     Number.POSITIVE_INFINITY,
-    (input, signal) =>
-      runGitWorkerOperation(
-        { type: "checkout.revision", input: { ...input, scope: "refs" } },
-        { signal },
-      ),
-    (input) => input.root,
+    ({ root, branch, defaultBranch }) => ({ root, branch, defaultBranch, scope: "refs" }),
     undefined,
     // Missing objects can arrive without moving refs; retry incomplete comparisons.
     (value) => value.complete,
@@ -490,19 +467,13 @@ function createReadCaches() {
       // after one minute; checkout-set/environment changes select an independent snapshot.
       60_000,
       undefined,
-      gitEnvironmentKey,
       { empty: () => [] },
     ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
       Number.POSITIVE_INFINITY,
-      (input, signal) =>
-        runGitWorkerOperation(
-          { type: "checkout.revision", input: { root: input.root, scope: "context" } },
-          { signal },
-        ),
-      (input) => input.root,
+      ({ root }) => ({ root, scope: "context" }),
     ),
     branchFacts: createReadCache(
       async (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) => {
@@ -523,18 +494,10 @@ function createReadCaches() {
       },
       // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
-      (input, signal) =>
-        runGitWorkerOperation(
-          {
-            type: "checkout.revision",
-            input: { ...input, scope: "worktree" },
-          },
-          { signal },
-        ),
-      (input) => input.root,
+      ({ root, branch, defaultBranch }) => ({ root, branch, defaultBranch, scope: "worktree" }),
     ),
     diff: createDiffReadCache(
-      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      { milliseconds: 0 },
       // Full results may retain 1.5 MB of patches each.
       32,
     ),
@@ -543,7 +506,6 @@ function createReadCaches() {
       {
         milliseconds: 10_000,
         joinPending: true,
-        versionedMilliseconds: Number.POSITIVE_INFINITY,
       },
     ),
     branches: createReadCache(

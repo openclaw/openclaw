@@ -171,15 +171,15 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // Closing the keyboard may retain focus, so the next editor tap has
-          // no focusin edge. Keep its origin before restoring the writing layout.
+          // Focus during the tap, before expansion moves the native hit target.
+          // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof Node &&
+            pointerOrigin instanceof HTMLTextAreaElement &&
             pointerOrigin === state.composerTextarea &&
-            doc.activeElement === pointerOrigin &&
             editable(pointerOrigin)
           ) {
+            pointerOrigin.focus({ preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {

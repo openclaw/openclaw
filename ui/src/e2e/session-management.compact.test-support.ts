@@ -2,7 +2,11 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { bounds } from "./new-session-page.scenario.test-support.ts";
 import * as support from "./session-management.test-support.ts";
+
+export { bounds };
+export { expectAttribute, expectCount, expectText } from "./session-page.test-support.ts";
 
 type GatewayOptions = NonNullable<Parameters<typeof support.installMockGateway>[1]>;
 type Gateway = Awaited<ReturnType<typeof support.installMockGateway>>;
@@ -41,6 +45,11 @@ export function installSessionRows(page: Page, rows: unknown[], options: Gateway
     },
   });
 }
+export const sessionMethods = (...methods: string[]) => [
+  "chat.metadata",
+  "chat.startup",
+  ...methods,
+];
 export const mainAndResearchAgents = {
   agents: [
     { id: "main", name: "Main" },
@@ -65,6 +74,10 @@ export function sessionPage(rows: readonly unknown[], offset: number, limit: num
 }
 export const requestCount = async (gateway: Gateway, method: string, match?: Fields) =>
   (await gateway.getRequests(method, match)).length;
+export const pollText = (locator: Locator) => expect.poll(() => locator.textContent());
+export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
+export const pollAttribute = (locator: Locator, name: string) =>
+  expect.poll(() => locator.getAttribute(name));
 export async function expectNoRequests(gateway: Gateway, ...methods: string[]) {
   for (const method of methods) {
     expect(await gateway.getRequests(method)).toEqual([]);
@@ -72,10 +85,6 @@ export async function expectNoRequests(gateway: Gateway, ...methods: string[]) {
 }
 export const expectSessionPath = (page: Page, key: string) =>
   expect.poll(() => new URL(page.url()).pathname).toBe(support.controlUiSessionPath(key));
-export const expectText = (locator: Locator, text: string) =>
-  expect.poll(() => locator.textContent()).toContain(text);
-export const expectCount = (locator: Locator, count: number) =>
-  expect.poll(() => locator.count()).toBe(count);
 export const sessionRows = (root: Page | Locator) => (key: string) =>
   root.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
 export const expectRightPadding = (locator: Locator, value: string) =>
@@ -109,13 +118,6 @@ export const menuItem = (root: Page | Locator, name: string | RegExp, exact = tr
 export const visible = (locator: Locator, timeout?: number) =>
   locator.waitFor({ state: "visible", timeout });
 
-export async function bounds(locator: Locator) {
-  const rect = await locator.boundingBox();
-  if (!rect) {
-    throw new Error("Expected visible session geometry");
-  }
-  return rect;
-}
 type Rect = Awaited<ReturnType<typeof bounds>>;
 export const centerX = (rect: Rect) => rect.x + rect.width / 2;
 export const centerY = (rect: Rect) => rect.y + rect.height / 2;

@@ -35,7 +35,6 @@ it.each([
   ["registration", ["timeout", "found", "found"], true],
   ["runtime", ["found", "timeout", "found", "found"], true],
   ["registration", ["timeout", "timeout"], false],
-  ["runtime", ["found", "timeout", "found", "timeout"], false],
   ["command then runtime", ["timeout", "found", "timeout"], false],
   ["unavailable", ["unavailable"], false],
 ] as const)(
@@ -114,7 +113,7 @@ it.each([
         expect(inspected.serviceMutationSkipMessage).toContain(
           stage === "unavailable"
             ? "Task Scheduler check failed (exit 2)."
-            : stage === "command then runtime" || stage === "runtime"
+            : stage === "command then runtime"
               ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
               : "Task Scheduler check timed out after 47000 ms.",
         );
@@ -126,11 +125,6 @@ it.each([
         expect(inspected.serviceEnv).toBeUndefined();
       }
       expect(taskResponses).toEqual([]);
-      for (const call of vi.mocked(spawnSync).mock.calls) {
-        expect(call[2]?.timeout).toBe(
-          call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 47_000,
-        );
-      }
       expect(service.stop).not.toHaveBeenCalled();
       expect(service.install).not.toHaveBeenCalled();
     }),

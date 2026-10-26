@@ -1,7 +1,7 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requestClientCredentialsFromApp } from "../infra/client-credential-ipc.js";
+import { prepareClientCredentialStoreAsync } from "../infra/client-credential-async.js";
 import {
   ClientCredentialMigrationRequiredError,
   readClientCredentialReceipt,
@@ -115,17 +115,7 @@ async function readCredentialPreparationState(
 ): Promise<"ready" | "upgrade" | "required"> {
   try {
     assertNoPendingLegacyExecApprovals({ env });
-    // A running Mac app retains custody; its admitted operation is authoritative.
-    if (
-      await requestClientCredentialsFromApp(env, { kind: "identity.read", identity_key: "primary" })
-    ) {
-      return "ready";
-    }
-    // Existing independent native sources refresh through this same noncreating owner.
-    using owner = openClientCredentialCustody(env);
-    const receipt = owner && readClientCredentialReceipt(owner.database)?.receipt;
-    // Older healthy bootstraps need durable provenance before a future filesystem remount.
-    return receipt?.sharedFile && receipt.source === null ? "upgrade" : "ready";
+    return await prepareClientCredentialStoreAsync(env);
   } catch (error) {
     if (
       error instanceof ClientCredentialMigrationRequiredError ||
@@ -139,7 +129,11 @@ async function readCredentialPreparationState(
 
 /** Complete the selected root's cutover before any client acquires credentials. */
 export async function prepareStartupClientCredentials(
-  params: { env?: NodeJS.ProcessEnv; runtime?: RuntimeEnv; config?: OpenClawConfig } = {},
+  params: {
+    env?: NodeJS.ProcessEnv;
+    runtime?: RuntimeEnv;
+    config?: OpenClawConfig;
+  } = {},
 ): Promise<void> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   const preparation = await readCredentialPreparationState(env);
@@ -283,7 +277,11 @@ export async function prepareStartupClientCredentials(
   });
 }
 
-async function preparePostgresClientCredentials(env: NodeJS.ProcessEnv, runtime: RuntimeEnv) {
+export async function preparePostgresClientCredentials(
+  env: NodeJS.ProcessEnv,
+  runtime: RuntimeEnv,
+  rebindMissing = false,
+) {
   const [
     preflight,
     { prepareDoctorDatabaseMigrations },
@@ -322,6 +320,15 @@ async function preparePostgresClientCredentials(env: NodeJS.ProcessEnv, runtime:
   }
   withEngineStoreAdmission(() => {
     const source = state.openOpenClawStateDatabase({ env });
-    credentials.recoverClientCredentialStore(source.db, { env, path: source.path });
+    const result = credentials.recoverClientCredentialStore(source.db, {
+      env,
+      path: source.path,
+      rebindMissing,
+    });
+    if (result === "rebound") {
+      runtime.error(
+        "Local client credentials were missing and have been re-created for the existing PostgreSQL state store. Clients on this host have new identities and must pair again; paired remote devices that kept their credentials stay paired.",
+      );
+    }
   });
 }

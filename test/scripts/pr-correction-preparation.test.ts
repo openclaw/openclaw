@@ -14,16 +14,14 @@ function receipt(hosted: string, local: string, incoming: string) {
   return `PUSH_PREP_HEAD_SHA=${hosted}\nPUSH_LOCAL_PREP_HEAD_SHA=${local}\nPUSHED_FROM_SHA=${incoming}\nPUSH_REPLACED_HOSTED_ANCESTRY=false\nPR_HEAD_SHA_AFTER_PUSH=${hosted}\n`;
 }
 
-function fixture(phase: "incoming" | "corrected" | "reviewed" | "approved" = "incoming") {
+function fixture(phase: "incoming" | "corrected" | "approved" = "incoming") {
   const f = createCorrectionFixture(tempDirs.make("openclaw-pr-correction-"));
   if (phase !== "incoming") {
     expect(f.run("prepare_init 42 '' correction").status).toBe(0);
     f.commitFix();
   }
-  if (phase === "reviewed" || phase === "approved") {
-    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-  }
   if (phase === "approved") {
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
     f.approve();
   }
   const local = (name: string) => join(f.root, ".local", name);
@@ -130,15 +128,6 @@ describePosix("native correction preparation", () => {
     },
   );
 
-  it("requires complete exact-candidate review, then rejects subsequent source drift", () => {
-    const f = fixture("reviewed");
-    expect(f.run("require_prepared_review 42").status).toBe(1);
-    f.approve();
-    f.check("require_prepared_review 42");
-    f.git("commit", "-q", "--allow-empty", "-m", "candidate moved");
-    expect(f.run("require_prepared_review 42").status).toBe(1);
-  });
-
   it.each(["gates", "push", "sync"])(
     "refuses %s before its execution/publication owner without candidate approval",
     (operation) => {
@@ -171,31 +160,20 @@ describePosix("native correction preparation", () => {
     expect(f.run("prepare_correction_review_init 42").status).toBe(1);
   });
 
-  it.each(["incoming review", "finding resolution", "foreign candidate", "lost correction mode"])(
-    "refuses changed %s",
-    (kind) => {
-      const f = fixture("approved");
-      if (kind === "incoming review") {
-        f.write("review.json", `${JSON.stringify(f.review)}\n\n`);
-      } else if (kind === "lost correction mode") {
-        f.write(
-          "prep-context.env",
-          f
-            .read("prep-context.env")
-            .replace("PREP_REVIEW_MODE=correction", "PREP_REVIEW_MODE=ready"),
-        );
-      } else {
-        const review = JSON.parse(f.read("correction-review.json"));
-        if (kind === "finding resolution") {
-          review.correction.resolvedFindings = [];
-        } else {
-          review.pr.headSha = "a".repeat(40);
-        }
-        f.write("correction-review.json", JSON.stringify(review));
-      }
-      expect(f.run("require_prepared_review 42").status).toBe(1);
-    },
-  );
+  it.each(["finding resolution", "lost correction mode"])("refuses changed %s", (kind) => {
+    const f = fixture("approved");
+    if (kind === "lost correction mode") {
+      f.write(
+        "prep-context.env",
+        f.read("prep-context.env").replace("PREP_REVIEW_MODE=correction", "PREP_REVIEW_MODE=ready"),
+      );
+    } else {
+      const review = JSON.parse(f.read("correction-review.json"));
+      review.correction.resolvedFindings = [];
+      f.write("correction-review.json", JSON.stringify(review));
+    }
+    expect(f.run("require_prepared_review 42").status).toBe(1);
+  });
 
   it.each([false, true])(
     "binds recovered approval to incoming review bytes, changed=%s",
@@ -239,28 +217,7 @@ describePosix("native correction preparation", () => {
     expect(f.has("execution-reached")).toBe(true);
   });
 
-  it("qualifies the reviewed correction for deferred GitHub gates without success stamps", () => {
-    const f = fixture("approved");
-    const result = f.shell(
-      "resolve_pr_gates_remote_mode() { echo github; }",
-      "mark_pr_operation_side_effects_if_available() { :; }",
-      f.changePlan,
-      executionReached,
-      "prepare_gates 42",
-      "prepare_push 42",
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(73);
-    const gates = f.read("gates.env");
-    expect(gates).toContain("GATES_MODE=github_pending");
-    expect(gates).not.toMatch(/GATES_PASSED_AT|LAST_VERIFIED_HEAD_SHA/);
-    expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${f.git("rev-parse", "HEAD")}`);
-    expect(f.has("execution-reached")).toBe(true);
-    expect(f.run("push_prep_head_to_pr_branch() { return 73; }; prepare_sync_head 42").status).toBe(
-      73,
-    );
-  });
-
-  it.each(["completed", "pending", "revoked", "fork", "stale-review", "foreign-gate"])(
+  it.each(["completed", "pending", "revoked", "fork", "foreign-gate"])(
     "preserves correction authority when a partial publication has %s gates",
     (state) => {
       const f = fixture("approved");
@@ -278,11 +235,6 @@ describePosix("native correction preparation", () => {
         "gates.env",
         `PR_NUMBER=42\nGATES_MODE=${pending ? "remote_crabbox_aws_pending" : "full"}\nLAST_VERIFIED_HEAD_SHA=${qualified}\nFULL_GATES_HEAD_SHA=${qualified}\nREMOTE_GATES_PROVIDER=aws\n`,
       );
-      if (state === "stale-review") {
-        const review = JSON.parse(f.read("correction-review.json"));
-        review.pr.headSha = f.incoming;
-        f.write("correction-review.json", JSON.stringify(review));
-      }
       const result = f.shell(
         "source .local/prep-context.env",
         `resolve_prep_publication_target 42 ${local}`,

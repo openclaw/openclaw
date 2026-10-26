@@ -18,7 +18,15 @@ function message(role: "assistant" | "user", content: Record<string, unknown>[])
   return { type: role, message: { role, content } };
 }
 
-it.each([true, false])("settles yield after receipt (interruptible=%s)", async (interruptible) => {
+it.each([
+  { name: "interruptible", interruptible: true, lateReply: "Late duplicate reply" },
+  { name: "uninterruptible", interruptible: false, lateReply: "Late duplicate reply" },
+  {
+    name: "uninterruptible hidden acknowledgement",
+    interruptible: false,
+    lateReply: "HEARTBEAT_OK",
+  },
+])("settles yield after receipt ($name)", async ({ interruptible, lateReply }) => {
   const order: string[] = [];
   const interrupt = vi.fn(async () => {
     order.push("interrupt");
@@ -67,8 +75,8 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
     const receipt = message("user", [{ type: "tool_result", tool_use_id: "yield-1", ...result }]);
     yield receipt;
     yield receipt;
-    yield message("assistant", [{ type: "text", text: "Late duplicate reply" }]);
-    yield { ...SUCCESS_RESULT, result: "Late duplicate reply" };
+    yield message("assistant", [{ type: "text", text: lateReply }]);
+    yield { ...SUCCESS_RESULT, result: lateReply };
   };
   context.executionTarget = { kind: "plugin", execute };
   const assistantEvents: unknown[] = [];
@@ -94,7 +102,7 @@ it.each([true, false])("settles yield after receipt (interruptible=%s)", async (
     expect(assistantEvents).toEqual([]);
   }
   expect(context.params.onSuccessfulAuthBinding).toHaveBeenCalledOnce();
-  expect(result.payloads).toEqual(interruptible ? undefined : [{ text: "Late duplicate reply" }]);
+  expect(result.payloads).toEqual(interruptible ? undefined : [{ text: lateReply }]);
   expect(result.meta).toMatchObject({
     yielded: true,
     stopReason: "end_turn",

@@ -1,4 +1,5 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type {
   CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
@@ -16,6 +17,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronCompletionStatus } from "./completion-status.js";
+import type {
+  PluginCommandSchedule,
+  PluginCommandScheduleBinding,
+} from "./plugin-command-schedule.types.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -155,6 +160,7 @@ export type CronEvent = {
   completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
+  result?: AutomationResult;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -215,11 +221,21 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  result?: AutomationResult;
   /** Producer-authored terminal reply fact without exposing reply text. */
   replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
+  /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
+  parentUnavailable?: CronParentUnavailable;
+};
+
+/** Why a parent-linked job pauses before any session is created. */
+export type CronParentUnavailable = {
+  reason: "removed" | "archived" | "worktree-missing";
+  parentSessionKey: string;
+  worktreePath?: string;
 };
 
 export type CronRunDeliveryResult = {
@@ -292,35 +308,13 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | Exclude<CronJobWire["payload"], { kind: "agentTurn" | "heartbeat" }>
-  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent)
-  // System-owned heartbeat monitor: execution requests an interval heartbeat
-  // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | Exclude<CronPayloadPatchWire, { kind: "agentTurn" }>
-  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent)
-  // Representable so the service can reject it with a typed boundary error;
-  // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
-
-export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat" {
-  return kind === "heartbeat";
-}
-
-type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronPayloadToolAllowPatch = {
-  toolsAllow?: string[] | null;
-  toolsAllowIsDefault?: boolean;
-};
+  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent);
 
 type CronPayloadPatchWire = NonNullable<CronUpdateParamsWire["patch"]["payload"]>;
 
@@ -344,6 +338,10 @@ export type CronJobState = Omit<
   pacedNextRunAtMs?: number;
   /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
+  /** Store-private, monotonic launch attempts for a requester-admitted plugin command. */
+  pluginCommandRuns?: number;
+  /** Store-private restart continuity for a plugin command schedule; see its type. */
+  pluginCommandBinding?: PluginCommandScheduleBinding;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -409,6 +407,11 @@ export type CronJob = CronJobBase<
   displayName?: string;
   /** Read-only execution placement derived from the stored stream target. */
   streamExecutionHost?: "gateway" | "sandbox";
+  /**
+   * Read-only stored payload kind when `payload` is a compatibility placeholder. A plugin command
+   * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
+   */
+  payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -446,7 +449,9 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
+  /** Immutable host-captured scheduled command invocation; never public create/patch input. */
+  pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
@@ -485,19 +490,28 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<
   Omit<
     CronJobState,
+    | "lastMeaningfulResult"
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
+    | "pluginCommandRuns"
+    | "pluginCommandBinding"
   >
 >;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
+  | "id"
+  | "createdAtMs"
+  | "updatedAtMs"
+  | "state"
+  | "scheduledToolPolicy"
+  | "streamExecutionHost"
+  | "payloadSource"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -519,6 +533,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "streamExecutionHost"
+    | "payloadSource"
     | "pacing"
     | "activeHours"
     | "idleOnly"

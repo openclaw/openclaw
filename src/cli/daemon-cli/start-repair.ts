@@ -194,17 +194,23 @@ export async function repairLoadedGatewayServiceForStart(
     readDaemonRuntimePin({ kind: "gateway", env: installEnv }, params.state.command),
   );
   const pinnedRuntime = wrapperPath ? undefined : pinSnapshot.pin?.path;
-  const installedRuntime = resolveGatewayDaemonRuntime(
-    pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments,
-  );
+  const installedRuntime =
+    (!wrapperPath && pinSnapshot.pin?.runtime) ||
+    resolveGatewayDaemonRuntime(pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments);
   if (!wrapperPath) {
     await resolvePinnedDaemonRuntimePath(pinnedRuntime, installedRuntime, installEnv);
   }
   const installedRuntimePath =
-    installedRuntime === "bun" ? (pinnedRuntime ?? managedCommand?.programArguments[0]) : undefined;
-  const runtimeInfo = installedRuntimePath
-    ? await resolveBunRuntimeInfo(installedRuntimePath)
-    : undefined;
+    installedRuntime === "bun" || installedRuntime === "standalone"
+      ? (pinnedRuntime ?? managedCommand?.programArguments[0])
+      : undefined;
+  if (installedRuntime === "standalone" && !pinnedRuntime) {
+    await resolvePinnedDaemonRuntimePath(installedRuntimePath, "standalone", installEnv);
+  }
+  const runtimeInfo =
+    installedRuntimePath && installedRuntime === "bun"
+      ? await resolveBunRuntimeInfo(installedRuntimePath)
+      : undefined;
   if (runtimeInfo?.status === "probe-failed") {
     throw runtimeInfo.error;
   }
@@ -212,11 +218,12 @@ export async function repairLoadedGatewayServiceForStart(
   if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
     throw new Error(runtimeInfo.sqliteSelectionError);
   }
-  const runtime = pinnedRuntime
-    ? installedRuntime
-    : runtimeInfo?.status === "supported"
-      ? "bun"
-      : "node";
+  const runtime =
+    pinnedRuntime || installedRuntime === "standalone"
+      ? installedRuntime
+      : runtimeInfo?.status === "supported"
+        ? "bun"
+        : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -243,7 +250,7 @@ export async function repairLoadedGatewayServiceForStart(
       env: installEnv,
       port,
       runtime,
-      runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
+      runtimePath: runtime === "bun" || runtime === "standalone" ? installedRuntimePath : undefined,
       pinnedRuntimePath: pinSnapshot.pin?.path,
       wrapperPath,
       existingCommand: params.state.command,

@@ -37,6 +37,7 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
   const observations: unknown[] = [];
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let lateResolver: (() => PluginServiceSchedulerV1) | undefined;
+  const parentPath: string[] = [];
   api.registerCli(
     ({ program: cliProgram }) => {
       cliProgram.command("scheduled").action(() => {
@@ -65,7 +66,11 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
         });
       });
     },
-    { commands: ["scheduled"] },
+    {
+      parentPath,
+      commands: ["scheduled"],
+      descriptors: [{ name: "scheduled", description: "Scheduled work", hasSubcommands: false }],
+    },
   );
   try {
     await host.run(() => builder.registry.cliRegistrars[0]!.register(registration));

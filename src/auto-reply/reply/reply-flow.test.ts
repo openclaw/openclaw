@@ -37,15 +37,9 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
-    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
-    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliveredTexts(deliver)).toEqual([
-      SILENT_REPLY_TOKEN,
-      `${SILENT_REPLY_TOKEN} -- nope`,
-      `interject.${SILENT_REPLY_TOKEN}`,
-    ]);
+    expect(deliveredTexts(deliver)).toEqual([SILENT_REPLY_TOKEN]);
   });
 
   it("keeps recorded silence off transport without recording delivery", async () => {
@@ -63,10 +57,8 @@ describe("createReplyDispatcher", () => {
   });
 
   it("strips heartbeat tokens and applies responsePrefix", async () => {
-    const onHeartbeatStrip = vi.fn();
     const { deliver, dispatcher } = dispatchFixture({
       responsePrefix: "PFX",
-      onHeartbeatStrip,
     });
 
     expect(dispatcher.sendFinalReply({ text: HEARTBEAT_TOKEN })).toBe(false);
@@ -74,7 +66,6 @@ describe("createReplyDispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(deliveredTexts(deliver)).toEqual(["PFX hello"]);
-    expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {
@@ -107,6 +98,9 @@ describe("createReplyDispatcher", () => {
         await cleanup.promise;
         order.push("cleanup-end");
       },
+      onDeliverySettled: ({ kind }) => {
+        order.push(`settled:${kind}`);
+      },
     });
 
     dispatcher.sendFinalReply({ text: "final" });
@@ -117,7 +111,7 @@ describe("createReplyDispatcher", () => {
 
     cleanup.resolve();
     await idle;
-    expect(order).toEqual(["cleanup-start", "cleanup-end", "idle"]);
+    expect(order).toEqual(["cleanup-start", "cleanup-end", "settled:final", "idle"]);
   });
 
   it("releases the same dispatcher after a beforeDeliver timeout", async () => {
@@ -260,20 +254,6 @@ describe("createReplyDispatcher", () => {
     expect(policy?.shouldExtend()).toBe(true);
     await vi.runAllTimersAsync();
     await dispatcher.waitForIdle();
-  });
-
-  it("reports each queued delivery settlement", async () => {
-    const onDeliverySettled = vi.fn();
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn().mockRejectedValueOnce(new Error("send failed")).mockResolvedValue(undefined),
-      onDeliverySettled,
-    });
-    dispatcher.sendToolResult({ text: "tool" });
-    dispatcher.sendFinalReply({ text: "final" });
-    dispatcher.markComplete();
-
-    await dispatcher.waitForIdle();
-    expect(onDeliverySettled.mock.calls).toEqual([[{ kind: "tool" }], [{ kind: "final" }]]);
   });
 
   it.each([

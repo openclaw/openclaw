@@ -1,3 +1,4 @@
+import "../styles/session-progress-hovercard.css";
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { render, spread } from "@solidjs/web";
 import { createMemo, onSettled, runWithOwner, Show } from "solid-js";
@@ -101,6 +102,7 @@ function createSessionProgressHovercard(
     delayed = true;
   }, SKIP_DELAY_MS);
   let lastProgressCard: ProgressCard | null = null;
+  let gatewaySnapshotRevision = 0;
   let renderedRevision: string | null = null;
   let current: HovercardFrame | undefined;
   let refreshCurrent = () => {};
@@ -272,6 +274,7 @@ function createSessionProgressHovercard(
     }
     const gateway = applicationGateway();
     const revision = JSON.stringify({
+      gateway: gatewaySnapshotRevision,
       progress: lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
         ? {
@@ -486,14 +489,23 @@ function createSessionProgressHovercard(
     }
   }
 
-  const readSources = () => ({ context: applicationContext(), progressCards, pullRequestStore });
+  const readSources = () => ({
+    context: applicationContext(),
+    gateway: applicationGateway(),
+    progressCards,
+    pullRequestStore,
+  });
   const projection = projectSource<ReturnType<typeof readSources>, HovercardFrame | undefined>(
-    { context: null, progressCards: null, pullRequestStore: null },
+    { context: null, gateway: null, progressCards: null, pullRequestStore: null },
     {
       read: () => readCurrent(),
       subscribe: (sources, notify) => {
         refreshCurrent = notify;
         const stops = [
+          sources.gateway?.subscribe(() => {
+            gatewaySnapshotRevision += 1;
+            notify();
+          }),
           sources.context?.sessions.subscribe(notify),
           sources.progressCards?.subscribe(notify),
           sources.pullRequestStore?.subscribe(notify),

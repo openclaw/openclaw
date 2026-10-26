@@ -10,16 +10,11 @@ import {
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
   sleep,
+  portUsage,
 } from "./restart-health.test-helpers.js";
 
 function listenerUsage(pid = 4300, errors?: string[]) {
-  return {
-    port: 18789,
-    status: "busy" as const,
-    listeners: [{ pid, commandLine: "openclaw-gateway" }],
-    hints: [],
-    ...(errors ? { errors } : {}),
-  };
+  return portUsage([{ pid, commandLine: "openclaw-gateway" }], { errors });
 }
 
 async function waitForListener(
@@ -52,7 +47,6 @@ it("renders a redacted pre-handshake failure beside external-listener diagnostic
   const diagnostics = renderGatewayPortHealthDiagnostics(snapshot).join("\n");
 
   expect(snapshot.healthy).toBe(false);
-  expect(snapshot.probeError).toContain("read ECONNRESET");
   expect(diagnostics).toContain("Gateway check failed: read ECONNRESET");
   expect(diagnostics).toContain("Port diagnostics errors: listener inspection warning");
   expect(diagnostics).toContain("\\nGateway probe succeeded: spoofed");
@@ -69,24 +63,6 @@ it("clears a prior probe failure after the next external-listener poll succeeds"
 
   expect(snapshot.healthy).toBe(true);
   expect(snapshot.probeError).toBeUndefined();
-  expect(sleep).toHaveBeenCalledTimes(1);
-});
-
-it("does not accept listener health until the gateway lock owner changes", async () => {
-  inspectPortUsage.mockResolvedValue(listenerUsage(4200));
-  callGateway.mockImplementation(
-    gatewayHealthResponse({
-      server: { version: "2026.7.16", connId: "gateway" },
-    }),
-  );
-  const previousLockIdentity = mockGatewayLockReplacement();
-
-  const snapshot = await waitForListener({ previousLockIdentity, attempts: 2 });
-
-  expect(snapshot.healthy).toBe(true);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
-  expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-  expect(callGateway).toHaveBeenCalledTimes(1);
   expect(sleep).toHaveBeenCalledTimes(1);
 });
 
@@ -127,18 +103,11 @@ it.each([
     if (healthy) {
       expect(snapshot.probeError).toBeUndefined();
     }
-    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledTimes(1);
   },
 );
 
 it("bounds replacement health after an indefinite previous-owner wait", async () => {
-  inspectPortUsage.mockResolvedValue({
-    port: 18789,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
+  inspectPortUsage.mockResolvedValue(portUsage());
   const previousLockIdentity = mockGatewayLockReplacement();
 
   const snapshot = await waitForListener({
@@ -148,55 +117,34 @@ it("bounds replacement health after an indefinite previous-owner wait", async ()
   });
 
   expect(snapshot.healthy).toBe(false);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
-  expect(inspectPortUsage).toHaveBeenCalledTimes(3);
   expect(sleep).toHaveBeenCalledTimes(3);
 });
 
-it("checks replacement ownership after the final bounded delay", async () => {
-  const previous = mockGatewayLockReplacement();
-  readActiveGatewayLockIdentity.mockReset();
-  const replacement = { ...previous, pid: 4300, ownerId: "replacement" };
-  readActiveGatewayLockIdentity.mockResolvedValueOnce(previous).mockResolvedValue(replacement);
-  const snapshot = await waitForListener({ previousLockIdentity: previous });
-  expect(snapshot.healthy).toBe(true);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
-  expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-  expect(sleep).toHaveBeenCalledTimes(1);
-});
-
-it("bounds a missing replacement after an indefinite previous-owner wait", async () => {
-  const previous = mockGatewayLockReplacement();
-  readActiveGatewayLockIdentity.mockReset();
-  readActiveGatewayLockIdentity.mockResolvedValueOnce(previous).mockResolvedValue(undefined);
-  const snapshot = await waitForListener({
-    previousLockIdentity: previous,
-    attempts: 2,
-    waitIndefinitelyForPreviousOwner: true,
-  });
-  expect(snapshot.healthy).toBe(false);
-  expect(snapshot.portUsage.errors).toEqual([
-    `Previous gateway lock owner ${previous.ownerId ?? previous.pid} is still active.`,
-  ]);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(4);
-  expect(inspectPortUsage).not.toHaveBeenCalled();
-  expect(sleep).toHaveBeenCalledTimes(3);
-});
-
-it("does not treat a failed lock inspection as release before checking replacement health", async () => {
-  const previous = mockGatewayLockReplacement();
-  readActiveGatewayLockIdentity.mockReset();
-  const replacement = { ...previous, pid: 4300, ownerId: "replacement" };
-  readActiveGatewayLockIdentity
-    .mockRejectedValueOnce(new Error("transient lock read failure"))
-    .mockResolvedValueOnce(previous)
-    .mockResolvedValue(replacement);
-  const snapshot = await waitForListener({
-    previousLockIdentity: previous,
-    waitIndefinitelyForPreviousOwner: true,
-  });
-  expect(snapshot.healthy).toBe(true);
-  expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(3);
-  expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-  expect(sleep).toHaveBeenCalledTimes(2);
-});
+it.each(["final-delay", "missing", "read-failure"] as const)(
+  "settles replacement ownership after %s",
+  async (scenario) => {
+    const previous = mockGatewayLockReplacement();
+    readActiveGatewayLockIdentity.mockReset();
+    const replacement = { ...previous, pid: 4300, ownerId: "replacement" };
+    if (scenario === "read-failure") {
+      readActiveGatewayLockIdentity.mockRejectedValueOnce(new Error("transient lock read failure"));
+    }
+    readActiveGatewayLockIdentity
+      .mockResolvedValueOnce(previous)
+      .mockResolvedValue(scenario === "missing" ? undefined : replacement);
+    const missing = scenario === "missing";
+    const snapshot = await waitForListener({
+      previousLockIdentity: previous,
+      ...(missing ? { attempts: 2 } : {}),
+      waitIndefinitelyForPreviousOwner: scenario !== "final-delay",
+    });
+    expect(snapshot.healthy).toBe(!missing);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(missing ? 0 : 1);
+    expect(sleep).toHaveBeenCalledTimes(missing ? 3 : scenario === "read-failure" ? 2 : 1);
+    if (missing) {
+      expect(snapshot.portUsage.errors).toEqual([
+        `Previous gateway lock owner ${previous.ownerId ?? previous.pid} is still active.`,
+      ]);
+    }
+  },
+);

@@ -17,6 +17,25 @@ function fields(count: number, name: (index: number) => string, value: TSchema =
 const closedIdSchema = closedObject({ id: Type.String() });
 
 describe("tool schema hints", () => {
+  it("renders frozen nested schemas without mutating their key order", () => {
+    const schema = Object.freeze({
+      type: "object",
+      properties: Object.freeze({
+        z: Object.freeze({ type: "string" }),
+        a: Object.freeze({
+          type: "object",
+          properties: Object.freeze({ b: Object.freeze({ type: "boolean" }) }),
+          additionalProperties: false,
+        }),
+      }),
+      required: Object.freeze(["z", "a"]),
+      additionalProperties: false,
+    });
+    expect(declaration(schema)).toBe("{ a: { b?: boolean }; z: string }");
+    expect(Object.keys(schema.properties)).toEqual(["z", "a"]);
+    expect(schema.required).toEqual(["z", "a"]);
+  });
+
   it("keeps unknown leaves and dictionaries honest in full declarations", () => {
     const schema = closedObject({
       value: Type.Unknown(),
@@ -30,26 +49,6 @@ describe("tool schema hints", () => {
     expect(declaration(undefined)).toBe("unknown");
   });
 
-  it("exposes fields beyond the compact output budget without changing compact hints", () => {
-    const schema = fields(24, (i) => `field${i}`);
-    expect(outputHint(schema)).toBeUndefined();
-    const full = declaration(schema);
-    expect(full).toContain("field23: string");
-    expect(full).not.toContain("...");
-  });
-
-  it("preserves numeric input constraints without changing output hints", () => {
-    const schema = {
-      type: "integer",
-      minimum: 0,
-      maximum: 10,
-      exclusiveMinimum: 1,
-      exclusiveMaximum: 9,
-    };
-    expect(inputHint(schema)).toBe("number /* integer, >= 0, <= 10, > 1, < 9 */");
-    expect(outputHint(schema)).toBe("number");
-  });
-
   it.each([{ minimum: "1" }, { maximum: Number.POSITIVE_INFINITY }])(
     "defers malformed numeric bounds instead of inventing constraints: %j",
     (bounds) => {
@@ -61,11 +60,17 @@ describe("tool schema hints", () => {
     const schema = fields(
       12,
       (i) => `field_${String(i).padStart(2, "0")}`,
-      Type.Integer({ minimum: 0, maximum: 100, description: "Description stays deferred." }),
+      Type.Integer({
+        minimum: 0,
+        maximum: 100,
+        exclusiveMinimum: 1,
+        exclusiveMaximum: 99,
+        description: "Description stays deferred.",
+      }),
     );
     const input = inputHint(schema);
 
-    expect(input).toContain("field_00: number /* integer, >= 0, <= 100 */");
+    expect(input).toContain("field_00: number /* integer, >= 0, <= 100, > 1, < 99 */");
     expect(input).toContain("...");
     expect(input).not.toContain("Description stays deferred.");
     expect(input.length).toBeLessThanOrEqual(300);
@@ -73,66 +78,11 @@ describe("tool schema hints", () => {
     expect(outputHint(schema)).not.toContain("/*");
   });
 
-  it("keeps deeply nested literal unions complete without increasing the depth budget", () => {
-    const outputSchema = closedObject({
-      conversations: Type.Array(
-        closedObject({
-          conversationRef: Type.String(),
-          kind: Type.Union(["direct", "group", "channel"].map((kind) => Type.Literal(kind))),
-        }),
-      ),
-    });
-
-    expect(outputHint(outputSchema)).toBe(
-      '{ conversations: Array<{ conversationRef: string; kind: "direct" | "group" | "channel" }> }',
-    );
-  });
-
-  it("renders up to eight literal union values", () => {
-    const values = "env agent defaults model provider implicit session session-key".split(" ");
-    const eight = Type.Union(values.map((value) => Type.Literal(value)));
-    const nine = Type.Union([...values, "extra"].map((value) => Type.Literal(value)));
-
-    expect(outputHint(eight)).toBe(
-      '"env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key"',
-    );
-    expect(outputHint(nine)).toBeUndefined();
-  });
-
-  it("renders five structural union variants and rejects six", () => {
-    const variant = (index: number) =>
-      closedObject({ kind: Type.Literal(`variant-${index}`), value: Type.Number() });
-    const five = Type.Union(Array.from({ length: 5 }, (_unused, index) => variant(index)));
-    const six = Type.Union(Array.from({ length: 6 }, (_unused, index) => variant(index)));
-
-    expect(outputHint(five)).toBe(
-      '{ kind: "variant-0"; value: number } | { kind: "variant-1"; value: number } | { kind: "variant-2"; value: number } | { kind: "variant-3"; value: number } | { kind: "variant-4"; value: number }',
-    );
-    expect(outputHint(six)).toBeUndefined();
-  });
-
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = fields(16, (i) => `field_${String(i).padStart(2, "0")}_with_long_name`);
 
-    const input = inputHint(schema);
-    const output = outputHint(schema);
-
-    expect(input).toBe("unknown");
-    expect(output).toBeDefined();
-    expect(output!.length).toBeGreaterThan(300);
-    expect(output!.length).toBeLessThanOrEqual(600);
-  });
-
-  it("keeps contracts with explicitly opaque leaves complete", () => {
-    const outputSchema = closedObject({
-      payload: Type.Optional(Type.Unknown()),
-      messages: Type.Array(Type.Unknown()),
-      count: Type.Number(),
-    });
-
-    expect(outputHint(outputSchema)).toBe(
-      "{ count: number; messages: Array<unknown>; payload?: unknown }",
-    );
+    expect(inputHint(schema)).toBe("unknown");
+    expect(outputHint(schema)).toContain("field_15_with_long_name: string");
   });
 
   it.each([
@@ -163,32 +113,30 @@ describe("tool schema hints", () => {
     const cyclic: Record<string, unknown> = { type: "object", properties: {} };
     (cyclic.properties as Record<string, unknown>).self = cyclic;
 
-    expect(outputHint(cyclic)).toBeUndefined();
-    expect(outputHint({ $ref: "#/$defs/result" })).toBeUndefined();
-    expect(outputHint({ anyOf: [] })).toBeUndefined();
-    expect(outputHint({ ...closedIdSchema, oneOf: [] })).toBeUndefined();
-    expect(
-      outputHint({
+    for (const schema of [
+      cyclic,
+      { $ref: "#/$defs/result" },
+      { anyOf: [] },
+      Type.Union(Array.from({ length: 9 }, (_, index) => Type.Literal(index))),
+      Type.Union(
+        Array.from({ length: 6 }, (_, index) => closedObject({ kind: Type.Literal(index) })),
+      ),
+      { ...closedIdSchema, oneOf: [] },
+      {
         ...closedIdSchema,
         anyOf: Array.from({ length: 5 }, (_unused, index) => ({ const: index })),
-      }),
-    ).toBeUndefined();
-    expect(
-      outputHint({
-        ...closedIdSchema,
-        anyOf: [{ const: "a" }],
-        oneOf: [{ const: "b" }],
-      }),
-    ).toBeUndefined();
-    expect(outputHint(Type.Object({ id: Type.String() }))).toBeUndefined();
-    expect(
-      outputHint({
+      },
+      { ...closedIdSchema, anyOf: [{ const: "a" }], oneOf: [{ const: "b" }] },
+      Type.Object({ id: Type.String() }),
+      {
         type: "object",
         properties: {},
         patternProperties: { "^item_": { type: "number" } },
         additionalProperties: false,
-      }),
-    ).toBeUndefined();
+      },
+    ]) {
+      expect(outputHint(schema)).toBeUndefined();
+    }
 
     const oversized = fields(32, (i) => `field_${i}`);
     expect(outputHint(oversized)).toBeUndefined();

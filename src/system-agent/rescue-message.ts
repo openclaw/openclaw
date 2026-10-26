@@ -5,8 +5,10 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentRoles } from "../agents/agent-roles.js";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals.js";
 import {
   createCorePluginStateKeyedStore,
   replaceCorePluginStateEntry,
@@ -21,7 +23,6 @@ import {
   type SystemAgentOperation,
 } from "./operations.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
-import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
 
 /**
  * Rescue mode accepts `/openclaw` commands from approved message contexts,
@@ -110,16 +111,6 @@ function resolveAccountDiscriminator(command: CommandContext): string {
   return command.accountId?.trim() || command.to?.trim() || "default";
 }
 
-function pendingStoreOptions(env?: NodeJS.ProcessEnv) {
-  return {
-    ownerId: "core:system-agent" as const,
-    namespace: RESCUE_PENDING_NAMESPACE,
-    maxEntries: RESCUE_PENDING_MAX_ENTRIES,
-    overflowPolicy: "reject-new" as const,
-    ...(env ? { env } : {}),
-  };
-}
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return (
     value !== null &&
@@ -183,13 +174,6 @@ function buildAuditDetails(input: SystemAgentRescueMessageInput): Record<string,
   };
 }
 
-function formatPersistentPlan(operation: SystemAgentOperation): string {
-  return formatSystemAgentPersistentPlan(operation).replace(
-    "Say yes to apply.",
-    "Reply /openclaw yes to apply.",
-  );
-}
-
 function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): string | null {
   if (operation.kind === "open-tui") {
     return [
@@ -232,14 +216,37 @@ export async function runSystemAgentRescueMessage(
   if (rescueMessage === null) {
     return null;
   }
-  const policy = resolveSystemAgentRescuePolicy({
-    cfg: input.cfg,
-    agentId: input.agentId,
-    senderIsOwner: input.command.senderIsOwner,
-    isDirectMessage: !input.isGroup,
+  const cfg = input.cfg;
+  const agentId = input.agentId;
+  const senderIsOwner = input.command.senderIsOwner;
+  const isDirectMessage = !input.isGroup;
+  // Rescue intentionally opens only for owner-controlled, non-sandboxed YOLO host
+  // posture because remote commands can write local state.
+  const agent = agentId ? resolveAgentEntry(cfg, agentId) : undefined;
+  const sandboxMode = agent?.sandbox?.mode ?? cfg.agents?.defaults?.sandbox?.mode ?? "off";
+  if (sandboxMode !== "off") {
+    return "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.";
+  }
+  const globalExec = cfg.tools?.exec;
+  const inherited = resolveExecModePolicy({
+    mode: globalExec?.mode,
+    security: globalExec?.security ?? "full",
+    ask: globalExec?.ask ?? "off",
   });
-  if (!policy.allowed) {
-    return policy.message;
+  const scopedExec = agent?.tools?.exec;
+  const effective = resolveExecModePolicy({
+    mode: scopedExec?.mode,
+    security: scopedExec?.security ?? inherited.security,
+    ask: scopedExec?.ask ?? inherited.ask,
+  });
+  if (effective.mode !== "full") {
+    return "OpenClaw rescue requires YOLO host posture with sandboxing off.";
+  }
+  if (!senderIsOwner) {
+    return "OpenClaw rescue only accepts commands from an OpenClaw owner.";
+  }
+  if (!isDirectMessage) {
+    return "OpenClaw rescue is restricted to owner DMs by default.";
   }
 
   const assertOwnerCurrent = input.command.assertOwnerCurrent;
@@ -248,7 +255,14 @@ export async function runSystemAgentRescueMessage(
     assertOwnerCurrent?.();
     assertInvocationCurrent?.();
   };
-  const options = pendingStoreOptions(input.env);
+  const env = input.env;
+  const options = {
+    ownerId: "core:system-agent" as const,
+    namespace: RESCUE_PENDING_NAMESPACE,
+    maxEntries: RESCUE_PENDING_MAX_ENTRIES,
+    overflowPolicy: "reject-new" as const,
+    ...(env ? { env } : {}),
+  };
   const pendingStore = createCorePluginStateKeyedStore<unknown>(options).withCurrent({
     assertCurrent,
   });
@@ -321,7 +335,10 @@ export async function runSystemAgentRescueMessage(
       { ttlMs, assertCurrent },
     );
     assertCurrent();
-    return formatPersistentPlan(operation);
+    return formatSystemAgentPersistentPlan(operation).replace(
+      "Say yes to apply.",
+      "Reply /openclaw yes to apply.",
+    );
   }
 
   await pendingStore.delete(pendingKey);

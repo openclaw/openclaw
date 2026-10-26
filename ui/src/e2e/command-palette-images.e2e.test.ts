@@ -121,6 +121,7 @@ suite.define(() => {
         name: "Start new session in background",
         exact: true,
       });
+      await expect.poll(() => images.count()).toBe(2);
       await expect.poll(() => start.isEnabled()).toBe(true);
       await gateway.deferNext("sessions.create");
       await input.press("ControlOrMeta+Enter");
@@ -128,7 +129,7 @@ suite.define(() => {
         message: "",
         attachments,
       });
-      expect(await input.isDisabled()).toBe(true);
+      expect(await input.isEditable()).toBe(false);
       await page.keyboard.press("ControlOrMeta+Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await gateway.rejectDeferred("sessions.create", {

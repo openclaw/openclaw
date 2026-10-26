@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleGatewayRequest } from "./server-methods.js";
+import { startAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const key = "agent:main:test";
@@ -25,30 +25,13 @@ const placementCases = [
 ] as const;
 
 async function dispatch(method: string, params: unknown, scopes: readonly string[], stub = true) {
-  const client = {
-    connId: `conn-${crypto.randomUUID()}`,
-    connect: {
-      role: "operator",
-      scopes: [...scopes],
-      client: { id: "test", version: "1", platform: "test", mode: "test" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as Parameters<typeof handleGatewayRequest>[0]["client"];
-  const context = {
-    getRuntimeConfig: () => ({}),
-    logGateway: { warn: vi.fn() },
-  } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
   const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { reached: true }));
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: { type: "req", id: `req-${method}`, method, params },
-    respond,
-    client,
-    isWebchatConnect: () => false,
-    context,
+  const { request, respond } = startAuthorizationRequest(method, params, {
+    connId: `conn-${crypto.randomUUID()}`,
+    scopes: [...scopes],
     ...(stub ? { extraHandlers: { [method]: handler } } : {}),
   });
+  await request;
   return { handler, respond };
 }
 

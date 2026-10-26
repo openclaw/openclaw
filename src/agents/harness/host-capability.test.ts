@@ -157,7 +157,7 @@ describe("agent harness host capability", () => {
 
   it.each([
     { available: undefined, expected: [] },
-    { available: false, expected: ["github_identity_status"] },
+    { available: false, expected: ["github_identity_status", "github_publish"] },
     { available: true, expected: ["github_identity_status", "github_publish"] },
   ])(
     "captures GitHub availability independently of plugin inputs: $available",

@@ -104,7 +104,6 @@ function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
-    .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!slug) {
     return "page";
@@ -343,8 +342,11 @@ function findNotesHumanBlock(
   return { start: bodyOffset + start, end: bodyOffset + endMarker + HUMAN_END_MARKER.length };
 }
 
-export function extractHumanNotesBlock(page: string): string | null {
-  const block = findNotesHumanBlock(page);
+export function extractHumanNotesBlock(
+  page: string,
+  options?: { producerMarkdown?: boolean },
+): string | null {
+  const block = findNotesHumanBlock(page, options?.producerMarkdown);
   if (!block) {
     return null;
   }

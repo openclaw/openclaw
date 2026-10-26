@@ -59,16 +59,7 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
 function registerHostTrustedReservedCommandForTest(
   command: Parameters<typeof registerPluginCommand>[1],
 ) {
-  const pluginRegistry = createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: true,
-  });
+  const pluginRegistry = createCommandRegistryFixture();
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
   setActivePluginRegistry(pluginRegistry.registry);
 }
@@ -132,6 +123,52 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
       detached: { removed: false },
     }),
   );
+}
+
+type ExecutionParams = Parameters<typeof executePluginCommand>[0];
+
+function executeCommandFixture(
+  command: ExecutionParams["command"],
+  params: Partial<Omit<ExecutionParams, "command">> = {},
+) {
+  return executePluginCommand({
+    command,
+    channel: "telegram",
+    isAuthorizedSender: true,
+    commandBody: `/${command.name}`,
+    config: {},
+    ...params,
+  });
+}
+
+function executionCommand(
+  name: string,
+  handler: ExecutionParams["command"]["handler"],
+  overrides: Partial<ExecutionParams["command"]> = {},
+): ExecutionParams["command"] {
+  return {
+    name,
+    description: "Demo command",
+    acceptsArgs: false,
+    handler,
+    pluginId: "demo-plugin",
+    ...overrides,
+  };
+}
+
+function createCommandRegistryFixture() {
+  return createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+}
+
+function completionCommandHandler(content: string): ExecutionParams["command"]["handler"] {
+  return async (ctx) => {
+    await ctx.runtimeContext?.llm?.complete({ messages: [{ role: "user", content }] });
+    return { text: "ok" };
+  };
 }
 
 beforeEach(() => {
@@ -510,13 +547,8 @@ describe("registerPluginCommand", () => {
       expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Scoped guidance"]);
       const match = matchPluginCommand("/same");
       expect(match?.command.pluginId).toBe("scoped");
-      await executePluginCommand({
-        command: match!.command,
+      await executeCommandFixture(match!.command, {
         senderId: "user-1",
-        channel: "telegram",
-        isAuthorizedSender: true,
-        commandBody: "/same",
-        config: {},
       });
     });
 
@@ -792,13 +824,8 @@ describe("registerPluginCommand", () => {
     });
     const match = requirePluginCommandMatch(`/voice \0${"a".repeat(4094)}😀tail`);
 
-    await executePluginCommand({
-      command: match.command,
+    await executeCommandFixture(match.command, {
       args: match.args,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      commandBody: "/voice",
-      config: {},
     });
 
     expect(observedArgs).toBe("a".repeat(4094));
@@ -817,29 +844,15 @@ describe("registerPluginCommand", () => {
     });
     const match = requirePluginCommandMatch("/voice");
 
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
+    await executeCommandFixture(match.command, {
       senderIsOwner: true,
-      commandBody: "/voice",
-      config: {},
     });
 
     expect(observedOwnerStatus).toBeUndefined();
   });
 
   it("ignores owner status opt-in from external plugin registry commands", async () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: true,
-    });
+    const pluginRegistry = createCommandRegistryFixture();
     let observedOwnerStatus: boolean | undefined;
     pluginRegistry.registerCommand(
       {
@@ -861,29 +874,15 @@ describe("registerPluginCommand", () => {
     setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/external");
 
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
+    await executeCommandFixture(match.command, {
       senderIsOwner: true,
-      commandBody: "/external",
-      config: {},
     });
 
     expect(observedOwnerStatus).toBeUndefined();
   });
 
   it("exposes owner status to trusted bundled plugin commands that opt in", async () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: true,
-    });
+    const pluginRegistry = createCommandRegistryFixture();
     let observedOwnerStatus: boolean | undefined;
     pluginRegistry.registerCommand(createBundledPluginRecord("device-pair"), {
       name: "pair_test",
@@ -897,13 +896,8 @@ describe("registerPluginCommand", () => {
     setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/pair_test");
 
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
+    await executeCommandFixture(match.command, {
       senderIsOwner: true,
-      commandBody: "/pair_test",
-      config: {},
     });
 
     expect(observedOwnerStatus).toBe(true);
@@ -916,19 +910,16 @@ describe("registerPluginCommand", () => {
       return { text: "ok" };
     };
 
-    const result = await executePluginCommand({
-      command: {
+    const result = await executeCommandFixture(
+      {
         name: "voice",
         description: "Voice command",
         channels: ["qqbot"],
         handler,
         pluginId: "demo-plugin",
       },
-      channel: "discord",
-      isAuthorizedSender: true,
-      commandBody: "/voice",
-      config: {},
-    });
+      { channel: "discord" },
+    );
 
     expect(result).toEqual({ continueAgent: true });
     expect(handlerCalled).toBe(false);
@@ -966,29 +957,15 @@ describe("registerPluginCommand", () => {
     });
     const match = requirePluginCommandMatch("/codex");
 
-    await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
+    await executeCommandFixture(match.command, {
       senderIsOwner: true,
-      commandBody: "/codex",
-      config: {},
     });
 
     expect(observedOwnerStatus).toBe(true);
   });
 
   it("rejects mismatched reserved command owners", () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: true,
-    });
+    const pluginRegistry = createCommandRegistryFixture();
     pluginRegistry.registerCommand(createBundledPluginRecord("bundled-plugin"), {
       name: "codex",
       description: "Codex command",
@@ -1123,24 +1100,16 @@ describe("registerPluginCommand", () => {
       { pluginRoot: "/plugins/demo-plugin" },
     );
 
-    const result = await executePluginCommand({
-      command: {
-        name: "bindcheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-        pluginRoot: "/plugins/demo-plugin",
+    const result = await executeCommandFixture(
+      executionCommand("bindcheck", handler, { pluginRoot: "/plugins/demo-plugin" }),
+      {
+        channel: "slack",
+        senderId: "U123",
+        from: "slack:U123",
+        to: "C456",
+        accountId: "default",
       },
-      channel: "slack",
-      senderId: "U123",
-      isAuthorizedSender: true,
-      commandBody: "/bindcheck",
-      config: {} as never,
-      from: "slack:U123",
-      to: "C456",
-      accountId: "default",
-    });
+    );
 
     expectUnsupportedBindingApiResult(result);
   });
@@ -1161,24 +1130,23 @@ describe("registerPluginCommand", () => {
     );
     const handler = vi.fn(async () => ({ text: "ok" }));
 
-    await executePluginCommand({
-      command: {
+    await executeCommandFixture(
+      {
         name: "control",
         description: "Control a binding",
         acceptsArgs: false,
         handler,
         pluginId: "demo-plugin",
       },
-      channel: "slack",
-      senderId: "U123",
-      isAuthorizedSender: true,
-      commandBody: "/control",
-      config: {} as never,
-      from: "slack:U123",
-      to: "changed-runtime-target",
-      originatingTo: "user:U123",
-      accountId: "default",
-    });
+      {
+        channel: "slack",
+        senderId: "U123",
+        from: "slack:U123",
+        to: "changed-runtime-target",
+        originatingTo: "user:U123",
+        accountId: "default",
+      },
+    );
 
     expect(resolveCommandConversation).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1200,21 +1168,11 @@ describe("registerPluginCommand", () => {
       return { text: "ok" };
     };
 
-    const result = await executePluginCommand({
-      command: {
-        name: "sessioncheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
+    const result = await executeCommandFixture(executionCommand("sessioncheck", handler), {
       channel: "whatsapp",
       senderId: "U123",
-      isAuthorizedSender: true,
       sessionKey: "agent:main:whatsapp:direct:123",
       sessionId: "session-123",
-      commandBody: "/sessioncheck",
-      config: {} as never,
     });
 
     expect(result).toEqual({ text: "ok" });
@@ -1223,34 +1181,11 @@ describe("registerPluginCommand", () => {
   });
 
   it("binds legacy main session plugin llm runtime to the default agent", async () => {
-    const handler = async (ctx: {
-      runtimeContext?: {
-        llm?: {
-          complete: (params: {
-            messages: Array<{ role: "user"; content: string }>;
-          }) => Promise<unknown>;
-        };
-      };
-    }) => {
-      await ctx.runtimeContext?.llm?.complete({
-        messages: [{ role: "user", content: "draft" }],
-      });
-      return { text: "ok" };
-    };
+    const handler = completionCommandHandler("draft");
 
-    await executePluginCommand({
-      command: {
-        name: "runtimecheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
-      channel: "telegram",
+    await executeCommandFixture(executionCommand("runtimecheck", handler), {
       senderId: "U123",
-      isAuthorizedSender: true,
       sessionKey: "main",
-      commandBody: "/runtimecheck",
       config: {
         agents: {
           entries: { ops: {} },
@@ -1272,37 +1207,14 @@ describe("registerPluginCommand", () => {
   });
 
   it("binds plugin-owned command sessions to the host-resolved agent", async () => {
-    const handler = async (ctx: {
-      runtimeContext?: {
-        llm?: {
-          complete: (params: {
-            messages: Array<{ role: "user"; content: string }>;
-          }) => Promise<unknown>;
-        };
-      };
-    }) => {
-      await ctx.runtimeContext?.llm?.complete({
-        messages: [{ role: "user", content: "summarize" }],
-      });
-      return { text: "ok" };
-    };
+    const handler = completionCommandHandler("summarize");
 
-    await executePluginCommand({
-      command: {
-        name: "runtimecheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
+    await executeCommandFixture(executionCommand("runtimecheck", handler), {
       channel: "discord",
       senderId: "U123",
-      isAuthorizedSender: true,
       agentId: "codex",
       sessionKey: "plugin-binding:openclaw-codex-app-server:dm",
       authProfileId: "openai:owner@example.com",
-      commandBody: "/runtimecheck",
-      config: {} as never,
     });
 
     expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
@@ -1316,19 +1228,8 @@ describe("registerPluginCommand", () => {
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
     const handler = async () => undefined as never;
 
-    const result = await executePluginCommand({
-      command: {
-        name: "silentcheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
-      channel: "telegram",
+    const result = await executeCommandFixture(executionCommand("silentcheck", handler), {
       senderId: "U123",
-      isAuthorizedSender: true,
-      commandBody: "/silentcheck",
-      config: {} as never,
     });
 
     expect(result).toStrictEqual({});
@@ -1384,19 +1285,9 @@ describe("registerPluginCommand", () => {
       return { text: "ok" };
     };
 
-    const result = await executePluginCommand({
-      command: {
-        name: "accountcheck",
-        description: "Demo command",
-        acceptsArgs: false,
-        handler,
-        pluginId: "demo-plugin",
-      },
+    const result = await executeCommandFixture(executionCommand("accountcheck", handler), {
       channel: "line",
       senderId: "U123",
-      isAuthorizedSender: true,
-      commandBody: "/accountcheck",
-      config: {} as never,
       from: "line:user:U1234567890abcdef1234567890abcdef",
     });
 

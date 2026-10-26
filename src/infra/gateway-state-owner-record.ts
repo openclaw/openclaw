@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayLockProcessNamespace,
   GatewayLockNamespaceError,
@@ -39,7 +40,7 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
     return false;
   }
-  const namespace = classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath);
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
@@ -86,7 +87,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   }
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
-  const namespace = classifyGatewayLockProcessNamespace(owner.processNamespace, ownerPath);
+  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
   if (isComparableStateOwnerStale(owner, namespace)) {
     return;
   }
@@ -106,7 +107,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
-  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes.`;
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\`.`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
@@ -126,6 +127,7 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(parentPid === undefined ? {} : { parentPid }),
     ...(parentStartTime === null ? {} : { parentStartTime }),
     ...(startTime === null ? {} : { startTime }),

@@ -39,7 +39,7 @@
 }
 
 .chat-details-subagents__row:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details-subagents__row:focus-visible {
@@ -87,7 +87,7 @@
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: details-subagents-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .chat-details-subagents__check {
@@ -176,6 +176,15 @@
 
 .chat-details-subagents__count {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-details-subagents__count[data-status="running"] {
+  color: var(--text);
+}
+
+.chat-details-subagents__count[data-status="done"]:not(:first-child) {
+  margin-inline-start: auto;
 }
 
 .chat-details-subagents__chevron {
@@ -238,35 +247,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@supports (background-clip: text) {
-  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-    .chat-details-subagents--mobile .chat-details-subagents__working {
-      background: linear-gradient(100deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
-      background-size: 250% 100%;
-      background-clip: text;
-      color: transparent;
-      animation: details-subagents-shimmer 1.5s linear infinite;
-    }
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-details-subagents__spinner {
     animation: none;
-  }
-}
-
-@keyframes details-subagents-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes details-subagents-shimmer {
-  from {
-    background-position: 150% 0;
-  }
-  to {
-    background-position: -150% 0;
   }
 }

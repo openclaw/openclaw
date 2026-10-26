@@ -191,14 +191,6 @@ function logBraveHttp(
   braveHttpLogger.info(`brave http ${event}`, meta);
 }
 
-function resolveBraveBaseUrl(braveConfig: { baseUrl?: unknown } | undefined): string {
-  const configured = readConfiguredSecretString(
-    braveConfig?.baseUrl,
-    "plugins.entries.brave.config.webSearch.baseUrl",
-  );
-  return configured?.replace(/\/+$/u, "") || DEFAULT_BRAVE_BASE_URL;
-}
-
 async function braveEndpointTargetsPrivateNetwork(
   url: URL,
   signal?: AbortSignal,
@@ -272,7 +264,11 @@ export async function executeBraveSearch(
 
   const braveConfig = asNonArrayRecord(searchConfig?.brave);
   const braveMode = resolveBraveMode(braveConfig);
-  const braveBaseUrl = resolveBraveBaseUrl(braveConfig);
+  const configuredBraveBaseUrl = readConfiguredSecretString(
+    braveConfig?.baseUrl,
+    "plugins.entries.brave.config.webSearch.baseUrl",
+  );
+  const braveBaseUrl = configuredBraveBaseUrl?.replace(/\/+$/u, "") || DEFAULT_BRAVE_BASE_URL;
   // One deadline owns classification, transport, response consumption, and cache publication.
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: resolveSearchTimeoutSeconds(searchConfig) * 1_000,
@@ -463,12 +459,12 @@ export async function executeBraveSearch(
             : [];
           return {
             mode: "llm-context" as const,
-            results: genericResults.map((entry) => ({
+            results: genericResults.slice(0, requestedCount).map((entry) => ({
               url: entry.url ?? "",
-              title: entry.title ?? "",
-              snippets: (entry.snippets ?? []).filter(
-                (snippet) => typeof snippet === "string" && snippet.length > 0,
-              ),
+              title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+              snippets: (entry.snippets ?? [])
+                .filter((snippet) => typeof snippet === "string" && snippet.length > 0)
+                .map((snippet) => wrapWebContent(snippet, "web_search")),
               siteName: resolveSiteName(entry.url) || undefined,
               // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
               // Only the absolute forms belong in published; never infer a date from recency.
@@ -501,16 +497,7 @@ export async function executeBraveSearch(
     );
     // A completed upstream response must not write cache state after its caller aborts.
     signal?.throwIfAborted();
-    const results =
-      response.mode === "llm-context"
-        ? response.results.slice(0, requestedCount).map((entry) => ({
-            title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-            url: entry.url,
-            snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),
-            siteName: entry.siteName,
-            published: entry.published,
-          }))
-        : response.results;
+    const results = response.results;
     const payload = {
       query,
       provider: "brave",

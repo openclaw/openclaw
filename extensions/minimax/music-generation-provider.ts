@@ -31,27 +31,6 @@ const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 const STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER = 5;
 const STREAM_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
-type MinimaxMusicCreateResponse = {
-  task_id?: string;
-  audio?: string;
-  audio_url?: string;
-  lyrics?: string;
-  data?: {
-    audio?: string;
-    audio_url?: string;
-    lyrics?: string;
-  };
-  base_resp?: MinimaxBaseResp;
-};
-
-type MinimaxMusicStreamFrame = {
-  data?: {
-    audio?: string;
-    status?: number | string;
-  };
-  base_resp?: MinimaxBaseResp;
-};
-
 function decodeHexAudioWithLimit(data: string, maxBytes: number): Buffer {
   const trimmed = normalizeMinimaxHexAudio(data, "MiniMax music generation");
   if (trimmed.length / 2 > maxBytes) {
@@ -71,13 +50,6 @@ function decodePossibleText(data: string): string {
   return trimmed;
 }
 
-function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
-  });
-}
-
 function createGeneratedMusicTooLargeError(maxBytes: number): Error {
   return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
 }
@@ -95,7 +67,11 @@ async function readResponseBufferWithDeadline(
   maxBytes: number,
 ): Promise<Buffer> {
   return await readResponseWithLimit(response, maxBytes, {
-    timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
+    timeoutMs: () =>
+      resolveProviderOperationTimeoutMs({
+        deadline,
+        defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+      }),
     onTimeout: () => createProviderOperationTimeoutError(deadline),
     onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
   });
@@ -134,7 +110,13 @@ async function readStreamingTrack(
     if (!json || json === "[DONE]") {
       continue;
     }
-    const frame = JSON.parse(json) as MinimaxMusicStreamFrame;
+    const frame = JSON.parse(json) as {
+      data?: {
+        audio?: string;
+        status?: number | string;
+      };
+      base_resp?: MinimaxBaseResp;
+    };
     assertMinimaxBaseResp(frame.base_resp, "MiniMax music generation failed");
     if (String(frame.data?.status ?? "") === "2") {
       completed = true;
@@ -262,7 +244,18 @@ export function buildMinimaxMusicGenerationProvider(
                     resolveStreamEnvelopeMaxBytes(maxGeneratedMusicBytes),
                   ),
                 ),
-              ) as MinimaxMusicCreateResponse);
+              ) as {
+                task_id?: string;
+                audio?: string;
+                audio_url?: string;
+                lyrics?: string;
+                data?: {
+                  audio?: string;
+                  audio_url?: string;
+                  lyrics?: string;
+                };
+                base_resp?: MinimaxBaseResp;
+              });
         if (payload) {
           assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
         }

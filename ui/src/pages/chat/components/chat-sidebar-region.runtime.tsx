@@ -1,6 +1,6 @@
 import "../../../styles/chat/side-panel.css";
 import { Portal } from "@solidjs/web";
-import { For, Show, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createSignal, onSettled } from "solid-js";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -55,10 +55,14 @@ const regionOperations = new WeakMap<
 function Region(props: RegionProps, host: RegionElement) {
   const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
   const panelElements = new Map<string, HTMLDivElement>();
+  const panelRef = (id: string) =>
+    elementRef((element: HTMLDivElement) => {
+      panelElements.set(id, element);
+      return () => panelElements.delete(id);
+    });
   let sideHeader: HTMLElement | null = null;
   let localBack: HTMLElement | undefined;
   const tabFocus = createTabFocus();
-  const focusActiveSideTab = tabFocus.focusActive;
   const operations = {
     readMobileChromeHeight: () =>
       (props.mobileHost?.destination.area === "panels"
@@ -68,7 +72,7 @@ function Region(props: RegionProps, host: RegionElement) {
       panelHosts.get(slot) ??
       props.panelDefinitions.find((definition) => definition.slot === slot)?.panelHost ??
       null,
-    focusActiveSideTab,
+    focusActiveSideTab: tabFocus.focusActive,
     inputsChanged(key: keyof RegionProps) {
       if (key === "elements") {
         bindHostedTabsRoot();
@@ -93,9 +97,23 @@ function Region(props: RegionProps, host: RegionElement) {
     setHostedRevision((value) => value + 1);
     scheduleGeometryCommit();
   };
+  function notifyPanelReady() {
+    if (!props.onPanelReady) {
+      return;
+    }
+    // Direct Solid hosts can settle before their portal inserts them.
+    queueMicrotask(() =>
+      onSettled(() => {
+        if (regionOperations.get(host) === operations && host.isConnected) {
+          props.onPanelReady?.();
+        }
+      }),
+    );
+  }
   const panelHostRegistration = (initialSlot: SidebarSlotId) => (element: SidebarPanelHost) => {
     panelHosts.set(initialSlot, element);
     refreshHostedTabs();
+    notifyPanelReady();
     return () => {
       if (panelHosts.get(initialSlot) === element) {
         panelHosts.delete(initialSlot);
@@ -161,7 +179,7 @@ function Region(props: RegionProps, host: RegionElement) {
     focusedSurface = header;
     const restoreFocus = () => {
       if (props.layout.open && focusedSurface === header && header?.isConnected) {
-        focusActiveSideTab();
+        tabFocus.focusActive();
       }
     };
     const scope = props.panelIdPrefix;
@@ -224,63 +242,6 @@ function Region(props: RegionProps, host: RegionElement) {
     refreshHostedTabs();
     await finishClose();
   };
-
-  /**
-   * A narrow pane puts the side panel in the main view's place, hiding whatever
-   * held focus there. Focus continues on the panel's tab, and goes back to that
-   * control once the panel is closed.
-   */
-  function moveFocusWithSideLock(state: {
-    locked: boolean;
-    managed?: boolean;
-    origin?: () => HTMLElement | null;
-    open: boolean;
-  }): void {
-    const side = props.elements?.outlet;
-    const region = props.elements?.shell;
-    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const inSide = Boolean(active && side?.contains(active));
-    if (state.locked) {
-      // The first panel a pane opens mounts this component after the browser
-      // has dropped focus from the hidden view; the pane then says what held it.
-      const given = state.origin?.() ?? null;
-      const origin = active && region?.contains(active) && !inSide ? active : given;
-      // A pane that merely loads this way has neither, and takes no focus.
-      if (origin) {
-        focusBeforeSideLock = origin;
-        // Content with an opening focus request owns entry. Focusing its tab here
-        // would look like newer input and cancel that request. Keep the return target.
-        if (state.managed) {
-          return;
-        }
-        // A tab strip rendered just now is focusable from its next frame.
-        if (focusFrame !== null) {
-          cancelAnimationFrame(focusFrame);
-        }
-        focusFrame = requestAnimationFrame(() => {
-          focusFrame = null;
-          const now = document.activeElement;
-          const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
-          if (props.sideFocusLocked && !moved) {
-            focusActiveSideTab();
-          }
-        });
-      }
-      return;
-    }
-    const before = focusBeforeSideLock;
-    focusBeforeSideLock = null;
-    const adrift = !active || active === document.body;
-    // A panel that is still open, beside or under the main view, keeps the focus it has.
-    if (!before || !(adrift || (inSide && !state.open))) {
-      return;
-    }
-    before.focus({ preventScroll: true });
-    if (document.activeElement !== before) {
-      // That control is gone by now; carry on from the main view's own header.
-      props.elements?.header.focus({ preventScroll: true });
-    }
-  }
 
   function scheduleGeometryCommit() {
     scheduleLayout(host, () => {
@@ -397,14 +358,13 @@ function Region(props: RegionProps, host: RegionElement) {
         }
       >
         {(type) => (
-          <div class="side-panel-empty side-panel-empty--type">
-            <PanelEmptyState
-              icon={<Icon name={type().icon} />}
-              heading={type().label}
-              description={type().empty.description}
-              action={type().empty.action}
-            />
-          </div>
+          <PanelEmptyState
+            presentation={props.presentation}
+            icon={<Icon name={type().icon} />}
+            heading={type().label}
+            description={type().empty.description}
+            action={type().empty.action}
+          />
         )}
       </Show>
     );
@@ -424,12 +384,9 @@ function Region(props: RegionProps, host: RegionElement) {
       >
         <For each={panels()} keyed={(panel) => panel.id}>
           {(panel) => {
-            // The semantic key owns this container until that panel is removed.
-            const initialPanelId = untrack(() => panel().id);
-            onCleanup(() => panelElements.delete(initialPanelId));
             return (
               <div
-                ref={(element) => panelElements.set(initialPanelId, element)}
+                ref={[panelRef(panel().id)]}
                 id={`${props.panelIdPrefix}-${encodeURIComponent(panel().slot)}`}
                 class="side-panel__panel"
                 role="region"
@@ -441,13 +398,12 @@ function Region(props: RegionProps, host: RegionElement) {
               >
                 <SidebarPanelView
                   definition={sidebarPanelType(props.panelDefinitions, panel().slot)}
+                  visible={isSidebarSlotVisible(props.layout, panel().slot)}
                   registerPanelHost={panelHostRegistration(panel().slot)}
                 />
                 <Show
                   when={
                     !sidebarPanelType(props.panelDefinitions, panel().slot).view &&
-                    sidebarPanelType(props.panelDefinitions, panel().slot).loadState ===
-                      undefined &&
                     sidebarPanelType(props.panelDefinitions, panel().slot).content == null
                   }
                 >
@@ -601,12 +557,59 @@ function Region(props: RegionProps, host: RegionElement) {
         return;
       }
       previousLock = props.sideFocusLocked;
-      moveFocusWithSideLock({
-        locked: props.sideFocusLocked,
-        managed: props.sideFocusManaged,
-        origin: props.sideFocusOrigin,
-        open: props.layout.open === true,
-      });
+      /**
+       * A narrow pane puts the side panel in the main view's place, hiding whatever
+       * held focus there. Focus continues on the panel's tab, and goes back to that
+       * control once the panel is closed.
+       */
+      const transitionLocked = props.sideFocusLocked;
+      const transitionManaged = props.sideFocusManaged;
+      const transitionOrigin = props.sideFocusOrigin;
+      const transitionOpen = props.layout.open === true;
+      const side = props.elements?.outlet;
+      const region = props.elements?.shell;
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const inSide = Boolean(active && side?.contains(active));
+      if (transitionLocked) {
+        // The first panel a pane opens mounts this component after the browser
+        // has dropped focus from the hidden view; the pane then says what held it.
+        const given = transitionOrigin?.() ?? null;
+        const origin = active && region?.contains(active) && !inSide ? active : given;
+        // A pane that merely loads this way has neither, and takes no focus.
+        if (origin) {
+          focusBeforeSideLock = origin;
+          // Content with an opening focus request owns entry. Focusing its tab here
+          // would look like newer input and cancel that request. Keep the return target.
+          if (transitionManaged) {
+            return;
+          }
+          // A tab strip rendered just now is focusable from its next frame.
+          if (focusFrame !== null) {
+            cancelAnimationFrame(focusFrame);
+          }
+          focusFrame = requestAnimationFrame(() => {
+            focusFrame = null;
+            const now = document.activeElement;
+            const moved = now instanceof HTMLElement && now !== document.body && now !== origin;
+            if (props.sideFocusLocked && !moved) {
+              tabFocus.focusActive();
+            }
+          });
+        }
+        return;
+      }
+      const before = focusBeforeSideLock;
+      focusBeforeSideLock = null;
+      const adrift = !active || active === document.body;
+      // A panel that is still open, beside or under the main view, keeps the focus it has.
+      if (!before || !(adrift || (inSide && !transitionOpen))) {
+        return;
+      }
+      before.focus({ preventScroll: true });
+      if (document.activeElement !== before) {
+        // That control is gone by now; carry on from the main view's own header.
+        props.elements?.header.focus({ preventScroll: true });
+      }
     });
   }
   const listeners = new AbortController();
@@ -651,16 +654,17 @@ function Region(props: RegionProps, host: RegionElement) {
   onSettled(() => {
     scheduleGeometryCommit();
     scheduleFocusTransition();
-  });
-  onCleanup(() => {
-    regionOperations.delete(host);
-    stopHostedTabs();
-    listeners.abort();
-    focusedSurface = null;
-    cancelLayout(host);
-    if (focusFrame !== null) {
-      cancelAnimationFrame(focusFrame);
-    }
+    notifyPanelReady();
+    return () => {
+      regionOperations.delete(host);
+      stopHostedTabs();
+      listeners.abort();
+      focusedSurface = null;
+      cancelLayout(host);
+      if (focusFrame !== null) {
+        cancelAnimationFrame(focusFrame);
+      }
+    };
   });
   return (
     <Show when={props.elements}>
@@ -693,6 +697,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       sideFocusManaged: { default: false },
       sideFocusOrigin: { default: undefined, attribute: false },
       availableWidth: { default: 0 },
+      onPanelReady: { default: undefined, attribute: false },
     },
     methods: {
       readMobileChromeHeight: (host) => regionOperations.get(host)?.readMobileChromeHeight() ?? 0,

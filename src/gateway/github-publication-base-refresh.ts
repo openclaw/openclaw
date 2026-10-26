@@ -26,13 +26,11 @@ import {
 import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
-import { manifestNodes, sameEntry } from "./worker-environments/workspace-manifest-comparison.js";
-import { applyWorkspaceSourceOverlay } from "./worker-environments/workspace-manifest-overlay.js";
-import { captureWorkspaceSnapshot } from "./worker-environments/workspace-manifest-worker.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./worker-environments/workspace-manifest.js";
+  captureWorkspaceManifestDocument,
+  prepareWorkspaceBaseRefresh,
+  workspaceSnapshotsEqual,
+} from "./worker-environments/workspace-manifest-worker.js";
 import { localWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -65,6 +63,7 @@ export async function integrateManagedWorkspaceSource(
       commit: string;
       githubHost: string;
       review: { repository: string; commit: string };
+      initial: boolean;
       emptySource: boolean;
       resuming: boolean;
       accept: () => Promise<void>;
@@ -109,13 +108,16 @@ export async function integrateManagedWorkspaceSource(
         identity,
         assertCurrent,
       });
-  const initialImport = params.source !== undefined;
+  const initialImport = params.source?.initial === true;
   let guestHead: string | undefined;
   let guestDirty = false;
-  if (initialImport) {
-    if (params.source?.resuming) {
+  let pendingStaged: { path: string; indexEntry?: string }[] = [];
+  const stagedError =
+    "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
+  if (params.source) {
+    if (params.source.resuming) {
       // An accepted transfer may retain a paused runtime. Recover it through its
-      // owner before asking that runtime to execute the initial-workspace check.
+      // owner before asking that runtime to execute the workspace check.
       await withLocalWorkspaceProjection({ ...owner, assertCurrent }, (state) => state.settle());
     }
     const observed = await readManagedSandboxGitState({
@@ -125,6 +127,13 @@ export async function integrateManagedWorkspaceSource(
     });
     guestHead = observed.head;
     guestDirty = observed.dirty;
+    if (!initialImport && observed.partiallyStaged.length) {
+      if (!params.source.resuming) {
+        throw new Error(stagedError);
+      }
+      // Checked against the pending integration below.
+      pendingStaged = observed.partiallyStaged;
+    }
   }
   let previousBase: string | undefined;
   const result = await withLocalWorkspaceProjection<SessionGitHubBaseRefreshResult>(
@@ -194,14 +203,31 @@ export async function integrateManagedWorkspaceSource(
           }
           if (params.conflictsResolved && (!baseCommit || params.baseCommit !== baseCommit)) {
             throw new Error(
-              `The pending base integration changed; call refresh_base again and resolve its returned baseCommit.`,
+              `The pending source integration changed; call ${action} again and resolve its returned conflicts.`,
             );
           }
           const continuingIntegration = Boolean(baseCommit);
+          // A refresh rewrites working files before the guest index is restaged, so a refreshed file
+          // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
+          // admitted. Any other staged-only entry is guest work that completion would replace.
+          const stagedSnapshot = pendingStaged.length
+            ? (await probe(["rev-parse", "--verify", "--quiet", "ORIG_HEAD"])).stdout.trim()
+            : "";
+          for (const entry of pendingStaged) {
+            const listed = stagedSnapshot
+              ? await probe(["ls-tree", "-z", "--full-tree", stagedSnapshot, "--", entry.path])
+              : undefined;
+            const recorded = listed?.stdout
+              .split("\0")
+              .find((line) => line.slice(line.indexOf("\t") + 1) === entry.path);
+            if (!entry.indexEntry || recorded?.split("\t")[0] !== entry.indexEntry) {
+              throw new Error(stagedError);
+            }
+          }
           if (!baseCommit) {
             if (params.baseCommit) {
               throw new Error(
-                `baseCommit acknowledges an existing conflict; it cannot select a source.`,
+                `The expected commit acknowledges an existing conflict; it cannot select a source.`,
               );
             }
             baseCommit =
@@ -293,37 +319,30 @@ export async function integrateManagedWorkspaceSource(
               }
             }
             const buildCacheInputs = new Set(await state.buildCacheInputs());
-            const canonical = await captureWorkspaceSnapshot({
+            const canonical = await captureWorkspaceManifestDocument({
               root: cwd,
               baseCommit: state.current().base_commit,
               includePaths: admittedPaths,
               buildCacheInputs,
               signal: params.signal,
             });
-            const projection = await captureWorkspaceSnapshot({
+            const projection = await captureWorkspaceManifestDocument({
               root: state.current().projection_path,
               baseCommit: state.current().base_commit,
               buildCacheInputs,
               signal: params.signal,
             });
             check();
-            const canonicalNodes = manifestNodes(canonical.manifest);
-            const projectionNodes = manifestNodes(projection.manifest);
-            if (
-              canonicalNodes.size !== projectionNodes.size ||
-              [...canonicalNodes].some(
-                ([file, entry]) => !sameEntry(entry, projectionNodes.get(file)),
-              )
-            ) {
+            const equal = await workspaceSnapshotsEqual(
+              canonical,
+              projection,
+              [...buildCacheInputs],
+              params.signal,
+            );
+            check();
+            if (!equal) {
               throw new Error(pristineError);
             }
-          }
-          // The source owner admits the binding only after protecting the initial workspace.
-          await params.source?.accept();
-          check();
-          if (!continuingIntegration) {
-            await state.synchronize("canonical");
-            await state.synchronize("projection");
           }
           const mergeBases = async (left: string, right: string) => {
             const bases = await probe(["merge-base", "--all", left, right]);
@@ -356,7 +375,12 @@ export async function integrateManagedWorkspaceSource(
               }
             }
           }
+          // Do not reserve a source that cannot be integrated or whose ancestry is unavailable.
+          await params.source?.accept();
+          check();
           if (!continuingIntegration) {
+            await state.synchronize("canonical");
+            await state.synchronize("projection");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               return {
@@ -448,7 +472,6 @@ export async function integrateManagedWorkspaceSource(
                 ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
                 "Prepare selected base integration\n",
               );
-              const snapshots = [];
               for (const [name, commit] of [
                 ["before", sourceHead],
                 ["after", mergedCommit],
@@ -463,41 +486,29 @@ export async function integrateManagedWorkspaceSource(
                   signal: new AbortController().signal,
                   assertCurrent: check,
                 });
-                snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
               const buildCacheInputs = await state.buildCacheInputs();
-              const accepted = parseWorkerWorkspaceManifest(
-                state.current().baseline_json!,
-                state.current().baseline_ref!,
-                buildCacheInputs,
+              const baseline = await state.baselineDocument();
+              const current = await prepareWorkspaceBaseRefresh(
+                {
+                  beforeRoot: path.join(temporary, "before"),
+                  afterRoot: path.join(temporary, "after"),
+                  baseCommit,
+                  baseRaw: baseline.rawManifest,
+                  baseRef: baseline.manifestRef,
+                  buildCacheInputs,
+                  action,
+                },
+                params.signal,
               );
-              const before = snapshots[0]!.manifest;
-              const current = applyWorkspaceSourceOverlay(before, accepted, snapshots[1]!.manifest);
-              current.buildCacheInputs = [
-                ...new Set([
-                  ...buildCacheInputs,
-                  ...snapshots[1]!.manifest.entries.map((entry) => entry.path),
-                ]),
-              ];
-              const priorNodes = manifestNodes(before);
-              const currentNodes = manifestNodes(current);
-              for (const [file, entry] of manifestNodes(accepted)) {
-                if (!priorNodes.has(file) && !sameEntry(entry, currentNodes.get(file))) {
-                  throw new Error(
-                    `The selected base conflicts with saved workspace data at ${file}; move that saved file before retrying ${action}.`,
-                  );
-                }
-              }
-              const currentRaw = serializeWorkerWorkspaceManifest(current);
               await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
                 root: cwd,
                 stagingRoot: path.join(temporary, "after"),
                 stagedResultRef: stagedRef,
-                baseManifestRef: state.current().baseline_ref!,
-                baseManifestRaw: state.current().baseline_json!,
-                currentManifestRef:
-                  "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
-                currentManifestRaw: currentRaw,
+                baseManifestRef: baseline.manifestRef,
+                baseManifestRaw: baseline.rawManifest,
+                currentManifestRef: current.manifestRef,
+                currentManifestRaw: current.rawManifest,
                 buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
               });
@@ -510,7 +521,7 @@ export async function integrateManagedWorkspaceSource(
             }
             // MERGE_HEAD is a native pseudoref; Git rejects updating it through update-ref.
             const mergeHead = await resolveGitMetadataPath(cwd, "MERGE_HEAD", { beforeRun: check });
-            if (initialImport && !continuingIntegration) {
+            if (params.source && !continuingIntegration) {
               await git(["update-ref", "ORIG_HEAD", sourceHead]);
             }
             check();
@@ -543,7 +554,7 @@ export async function integrateManagedWorkspaceSource(
           const markers = await probe(["diff", "--check", sourceHead, "--", ...conflictPaths]);
           if (conflictPaths.length && markers.stdout.includes("conflict marker")) {
             throw new Error(
-              `Conflict markers remain. Resolve the reported files, then repeat refresh_base with conflictsResolved and the same baseCommit before tests and Auto Review.`,
+              `Conflict markers remain. Resolve the reported files, then repeat ${action} with conflictsResolved and the same returned commit before tests and Auto Review.`,
             );
           }
           await git(["read-tree", snapshot.workspaceTree]);

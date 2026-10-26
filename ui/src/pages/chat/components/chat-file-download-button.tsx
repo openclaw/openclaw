@@ -1,12 +1,15 @@
-import { createSignal, onSettled } from "solid-js";
+import { action, createOptimistic, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { FileReaderDownload } from "./chat-sidebar-content-types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerFilePreviewEnglish();
 
@@ -17,9 +20,17 @@ export function FileDownloadButton(props: {
   disabled?: boolean;
   showLabel?: boolean;
 }) {
-  const [pending, setPending] = createSignal(false);
+  const [pending, setPending] = createOptimistic(false);
+  const retired = Promise.withResolvers<void>();
   let request: AbortController | null = null;
-  onSettled(() => () => request?.abort());
+  onSettled(() => () => {
+    request?.abort();
+    retired.resolve();
+  });
+  const presentDownload = action(function* (completion: Promise<void>) {
+    setPending(true);
+    yield Promise.race([completion, retired.promise]);
+  });
   const download = async () => {
     if (request || props.disabled) {
       return;
@@ -27,32 +38,38 @@ export function FileDownloadButton(props: {
     const controller = new AbortController();
     const scopeKey = props.scopeKey;
     request = controller;
-    setPending(true);
     const current = () => !controller.signal.aborted && props.scopeKey === scopeKey;
-    try {
-      const file = await props.download(controller.signal);
-      if (file && current()) {
-        if ("blob" in file) {
-          downloadBlobFile(file.filename, file.blob);
-          return;
-        }
-        // The browser owns the byte stream and save progress, not a JavaScript Blob.
-        const link = document.createElement("a");
-        link.href = file.url;
-        link.download = file.filename;
-        link.click();
-      }
-    } catch (error) {
+    const failed = (error: unknown) => {
       if (current()) {
         showToast({
           message: t("chat.detailPanel.downloadFailed", { error: formatUiError(error) }),
         });
       }
-    } finally {
-      request = null;
-      if (!controller.signal.aborted) {
-        setPending(false);
+    };
+    const completion = (async () => {
+      try {
+        const file = await props.download(controller.signal);
+        if (file && current()) {
+          if ("blob" in file) {
+            downloadBlobFile(file.filename, file.blob);
+            return;
+          }
+          // The browser owns the byte stream and save progress, not a JavaScript Blob.
+          const link = document.createElement("a");
+          link.href = file.url;
+          link.download = file.filename;
+          link.click();
+        }
+      } catch (error) {
+        failed(error);
+      } finally {
+        request = null;
       }
+    })();
+    // Download callbacks may select their file. Let that owner update land first.
+    await Promise.resolve();
+    if (current()) {
+      await presentDownload(completion).catch(failed);
     }
   };
   const label = () =>

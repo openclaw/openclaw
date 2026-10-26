@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -8,7 +9,6 @@ import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import {
   getUpdateRun,
   recordUpdateRunStep,
@@ -43,8 +43,8 @@ import {
   verifyPreviousGatewayForUpdate,
   type UpdateGatewayReadinessParams,
 } from "./update-command-readiness.js";
+import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import { formatPostUpdateGatewayRecoveryInstructions } from "./update-command-service-recovery.js";
 
 /** Observe native state when a restart fails before health probes. */
 export async function readFailedUpdateGatewayState(
@@ -119,7 +119,7 @@ export async function recordFailedUpdateGatewayState(
   const facts = await readFailedUpdateGatewayState(run, env, timeoutMs);
   assertCurrent();
   if (run && facts) {
-    recordUpdateRunVerification(run.runId, facts, { env: run.env });
+    recordUpdateRunVerification(run.runId, facts, run);
   }
 }
 
@@ -167,7 +167,7 @@ export async function verifyPreviousManagedGatewayForUpdate(
           : "Previous gateway was not verified; automatic rollback cannot restart it.",
         endedAtMs: Date.now(),
       },
-      { env: run.env },
+      run,
     );
   }
 }
@@ -212,12 +212,13 @@ export async function verifyUpdatedGateway(
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery" | "package-replacement";
   },
-): Promise<
-  UpdateRepairValidation & {
-    pluginWarnings?: PluginUpdateWarning[];
-    serviceDefinitionRefusal?: SystemdServiceStartRefusal;
-  }
-> {
+): Promise<{
+  ok: boolean;
+  summary: string;
+  stopReason?: string;
+  pluginWarnings?: PluginUpdateWarning[];
+  serviceDefinitionRefusal?: SystemdServiceStartRefusal;
+}> {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
@@ -236,6 +237,14 @@ export async function verifyUpdatedGateway(
     verificationWarnings.push(
       redactSupportDiagnosticLine(
         `Gateway RPC authentication rejected (${health.authenticationError}); verified through local HTTP readiness and runtime identity.`,
+        { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
+      ),
+    );
+  }
+  if (health.healthy && health.protocolMismatch) {
+    verificationWarnings.push(
+      redactSupportDiagnosticLine(
+        `Gateway RPC protocol differs from this updater (${health.protocolMismatch}); verified through local HTTP readiness and runtime identity.`,
         { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
       ),
     );
@@ -260,7 +269,7 @@ export async function verifyUpdatedGateway(
     recordUpdateRunVerification(
       proofOptions.run.runId,
       updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      { env: proofOptions.run.env },
+      proofOptions.run,
     );
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
@@ -271,7 +280,6 @@ export async function verifyUpdatedGateway(
   ) {
     return {
       ok: false,
-      score: 0,
       summary: serviceDefinitionRefusal.message,
       serviceDefinitionRefusal,
     };
@@ -321,7 +329,7 @@ export async function verifyUpdatedGateway(
         recordUpdateRunStep(
           run.runId,
           { failureFacts: undefined, ...row, endedAtMs, detail: row.detail ?? detail },
-          { env: run.env },
+          run,
         );
       }
     }
@@ -360,7 +368,6 @@ export async function verifyUpdatedGateway(
     }
     return {
       ok: true,
-      score: 7,
       summary: health.authenticationError
         ? "Gateway service, version, and readiness verified through local HTTP; RPC authentication needs attention."
         : verificationWarnings.length > 0
@@ -382,7 +389,6 @@ export async function verifyUpdatedGateway(
     defaultRuntime.error(detail);
     return {
       ok: false,
-      score: 0,
       summary: "Gateway is still starting; readiness remains unverified.",
       stopReason:
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
@@ -409,8 +415,29 @@ export async function verifyUpdatedGateway(
       : []),
     `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv)}`,
     `Run \`${formatCliCommand("openclaw gateway status --deep")}\` for details.`,
-    ...formatPostUpdateGatewayRecoveryInstructions(params.result),
   ];
+  const platform = process.platform;
+  const restartCommand = formatCliCommand("openclaw gateway restart");
+  const installCommand = formatCliCommand("openclaw gateway install --force");
+  const statusCommand = formatCliCommand("openclaw gateway status --deep");
+  const condition =
+    platform === "darwin"
+      ? "LaunchAgent is installed but not loaded"
+      : platform === "linux"
+        ? "systemd user service is missing, stale, or not active"
+        : platform === "win32"
+          ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
+          : "local service manager reports the gateway service is missing, stale, or not running";
+  const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
+  diagnosticLines.push(
+    `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`,
+  );
+  const beforeVersion = normalizeOptionalString(params.result.before?.version);
+  if (isPackageManagerUpdateMode(params.result.mode) && beforeVersion) {
+    diagnosticLines.push(
+      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${installCommand}\`.`,
+    );
+  }
   const reason = health.versionMismatch
     ? "version-mismatch"
     : health.buildIdMismatch
@@ -476,16 +503,7 @@ export async function verifyUpdatedGateway(
       defaultRuntime.log(theme.muted(line));
     }
   }
-  const score = [
-    serviceRunning,
-    !health.versionMismatch,
-    !health.buildIdMismatch,
-    !health.activatedPluginErrors?.length,
-    !health.channelProbeErrors?.length,
-    health.healthy,
-    readyz,
-  ].filter(Boolean).length;
-  return { ok: params.purpose === "package-replacement", score, summary: reason };
+  return { ok: params.purpose === "package-replacement", summary: reason };
 }
 
 export { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";

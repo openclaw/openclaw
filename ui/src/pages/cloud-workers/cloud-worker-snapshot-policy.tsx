@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createStore, For } from "solid-js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -12,8 +12,13 @@ registerEnglishCatalog(registerSettingsEnglish);
 type PolicyDraft = { refreshAfter: string; retainUnused: string; keepPrevious: "0" | "1" };
 
 export function CloudWorkerSnapshotPolicy() {
-  const [draft, setDraft] = createSignal<PolicyDraft | null>(null, { ownedWrite: true });
-  const editor = useCloudWorkerConfig(() => setDraft(null));
+  const [draft, setDraft] = createStore<{ value: PolicyDraft | null }>({ value: null });
+  const resetDraft = () => {
+    setDraft((state) => {
+      state.value = null;
+    });
+  };
+  const editor = useCloudWorkerConfig(resetDraft);
   void editor.ensureLoaded();
   const saveState = editor.state;
   const policy = createMemo<PolicyDraft>(() => {
@@ -28,17 +33,20 @@ export function CloudWorkerSnapshotPolicy() {
       keepPrevious: configured.keepPrevious === 1 ? "1" : "0",
     };
   });
-  const values = () => draft() ?? policy();
+  const values = () => draft.value ?? policy();
   const canSave = () => editor.editable() && !editor.loading();
   function edit(patch: Partial<PolicyDraft>) {
-    setDraft((current) => ({ ...(current ?? policy()), ...patch }));
+    setDraft((state) => {
+      state.value ??= { ...policy() };
+      Object.assign(state.value, patch);
+    });
     editor.update({ error: null, notice: null });
   }
   async function save() {
     if (!canSave()) {
       return;
     }
-    const current = values();
+    const current = { ...values() };
     for (const [key, minimum] of [
       ["refreshAfter", 3_600_000],
       ["retainUnused", 86_400_000],
@@ -72,7 +80,7 @@ export function CloudWorkerSnapshotPolicy() {
       note: "cloud workers: update snapshot retention policy",
       failed: () => t("cloudWorkersPage.snapshots.policySaveFailed"),
       success: () => {
-        setDraft(null);
+        resetDraft();
         return t("cloudWorkersPage.snapshots.policySaved");
       },
     });

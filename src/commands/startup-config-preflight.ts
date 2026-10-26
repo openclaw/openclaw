@@ -260,7 +260,16 @@ async function prepareStartupConfig(
       read.pluginMetadataSnapshot
         ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
         : getPluginCache(),
-      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+      () =>
+        refreshStartupPluginQuarantine({
+          cfg: read.snapshot.sourceConfig,
+          env,
+          measure,
+          beforePersistentEffect: async () => {
+            await beforeStatePreparation(read.snapshot);
+            assertLeaseCurrent();
+          },
+        }),
     );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([

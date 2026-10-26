@@ -5,7 +5,7 @@ import {
   parseStrictInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { isStringArray, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -210,8 +210,7 @@ export async function readCorrespondingLaunchAgentCommand(
   const args = plist?.ProgramArguments;
   const environment = plist?.EnvironmentVariables ?? {};
   if (
-    !Array.isArray(args) ||
-    !args.every((arg): arg is string => typeof arg === "string") ||
+    !isStringArray(args) ||
     !isStringRecord(environment) ||
     (plist?.Program ?? args[0]) !== observation.program
   ) {
@@ -252,7 +251,7 @@ export async function readLaunchAgentProgramArguments(
     ...resolveLaunchAgentEnvironmentReadOptions(env, label),
     ...options,
   });
-  if (!command && options?.requireEffective) {
+  if (!command && options?.requireEffective && !options.allowMissingDefinition) {
     // A removed plist can leave its job registered; only launchd can prove absence.
     const timeoutMs =
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;

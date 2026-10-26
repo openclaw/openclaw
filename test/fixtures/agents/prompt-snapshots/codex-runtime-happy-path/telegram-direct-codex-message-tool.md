@@ -38,9 +38,6 @@
 {
   "agents": {
     "defaults": {
-      "heartbeat": {
-        "every": "30m"
-      },
       "userTimezone": "UTC"
     },
     "entries": {
@@ -69,8 +66,11 @@
     },
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.reasoning_effort_override": true,
+    "features.recommended_plugins": false,
     "features.shell_tool": true,
     "features.standalone_web_search": false,
+    "features.tool_suggest": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -94,7 +94,6 @@
     "tts",
     "web_fetch",
     "web_search",
-    "heartbeat_respond",
     "sessions_yield"
   ],
   "experimentalRawEvents": true,
@@ -117,8 +116,11 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.reasoning_effort_override": true,
+    "features.recommended_plugins": false,
     "features.shell_tool": true,
     "features.standalone_web_search": false,
+    "features.tool_suggest": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -257,8 +259,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 80977,
-    "roughTokens": 20245
+    "chars": 82684,
+    "roughTokens": 20671
   },
   "openClawDeveloperInstructions": {
     "chars": 3490,
@@ -273,8 +275,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6876
   },
   "totalWithDynamicToolsJson": {
-    "chars": 108480,
-    "roughTokens": 27120
+    "chars": 110187,
+    "roughTokens": 27547
   },
   "userInputText": {
     "chars": 879,
@@ -603,7 +605,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "tts",
   "web_fetch",
   "web_search",
-  "heartbeat_respond",
   "sessions_yield"
 ]
 ```
@@ -613,7 +614,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -621,7 +622,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "action": {
           "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-          "enum": ["send"],
+          "enum": ["react", "send"],
           "type": "string"
         },
         "asDocument": {
@@ -678,6 +679,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "sendWithEffect id/name.",
           "type": "string"
         },
+        "emoji": {
+          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "type": "string"
+        },
         "filename": {
           "type": "string"
         },
@@ -698,12 +703,23 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "gifPlayback": {
           "type": "boolean"
         },
+        "groupId": {
+          "type": "string"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
           "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "snake_case alias of messageId; same defaults.",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
           "type": "string"
         },
         "mimeType": {
@@ -713,6 +729,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "Telegram reply quote text.",
           "type": "string"
         },
+        "remove": {
+          "type": "boolean"
+        },
         "replyTo": {
           "type": "string"
         },
@@ -721,6 +740,12 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targetAuthor": {
+          "type": "string"
+        },
+        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -736,6 +761,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "Use the reacted message for this turn's status reaction lifecycle.",
+          "type": "boolean"
         },
         "voiceId": {
           "description": "Per-send speech voice override.",
@@ -754,45 +787,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "type": "object"
     },
     "name": "message",
-    "type": "function"
-  },
-  {
-    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "nextCheck": {
-          "type": "string"
-        },
-        "notificationText": {
-          "type": "string"
-        },
-        "notify": {
-          "type": "boolean"
-        },
-        "outcome": {
-          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-          "type": "string"
-        },
-        "priority": {
-          "enum": ["low", "normal", "high"],
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "scratch": {
-          "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": ["outcome", "notify", "summary"],
-      "type": "object"
-    },
-    "name": "heartbeat_respond",
     "type": "function"
   }
 ]

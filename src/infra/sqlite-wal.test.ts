@@ -15,6 +15,7 @@ import {
   thrownBy,
 } from "./sqlite-maintenance-fixture.test-support.js";
 import { sqliteMaintenanceEntrypoints } from "./sqlite-maintenance-runtime.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -746,6 +747,43 @@ describe("sqlite WAL maintenance", () => {
         databaseLabel: "test-db",
       }),
     ).toThrow("test-db could not enable WAL; SQLite kept journal_mode=delete");
+  });
+
+  it("preserves incremental auto-vacuum initialization after empty schema admission", () => {
+    const db = resources.open(resources.file(), {}, true);
+    admitSqliteSchema(db);
+    const probes = resources.count(db, "pageCount", /^PRAGMA page_count$/);
+
+    configureSqlitePreSchemaPragmas(db);
+
+    expect(probes.counts.pageCount).toBe(1);
+    expect(db.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 2 });
+  });
+
+  it("skips freshness probes for admitted nonempty databases across reopen", () => {
+    const pathname = resources.file();
+    const db = resources.open(pathname, {}, true);
+    admitSqliteSchema(db);
+    db.exec(
+      "PRAGMA auto_vacuum = FULL; CREATE TABLE payload (value INTEGER); INSERT INTO payload VALUES (7);",
+    );
+    admitSqliteSchema(db);
+    const probes = resources.count(db, "pageCount", /^PRAGMA page_count$/);
+
+    configureSqlitePreSchemaPragmas(db);
+
+    expect(probes.counts.pageCount).toBe(0);
+    expect(db.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 1 });
+    db.close();
+
+    const reopened = resources.open(pathname, {}, true);
+    admitSqliteSchema(reopened);
+    const reopenedProbes = resources.count(reopened, "pageCount", /^PRAGMA page_count$/);
+    configureSqlitePreSchemaPragmas(reopened);
+
+    expect(reopenedProbes.counts.pageCount).toBe(0);
+    expect(reopened.prepare("PRAGMA auto_vacuum").get()).toMatchObject({ auto_vacuum: 1 });
+    expect(reopened.prepare("SELECT value FROM payload").get()).toMatchObject({ value: 7 });
   });
 
   it("configures lock retry before inspecting a fresh database header", () => {

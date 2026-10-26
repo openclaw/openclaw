@@ -111,7 +111,7 @@ export function readNewSessionSubmissionAccess(options: {
     }
   }
   if (target.kind === "profile" && target.required) {
-    return readSessionMethodAccess(gateway, { method: "sessions.send", sessionScope: true });
+    return readSessionMethodAccess(gateway, { method: "chat.send", sessionScope: true });
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",

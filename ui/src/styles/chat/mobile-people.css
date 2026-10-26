@@ -1,124 +1,3 @@
-.chat-mobile-people-grid {
-  display: grid;
-  place-items: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text);
-  cursor: default;
-}
-
-.chat-mobile-people-grid__canvas {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  isolation: isolate;
-}
-
-.chat-mobile-people-grid__avatar,
-.chat-mobile-people-grid__more {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  width: 18px;
-  height: 18px;
-  overflow: hidden;
-  border: 0;
-  border-radius: 50%;
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 1px var(--chat-mobile-people-grid-surface, var(--bg));
-}
-
-.chat-mobile-people-grid__avatar .chat-author-avatar {
-  flex: none;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  border-radius: inherit;
-  box-shadow: none;
-}
-
-.chat-mobile-people-grid__avatar .chat-author-avatar__initials {
-  font-size: 8px;
-  font-weight: 500;
-}
-
-.chat-mobile-people-grid__avatar--away .chat-author-avatar {
-  filter: grayscale(1) brightness(0.72);
-}
-
-.chat-mobile-people-grid__canvas > :nth-child(1) {
-  top: 0;
-  left: 0;
-  z-index: 4;
-}
-.chat-mobile-people-grid__canvas > :nth-child(2) {
-  top: 0;
-  right: 0;
-  z-index: 3;
-}
-.chat-mobile-people-grid__canvas > :nth-child(3) {
-  bottom: 0;
-  left: 0;
-  z-index: 2;
-}
-.chat-mobile-people-grid__canvas > :nth-child(4) {
-  bottom: 0;
-  right: 0;
-  z-index: 5;
-}
-
-.chat-mobile-people-grid__canvas[data-count="1"] > :first-child {
-  top: 5px;
-  left: 5px;
-  width: 22px;
-  height: 22px;
-  box-shadow: none;
-}
-
-.chat-mobile-people-grid__canvas[data-count="2"] > :first-child {
-  top: 10px;
-  left: 2px;
-  width: 20px;
-  height: 20px;
-}
-
-.chat-mobile-people-grid__canvas[data-count="2"] > :nth-child(2),
-.chat-mobile-people-grid__canvas[data-count="3"] > :nth-child(2),
-.chat-mobile-people-grid__canvas[data-count="3"] > :nth-child(3) {
-  width: 16px;
-  height: 16px;
-}
-
-.chat-mobile-people-grid__canvas[data-count="3"] > :first-child {
-  top: 6px;
-  width: 20px;
-  height: 20px;
-}
-
-.chat-mobile-people-grid__canvas[data-count="2"] > :nth-child(2) {
-  top: 2px;
-  right: 2px;
-}
-
-.chat-mobile-people-grid__canvas[data-count="3"] > :nth-child(3) {
-  right: 0;
-  left: auto;
-}
-
-.chat-mobile-people-grid__more {
-  background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
-  color: var(--text);
-  font: 400 8.5px/1 var(--font-body);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.35px;
-}
-
 .chat-mobile-people {
   display: flex;
   flex-direction: column;
@@ -175,6 +54,7 @@
   height: 28px;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 
@@ -188,7 +68,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-size: 14px;
   line-height: 20px;
@@ -267,7 +147,6 @@
   line-height: 18px;
 }
 
-.chat-mobile-people-grid:focus-visible,
 .chat-mobile-people__mention:focus-visible,
 .chat-mobile-people__viewer:focus-visible {
   outline: 2px solid var(--accent);

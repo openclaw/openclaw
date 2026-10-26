@@ -12,6 +12,10 @@ Manage named destinations configured under `storage.locations`. See
 [Storage locations](/concepts/storage-locations) for configuration, encryption,
 and provider contracts.
 
+Human-readable location reports strip terminal escape sequences and show embedded
+newlines, tabs, and carriage returns as `\n`, `\t`, and `\r`. Storage targets and
+`--json` output retain their original values.
+
 ```bash
 openclaw storage list
 openclaw storage init archive

@@ -4,18 +4,16 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 import "./agent-select-registration.ts";
 
-type AgentScopeControlProps = {
+export function AgentScopeControl(params: {
   agents: readonly GatewayAgentRow[];
   additionalAgentIds?: readonly string[];
   selection: AgentSelectionCapability;
   allowAll?: boolean;
   selectedId?: string | null;
-};
-
-export function AgentScopeControl(params: AgentScopeControlProps) {
+}) {
   const selection = createMemo(() => {
     const requestedSelected = params.selectedId ?? params.selection.state.scopeId ?? "";
     const selectedId = requestedSelected ? normalizeAgentId(requestedSelected) : "";

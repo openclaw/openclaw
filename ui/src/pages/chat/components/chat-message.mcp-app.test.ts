@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantCanvasBlock,

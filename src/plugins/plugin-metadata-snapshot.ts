@@ -6,7 +6,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -61,6 +61,26 @@ import { buildDeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 import { registerProviderPolicyOwnerIndexes } from "./provider-policy-owners.js";
 
 const MAX_PLUGIN_METADATA_PROJECTIONS = 64;
+export const MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS = 64;
+
+/** Keep recently used discovery views; active scopes retain their own snapshot references. */
+export function readPluginMetadataSnapshotCache(key: string): PluginMetadataSnapshot | undefined {
+  const snapshots = getPluginCache().metadata.snapshots;
+  const snapshot = snapshots.get(key);
+  if (snapshot) {
+    snapshots.delete(key);
+    snapshots.set(key, snapshot);
+  }
+  return snapshot;
+}
+
+export function cachePluginMetadataSnapshot(key: string, snapshot: PluginMetadataSnapshot): void {
+  const snapshots = getPluginCache().metadata.snapshots;
+  snapshots.delete(key);
+  snapshots.set(key, snapshot);
+  pruneMapToMaxSize(snapshots, MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS);
+}
+
 export type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotOwnerMaps,
@@ -114,36 +134,25 @@ export function isPluginMetadataSnapshotCompatible(params: {
   >;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  allowScopedSnapshot?: boolean;
-  pluginIds?: readonly string[];
   workspaceDir?: string;
-  index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
   if (isCurrentPluginMetadataSnapshotRuntimeGeneration(params.snapshot)) {
     return true;
   }
-  const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
-  const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
-  const scopeMatches =
-    snapshotPluginIds === undefined ||
-    params.allowScopedSnapshot === true ||
-    (requestedPluginIds !== undefined &&
-      serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
-    scopeMatches &&
+    normalizePluginIdScope(params.snapshot.pluginIds) === undefined &&
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, env) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
         resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
-          index: params.index ?? params.snapshot.index,
+          index: params.snapshot.index,
           policyHash: params.snapshot.policyHash,
           workspaceDir: params.workspaceDir,
         })) &&
-    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
-    indexesMatch(params.snapshot.index, params.index)
+    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "")
   );
 }
 
@@ -236,8 +245,15 @@ function buildPluginMetadataManifestFacts(
   manifestRegistry: PluginManifestRegistry,
   index: InstalledPluginIndex,
 ) {
+  const cache = getPluginCache().metadata.snapshotManifestFacts;
+  const key = resolveInstalledManifestRegistryIndexFingerprint(index);
+  let entries = cache.get(manifestRegistry);
+  const cached = entries?.get(key);
+  if (cached) {
+    return cached;
+  }
   const plugins = manifestRegistry.plugins;
-  return {
+  const facts = {
     manifestRegistry,
     plugins,
     diagnostics: manifestRegistry.diagnostics,
@@ -245,6 +261,12 @@ function buildPluginMetadataManifestFacts(
     owners: buildPluginMetadataOwnerMaps(manifestRegistry, index),
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
   };
+  if (!entries) {
+    cache.set(manifestRegistry, (entries = new Map()));
+  }
+  entries.set(key, facts);
+  pruneMapToMaxSize(entries, MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS);
+  return facts;
 }
 
 export function listPluginOriginsFromMetadataSnapshot(
@@ -388,9 +410,8 @@ export function loadPluginMetadataSnapshotForRegistry(
 function loadCachedPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  const cache = getPluginCache();
   const key = resolvePluginMetadataSnapshotCacheKey(params);
-  const cached = cache.metadata.snapshots.get(key);
+  const cached = readPluginMetadataSnapshotCache(key);
   if (cached) {
     return projectPluginMetadataSnapshot(
       cached,
@@ -424,7 +445,7 @@ function loadCachedPluginMetadataSnapshot(
       },
     },
   );
-  cache.metadata.snapshots.set(key, frozen);
+  cachePluginMetadataSnapshot(key, frozen);
   return projectPluginMetadataSnapshot(
     frozen,
     params.pluginIds ?? params.pluginIdScope?.resolve({ index: frozen.index }),
@@ -609,7 +630,7 @@ export function resolvePluginMetadataSnapshotInput(
     return selection.snapshot;
   }
   return (
-    getPluginCache().metadata.snapshots.get(resolvePluginMetadataSnapshotCacheKey(params)) ??
+    readPluginMetadataSnapshotCache(resolvePluginMetadataSnapshotCacheKey(params)) ??
     loadPluginMetadataSnapshotInput(params, () => registryReader(params.workspaceDir))
   );
 }
@@ -619,9 +640,11 @@ export function buildPluginMetadataSnapshot(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env">,
 ): Omit<PluginMetadataSnapshot, "normalizePluginId"> {
   const startedAt = performance.now();
-  const index = structuredClone(input.index);
+  const cloneIndex = (index: InstalledPluginIndex) =>
+    isDeeplyFrozenPlainData(index) ? index : structuredClone(index);
+  const index = cloneIndex(input.index);
   const registryIndex =
-    input.registryIndex === input.index ? index : structuredClone(input.registryIndex);
+    input.registryIndex === input.index ? index : cloneIndex(input.registryIndex);
   const manifestFacts = buildPluginMetadataManifestFacts(input.manifestRegistry, index);
   const ownerMapsMs = performance.now() - startedAt;
   return {

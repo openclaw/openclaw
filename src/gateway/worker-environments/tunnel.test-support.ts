@@ -214,7 +214,7 @@ export function fakeRunner(
     argv: string[],
     options: CommandOptions,
   ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
-  defaults: { defaultStdout?: string; deferStop?: boolean } = {},
+  defaults: { defaultStdout?: string; deferStop?: boolean; ready?: boolean } = {},
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
@@ -222,6 +222,9 @@ export function fakeRunner(
     start(argv, options) {
       const process = new FakeProcess(defaults.deferStop);
       starts.push({ argv, options, process });
+      if (defaults.ready) {
+        process.becomeReady();
+      }
       return process;
     },
     async run(argv, options) {

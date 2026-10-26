@@ -85,7 +85,7 @@ function assertRequestedSource(
     throw new Error("GitHub publication requested session changed.");
   }
   if (input.kind === "shared") {
-    assertGitHubPublicationWorktreeSource(source, input.input.worktree);
+    assertGitHubPublicationWorktreeSource(source, input.input.worktree, true);
     const actor = input.input.requester.actor;
     if ((actor.kind === "operator" ? actor.profileId : undefined) !== selector.profileId) {
       throw new Error("GitHub publication requested actor changed.");

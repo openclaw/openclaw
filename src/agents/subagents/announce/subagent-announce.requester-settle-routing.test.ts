@@ -7,34 +7,20 @@ import {
 import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-authorization.js";
 import { resolveInProcessGatewayDispatch } from "../../../gateway/server-plugin-in-process-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
-  deliver,
   registryRead,
   startTurn,
   loadRequester,
   settledChild,
-  publishWakeTransition,
+  requesterSnapshot,
+  useDirectDelivery,
+  withGateway,
+  wakeParams,
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
-
-type RouteCase = {
-  name: string;
-  channel?: string;
-  pause: boolean;
-  external: boolean;
-} & Partial<Record<"narrow" | "reset" | "replaced" | "mixed" | "legacy", boolean>>;
-
-function routeCase(name: string, overrides: Partial<Omit<RouteCase, "name">> = {}): RouteCase {
-  return { name, channel: "webchat", pause: false, external: false, ...overrides };
-}
 
 describe("requester settle routing and session authority", () => {
   useRequesterSettleDispatchFixture();
@@ -42,21 +28,24 @@ describe("requester settle routing and session authority", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each([
-    routeCase("WebChat settle"),
-    routeCase("WebChat pause", { pause: true }),
-    routeCase("explicit external completion", { channel: "telegram", external: true }),
-    routeCase("saved-route completion", { channel: undefined, external: true }),
-    routeCase("visible failed child", { narrow: true }),
-    routeCase("reset visible requester", { narrow: true, reset: true }),
-    routeCase("replaced visible requester", { narrow: true, replaced: true }),
-    routeCase("mixed visible requester", { narrow: true, mixed: true }),
-    routeCase("legacy visible requester", { narrow: true, legacy: true }),
-  ])("keeps $name on its owning route despite external session history", async (testCase) => {
+    "WebChat settle",
+    "WebChat pause",
+    "external",
+    "saved-route",
+    "current",
+    "reset",
+    "replaced",
+    "mixed",
+    "legacy",
+  ])("keeps %s on its owning route despite external session history", async (mode) => {
+    const external = mode === "external" || mode === "saved-route";
+    const narrow = ["current", "reset", "replaced", "mixed", "legacy"].includes(mode);
+    const channel = mode === "saved-route" ? undefined : external ? "telegram" : "webchat";
     const requesterSessionKey = "agent:main:dashboard:completion-route";
     const requesterIdentity = {
-      sessionId: testCase.replaced ? "replacement-session" : "requester-session",
-      lifecycleRevision: testCase.narrow
-        ? testCase.reset
+      sessionId: mode === "replaced" ? "replacement-session" : "requester-session",
+      lifecycleRevision: narrow
+        ? mode === "reset"
           ? "reset-revision"
           : "requester-revision"
         : undefined,
@@ -64,10 +53,9 @@ describe("requester settle routing and session authority", () => {
     const child = settledChild();
     child.requesterSessionKey = requesterSessionKey;
     child.completionRequesterSessionId = "requester-session";
-    if (testCase.narrow) {
-      child.completionRequesterLifecycleRevision = testCase.mixed
-        ? "older-revision"
-        : "requester-revision";
+    if (narrow) {
+      child.completionRequesterLifecycleRevision =
+        mode === "mixed" ? "older-revision" : "requester-revision";
       vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockResolvedValue({
         readCurrent: () => requesterIdentity,
         release() {},
@@ -76,18 +64,18 @@ describe("requester settle routing and session authority", () => {
       child.completion = { required: true, resultText: "Child preparation failed" };
       child.delivery = { status: "pending" };
     }
-    if (testCase.legacy) {
+    if (mode === "legacy") {
       child.completionRequesterSessionId = undefined;
       child.completionRequesterLifecycleRevision = undefined;
     }
-    child.requesterOrigin = testCase.channel ? { channel: testCase.channel } : undefined;
-    if (testCase.pause) {
+    child.requesterOrigin = channel ? { channel } : undefined;
+    if (mode === "WebChat pause") {
       child.pauseReason = "sessions_yield";
       child.execution.outcome = undefined;
       child.requesterSettleWake!.pauseNotice = { acknowledgment: "Need direction." };
     }
     const cohort = [child];
-    if (testCase.mixed) {
+    if (mode === "mixed") {
       cohort.push({
         ...child,
         runId: "current-sibling",
@@ -96,12 +84,9 @@ describe("requester settle routing and session authority", () => {
       });
     }
     registryRead.listSubagentRunsForRequester.mockReturnValue(cohort);
-    const requester: Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>> = {
-      cfg: {},
-      canonicalKey: requesterSessionKey,
-      agentId: "main",
-      storePath: "/synthetic/requester-settle.sqlite",
-      entry: {
+    const requester = requesterSnapshot(
+      {},
+      {
         ...requesterIdentity,
         updatedAt: 1,
         delivery: {
@@ -111,23 +96,10 @@ describe("requester settle routing and session authority", () => {
           origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
         },
       },
-    };
+      { sessionKey: requesterSessionKey, storePath: "/synthetic/requester-settle.sqlite" },
+    );
     loadRequester.mockResolvedValue(requester);
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: () => requester,
-      getRequesterSessionActivity: () => ({
-        sessionId: requesterIdentity.sessionId,
-        target: captureSessionTarget({
-          storeScope: "/synthetic/requester-settle.sqlite",
-          sessionKey: requesterSessionKey,
-          agentId: requester.agentId,
-          incarnation: requesterIdentity.sessionId,
-        }),
-        isActive: false,
-      }),
-    });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+    useDirectDelivery(requester);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
       io.emitFinal([
@@ -136,7 +108,7 @@ describe("requester settle routing and session authority", () => {
           status: "ok",
           result: {
             payloads: [{ text: "Completed." }],
-            ...(testCase.external
+            ...(external
               ? { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } }
               : {}),
           },
@@ -145,30 +117,21 @@ describe("requester settle routing and session authority", () => {
     });
     const context = createContext();
     const completeBatch = vi.fn();
-    const delivered = await withPluginRuntimeGatewayRequestScope(
-      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () =>
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey,
-          requesterOrigin: child.requesterOrigin,
-          isSourceCurrent: () => true,
-          settledEntry: child,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+    const delivered = await withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
     );
     expect(startTurn).toHaveBeenCalledOnce();
     expect(startTurn.mock.calls[0]![0].preflight.request).toMatchObject({
       sessionKey: requesterSessionKey,
-      deliver: testCase.external,
-      channel: testCase.external ? "telegram" : "webchat",
-      to: testCase.external ? "12345" : undefined,
-      accountId: testCase.external ? "bot-1" : undefined,
-      threadId: testCase.external ? "42" : undefined,
+      deliver: external,
+      channel: external ? "telegram" : "webchat",
+      to: external ? "12345" : undefined,
+      accountId: external ? "bot-1" : undefined,
+      threadId: external ? "42" : undefined,
     });
     expect(delivered).toBe(true);
     expect(completeBatch).toHaveBeenCalledOnce();
-    if (testCase.narrow) {
+    if (narrow) {
       const request = startTurn.mock.calls[0]![0].preflight.request;
       const { client } = await withOperatorToolGatewayAuthority(
         {
@@ -181,7 +144,7 @@ describe("requester settle routing and session authority", () => {
             resolveGatewayContext: () => context,
           }),
       );
-      const unbound = testCase.reset || testCase.replaced || testCase.legacy || testCase.mixed;
+      const unbound = mode !== "current";
       expect(client.connect.scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
       const registry = context.getGatewayMethodRegistry!();
       const authorization = authorizeGatewayMethod("agent", client, request, registry, context);

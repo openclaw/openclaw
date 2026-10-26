@@ -336,6 +336,55 @@ const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";
 
+it("bounds the offline startup publication fixture to one reviewed insert and authority removal", () => {
+  const file = "scripts/bench-gateway-startup.ts";
+  const statement =
+    "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'";
+  const insert = "insertGitHubPublicationRequest(db, request);";
+  const update = `db.prepare(${JSON.stringify(statement)}).run();`;
+  const sources = (body: string, caller = "seedTeamBootPublication", sourceFile = file) => ({
+    [sharedPublication]: "export function insertGitHubPublicationRequest() {}",
+    [sourceFile]: `
+      import { insertGitHubPublicationRequest } from '../src/gateway/github-publication-store.worker.js';
+      async function ${caller}() {
+        runOpenClawStateWriteTransaction(({ db }) => { ${body} });
+      }
+    `,
+  });
+  expectAllowed(sources(`${insert} ${update}`));
+  for (const [caller, sourceFile] of [
+    ["otherFixture", file],
+    ["seedTeamBootPublication", "scripts/other-benchmark.ts"],
+  ]) {
+    expect(inspect(sources(`${insert} ${update}`, caller, sourceFile))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("unreviewed GitHub publication writer reference"),
+        expect.stringContaining("raw authority-table write"),
+      ]),
+    );
+  }
+  expectDenied(
+    sources(`${insert} ${insert} ${update}`),
+    "unreviewed GitHub publication writer reference",
+  );
+  for (const sql of [
+    `${statement}; ${statement}`,
+    statement.replace("NULL", "'{}'"),
+    statement.replace("publication_kind = 'shared' AND ", ""),
+    statement.replace(" AND request_id = 'startup-publication'", ""),
+    statement.replace("'startup-publication'", "'another-request'"),
+  ]) {
+    expect(inspect(sources(`${insert} db.prepare(${JSON.stringify(sql)}).run();`))).toContainEqual(
+      expect.stringContaining("raw authority-table write"),
+    );
+  }
+  expectDenied(sources(`${insert} ${update} ${update}`), "raw authority-table write");
+  expectDenied(
+    sources(`${insert} db.prepare(${JSON.stringify(statement)} + ' OR 1=1').run();`),
+    "raw authority-table write",
+  );
+});
+
 it("permits publication inserts only through the reviewed request and lifecycle owners", () => {
   const reject = allowedGraph({
     [lifecycle]: `export function insertGitHubPublicationSessionLifecycle() {

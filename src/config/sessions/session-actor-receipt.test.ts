@@ -7,6 +7,7 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 import type { SessionActorHotState } from "./session-actor-contract.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
@@ -48,8 +49,40 @@ function expectRetry(f: Fixture, command: Mutation) {
   });
 }
 
-it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
-  await withActor(async (f) => {
+it("detaches read and committed metadata while retaining the actor's current facts", () =>
+  withActor(async (f) => {
+    const participant = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(participant);
+    addSessionMember(f.scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+    const before = f.read();
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        expected: before.version,
+        commandId: "metadata-isolation",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const outcome = f.mutate(command);
+    assert(outcome.kind === "committed");
+    const current = f.read();
+    for (const snapshot of [before, outcome.receipt.postimage]) {
+      Object.assign(snapshot.target, { sessionKey: "caller edit" });
+      Object.assign(snapshot.version, { sequence: -1 });
+      snapshot.participants[0]!.identity.id = "caller edit";
+      snapshot.members[0]!.identityId = "caller edit";
+    }
+    expect(f.read()).toEqual(current);
+    f.participant({ ...participant, promptedAt: 30 });
+    expect(f.read().participants[0]).toMatchObject({ contributionCount: 2, lastPromptedAt: 30 });
+    expect(current.participants[0]).toMatchObject({ contributionCount: 1, lastPromptedAt: 10 });
+  }));
+
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
+  withActor(async (f) => {
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -85,8 +118,7 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
         commandId: "model-change-retry",
       },
     });
-  });
-});
+  }));
 
 function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
   return {

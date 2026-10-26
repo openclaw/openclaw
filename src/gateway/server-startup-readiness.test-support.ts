@@ -1,10 +1,13 @@
 import { expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
+import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -23,9 +26,71 @@ export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<strin
 }
 
 export function registerGatewayStartupReadinessTests(params: {
-  start: (params: PostAttachParams) => ReturnType<typeof startGatewayPostAttachRuntime>;
+  start: (
+    params: PostAttachParams,
+    runtimeDeps?: GatewayStartupModuleMocks,
+  ) => ReturnType<typeof startGatewayPostAttachRuntime>;
   createParams: (overrides?: Partial<PostAttachParams>) => PostAttachParams;
+  createRuntimeDeps: () => GatewayStartupModuleMocks;
+  path: (...parts: string[]) => string;
+  expectAutonomousSidecarsNotStarted: () => void;
 }): void {
+  it.each([true, false])(
+    "admits update canary readiness only for attributed plugin failures (attributed=%s)",
+    async (attributed) => {
+      const error = "synthetic registration failure";
+      const diagnostic = {
+        level: "error" as const,
+        message: error,
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      };
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.plugins.push(
+        createPluginRecord({
+          id: "startup-fixture",
+          source: params.path("startup-fixture", "index.js"),
+          status: "error",
+          error,
+        }),
+      );
+      pluginRegistry.diagnostics.push({ ...diagnostic });
+      const onStartupPluginsLoaded =
+        vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
+      const onSidecarsReady = vi.fn();
+      const startupParams = params.createParams({
+        updateCanary: true,
+        pluginRegistry: createEmptyPluginRegistry(),
+        loadStartupPlugins: async () => ({ pluginRegistry, gatewayMethods: ["ping"] }),
+        onStartupPluginsLoaded,
+        onSidecarsReady,
+      });
+      const runtimeDeps = params.createRuntimeDeps();
+      const startup = params.start(startupParams, runtimeDeps);
+      if (attributed) {
+        await startup;
+      } else {
+        await expect(startup).rejects.toThrow(
+          "Candidate plugin registry reported an unattributed error",
+        );
+      }
+      expect(onSidecarsReady).toHaveBeenCalledTimes(Number(attributed));
+      expect(startupParams.unlockStartupMethods).toHaveBeenCalledTimes(Number(attributed));
+      const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
+      expect(published?.plugins).toMatchObject([
+        {
+          id: "startup-fixture",
+          status: "error",
+          activated: true,
+          error,
+        },
+      ]);
+      expect(published?.diagnostics).toEqual([diagnostic]);
+      expect(startupParams.startChannels).not.toHaveBeenCalled();
+      params.expectAutonomousSidecarsNotStarted();
+      expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "does not announce readiness while a core agent is refused (canary=%s)",
     async (updateCanary) => {

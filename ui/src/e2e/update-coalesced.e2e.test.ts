@@ -6,6 +6,7 @@ import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   type MockGatewayControls,
+  waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -48,7 +49,7 @@ function watchPageErrors(page: Page) {
 }
 async function announceUpdate(page: Page, gateway: MockGatewayControls, mobile = false) {
   expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   if (mobile) {
     await page.getByRole("button", { name: "Expand sidebar" }).click();
   }
@@ -63,6 +64,7 @@ async function startUpdate(page: Page) {
 async function openUpdateConfirmation(page: Page): Promise<void> {
   const updateIssue = await openUpdateIssue(page);
   await updateIssue.locator(".sidebar-update-card__action").click();
+  await waitForConfirmModal(page);
 }
 async function openUpdateIssue(page: Page) {
   await page.locator(".sidebar-issues-button").click();

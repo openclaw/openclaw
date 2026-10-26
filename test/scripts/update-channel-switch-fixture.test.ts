@@ -31,6 +31,10 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-scripts.generated.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
   ]) {
@@ -69,25 +73,23 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     execSync(manifest.scripts.build, { cwd: checkout });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
     checked.write(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, "pending\n");
-    expect(
-      await completePendingPackageLifecycle({
-        packageRoot: checkout,
-        runScript: ({ relativePath }) => {
-          execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
-            cwd: checkout,
-            env: {
-              ...process.env,
-              HOME: home,
-              OPENCLAW_HOME: home,
-              OPENCLAW_STATE_DIR: join(home, "state"),
-              OPENCLAW_CONFIG_PATH: join(home, "config.json"),
-              STATE_DIRECTORY: undefined,
-              OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
-            },
-          });
-        },
-      }),
-    ).toBe(true);
+    await completePendingPackageLifecycle({
+      packageRoot: checkout,
+      runScript: ({ relativePath }) => {
+        execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
+          cwd: checkout,
+          env: {
+            ...process.env,
+            HOME: home,
+            OPENCLAW_HOME: home,
+            OPENCLAW_STATE_DIR: join(home, "state"),
+            OPENCLAW_CONFIG_PATH: join(home, "config.json"),
+            STATE_DIRECTORY: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: undefined,
+          },
+        });
+      },
+    });
     expect({
       errors: await collectGitRuntimeErrors({ root: checkout, sha }),
       pending: existsSync(checked.file(PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH)),

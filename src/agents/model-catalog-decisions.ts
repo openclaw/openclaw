@@ -51,8 +51,8 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
 import {
+  createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
@@ -129,9 +129,14 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   ).profile;
   const primary = resolveDefaultModelForAgent({ ...params, manifestPlugins: metadataSnapshot });
   const primaryEntry = { provider: primary.provider, id: primary.model };
-  const primaryKey = resolveModelCatalogIdentityKey(primaryEntry);
+  // This decision view owns one plugin metadata generation. Resolve each provider's
+  // identity policy once for that view instead of reloading it for every catalog row.
+  const modelKeyOf = createModelCatalogIdentityKeyResolver();
+  const primaryKey = modelKeyOf(primaryEntry);
   const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    resolveModelCatalogIdentityKey(entry) === primaryKey ? configuredProfileId : undefined;
+    configuredProfileId !== undefined && modelKeyOf(entry) === primaryKey
+      ? configuredProfileId
+      : undefined;
   // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
   const cliRuntimeBindings = params.pluginRegistry
     ? withPluginRuntimeRegistryScope(params.pluginRegistry, () =>
@@ -390,7 +395,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
     const observedRoutes = listModelCatalogObservedRoutes(routeVariants ?? [entry]);
     const cacheKey = JSON.stringify([
-      resolveModelCatalogIdentityKey(entry),
+      modelKeyOf(entry),
       runtimeId,
       entry.api,
       entry.baseUrl,
@@ -528,6 +533,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             providerId,
             profileId,
             authStore,
+            refresh: options.refresh,
             config: params.cfg,
             agentDir: params.agentDir ?? resolveAgentDir(params.cfg, params.agentId),
             workspaceDir,
@@ -546,6 +552,11 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       );
       await withCurrentReadAuthority(authority, () => {
         accountObservations.push(acquired.isCurrent);
+        // A cold account cache is not a new observation. Retain the current
+        // authenticated shared outcome until the account publishes a result.
+        if (!acquired.hasPublishedCatalog) {
+          return;
+        }
         providerOutcomes.splice(
           0,
           providerOutcomes.length,

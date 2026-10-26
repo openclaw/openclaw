@@ -2,11 +2,49 @@ import { describe, expect, it } from "vitest";
 import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
 type Options = Record<string, string>;
-type AdminCase = [command: string, action: string, required: Options, optional?: Options];
+type AdminCase = [
+  command: string,
+  action: string,
+  required: Options,
+  optional?: Options,
+  defaults?: Record<string, unknown>,
+];
 
 const guild = { guildId: "guild-1" };
 const member = { ...guild, userId: "user-1" };
 const cases: AdminCase[] = [
+  [
+    "edit",
+    "edit",
+    { messageId: "message-1", message: "updated", target: "channel:123" },
+    { threadId: "thread-1" },
+  ],
+  ["delete", "delete", { messageId: "message-1", target: "channel:123" }],
+  ["thread list", "thread-list", guild, { channelId: "channel-1" }, { includeArchived: false }],
+  [
+    "thread reply",
+    "thread-reply",
+    { message: "reply", target: "thread-1" },
+    { media: "https://example.com/image.png", replyTo: "message-1" },
+  ],
+  [
+    "emoji upload",
+    "emoji-upload",
+    { ...guild, emojiName: "party", media: "https://example.com/emoji.png" },
+    {},
+    { roleIds: [] },
+  ],
+  [
+    "sticker upload",
+    "sticker-upload",
+    {
+      ...guild,
+      stickerName: "party",
+      stickerDesc: "Party sticker",
+      stickerTags: "party",
+      media: "https://example.com/sticker.png",
+    },
+  ],
   ["role info", "role-info", guild],
   ["role add", "role-add", { ...member, roleId: "role-1" }],
   ["role remove", "role-remove", { ...member, roleId: "role-1" }],
@@ -54,21 +92,29 @@ function run(path: string, options: Options) {
   );
 }
 
-function expectAction(action: string, options: Options) {
+function expectAction(action: string, options: Options, defaults: Record<string, unknown> = {}) {
   expect(messageCliMocks.command).toHaveBeenCalledExactlyOnceWith(
-    { json: false, dryRun: false, verbose: false, ...options, accountId: undefined, action },
+    {
+      json: false,
+      dryRun: false,
+      verbose: false,
+      ...defaults,
+      ...options,
+      accountId: undefined,
+      action,
+    },
     expect.anything(),
     expect.anything(),
   );
 }
 
-describe("Discord-admin message registration", () => {
+describe("message action registration", () => {
   it.each(cases)(
     "%s forwards the exact action, defaults and options",
-    async (path, action, required, optional = {}) => {
+    async (path, action, required, optional = {}, defaults = {}) => {
       const options = { ...required, ...optional, channel: "discord" };
       await run(path, options);
-      expectAction(action, options);
+      expectAction(action, options, defaults);
     },
   );
 

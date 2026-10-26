@@ -1,5 +1,6 @@
 // Shared startup tracing for the entry wrapper and CLI dispatcher.
 import process from "node:process";
+import { getHeapStatistics } from "node:v8";
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -8,13 +9,11 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
-type StartupTraceMeasureOptions = {
-  timeline?: boolean;
-};
 type PendingTimelineEvent =
   | {
       type: "mark";
@@ -53,6 +52,16 @@ type GatewayBootstrapStep = {
 
 const MAX_BOOTSTRAP_STEPS = 128;
 let bootstrapSteps: Map<string, GatewayBootstrapStep> | undefined = new Map();
+
+export function formatGatewayStartupMemoryUsage(): string {
+  const workers = sampleTrackedWorkerMemory({ refresh: false });
+  const workerHeap =
+    workers.workerHeapTotalBytes === undefined
+      ? ""
+      : ` workerHeapMb=${(workers.workerHeapTotalBytes / 1024 / 1024).toFixed(1)} workerHeapSource=cached`;
+  // MiB: RSS includes worker isolates; the heap belongs to the main isolate.
+  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)} workers=${workers.workerCount} workerHeapSamples=${workers.workerHeapSampledCount}/${workers.workerCount}${workerHeap}`;
+}
 
 /** Collect process facts once; Gateway startup consumes them before serving. */
 export function recordGatewayBootstrapStep(
@@ -117,7 +126,7 @@ export async function measureGatewayBootstrapStep<T>(
     const counts = Object.entries(facts)
       .map(([key, value]) => ` ${key}=${value}`)
       .join("");
-    const message = `[gateway] startup ${traceEnabled ? "trace" : "phase"}: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts}`;
+    const message = `[gateway] startup ${traceEnabled ? "trace" : "phase"}: ${name} ${(completedAt - startedAt).toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${counts} ${formatGatewayStartupMemoryUsage()}`;
     process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
   }
 }
@@ -264,7 +273,7 @@ export function createGatewayDispatchStartupTrace(
     const startedAt = completedAt - durationMs;
     recordGatewayBootstrapStep(`${source}.${name}`, startedAt, completedAt);
     writeMessage(
-      `[gateway] startup ${enabled ? "trace" : "phase"}: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${completed ? "" : " failed"}`,
+      `[gateway] startup ${enabled ? "trace" : "phase"}: ${source}.${name} ${durationMs.toFixed(1)}ms total=${completedAt.toFixed(1)}ms start=${startedAt.toFixed(1)}ms${completed ? "" : " failed"} ${formatGatewayStartupMemoryUsage()}`,
     );
   };
   return {
@@ -300,7 +309,9 @@ export function createGatewayDispatchStartupTrace(
     async measure<T>(
       name: string,
       run: () => T | PromiseLike<T>,
-      options: StartupTraceMeasureOptions = {},
+      options: {
+        timeline?: boolean;
+      } = {},
     ): Promise<T> {
       const before = performance.now();
       if (progressEnabled && STARTUP_PROGRESS_PHASES.has(timelineName(name))) {

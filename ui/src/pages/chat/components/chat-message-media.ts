@@ -3,6 +3,8 @@ import type { ChatImageRenditionWidth } from "../../../../../src/shared/chat-ima
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem, MessageImageSource } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
@@ -15,6 +17,10 @@ import {
   labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
+
+registerChatComposerEnglish();
+
+registerChatMediaEnglish();
 
 export type ImageBlock = {
   factIndex?: number;
@@ -60,11 +66,13 @@ export type ImageRenderOptions = {
   policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
+  messageSendId?: string;
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;
   /** Synchronous cancellation custody, independent of any rendering callback. */
   mediaOwner?: object;
+  mediaReadAllowed?: boolean;
   /** A local resource observer; never a pane or page redraw callback. */
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;

@@ -10,13 +10,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
-import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import * as stateReadonly from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -25,7 +23,7 @@ import {
 import { acquireOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
 
 const boundary = vi.hoisted(() => ({
@@ -131,12 +129,10 @@ it.each([
           restoreObservation = sql.restore;
           const leaseQueries = () =>
             sql.queries.filter((query) => /from\s+"?state_leases"?/iu.test(query));
-          let atStop: string[] | undefined;
           const reachedStop = new Error("synthetic service stop boundary reached");
           boundary.stop.mockReset().mockImplementation(async (params) => {
             params.assertCurrent?.();
             if (params.phase !== "inspect") {
-              atStop = leaseQueries();
               throw reachedStop;
             }
             return {
@@ -154,17 +150,6 @@ it.each([
               },
             };
           });
-          if (kind !== "missing") {
-            expect(
-              readGatewayOwnerLease({
-                env: state.env,
-                current: true,
-                openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-              })?.owner,
-            ).toBe("serving-gateway");
-            expect(leaseQueries().length).toBeGreaterThan(0);
-          }
-          sql.queries.length = 0;
           const held = ["revoked", "cancelled", "selected-source", "process-exited"].includes(kind);
           const entered = createDeferredCore();
           const resume = createDeferredCore();
@@ -193,10 +178,8 @@ it.each([
           }
           const operation = withCommandProcessScope(
             () =>
-              beginDoctorMaintenance({
-                options: { repair: true, nonInteractive: true },
+              beginDoctorRepair({
                 root: state.root,
-                runtime: { log() {}, error() {}, exit() {} },
                 assertCurrent: () => {
                   if (!authorized) {
                     throw refused;
@@ -240,9 +223,7 @@ it.each([
             await settled;
           }
           expect(boundary.stop).toHaveBeenCalledTimes(live ? 2 : 1);
-          if (live) {
-            expect(atStop).toEqual([]);
-          }
+          // Includes the service-stop boundary: no lease query may run on this thread.
           expect(leaseQueries()).toEqual([]);
           expect(fs.existsSync(databasePath)).toBe(before !== undefined);
           if (before) {

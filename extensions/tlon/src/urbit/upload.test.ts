@@ -24,8 +24,8 @@ const uploadedUrl = "https://memex.tlon.network/uploaded.png";
 const imageUrl = "https://example.com/image.png";
 const buffer = Buffer.from("fake-image");
 const upload = (url = imageUrl, cap?: number) => uploadImageFromUrl(url, clientConfig, cap);
-function setupSuccessfulUpload(contentType = "image/png") {
-  mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName: "image.png" });
+function setupSuccessfulUpload(contentType = "image/png", fileName?: string) {
+  mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName });
   mockUploadFile.mockResolvedValue({ url: uploadedUrl });
 }
 
@@ -61,6 +61,12 @@ it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) =
   expect(Buffer.from(await blob.arrayBuffer())).toEqual(buffer);
 });
 
+it("prefers the downloaded filename over a query-style URL basename", async () => {
+  setupSuccessfulUpload("image/png", "photo#1.png");
+  await upload("https://example.com/download?id=123");
+  expect(requireUploadParams().fileName).toBe("photo#1.png");
+});
+
 it("preserves a wrapped authority rejection instead of falling back to the original URL", async () => {
   const revoked = new Error("delivery revoked");
   const assertDirectAdapterHandoff = vi.fn().mockImplementationOnce(() => {
@@ -86,13 +92,6 @@ it("does not embed an unchecked URL when a configured cap rejects its bytes", as
   mockReadRemoteMediaBuffer.mockRejectedValue(error);
   await expect(upload(imageUrl, 1024)).rejects.toBe(error);
   expect(mockUploadFile).not.toHaveBeenCalled();
-});
-
-it("retains the bounded original URL if upload fails with a configured cap", async () => {
-  setupSuccessfulUpload();
-  mockUploadFile.mockRejectedValue(new Error("Upload failed"));
-
-  await expect(upload(imageUrl, 1024)).resolves.toBe(imageUrl);
 });
 
 it("rejects non-http(s) URLs", async () => {

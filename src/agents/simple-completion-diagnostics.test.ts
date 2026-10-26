@@ -11,6 +11,10 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
+import {
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../logging/diagnostic-stability.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -53,10 +57,30 @@ beforeEach(() => {
   completeSimple.mockReset();
 });
 afterEach(() => {
+  stopDiagnosticStabilityRecorder();
   stop?.();
   stop = undefined;
   resetDiagnosticRunActivityForTest();
   resetDiagnosticEventsForTest();
+});
+
+it("does not serialize prompts for the default activity and stability listeners", async () => {
+  startDiagnosticStabilityRecorder();
+  completeSimple.mockResolvedValue(assistant);
+  const messages = [{ role: "user" as const, content: "Generate a title", timestamp: 1 }];
+  using stringify = vi.spyOn(JSON, "stringify");
+
+  for (let call = 0; call < 3; call++) {
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+      context: { messages },
+    });
+  }
+  await waitForDiagnosticEventsDrained();
+  expect(stringify.mock.calls.filter(([value]) => value === messages)).toHaveLength(0);
+  expect(completeSimple).toHaveBeenCalledTimes(3);
+  expect(activityByRunId.size).toBe(0);
 });
 
 it.each(["success", "returned-error", "throw"] as const)(

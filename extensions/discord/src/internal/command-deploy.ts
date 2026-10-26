@@ -47,7 +47,8 @@ export class DiscordCommandDeployer {
 
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
     // SAFETY: Discord's global-command list endpoint returns APIApplicationCommand[].
-    const existing = (await this.rest.get(
+    const existing = (await this.request(
+      "get",
       Routes.applicationCommands(this.params.clientId),
     )) as APIApplicationCommand[];
     const existingByKey = new Map(existing.map((command) => [stableCommandKey(command), command]));
@@ -59,9 +60,11 @@ export class DiscordCommandDeployer {
     for (const { command, key } of desiredCommands) {
       const current = existingByKey.get(key);
       if (current && !commandsEqual(current, command)) {
-        await this.rest.patch(Routes.applicationCommand(this.params.clientId, current.id), {
-          body: command,
-        });
+        await this.request(
+          "patch",
+          Routes.applicationCommand(this.params.clientId, current.id),
+          command,
+        );
       }
     }
     for (const { command, key } of desiredCommands) {
@@ -69,20 +72,27 @@ export class DiscordCommandDeployer {
         continue;
       }
       try {
-        await this.rest.post(Routes.applicationCommands(this.params.clientId), { body: command });
+        await this.request("post", Routes.applicationCommands(this.params.clientId), command);
       } catch (error) {
-        if (!isApplicationCommandLimitError(error)) {
+        if (
+          !(
+            error !== null &&
+            typeof error === "object" &&
+            "discordCode" in error &&
+            error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
+          )
+        ) {
           throw error;
         }
         // Reconcile cannot create before deleting at Discord's hard cap. Bulk
         // overwrite replaces the complete set without an unsafe delete gap.
-        await this.rest.put(Routes.applicationCommands(this.params.clientId), { body: desired });
+        await this.request("put", Routes.applicationCommands(this.params.clientId), desired);
         return;
       }
     }
     for (const command of existing) {
       if (!desiredKeys.has(stableCommandKey(command))) {
-        await this.rest.delete(Routes.applicationCommand(this.params.clientId, command.id));
+        await this.request("delete", Routes.applicationCommand(this.params.clientId, command.id));
       }
     }
   }
@@ -99,22 +109,41 @@ export class DiscordCommandDeployer {
     }
   }
 
-  private get rest(): RequestClient {
-    return this.params.rest();
+  private async request(
+    method: "get" | "post" | "put" | "patch" | "delete",
+    path: string,
+    body?: SerializedCommand | SerializedCommand[],
+  ): Promise<unknown> {
+    const rest = this.params.rest();
+    const timeoutMs = rest.options.timeout;
+    const startedAt = Date.now();
+    try {
+      return method === "get" || body === undefined
+        ? await rest[method](path)
+        : await rest[method](path, { body });
+    } catch (error) {
+      // Annotate only this owner's requests; concurrent startup REST traffic is unrelated.
+      if (error && typeof error === "object") {
+        if (
+          body !== undefined &&
+          (!("deployRequestBody" in error) || error.deployRequestBody === undefined)
+        ) {
+          Object.assign(error, { deployRequestBody: body });
+        }
+        Object.assign(error, {
+          deployRestMethod: method,
+          deployRestPath: path,
+          deployRequestMs: Date.now() - startedAt,
+          ...(Number.isFinite(timeoutMs) ? { deployTimeoutMs: timeoutMs } : {}),
+        });
+      }
+      throw error;
+    }
   }
 }
 
 function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
-}
-
-function isApplicationCommandLimitError(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    "discordCode" in error &&
-    error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
-  );
 }
 
 function stableCommandSetHash(commands: SerializedCommand[]): string {

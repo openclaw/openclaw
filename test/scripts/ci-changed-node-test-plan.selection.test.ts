@@ -1,55 +1,18 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Mode = "aggressive" | "full";
 function fixture(files: Record<string, string> | string[]) {
   const cwd = tempDirs.make("node-selection-");
-  const entries: [string, string][] = Array.isArray(files)
-    ? files.map((file) => [file, "export {};\n"])
-    : Object.entries(files);
-  for (const [file, content] of entries) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), content);
-  }
+  writeFiles(cwd, files);
   return cwd;
 }
 
 const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
   resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
-
-it.each(["added", "renamed", "deleted", "import-edge"])(
-  "retains non-import inventories and architecture for %s source modules",
-  (change) => {
-    const source = "src/infra/new-module.ts";
-    const guards = [
-      "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
-      "test/scripts/type-suppression-inventory.test.ts",
-      "test/scripts/plugin-sdk-surface-report.test.ts",
-    ];
-    const testOnly = "src/infra/own.test.ts";
-    const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
-    if (change === "import-edge") {
-      writeFileSync(path.join(cwd, source), 'import "./dependency.js";\n');
-      writeFileSync(path.join(cwd, "src/infra/dependency.ts"), "export {};\n");
-    }
-    const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
-    expect(select(cwd, paths)).toEqual(guards.toSorted());
-    mkdirSync(path.dirname(path.join(cwd, testOnly)), { recursive: true });
-    writeFileSync(path.join(cwd, testOnly), "export {};\n");
-    expect(select(cwd, [testOnly])).toEqual([testOnly]);
-    expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
-      "runtime-topology-architecture",
-    );
-  },
-);
 
 it.each(["aggressive", "full"] as const)(
   "routes skill node:test and Python files through their Vitest owner in %s mode",
@@ -75,7 +38,7 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
   const distant = "src/infra/state-migrations.audit-logs.test.ts";
-  const unrelated = "src/agents/bash-tools.exec.path.test.ts";
+  const unrelated = "src/agents/bash-tools.exec.script-preflight.test.ts";
   const cwd = fixture({
     [source]: "export const value = 1;",
     [direct]: 'import "./subject.js";',
@@ -148,5 +111,24 @@ it.each([30, 31])(
     expect(selected).toEqual((count <= 30 ? [...matching, ...unrelated] : matching).toSorted());
     expect(selected).not.toContain(nested);
     expect(select(cwd, [source, unrelated[0]!])).toContain(unrelated[0]);
+  },
+);
+
+it.each(["aggressive", "full"] as const)(
+  "keeps opt-in tests outside PR test roots out of %s selection",
+  (selectionMode) => {
+    // #182101: the retention census imports this helper but has its own opt-in config.
+    const helper = "ui/src/test-helpers/control-ui-e2e.ts";
+    const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const cwd = fixture({
+      [helper]: "export const helper = 1;\n",
+      [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',
+      [consumer]: 'import "./control-ui-e2e.ts";\n',
+    });
+    const selected = select(cwd, [helper], selectionMode);
+    expect(selected).toContain(consumer);
+    expect(selected).not.toContain(optIn);
+    expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );

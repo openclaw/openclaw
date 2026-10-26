@@ -12,7 +12,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   isCodexActiveCompactTurnError,
   clearCodexBindingAfterInvalidImagePayload,
@@ -31,7 +31,7 @@ import {
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,

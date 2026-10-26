@@ -5,7 +5,6 @@ import { countUntrackedActiveAcpRunsForOwner } from "../spawn/acp-spawn-admissio
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import {
   buildScopedSubagentRunReadIndexFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -165,7 +164,12 @@ describe("subagent registry scoped reads", () => {
         ).countActiveDescendantRuns(root),
       ).toBe(1);
       expect(
-        hasDescendantRunAwaitingSettleFromRuns(mocks.liveRuns, root, excluded, "main", storePath),
+        buildScopedSubagentRunReadIndexFromRuns(
+          mocks.liveRuns,
+          root,
+          "main",
+          storePath,
+        ).hasDescendantRunAwaitingSettle(root, excluded),
       ).toBe(false);
     },
   );
@@ -209,6 +213,47 @@ describe("subagent registry scoped reads", () => {
       expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
     } finally {
       releaseTurn?.();
+      releaseAgentRunContext(older.runId, claim);
+    }
+  });
+
+  it("checks requester liveness without visiting unrelated retained runs", () => {
+    const childSessionKey = "agent:main:subagent:requester";
+    const older = createRun("requester-older", { childSessionKey, generation: 1 });
+    const latest = createRun("requester-latest", {
+      childSessionKey,
+      generation: 2,
+      execution: { status: "terminal", endedAt: 10 },
+    });
+    let unrelatedReads = 0;
+    for (let index = 0; index < 32; index += 1) {
+      const unrelated = createRun(`retained-${index}`, {
+        execution: { status: "terminal", endedAt: 10 },
+      });
+      Object.defineProperty(unrelated, "childSessionKey", {
+        get() {
+          unrelatedReads += 1;
+          return `agent:main:subagent:retained-${index}`;
+        },
+      });
+      publishLive(unrelated);
+    }
+    publishLive(older, latest);
+    mocks.getSubagentRunsForChildSession.mockReturnValue([older, latest]);
+    const claim = claimAgentRunContext(
+      older.runId,
+      { sessionKey: childSessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+      mocks.liveRuns.delete(latest.runId);
+      mocks.getSubagentRunsForChildSession.mockReturnValue([older]);
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
+      releaseAgentRunContext(older.runId, claim);
+      expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+      expect(unrelatedReads).toBe(0);
+    } finally {
       releaseAgentRunContext(older.runId, claim);
     }
   });
@@ -304,7 +349,12 @@ describe("subagent registry scoped reads", () => {
     ).toEqual([2, 1]);
     mocks.readSnapshot = snapshot;
     expect(await mod.countPendingDescendantRuns(root, () => {})).toBe(4);
-    expect(hasDescendantRunAwaitingSettleFromRuns(snapshot, root, pendingRun.runId)).toBe(true);
+    expect(
+      buildScopedSubagentRunReadIndexFromRuns(snapshot, root).hasDescendantRunAwaitingSettle(
+        root,
+        pendingRun.runId,
+      ),
+    ).toBe(true);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toEqual(
       projectSubagentRunForSessionList(freshTerminal),

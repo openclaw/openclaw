@@ -1,7 +1,6 @@
-import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
+import { beamTestServiceContext } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStoredSession } from "./types.js";
 
@@ -43,12 +42,7 @@ it("expires cached summaries at storage expiry without rereading transcripts", a
 it("refreshes foreign changes in the background and drains its service on stop", async () => {
   vi.useFakeTimers();
   const store = memoryStore();
-  const ctx: OpenClawPluginServiceContextV2 = {
-    config: {},
-    scheduler: createTestPluginServiceScheduler(),
-    stateDir: "/unused",
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  };
+  const ctx = beamTestServiceContext();
   const readEntries = store.keyedStore.entries;
   const entries = vi.spyOn(store.keyedStore, "entries");
   const stop = async () => {

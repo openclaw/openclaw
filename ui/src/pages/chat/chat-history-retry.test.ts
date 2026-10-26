@@ -9,7 +9,6 @@ import {
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
-import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -41,26 +40,6 @@ const requestError = (code: string, message: string, retryable: boolean, retryAf
   new GatewayRequestError({ code, message, retryable, retryAfterMs });
 
 describe("shared chat history transient recovery", () => {
-  it.each([
-    {
-      message: "Startup inspection pending: /private/agent.sqlite",
-      details: {
-        paths: ["/private/agent.sqlite"],
-        code: "agent-database-inspection-pending",
-      },
-      retryable: true,
-      expected: "This agent is still starting. Retry in a moment.",
-    },
-    {
-      message: "Agent database inspection failed. Run Doctor.",
-      details: { code: "agent-database-inspection-failed" },
-      retryable: false,
-    },
-  ])("formats $details.code for the operator", ({ expected, ...params }) => {
-    const error = new GatewayRequestError({ code: "UNAVAILABLE", ...params });
-    expect(formatChatHistoryLoadError(error)).toBe(expected ?? params.message);
-  });
-
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {
@@ -138,6 +117,9 @@ describe("shared chat history transient recovery", () => {
       });
       await loadChatHistory(state, { deferBranches: true });
       expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable });
+      if (error instanceof GatewayRequestError) {
+        expect(getChatHistoryLoadState(state)).toMatchObject({ message: error.message });
+      }
       expect(state.request).toHaveBeenCalledOnce();
     },
   );

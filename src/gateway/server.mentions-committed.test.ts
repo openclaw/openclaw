@@ -1,18 +1,14 @@
 import { X509Certificate } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
   connectGatewayClient,
@@ -34,9 +30,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
     prepareProfileCatalog: true,
   });
   await using cleanup = new AsyncDisposableStack();
-  const heartbeatsEnabled = areHeartbeatsEnabled();
-  cleanup.defer(() => setHeartbeatsEnabled(heartbeatsEnabled));
-  setHeartbeatsEnabled(false);
   cleanup.defer(() => state.cleanup());
   const alice = ensureProfileForEmail("alice@committed-mention.example.test");
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");
@@ -45,7 +38,7 @@ it("delivers a committed human mention once through authenticated chat.send", as
   setDisplayName(bob.id, "Bob");
   setUserProfileRole(bob.id, "administrator");
   const provider = createServer((request, response) => {
-    void readProviderBody(request)
+    void readRequestText(request)
       .then(() => {
         writeOpenAiResponsesText(response, {
           text: "Acknowledged.",
@@ -99,7 +92,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {

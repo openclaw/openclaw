@@ -24,7 +24,6 @@ import type {
 } from "../../../src/gateway/session-utils.types.js";
 import type {
   GatewayContextWindowOption,
-  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -78,6 +77,7 @@ export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type {
+  AgentsCreateResult,
   AgentsListResult,
   ModelChoice as ModelCatalogEntry,
   ModelCatalogProviderOutcome,
@@ -89,8 +89,6 @@ export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][str
 export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
   probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
-
-type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
   writeError?: ErrorShape;
@@ -106,18 +104,20 @@ export type ConfigSnapshot = {
   resolved?: Record<string, unknown> | null;
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
-  issues?: ConfigSnapshotIssue[] | null;
+  issues?: { path: string; message: string }[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 export type { GatewayWireSessionsDefaults as GatewaySessionsDefaults };
 export type { GatewayAgentRow } from "../../../src/shared/session-types.js";
-export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
+export type { GatewayContextWindowOption };
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: ProtocolArtifactSummary[];
 };
+
+export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessProgram"]>;
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
@@ -164,13 +164,14 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
 }> &
   Pick<GatewayWireSessionsPatchResult, "resolved">;
 
-export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
+export type { SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;

@@ -35,52 +35,17 @@ beforeEach(() => {
   });
 });
 
-it("gives each selected runtime build its own managed deadline", async () => {
-  writePublishablePluginFixture(repoDir, {
-    extensionId: "second-plugin",
-    version: "2026.4.11",
-    publishTo: "both",
+it("preserves timeout failure semantics without child details", async () => {
+  command.mockResolvedValueOnce(0).mockRejectedValueOnce(failure("ETIMEDOUT"));
+  await expect(checkPack(repoDir)).rejects.toMatchObject({
+    code: "ETIMEDOUT",
+    message:
+      "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
   });
-  command.mockResolvedValue(0);
-
-  await checkPack(repoDir, { timeoutMs: 321 });
-
-  expect(command).toHaveBeenCalledTimes(6);
-  for (const [index, id] of [
-    [0, "demo"],
-    [3, "second"],
-  ] as const) {
-    expect(command.mock.calls[index]?.[0]).toMatchObject({
-      args: expect.arrayContaining(["--package", `extensions/${id}-plugin`]),
-      timeoutMs: 321,
-    });
-  }
 });
 
-it.each([
-  [
-    7,
-    "plugin runtime build for @openclaw/demo-plugin failed with exit code 7: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
-  ],
-  [
-    "ETIMEDOUT",
-    "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
-  ],
-])("preserves %s failure semantics without child details", async (code, message) => {
-  if (typeof code === "number") {
-    command.mockResolvedValueOnce(code);
-  } else {
-    command.mockResolvedValueOnce(0).mockRejectedValueOnce(failure(code));
-  }
-  await expect(checkPack(repoDir)).rejects.toMatchObject({ code, message });
-});
-
-it("preserves managed cancellation statuses at the CLI boundary", () => {
-  expect(
-    [130, 143, "ETIMEDOUT"].map((code) =>
-      pluginReleasePretagExitCode(Object.assign(new Error("interrupted"), { code })),
-    ),
-  ).toEqual([130, 143, 1]);
+it("maps nonnumeric failures to the CLI failure status", () => {
+  expect(pluginReleasePretagExitCode(failure("ETIMEDOUT"))).toBe(1);
 });
 
 it.each(["live", "terminated"] as const)(

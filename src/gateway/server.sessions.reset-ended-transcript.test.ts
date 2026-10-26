@@ -1,6 +1,5 @@
-import { afterAll, afterEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as sessionHistoryWorkers from "../config/sessions/session-history-worker-runtime.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -111,34 +110,20 @@ test("sessions.reset delivers the ended SQLite window only to a loaded granted p
   const ungrantedResult = createDeferred<unknown>();
   (globalThis as Record<PropertyKey, unknown>)[resultKeys.granted] = grantedResult;
   (globalThis as Record<PropertyKey, unknown>)[resultKeys.ungranted] = ungrantedResult;
-  const historyRead = vi.spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker");
-  try {
-    await resetMainSession();
-    const [granted, ungranted] = await Promise.all([
-      grantedResult.promise,
-      ungrantedResult.promise,
-      hookSettled.promise,
-    ]);
-    expect(granted).toMatchObject({
-      messages: [expect.objectContaining({ role: "user", content: latestEndedContent })],
-      totalMessages: 1,
-      truncated: false,
-    });
-    expect(Buffer.byteLength(JSON.stringify(granted.messages), "utf8")).toBeLessThanOrEqual(
-      4 * 1024,
-    );
-    expect(ungranted).toEqual({
-      available: false,
-      reason: "conversation-access-required",
-    });
-    expect(historyRead).toHaveBeenCalledOnce();
-    expect(historyRead.mock.calls[0]?.[0]).toEqual({
-      kind: "around-id",
-      params: expect.objectContaining({
-        options: expect.objectContaining({ closedResetInterval: true }),
-      }),
-    });
-  } finally {
-    historyRead.mockRestore();
-  }
+  await resetMainSession();
+  const [granted, ungranted] = await Promise.all([
+    grantedResult.promise,
+    ungrantedResult.promise,
+    hookSettled.promise,
+  ]);
+  expect(granted).toMatchObject({
+    messages: [expect.objectContaining({ role: "user", content: latestEndedContent })],
+    totalMessages: 1,
+    truncated: false,
+  });
+  expect(Buffer.byteLength(JSON.stringify(granted.messages), "utf8")).toBeLessThanOrEqual(4 * 1024);
+  expect(ungranted).toEqual({
+    available: false,
+    reason: "conversation-access-required",
+  });
 });

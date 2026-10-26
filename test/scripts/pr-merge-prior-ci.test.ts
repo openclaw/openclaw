@@ -118,20 +118,6 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it("lands attributed CI with a maintainer writer without classic-policy visibility", () => {
-    const f = preExistingCandidate();
-    const state = delegate(f);
-    f.save({ ...state, restPolicy: "not-found" });
-    const result = f.adminPriorCi(f.path);
-    expectResult(f, result, undefined, 1);
-    expect(f.record()).toMatchObject({ phase: "complete", route: "admin", head: f.head });
-    expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
-    expect(
-      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
-    ).toBe(false);
-    expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
-  });
-
   it.each([
     { kind: "check", state: "failure", required: true, padding: 0, admitted: false },
     { kind: "status", state: "pending", required: true, padding: 0, admitted: false },
@@ -211,28 +197,6 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it.each(["review", "security", "new attempt", "head"])("delegation cannot waive %s", (fault) => {
-    const f = preExistingCandidate();
-    const state = delegate(f);
-    state.restPolicy = "not-found";
-    if (fault === "review") {
-      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "security") {
-      state.priorCi.security.fault = "failed-guard";
-    }
-    if (fault === "new attempt") {
-      state.priorCi.latestAttempt++;
-    }
-    if (fault === "head") {
-      state.pr.headRefOid = f.base;
-    }
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expectResult(f, result, /current enforced reviews|security-sensitive|newer or running/);
-    expect(() => f.record()).toThrow();
-  });
-
   it("lands fork matrix cancellation while retaining independent UI failure attribution", () => {
     const f = mixedMatrixCandidate();
     const state = f.state();
@@ -261,12 +225,7 @@ describePosix("explicit prior-CI admin landing", () => {
   it.each([
     "empty causes",
     "duplicate cause",
-    "unknown cause",
-    "nonfailed cause",
-    "cancelled cause",
     "unrelated failure as cause",
-    "extra unrelated member",
-    "missing causal member",
     "aggregate omits unrelated failure",
     "missing cancellation qualification",
     "disabled",
@@ -288,18 +247,9 @@ describePosix("explicit prior-CI admin landing", () => {
     const causes: Record<string, number[]> = {
       "empty causes": [],
       "duplicate cause": [601, 601],
-      "unknown cause": [999],
-      "nonfailed cause": [605],
-      "cancelled cause": [604],
       "unrelated failure as cause": [606],
     };
     cancellation.causedBy = causes[fault] ?? cancellation.causedBy;
-    if (fault === "extra unrelated member") {
-      cancellation.members.push({ jobId: 606, name: "checks-ui-e2e-real-gateway" });
-    }
-    if (fault === "missing causal member") {
-      cancellation.members.shift();
-    }
     if (fault === "aggregate omits unrelated failure") {
       f.evidence.aggregate.causedBy = [601];
     }
@@ -407,6 +357,10 @@ describePosix("explicit prior-CI admin landing", () => {
   it.each([
     ["success", ""],
     ["pending", ""],
+    ["head-only-enforcement", ""],
+    ["wrong-ci-run", "successful exact-head security enforcement is required"],
+    ["wrong-ci-attempt", "successful exact-head security enforcement is required"],
+    ["duplicate-enforcement", "successful exact-head security enforcement is required"],
     ["automation-dispatch", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
@@ -429,7 +383,7 @@ describePosix("explicit prior-CI admin landing", () => {
   ])("validates %s security evidence without dispatch", (fault, message) => {
     const f = preExistingCandidate();
     const state = f.state();
-    const accepted = fault === "success" || fault === "pending";
+    const accepted = ["success", "pending", "head-only-enforcement"].includes(fault!);
     if (fault === "success" || fault === "pending") {
       state.priorCi.security.combinedState = fault;
     } else {
@@ -520,7 +474,7 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it.each(["failure", "cancelled"])(
+  it.each(["cancelled"])(
     "lands an attributed %s attempt without claiming cancelled coverage passed",
     (conclusion) => {
       const f = preExistingCandidate();

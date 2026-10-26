@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { streamFixture } from "./openai-completions-suite.test-support.js";
-import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  expectedRecoveredTool,
+  makeCompletionsChunk,
+  makeCompletionsModel,
+  makeCompletionsToolDelta,
+} from "./openai-completions.test-support.js";
 
 const model = makeCompletionsModel({
   id: "google/gemma-4-e4b",
@@ -19,12 +24,7 @@ describe("Gemma tool-call text recovery", () => {
     await text([call, suffix]);
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "process",
-        arguments: { action: "poll", sessionId: "example" },
-      },
+      expectedRecoveredTool("process", { action: "poll", sessionId: "example" }),
       ...(suffix ? [{ type: "text", text: suffix }] : []),
     ]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
@@ -106,16 +106,9 @@ describe("Gemma tool-call text recovery", () => {
     async (rawFirst) => {
       const { output, events, run } = streamFixture(model);
       const raw = makeCompletionsChunk({ content: call });
-      const native = makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "native-call",
-            type: "function",
-            function: { name: "read", arguments: '{"path":"probe.txt"}' },
-          },
-        ],
-      });
+      const native = makeCompletionsChunk(
+        makeCompletionsToolDelta("native-call", "read", '{"path":"probe.txt"}'),
+      );
       await run([
         ...(rawFirst ? [raw, native] : [native, raw]),
         makeCompletionsChunk({}, "tool_calls"),

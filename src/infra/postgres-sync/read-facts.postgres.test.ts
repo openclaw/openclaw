@@ -13,6 +13,7 @@ import {
   bindAcpSessionMeta,
 } from "../../acp/runtime/session-meta-write.kernel.js";
 import { getExactSessionEntryQueries } from "../../config/sessions/session-accessor.sqlite-entry-query.js";
+import { readModelContextNavigationPages } from "../../config/sessions/session-model-context-pages.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { agentEngineSchema } from "../../state/openclaw-agent-db-engine.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
@@ -24,28 +25,16 @@ import { executeSqliteQuerySync } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { admitSqliteSchema, hasUncommittedSqliteWrites } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
+import { failAfterStatement } from "./sql.test-support.js";
 
 const harness = usePostgresTestHarness("read_facts");
 const { connection, prefix, directories } = harness;
-type StoreFixture = {
-  pathname: string;
-  writer: PostgresSqlConnection;
-  open: () => PostgresSqlConnection;
-  close: () => void;
-};
-const stores: StoreFixture[] = [];
-harness.onClose(() =>
-  withEngineStoreAdmission(() => {
-    for (const store of stores) {
-      store.close();
-    }
-  }),
-);
+type StoreFixture = ReturnType<typeof openStore>;
 
-function openStore(schema: StoreSchema): StoreFixture {
+function openStore(schema: StoreSchema) {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
   const handles: {
     db: PostgresSqlConnection;
@@ -77,19 +66,15 @@ function openStore(schema: StoreSchema): StoreFixture {
   };
   const writer = open();
   assert(getPostgresPhysicalFacts(writer), "Expected production schema admission");
-  const store = {
-    pathname,
-    writer,
-    open,
-    close() {
+  harness.onClose(() =>
+    withEngineStoreAdmission(() => {
       for (const { db, anchor } of handles) {
         db.close();
         anchor.close();
       }
-    },
-  };
-  stores.push(store);
-  return store;
+    }),
+  );
+  return { pathname, writer, open };
 }
 
 function metadata(runtimeSessionName: string): SessionAcpMeta {
@@ -171,12 +156,18 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       seedAcp(state.writer, "published", "initial");
       const { reader, read, snapshot, published } = acpReader(state, "published", "absent");
       using query = vi.spyOn(reader, "query");
+      using exec = vi.spyOn(reader, "exec");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
-      runSqliteReadSnapshotSync(reader, () => {
-        expectRows(read(), "initial", null);
+      snapshot(() => {
+        expectRows(snapshot(read), "initial", null);
         expect(published()).toBeUndefined();
       });
+      expect(exec.mock.calls).toEqual([
+        ["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"],
+        ["ROLLBACK"],
+      ]);
+      expect(reader.isTransaction).toBe(false);
       expect(metadataReads()).toHaveLength(1);
       expectRows(published(), "initial", null);
       query.mockClear();
@@ -187,6 +178,49 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       writeAcp(state.writer, "published", null);
       expectRows(snapshot(), null, "created");
       expect(metadataReads()).toHaveLength(0);
+    });
+  });
+
+  it("reuses model-context navigation facts across PostgreSQL read-only snapshots", () => {
+    withEngineStoreAdmission(() => {
+      const agent = openStore(agentEngineSchema);
+      const entry = {
+        seq: 0,
+        id: "entry",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        type: "message" as const,
+        message: { role: "user" as const, content: "hello", timestamp: 0 },
+      };
+      let rowReads = 0;
+      const read = () =>
+        readModelContextNavigationPages({
+          database: agent.writer,
+          sessionId: "cache-session",
+          generation: "generation",
+          through: 0,
+          maxEvents: 1,
+          readRows: () => {
+            rowReads += 1;
+            return [{ entry, bytes: 10, withoutCheckpointBytes: 10 }];
+          },
+        });
+
+      runSqliteReadSnapshotSync(agent.writer, () => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(false);
+        expect(read().prepared).toBeUndefined();
+      });
+      runSqliteReadSnapshotSync(agent.writer, () => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(false);
+        expect(read().prepared).toBeDefined();
+      });
+      expect(rowReads).toBe(1);
+
+      agent.writer.runTransaction(() => {
+        expect(hasUncommittedSqliteWrites(agent.writer)).toBe(true);
+        expect(read().prepared).toBeUndefined();
+      });
+      expect(rowReads).toBe(2);
     });
   });
 
@@ -204,16 +238,8 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         );
         const expected = failureAt === "callback" ? ["durable", null] : [null, null];
         const failure = new Error("snapshot failure");
-        const exec = reader.exec.bind(reader);
         using close =
-          failureAt === "close"
-            ? vi.spyOn(reader, "exec").mockImplementation((sql) => {
-                exec(sql);
-                if (sql === "ROLLBACK") {
-                  throw failure;
-                }
-              })
-            : undefined;
+          failureAt === "close" ? failAfterStatement(reader, "ROLLBACK", failure) : undefined;
         expect(() =>
           snapshot(() => {
             expectRows(read(), ...expected);
@@ -233,12 +259,12 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
   it("keeps old ACP snapshots isolated from newer positive and negative postimages", () => {
     withEngineStoreAdmission(() => {
       seedAcp(state.writer, "overlap-positive", "before");
-      const { reader, read, snapshot, published } = acpReader(
+      const { read, snapshot, published } = acpReader(
         state,
         "overlap-positive",
         "overlap-negative",
       );
-      runSqliteReadSnapshotSync(reader, () => {
+      snapshot(() => {
         expectRows(read(), "before", null);
         writeAcp(state.writer, "overlap-positive", null);
         writeAcp(state.writer, "overlap-negative", "after");

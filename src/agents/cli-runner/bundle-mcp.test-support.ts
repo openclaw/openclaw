@@ -119,10 +119,14 @@ export function prepareNativeMcpTestConfig(params: {
   sessionId: string;
   config: OpenClawConfig;
   senderId?: string;
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  sandboxAgentId?: string;
+  timeoutMs?: number;
 }) {
   const { workspaceDir, sessionId } = params;
   const authStorage = AuthStorage.inMemory();
-  const sessionKey = `agent:main:${sessionId}`;
+  const sessionKey = params.sessionKey ?? `agent:main:${sessionId}`;
   return buildCodexUserMcpServersThreadConfigPatchForRun({
     cwd: workspaceDir,
     run: {
@@ -131,7 +135,7 @@ export function prepareNativeMcpTestConfig(params: {
       sessionKey,
       sessionFile: sessionKey,
       prompt: "hello",
-      timeoutMs: 5_000,
+      timeoutMs: params.timeoutMs ?? 5_000,
       runId: sessionId,
       provider: "openai",
       modelId: "gpt-5.6-luna",

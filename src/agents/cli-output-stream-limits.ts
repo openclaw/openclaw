@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stream-json output limits and raw-line framing for the CLI streaming parser.
 // Kept beside `cli-output-stream.ts` so the parser stays within the file-size
 // budget; the limits are process constants, not per-backend configuration.
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
+import { readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
 const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
@@ -82,6 +84,40 @@ export function measureClaudePartialMessage(
       : JSON.stringify({ estimated_tokens: estimatedTokens }).length) +
     Math.max(0, rawLine.length - JSON.stringify(parsed).length)
   );
+}
+
+// Forwarded child message payloads are discarded; only their progress id survives.
+// Stream events can retain text even with child attribution, so keep their full charge.
+const CLAUDE_SUBAGENT_RECORD_CHARS = 64;
+
+/** Fixed charge only for child message records the parser discards. */
+function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | undefined {
+  if ((parsed.type !== "assistant" && parsed.type !== "user") || parsed.item != null) {
+    return undefined;
+  }
+  const parentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
+  if (!parentToolUseId || parentToolUseId.length > 128) {
+    return undefined;
+  }
+  return CLAUDE_SUBAGENT_RECORD_CHARS;
+}
+
+/** Budget charge for one Claude stream-json line, and whether it is a partial-message frame. */
+export function chargeClaudeStreamJsonLine(
+  record: Record<string, unknown> | undefined,
+  rawLine: string,
+): { chars: number; partialMessage: boolean } {
+  const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
+  const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
+  const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
+  // Neither media omission nor token-envelope discounts may erase wire whitespace.
+  const chars =
+    subagentChars ??
+    partialChars ??
+    (normalized
+      ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
+      : rawLine.length);
+  return { chars, partialMessage: partialChars !== undefined };
 }
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */

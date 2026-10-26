@@ -1836,6 +1836,23 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/knowledge",
+                      {
+                        "group": "Knowledge",
+                        "pages": [
+                          "plugins/knowledge/stores-and-access",
+                          "plugins/knowledge/memory-provider",
+                          "plugins/knowledge/tools",
+                          "plugins/knowledge/records-and-ontology",
+                          "plugins/knowledge/retrieval",
+                          "plugins/knowledge/evidence",
+                          "plugins/knowledge/ingestion",
+                          "plugins/knowledge/corrections",
+                          "plugins/knowledge/local-history",
+                          "plugins/knowledge/maintenance",
+                          "plugins/knowledge/control-ui"
+                        ]
+                      },
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
@@ -1872,6 +1889,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/runtime-compatibility",
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
@@ -2204,6 +2222,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abliteration",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
@@ -2297,9 +2316,11 @@
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
+                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
+                      "providers/requesty",
                       "providers/vercel-ai-gateway"
                     ]
                   },
@@ -3225,6 +3246,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.7",
+                  "releases/2026.10.6",
                   "releases/2026.10.5",
                   "releases/2026.10.4",
                   "releases/2026.10.3",
@@ -3381,6 +3404,7 @@
                 "group": "Start here",
                 "pages": [
                   "help/index",
+                  "help/support",
                   "help/troubleshooting",
                   "help/debugging"
                 ]

@@ -46,7 +46,6 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
-  validateReleaseTelegramWaiverBinding,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
@@ -57,6 +56,10 @@ import {
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
@@ -288,11 +291,33 @@ export async function readChild(child, previous, signal, options = {}) {
       },
       run,
     });
-    return validateChildBinding(child, run, {
+    const snapshot = validateChildBinding(child, run, {
       jobs: evidence.jobs,
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
+    if (snapshot.status === "completed") {
+      const policy = evaluateReleaseChildPolicy({
+        child: snapshot,
+        targetVersion: options.targetVersion,
+      });
+      const jobs = evidence.jobs.map((job) =>
+        attempts
+          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+          .jobs.find((raw) => raw.name === job.name),
+      );
+      await validateReleaseWaiverAggregates({
+        policy,
+        jobs,
+        getJobLog:
+          options.readJobLog ??
+          ((id) =>
+            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
+              signal,
+            })),
+      });
+    }
+    return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
@@ -531,7 +556,6 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence no longer matches the requested validation");
     }
-    validateReleaseTelegramWaiverBinding(executionPlan, evidence.manifest.validationInputs);
     validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
@@ -678,7 +702,6 @@ function planExpected() {
     sourceAdmissionContract: process.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT || undefined,
     targetContextRef: process.env.TARGET_CONTEXT_REF || undefined,
     coveragePolicy: process.env.COVERAGE_POLICY || undefined,
-    telegramWaiver: process.env.TELEGRAM_WAIVER ?? "",
     ...(process.env.TARGET_VERSION ? { targetVersion: process.env.TARGET_VERSION } : {}),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
@@ -706,7 +729,6 @@ function publicationKnownBudget(record, evidenceReuse) {
     targetVersion: context.validationInputs.targetVersion,
     runReleaseSoak: context.runReleaseSoak,
     coveragePolicy: source.coverage.coverage_policy || undefined,
-    telegramWaiver: source.coverage.telegram_waiver,
     releasePackageSpec: source.coverage.release_package_spec,
     npmTelegramPackageSpec: source.coverage.npm_telegram_package_spec,
     liveSuiteFilter: source.coverage.live_suite_filter,
@@ -1191,7 +1213,6 @@ async function planMode() {
     gates: built.gates,
     releaseProfile: expected.releaseProfile,
     rerunGroup: expected.rerunGroup,
-    telegramWaiver: planInputs.telegramWaiver,
     targetVersion: planInputs.targetVersion,
     trustedWorkflow: planInputs.trustedWorkflow,
     ...(presealRecovery ? { sealParentRunAttempt: currentAttempt } : {}),
@@ -1329,6 +1350,7 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
+      targetVersion: executionPlan.targetVersion,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1387,6 +1409,7 @@ async function collectMode(mode) {
       plan.map((child, index) =>
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
+          targetVersion: executionPlan.targetVersion,
         }),
       ),
     );
@@ -1397,6 +1420,7 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
+      targetVersion: executionPlan.targetVersion,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1424,6 +1448,7 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
+          targetVersion: executionPlan.targetVersion,
         });
       }
     }
@@ -1530,8 +1555,13 @@ async function validateManifestMode() {
   ) {
     throw new Error("release manifest publication admission differs from its immutable plan");
   }
-  validateReleaseTelegramWaiverBinding(executionPlan, manifest.validationInputs);
   validateReleaseCoveragePolicyBinding(executionPlan, manifest.validationInputs);
+  if (
+    Object.hasOwn(executionPlan, "targetVersion") &&
+    (manifest.validationInputs?.targetVersion ?? "") !== executionPlan.targetVersion
+  ) {
+    throw new Error("release manifest target version differs from its immutable plan");
+  }
   const expectedChildRunIds = Object.fromEntries(
     executionPlan.children.map((child) => [
       child.key,
@@ -1557,6 +1587,7 @@ async function validateManifestMode() {
     : undefined;
   if (
     manifest.targetSha !== executionPlan.targetSha ||
+    JSON.stringify(rawManifest.waivers ?? []) !== JSON.stringify(drain?.waivers ?? []) ||
     manifest.releaseProfile !== executionPlan.releaseProfile ||
     manifest.rerunGroup !== executionPlan.rerunGroup ||
     JSON.stringify(sortJsonValueKeys(manifest.childRunIds)) !==

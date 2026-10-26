@@ -164,6 +164,7 @@ describe("voice-call doctor state migration", () => {
         "- Voice Call SQLite schema: GitHub publication requests -> durable draft choice",
         "- Voice Call SQLite schema: client credentials and native socket material -> local owner",
         "- Voice Call SQLite schema: heartbeat monitors -> ordinary automation timing and delivery policy fence",
+        "- Voice Call SQLite schema: local workspace baselines -> incremental checkpoint manifests",
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
         "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],
@@ -175,6 +176,7 @@ describe("voice-call doctor state migration", () => {
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
         "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+        "Introduced durable default cron partition selection (v34)",
         expect.stringMatching(
           /^Migrated Voice Call SQLite tables to SQLite STRICT typing \(\d+\)$/,
         ),

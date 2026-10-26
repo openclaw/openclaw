@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
@@ -34,6 +35,7 @@ import {
   writeArchive,
   type FixtureEvent,
 } from "./state-migrations.media-persistence.test-support.js";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 
 const tempDirs: string[] = [];
 
@@ -231,7 +233,8 @@ it("repairs the next agent after another agent loses maintenance ownership", asy
   const { result, preparedPaths } = await migratePrepared(env);
   expect(revoked).toBe(true);
   expect(result.warnings).toHaveLength(1);
-  expect(result.warnings[0]).toContain(`Skipped agent database migration for ${first}:`);
+  expect(result.warnings[0]).toContain("Skipped agent database migration");
+  expect(result.warnings[0]).toContain(`Database: ${first}`);
   expect(result.warnings[0]).toContain("lease");
   expect(preparedPaths).toEqual([second]);
   expect(readDatabaseSnapshot(first)).toEqual(before);
@@ -423,8 +426,7 @@ it("rewrites every active shape and trajectory snapshot, migrates mixed archives
   try {
     const prepared = await migratePrepared(env);
     result = prepared.result;
-    const { preparedPaths } = prepared;
-    expect(preparedPaths).toEqual([databasePath]);
+    expect(prepared.preparedPaths).toEqual([databasePath]);
     const statements = sql.calls.flatMap((call) => call.mock.calls.map(([statement]) => statement));
     expect(
       statements.filter(
@@ -665,8 +667,17 @@ it.each([
         `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
       ),
     ]);
-    expect(result.warnings[0]).toContain(`Skipped agent database migration for ${databasePath}:`);
+    expect(result.warnings[0]).toContain("Skipped agent database migration:");
+    expect(result.warnings[0]).toContain(`Database: ${databasePath}`);
     expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
+    expect(
+      createUpdateFailureFact({
+        check: "media-persistence",
+        code: "step-refused",
+        message: result.warnings[0],
+      }).message,
+    ).toContain(`invalid ${kind} JSON`);
+    expect(result.notices).toContainEqual(expect.stringContaining('rerun "openclaw doctor --fix"'));
     expect(readDatabaseSnapshot(databasePath)).toEqual(before);
     expect(
       readRows(
@@ -705,16 +716,37 @@ it("preserves an archive replaced before its atomic media repair", async () => {
   expect(archiveDrift.warnings.join("\n")).toContain("changed before atomic");
   expect(fs.readFileSync(archivePath, "utf8")).toBe("replacement\n");
 });
-function createArchiveFixture(bytes: Uint8Array) {
+function createArchiveFixture(bytes: Uint8Array, compressed = false) {
   const stateDir = fs.realpathSync(makeTempDir(tempDirs, "media-persistence-archive-"));
   const env = { OPENCLAW_STATE_DIR: stateDir };
   openOpenClawAgentDatabase({ agentId: "main", env });
   closeOpenClawAgentDatabasesForTest();
-  const archivePath = archiveFile(env, "fixture.jsonl.deleted.2026-07-24T01-02-03.000Z");
+  const archivePath =
+    archiveFile(env, "fixture.jsonl.deleted.2026-07-24T01-02-03.000Z") +
+    (compressed ? SESSION_ARCHIVE_ZSTD_SUFFIX : "");
   fs.mkdirSync(path.dirname(archivePath), { recursive: true });
   fs.writeFileSync(archivePath, bytes);
   return { archivePath, env };
 }
+
+it.each([false, true])(
+  "preserves malformed UTF-8 legacy archive (compressed=%s)",
+  async (compressed) => {
+    const malformed = Buffer.from(
+      '{"type":"message","message":{"role":"user","content":"bad text","MediaPath":"/media/a.png"}}\n',
+    );
+    malformed[malformed.indexOf("text")] = 0xff;
+    const bytes = compressed ? zstdCompressSync(malformed) : malformed;
+    const { archivePath: source, env } = createArchiveFixture(bytes, compressed);
+
+    const result = await migrate({ env });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain(`${source} must be valid UTF-8`);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+  },
+);
 
 const valid = Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n`);
 it.each([

@@ -7,19 +7,22 @@ import type {
   ControlUiSettingsView,
   MemorySearchResponse,
 } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { createTranslator } from "./i18n/index.ts";
+import { loadMessages } from "./i18n/locales.ts";
 import "./memories.css";
 
 type SearchResult = MemorySearchResponse["results"][number];
-type SearchState =
-  | { kind: "idle" | "loading" }
-  | ({ kind: "ready"; query: string } & MemorySearchResponse)
-  | { kind: "error"; query: string; message: string };
-type DetailState =
-  | { kind: "loading" }
-  | { kind: "ready"; content: string }
-  | { kind: "error"; message: string };
+type SearchResultPage = MemorySearchResponse & { query: string };
 
 type MemoryMemoriesProps = {
   context: ControlUiSettingsContext;
@@ -64,18 +67,21 @@ function MemoryMemories(props: MemoryMemoriesProps) {
   const methodAdvertised = () =>
     props.snapshot.advertisedMethods?.includes("memory.search") === true;
   const [query, setQuery] = createSignal("");
-  const [searchState, setSearchState] = createSignal<SearchState>({ kind: "idle" });
+  const [searchRead, setSearchRead] = createSignal<{
+    query: string;
+    result: Promise<SearchResultPage | undefined>;
+  }>();
+  const searchResult = createMemo(() => searchRead()?.result);
   const [openResultKey, setOpenResultKey] = createSignal<string | null>(null);
-  const [details, setDetails] = createSignal(new Map<string, DetailState>());
   let searchRequest: object | null = null;
-  const detailRequests = new Map<string, object>();
+  const detailRequests = new Map<string, string | Promise<string | undefined>>();
 
   onSettled(() => () => {
     searchRequest = null;
     detailRequests.clear();
   });
 
-  async function search(value: string) {
+  function search(value: string) {
     const normalizedQuery = value.trim();
     const agentId = props.snapshot.agentId;
     if (
@@ -91,28 +97,26 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     searchRequest = request;
     detailRequests.clear();
     setQuery(normalizedQuery);
-    setSearchState({ kind: "loading" });
     setOpenResultKey(null);
-    setDetails(new Map());
-    try {
-      const result = await props.context.request<MemorySearchResponse>("memory.search", {
+    const result = props.context
+      .request<MemorySearchResponse>("memory.search", {
         query: normalizedQuery,
         agentId,
+      })
+      .then((response) => {
+        if (searchRequest !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        return { ...response, query: normalizedQuery };
+      })
+      .catch((error: unknown) => {
+        if (searchRequest !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        throw error;
       });
-      if (searchRequest !== request || props.context.signal.aborted) {
-        return;
-      }
-      setSearchState({ kind: "ready", query: normalizedQuery, ...result });
-    } catch (error) {
-      if (searchRequest !== request || props.context.signal.aborted) {
-        return;
-      }
-      setSearchState({
-        kind: "error",
-        query: normalizedQuery,
-        message: props.context.formatError(error),
-      });
-    }
+    setSearchRead({ query: normalizedQuery, result });
+    void result.catch(() => undefined);
   }
 
   function toggleResult(result: SearchResult, index: number) {
@@ -120,15 +124,12 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     const opening = openResultKey() !== key;
     setOpenResultKey(opening ? key : null);
     // Reopening retries a failed read, such as one interrupted by a reconnect.
-    if (
-      opening &&
-      (!detailRequests.has(result.path) || details().get(result.path)?.kind === "error")
-    ) {
-      void loadDetail(result.path);
+    if (opening && !detailRequests.has(result.path)) {
+      loadDetail(result.path);
     }
   }
 
-  async function loadDetail(path: string) {
+  function loadDetail(path: string) {
     const agentId = props.snapshot.agentId;
     if (
       !props.snapshot.connected ||
@@ -138,60 +139,51 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     ) {
       return;
     }
-    const request = {};
+    const request = props.context
+      .request<AgentsWorkspaceGetResult>("agents.workspace.get", { agentId, path })
+      .then((response) => {
+        if (detailRequests.get(path) !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        if (response.file.encoding !== "utf8") {
+          throw new Error(t("memoryPage.memories.fileUnsupported"));
+        }
+        detailRequests.set(path, response.file.content);
+        return response.file.content;
+      })
+      .catch((error: unknown) => {
+        if (detailRequests.get(path) !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        // Failed reads are retried on reopen; pending and successful reads stay shared.
+        detailRequests.delete(path);
+        throw error;
+      });
     detailRequests.set(path, request);
-    setDetails((current) => new Map(current).set(path, { kind: "loading" }));
-    try {
-      const response = await props.context.request<AgentsWorkspaceGetResult>(
-        "agents.workspace.get",
-        {
-          agentId,
-          path,
-        },
-      );
-      if (detailRequests.get(path) !== request || props.context.signal.aborted) {
-        return;
-      }
-      const detail: DetailState =
-        response.file.encoding === "utf8"
-          ? { kind: "ready", content: response.file.content }
-          : { kind: "error", message: t("memoryPage.memories.fileUnsupported") };
-      setDetails((current) => new Map(current).set(path, detail));
-    } catch (error) {
-      if (detailRequests.get(path) !== request || props.context.signal.aborted) {
-        return;
-      }
-      setDetails((current) =>
-        new Map(current).set(path, { kind: "error", message: props.context.formatError(error) }),
-      );
-    }
+    // The row can close before the request settles, leaving no mounted async reader.
+    void request.catch(() => undefined);
   }
 
   function Detail(detailProps: { result: SearchResult; panelId: string }) {
-    const detail = () => details().get(detailProps.result.path);
-    const failure = () => {
-      const current = detail();
-      return current?.kind === "error" ? current : undefined;
-    };
-    const loaded = () => {
-      const current = detail();
-      return current?.kind === "ready" ? current : undefined;
-    };
+    const detail = createMemo(() => detailRequests.get(detailProps.result.path));
+    const loading = () => <p role="status">{t("memoryPage.memories.fileLoading")}</p>;
     return (
       <div id={detailProps.panelId} class="memory-memories__detail">
-        {(!detail() || detail()?.kind === "loading") && (
-          <p role="status">{t("memoryPage.memories.fileLoading")}</p>
-        )}
-        <Show when={failure()} keyed>
-          {(error) => (
-            <p class="memory-memories__detail-error" role="alert">
-              {t("memoryPage.memories.fileError", { message: error.message })}
-            </p>
-          )}
-        </Show>
-        <Show when={loaded()} keyed>
-          {(ready) => <FileContent content={ready.content} result={detailProps.result} />}
-        </Show>
+        <Loading fallback={loading()}>
+          <Errored
+            fallback={(error) => (
+              <p class="memory-memories__detail-error" role="alert">
+                {t("memoryPage.memories.fileError", {
+                  message: props.context.formatError(error()),
+                })}
+              </p>
+            )}
+          >
+            <Show when={detail() !== undefined} fallback={loading()}>
+              <FileContent content={detail() ?? ""} result={detailProps.result} />
+            </Show>
+          </Errored>
+        </Loading>
       </div>
     );
   }
@@ -252,7 +244,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     );
   }
 
-  function Results(resultsProps: { ready: Extract<SearchState, { kind: "ready" }> }) {
+  function Results(resultsProps: { ready: SearchResultPage }) {
     return (
       <>
         {resultsProps.ready.stale && (
@@ -289,42 +281,45 @@ function MemoryMemories(props: MemoryMemoriesProps) {
   }
 
   function SearchStatus() {
-    const failure = () => {
-      const current = searchState();
-      return current.kind === "error" ? current : undefined;
-    };
-    const ready = () => {
-      const current = searchState();
-      return current.kind === "ready" ? current : undefined;
-    };
     return (
-      <>
-        {searchState().kind === "loading" && (
+      <Loading
+        on={searchRead()}
+        fallback={
           <p class="memory-memories__state" role="status">
             {t("memoryPage.memories.searching")}
           </p>
-        )}
-        <Show when={failure()} keyed>
-          {(error) => (
+        }
+      >
+        <Errored
+          fallback={(error, reset) => (
             <div class="memory-memories__state" role="alert">
-              <p>{t("memoryPage.memories.error", { message: error.message })}</p>
+              <p>
+                {t("memoryPage.memories.error", {
+                  message: props.context.formatError(error()),
+                })}
+              </p>
               <button
                 class="btn btn--sm"
                 disabled={!props.snapshot.connected || !props.snapshot.agentId}
-                onClick={() => void search(error.query)}
+                onClick={() => {
+                  search(searchRead()?.query ?? "");
+                  reset();
+                }}
               >
                 {t("memoryPage.memories.retry")}
               </button>
             </div>
           )}
-        </Show>
-        <Show when={ready()} keyed>
-          {(result) => <Results ready={result} />}
-        </Show>
-        {searchState().kind === "idle" && (
-          <p class="memory-memories__state">{t("memoryPage.memories.idle")}</p>
-        )}
-      </>
+        >
+          <Show
+            when={searchResult()}
+            fallback={<p class="memory-memories__state">{t("memoryPage.memories.idle")}</p>}
+            keyed
+          >
+            {(result) => <Results ready={result} />}
+          </Show>
+        </Errored>
+      </Loading>
     );
   }
 
@@ -342,7 +337,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
               role="search"
               onSubmit={(event) => {
                 event.preventDefault();
-                void search(query());
+                search(query());
               }}
             >
               <label class="settings-control__sr-label" for="memory-search-input">
@@ -356,18 +351,20 @@ function MemoryMemories(props: MemoryMemoriesProps) {
                 placeholder={t("memoryPage.memories.searchPlaceholder")}
                 onInput={(event) => setQuery(event.currentTarget.value)}
               />
-              <button
-                class="btn btn--sm primary"
-                type="submit"
-                disabled={
-                  !props.snapshot.connected ||
-                  !props.snapshot.agentId ||
-                  !query().trim() ||
-                  searchState().kind === "loading"
-                }
-              >
-                {t("memoryPage.memories.searchButton")}
-              </button>
+              <Loading>
+                <button
+                  class="btn btn--sm primary"
+                  type="submit"
+                  disabled={
+                    !props.snapshot.connected ||
+                    !props.snapshot.agentId ||
+                    !query().trim() ||
+                    isPending(searchResult)
+                  }
+                >
+                  {t("memoryPage.memories.searchButton")}
+                </button>
+              </Loading>
             </form>
             <SearchStatus />
           </>
@@ -380,12 +377,19 @@ function MemoryMemories(props: MemoryMemoriesProps) {
 export const memoriesView: ControlUiSettingsView = {
   placement: { section: "memory", panel: "memories" },
   mount(container, context) {
+    void loadMessages(context.props.locale);
     // Only the host's imperative lifetime writes this presentation projection.
     const [snapshot, setSnapshot] = createSignal(context.props, { ownedWrite: true });
     const dispose = render(
       () => <MemoryMemories context={context} snapshot={snapshot()} />,
       container,
     );
-    return { update: setSnapshot, dispose };
+    return {
+      update(next) {
+        void loadMessages(next.locale);
+        setSnapshot(next);
+      },
+      dispose,
+    };
   },
 };

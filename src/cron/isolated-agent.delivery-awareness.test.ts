@@ -19,6 +19,7 @@ import {
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 
 async function announce(
   payloads: ReplyPayload[],
@@ -36,6 +37,7 @@ async function announce(
     const deps = createCliDeps();
     mockAgentPayloads(payloads);
     const result = await runCronIsolatedAgentTurn({
+      occurrence: TEST_SCHEDULED_OCCURRENCE,
       deliveryAttemptFence: null,
       cfg,
       deps,
@@ -75,7 +77,7 @@ it("adds the exact run-session inspection link only to the final visible payload
     throw new Error("expected a cron run session key");
   }
   expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
-  const finalText = `final cron summary\nInspect: https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
+  const finalText = `final cron summary\n[Inspect run](https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")})`;
   expect(deps.telegram).toHaveBeenNthCalledWith(1, "123", "first cron update", expect.any(Object));
   expect(deps.telegram).toHaveBeenNthCalledWith(2, "123", finalText, expect.any(Object));
   expect(deps.telegram).toHaveBeenCalledTimes(2);

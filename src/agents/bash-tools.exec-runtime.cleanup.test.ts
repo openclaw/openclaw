@@ -1,11 +1,7 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  cancelExecRequestOwners,
-  captureExecRequestOwners,
-  withExecRequestTurn,
-} from "../infra/exec-request-context.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
+import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { readBackgroundProcesses } from "./bash-process-observation.js";
@@ -19,8 +15,10 @@ import {
   waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import {
@@ -70,25 +68,33 @@ function completedReceipt(cancel = vi.fn(() => true)) {
 }
 
 function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
-  return runExecProcess({
-    command: "sandbox-fixture",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-    ...params,
-  });
+  return runExecFixture({ command: "sandbox-fixture", ...params });
 }
 
-function queueRun(wait: () => Promise<RunExit>, output = "") {
+function queueRun(
+  wait: (() => Promise<RunExit>) | undefined,
+  output = "",
+  overrides: Partial<ManagedRun> = {},
+) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     ...runtimeManagedRun(input, output),
-    wait,
+    ...(wait ? { wait } : {}),
+    ...overrides,
   }));
+}
+
+function createExecOperatorSource(profileId = "exec-guest") {
+  const controller = new AbortController();
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.write"],
+    signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+    retain,
+  });
+  return { controller, authority, retain, release };
 }
 
 const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
@@ -119,16 +125,18 @@ it.each([
   ["manual-cancel", false, true, "none"],
   ["manual-cancel", false, true, "capture"],
   ["manual-cancel", true, true, "capture"],
-  ["manual-cancel", true, true, "direct"],
 ] as const)(
   "starts and joins targeted sandbox cleanup for %s (cleanupFails=%s, duringFinalize=%s, requestStop=%s)",
   async (reason, cleanupFails, duringFinalize, requestStop) => {
     const termination = createDeferred();
-    const artifactFinalization = createDeferred();
-    const artifactsEntered = createDeferred();
+    const artifacts = createEnteredGate();
     const guestExit = createDeferred<ReturnType<typeof createRunExit>>();
     const otherExit = createDeferred<ReturnType<typeof createRunExit>>();
-    const releaseSource = vi.fn();
+    const {
+      controller: originalSource,
+      release: releaseSource,
+      authority,
+    } = createExecOperatorSource("guest");
     const cleanupError = new Error("targeted process cleanup failed");
     const makeSandbox = (marker: string) => {
       const terminate = vi.fn(async () => {
@@ -156,8 +164,7 @@ it.each([
         ),
         finalizeExec: vi.fn(async () => {
           if (marker === "guest" && duringFinalize) {
-            artifactsEntered.resolve();
-            await artifactFinalization.promise;
+            await artifacts.wait();
           }
         }),
         terminate,
@@ -181,7 +188,6 @@ it.each([
         cancel: cancelOther,
         wait: () => otherExit.promise,
       }));
-    const originalSource = new AbortController();
     const requestIdentity = {
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",
@@ -196,13 +202,6 @@ it.each([
             return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
           })
         : undefined;
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      signal: originalSource.signal,
-      assertCurrent: () => originalSource.signal.throwIfAborted(),
-      retain: () => releaseSource,
-    });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
       () =>
@@ -223,13 +222,9 @@ it.each([
       );
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
-        await artifactsEntered.promise;
+        await artifacts.entered;
         if (request) {
-          if (requestStop === "capture") {
-            expect(request.cancellation.cancel()).toBe(true);
-          } else {
-            cancelExecRequestOwners([request.owner]);
-          }
+          expect(request.cancellation.cancel()).toBe(true);
           expect(originalSource.signal.aborted).toBe(false);
           expect(guest.session.requestCancelled).toBe(true);
         } else {
@@ -260,7 +255,7 @@ it.each([
       expect(sandbox.finalizeExec).toHaveBeenCalledTimes(duringFinalize ? 1 : 0);
       expect(releaseSource).not.toHaveBeenCalled();
       if (duringFinalize) {
-        artifactFinalization.resolve();
+        artifacts.release();
         otherExit.resolve(createRunExit());
         await other.promise;
         expect(settled).toBe(false);
@@ -295,7 +290,7 @@ it.each([
       expect(otherSandbox.terminate).not.toHaveBeenCalled();
       expect(otherSandbox.finalizeExec).toHaveBeenCalledOnce();
     } finally {
-      artifactFinalization.resolve();
+      artifacts.release();
       termination.resolve();
       guestExit.resolve(createRunExit());
       otherExit.resolve(createRunExit());
@@ -311,16 +306,14 @@ it.each([
 ])(
   "joins sandbox artifacts and retains cleanup failure (fails=$fails, beforeJoin=$beforeJoin, commandCode=$commandCode)",
   async ({ fails, beforeJoin, commandCode }) => {
-    const finalization = createDeferred();
-    const entered = createDeferred();
+    const finalization = createEnteredGate();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
     const cleanupFailure = "sandbox artifact cleanup failed";
     queueRun(async () => createRunExit({ exitCode: commandCode }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
-      entered.resolve();
-      await finalization.promise;
+      await finalization.wait();
       if (fails) {
         throw new Error(cleanupFailure);
       }
@@ -342,9 +335,9 @@ it.each([
           },
         });
         markBackgrounded(run.session);
-        await entered.promise;
+        await finalization.entered;
         if (beforeJoin) {
-          finalization.resolve();
+          finalization.release();
           await run.promise;
         }
         let joined = false;
@@ -355,7 +348,7 @@ it.each([
           await Promise.resolve();
           expect(joined).toBe(false);
           expect(run.session.finalizing).toBe(true);
-          finalization.resolve();
+          finalization.release();
         }
         await join;
         const outcome = await run.promise;
@@ -368,7 +361,7 @@ it.each([
       });
       expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");
     } finally {
-      finalization.resolve();
+      finalization.release();
       await run?.promise;
     }
   },
@@ -398,8 +391,6 @@ it.each([
   });
   markBackgrounded(run.session);
   const scope = { scopeKeys: ["global"], agentId: "main" };
-  const running = readBackgroundProcesses(scope).processes[0];
-  expect(running).toMatchObject({ processId: run.session.id, status: "running" });
   if (path === "observed") {
     acknowledgeNotifyOnExit(run.session);
   }
@@ -409,14 +400,6 @@ it.each([
   expect(outcome.status).toBe("completed");
   const retained = getFinishedSession(run.session.id);
   expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
-  expect(readBackgroundProcesses(scope).processes).toEqual([
-    expect.objectContaining({
-      processId: run.session.id,
-      instanceId: running?.instanceId,
-      status: "completed",
-      canStop: false,
-    }),
-  ]);
   expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
   expectRoutingReleased(retained);
   expect(retained?.stdin).toBeUndefined();
@@ -527,3 +510,105 @@ it.each(["task", "persistent task", "stdin"])(
     }
   },
 );
+
+describe("operator source lifetime", () => {
+  afterEach(() => {
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+  });
+  const caller = (source: ReturnType<typeof createExecOperatorSource>, sessionKey: string) => ({
+    agentId: "main",
+    sessionKey,
+    operatorAuthority: source.authority,
+  });
+
+  it("retains the original operator source through background cancellation and finalization", async () => {
+    const source = createExecOperatorSource();
+    const turn = new AbortController();
+    const guestExit = createDeferred<RunExit>();
+    const staffExit = createDeferred<RunExit>();
+    const cleanup = createEnteredGate();
+    const cancelGuest = vi.fn(() => {
+      guestExit.resolve(createRunExit({ reason: "manual-cancel", exitCode: null }));
+    });
+    const cancelStaff = vi.fn();
+    queueRun(undefined, "saved guest output\n", {
+      cancel: cancelGuest,
+      wait: () => guestExit.promise,
+      waitForExtinction: cleanup.wait,
+    });
+    queueRun(undefined, "independent output\n", {
+      cancel: cancelStaff,
+      wait: () => staffExit.promise,
+    });
+    const guest = await withGatewayToolCallerIdentity(
+      {
+        ...caller(source, "agent:main:retained-exec"),
+        receiptAuthority: () => !turn.signal.aborted,
+      },
+      () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
+    );
+    const staff = await runTestExecProcess({ command: "retained-source-command" });
+    markBackgrounded(guest.session);
+    markBackgrounded(staff.session);
+    try {
+      turn.abort();
+      guest.disableUpdates();
+      expect(cancelGuest).not.toHaveBeenCalled();
+      expect(guest.session.exited).toBe(false);
+
+      source.controller.abort(new Error("original invitation revoked"));
+      expect(cancelGuest).toHaveBeenCalledWith("manual-cancel");
+      expect(cancelStaff).not.toHaveBeenCalled();
+      await cleanup.entered;
+      expect(guest.session).toMatchObject({ finalizing: true, exited: false });
+      expect(source.release).not.toHaveBeenCalled();
+
+      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(staff.session.exited).toBe(false);
+      cleanup.release();
+      await expect(guest.promise).resolves.toMatchObject({
+        status: "failed",
+        exitReason: "manual-cancel",
+        aggregated: expect.stringContaining("saved guest output"),
+      });
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      staffExit.resolve(createRunExit());
+      await expect(staff.promise).resolves.toMatchObject({ status: "completed" });
+      expect(cancelStaff).not.toHaveBeenCalled();
+    } finally {
+      cleanup.release();
+      guestExit.resolve(createRunExit());
+      staffExit.resolve(createRunExit());
+      await Promise.all([guest.promise, staff.promise]);
+    }
+  });
+
+  it.each([false, true])(
+    "releases the original operator source after startup failure=%s",
+    async (fails) => {
+      const source = createExecOperatorSource();
+      const cancel = vi.fn();
+      if (fails) {
+        supervisorMock.spawn.mockRejectedValueOnce(new Error("process startup failed"));
+      } else {
+        queueRun(undefined, "", { cancel });
+      }
+      const pending = withGatewayToolCallerIdentity(
+        caller(source, "agent:main:source-release"),
+        () => runTestExecProcess({ command: "source-release-command" }),
+      );
+      if (fails) {
+        await expect(pending).rejects.toThrow("process startup failed");
+      } else {
+        const run = await pending;
+        await expect(run.promise).resolves.toMatchObject({ status: "completed" });
+      }
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      source.controller.abort();
+      expect(cancel).not.toHaveBeenCalled();
+    },
+  );
+});

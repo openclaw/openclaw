@@ -3,21 +3,12 @@ import { runClientCredentialOperation } from "./client-credential-store.js";
 import { createDeviceAuthEntry, deviceAuthEntryFromRow } from "./device-auth-store.kernel.js";
 
 type Lookup = { deviceId: string; role: string; env?: NodeJS.ProcessEnv };
-type OriginLookup = Lookup & { gatewayScope: string };
 type Seed = Lookup & { token: string; scopes?: string[]; updatedAtMs?: number };
 
 export function readDeviceAuthTokenForTest(params: Lookup) {
   const result = runClientCredentialOperation(params.env ?? process.env, {
     kind: "token.read",
     key: { device_id: params.deviceId, role: params.role },
-  });
-  return result.kind === "token" && result.token ? deviceAuthEntryFromRow(result.token) : null;
-}
-
-export function readOriginDeviceTokenReadOnlyForTest(params: OriginLookup) {
-  const result = runClientCredentialOperation(params.env ?? process.env, {
-    kind: "token.read",
-    key: { device_id: params.deviceId, role: params.role, gateway_scope: params.gatewayScope },
   });
   return result.kind === "token" && result.token ? deviceAuthEntryFromRow(result.token) : null;
 }

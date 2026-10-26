@@ -4,6 +4,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionListOptions } from "../../lib/sessions/index.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { page, type SessionsRouteData } from "./route.ts";
 
@@ -16,17 +17,13 @@ async function loadSessionsRoute(
   const context = {
     gateway: { snapshot: { phase: "connected", client: {} } },
     sessions,
-    runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
     agentSelection: { state: { selectedId: scopeId, scopeId } },
   } as unknown as ApplicationContext;
-  const loaderOptions: RouteLoaderOptions = {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/sessions", search, hash: "" },
-    deps: "",
-    cause: "navigation",
-  };
+  const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions({
+    pathname: "/sessions",
+    search,
+    hash: "",
+  });
 
   const data = (await page.loader?.(context, loaderOptions)) as SessionsRouteData;
 
@@ -38,13 +35,16 @@ async function loadSessionsRoute(
     statusFilter: expectedQuery.archivedFilter,
   });
   expect(
-    buildSessionsListQuery(context, {
-      statusFilter: data.statusFilter,
-      deepLinkSessionKey: data.expandedSessionKey,
-      includeGlobal: true,
-      includeUnknown: false,
-      limit: 50,
-    }),
+    buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      {
+        statusFilter: data.statusFilter,
+        includeGlobal: true,
+        includeUnknown: false,
+        limit: "50",
+      },
+      data.expandedSessionKey,
+    ),
   ).toEqual({
     source: "sessions-page",
     rowMode: "compact",
@@ -75,4 +75,28 @@ it.each([
 ] as const)(
   "prepares sessions route %s in scope %s without issuing outside the page owner",
   loadSessionsRoute,
+);
+
+it.each([
+  [" 15 ", "25", "active", undefined, [15, 25, "needle"]],
+  ["15 minutes", "0", "active", undefined, [undefined, 50, "needle"]],
+  ["15", "25", "archived", "", [undefined, 25, undefined]],
+] as const)(
+  "normalizes minutes=%s limit=%s status=%s search=%s",
+  (activeMinutes, limit, statusFilter, search, expected) => {
+    const query = buildSessionsListQuery(
+      "writer",
+      {
+        activeMinutes,
+        limit,
+        statusFilter,
+        includeGlobal: true,
+        includeUnknown: false,
+        searchQuery: " needle ",
+      },
+      null,
+      search,
+    );
+    expect([query.activeMinutes, query.limit, query.search]).toEqual(expected);
+  },
 );

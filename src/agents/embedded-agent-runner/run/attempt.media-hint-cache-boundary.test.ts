@@ -96,7 +96,6 @@ it("#85203 keeps static hooks and model identity stable with a marker-free hook 
       hasBaselineTools: () => true,
       applyPromptBuildToolsAllow: () => ["image_generate"],
       setActiveSessionSystemPrompt,
-      setLeasedSteering: vi.fn(),
     });
     return prepareEmbeddedAttemptPromptContext({
       ...common,

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { vi, type Mock } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { UpdateRepairInferenceResult } from "../infra/update-repair-inference.js";
 
 export function createTriageInferenceSelection(stateDir: string): UpdateRepairInferenceResult {
@@ -47,21 +48,11 @@ export function createTriageRuntime() {
 }
 
 export async function withTriageTerminal(interactive: boolean, run: () => Promise<void>) {
-  const streams = [process.stdin, process.stdout];
-  const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
-  for (const stream of streams) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: interactive });
-  }
+  const tty = createCliTtyMock();
+  tty.set(interactive);
   try {
     await run();
   } finally {
-    streams.forEach((stream, index) => {
-      const descriptor = descriptors[index];
-      if (descriptor) {
-        Object.defineProperty(stream, "isTTY", descriptor);
-      } else {
-        Reflect.deleteProperty(stream, "isTTY");
-      }
-    });
+    tty.restore();
   }
 }

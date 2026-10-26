@@ -15,12 +15,13 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
@@ -30,6 +31,7 @@ import {
   getExpansionStateVersion,
   subscribeExpansionState,
 } from "../chat-thread.ts";
+import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
@@ -46,6 +48,8 @@ import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -72,6 +76,8 @@ export function ChatThread(input: {
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const transcript = createMemo(() => input.transcript);
+  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
   const presentation = createMemo(
     () =>
       input.transcript.renderSession(input.props.sessionKey, (session) => ({
@@ -143,8 +149,10 @@ export function ChatThread(input: {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
-    if (routeLoading()) {
-      return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
+    // Native range changes redraw this island without preparing the whole pane.
+    geometry().read();
+    if (routeLoading() && mobile()) {
+      return <ChatConversationLoading route />;
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
@@ -156,6 +164,8 @@ export function ChatThread(input: {
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />
+            ) : routeLoading() ? (
+              <LoadingState messagesOnly />
             ) : (
               <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
             )
@@ -178,6 +188,12 @@ export function ChatThread(input: {
   });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={input.props.fetchLinkFavicon} keyed>
+        {(fetcher) => {
+          onSettled(() => retainLinkFaviconCache(fetcher));
+          return null;
+        }}
+      </Show>
       <div
         ref={[
           elementRef((element: HTMLDivElement) => {
@@ -200,11 +216,12 @@ export function ChatThread(input: {
           "chat-thread",
           {
             "chat-thread--direct": current().projection.isDirectThread,
-            "chat-thread--route-loading": routeLoading(),
+            "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
           },
         ]}
         role="log"
+        aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}

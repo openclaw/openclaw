@@ -13,7 +13,10 @@ it("retains Details in the header actions while pane props change", () => {
   const selector = ".chat-pane__header-trailing > .chat-pane__actions > openclaw-chat-details";
   const details = mounted.container.querySelector<HTMLElement>(selector);
   expect(details).not.toBeNull();
-  expect(setRef).toHaveBeenCalledWith({ open: expect.any(Function) });
+  expect(setRef).toHaveBeenCalledWith({
+    open: expect.any(Function),
+    close: expect.any(Function),
+  });
   expect(elements.frame.querySelector(".chat-details")).not.toBeNull();
 
   mounted.update({ detailsControl: { ...detailsControl, mobile: true } });

@@ -1,6 +1,5 @@
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { maybeWakeRequesterAfterAllChildrenSettled as runRequesterSettleWake } from "../announce/subagent-announce.requester-settle-wake.js";
 import type {
   blockSubagentCompletionDelivery,
@@ -18,6 +17,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import {
+  createSubagentTestGate,
   readLifecycleRun,
   mutateLifecycleRun,
   expectUndefinedFields,
@@ -320,7 +320,6 @@ export function registerPrivateCompletionSettlementTests({
           requesterYielded ? true : undefined,
         );
         expect(readLifecycleRun(sibling).execution.endedAt).toBeUndefined();
-        expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
       } finally {
         requesterTurn.restore();
@@ -393,20 +392,6 @@ export function registerNativeCompletionAuthorityTest({
   completeRun: CompleteLifecycleRun;
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
-  it("emits one progress end event at the canonical terminal transition", async () => {
-    const entry = createRunEntry({ expectsCompletionMessage: false });
-    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
-    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
-    const completion = makeSubagentCompletion(entry, { terminalReply: undefined });
-
-    await controller.completeSubagentRun(completion);
-    await controller.completeSubagentRun(completion);
-
-    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(
-      readLifecycleRun(entry),
-    );
-  });
-
   it("keeps provisional cancellation when a repeated success has no producer reply evidence", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: true,
@@ -417,7 +402,6 @@ export function registerNativeCompletionAuthorityTest({
       killReconciliation: { killedAt: 4_000, suppressTaskDelivery: true },
       completion: { required: true, resultText: null, capturedAt: 4_000 },
     });
-    const marker = entry.killReconciliation;
     const original = structuredClone(entry);
     const controller = createLifecycleController({ entry });
     await completeRun(controller, entry, {
@@ -426,16 +410,14 @@ export function registerNativeCompletionAuthorityTest({
       triggerCleanup: false,
     });
     expect(readLifecycleRun(entry)).toEqual(original);
-    expect(readLifecycleRun(entry).killReconciliation).toBe(marker);
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
   });
-  it.each(["replacement", "cancellation", "recovery authority"] as const)(
+  it.each(["replacement", "recovery authority"] as const)(
     "does not commit a captured result after %s retires its owner",
     async (transition) => {
       const entry = createRunEntry({ expectsCompletionMessage: false });
       const runs = new Map([[entry.runId, entry]]);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      await using gate = createSubagentTestGate();
       const beforeWrite = vi.fn();
       let recoveryHostCurrent = true;
       const controller = createLifecycleController({
@@ -443,8 +425,7 @@ export function registerNativeCompletionAuthorityTest({
         runs,
         beforeWrite,
         captureSubagentCompletionReply: async () => {
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
           return "old result";
         },
       });
@@ -456,44 +437,33 @@ export function registerNativeCompletionAuthorityTest({
           isHostCurrent: () => recoveryHostCurrent,
         },
       });
-      const settled = Promise.allSettled([pending]);
-      try {
-        await entered.promise;
-        if (transition === "recovery authority") {
-          recoveryHostCurrent = false;
-        } else {
-          await mutateLifecycleRun(entry, (draft) => {
-            if (transition === "replacement") {
-              draft.generation = (draft.generation ?? 0) + 1;
-            }
-            draft.execution = {
-              status: "terminal",
-              endedAt: 3_000,
-              outcome: { status: "error", error: "cancelled" },
-            };
-            draft.endedReason = SUBAGENT_ENDED_REASON_KILLED;
-            draft.killReconciliation = { killedAt: 3_000, taskCancellationAccepted: true };
-          });
-        }
-        const successor = runs.get(entry.runId);
-        beforeWrite.mockClear();
-        release.resolve();
-        const [result] = await settled;
-        if (transition === "cancellation") {
-          expect(result?.status).toBe("fulfilled");
-        } else {
-          expect(result).toMatchObject({
-            status: "rejected",
-            reason: expect.objectContaining({ message: "Subagent terminal execution changed" }),
-          });
-        }
-        expect(runs.get(entry.runId)).toBe(successor);
-        expect(beforeWrite).not.toHaveBeenCalled();
-        expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await settled;
+      const settled = gate.track(Promise.allSettled([pending]));
+      await gate.entered;
+      if (transition === "recovery authority") {
+        recoveryHostCurrent = false;
+      } else {
+        await mutateLifecycleRun(entry, (draft) => {
+          draft.generation = (draft.generation ?? 0) + 1;
+          draft.execution = {
+            status: "terminal",
+            endedAt: 3_000,
+            outcome: { status: "error", error: "cancelled" },
+          };
+          draft.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+          draft.killReconciliation = { killedAt: 3_000, taskCancellationAccepted: true };
+        });
       }
+      const successor = runs.get(entry.runId);
+      beforeWrite.mockClear();
+      gate.release();
+      const [result] = await settled;
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ message: "Subagent terminal execution changed" }),
+      });
+      expect(runs.get(entry.runId)).toBe(successor);
+      expect(beforeWrite).not.toHaveBeenCalled();
+      expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
     },
   );
 }

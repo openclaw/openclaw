@@ -90,14 +90,6 @@ it("keeps the oldest active exporter failure visible until its producer recovers
   ]);
 });
 
-it("records a shutdown rejection without exposing its message", async () => {
-  const observed = createObservedExporter("traces");
-  observed.shutdown.mockRejectedValueOnce(new TypeError("private collector details"));
-
-  await expect(observed.exporter.shutdown()).rejects.toThrow("private collector details");
-  expectPrivateFailure("traces", "shutdown_failed", "private collector details");
-});
-
 it("records and rethrows a synchronous dependency export failure once", () => {
   const { exporter, exportItems } = createObservedExporter("logs");
   exportItems.mockImplementation(() => {

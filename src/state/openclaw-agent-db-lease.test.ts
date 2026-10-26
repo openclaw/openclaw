@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as provenance from "./openclaw-agent-db-lease-provenance.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
@@ -9,6 +11,7 @@ import {
   recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
+import { expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -31,38 +34,43 @@ function createLeaseOwner() {
 }
 
 it.each([
-  { name: "prior boot", openedAt: 699_999, bootReadable: true, reclaimed: true },
-  { name: "boot safety margin", openedAt: 700_000, bootReadable: true, reclaimed: false },
-  { name: "same boot", openedAt: 1_000_001, bootReadable: true, reclaimed: false },
-  { name: "unreadable boot", openedAt: 699_999, bootReadable: false, reclaimed: false },
-  { name: "unfinished admission", openedAt: 0, bootReadable: true, reclaimed: false },
-])("handles a legacy null-identity lease from $name", ({ openedAt, bootReadable, reclaimed }) => {
-  const { params, state } = createLeaseOwner();
-  const leaseId = claimOpenClawAgentDatabaseLease(params);
-  state.db
-    .prepare(
-      "UPDATE agent_database_leases SET owner_start_time = NULL, opened_at = ? WHERE lease_id = ?",
-    )
-    .run(openedAt, leaseId);
-  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => {
-    if (!bootReadable) {
-      throw new Error("OS boot time unavailable");
+  ["prior boot", 699_999, true, true],
+  ["boot safety margin", 700_000, true, false],
+  ["same boot", 1_000_001, true, false],
+  ["unreadable boot", 699_999, false, false],
+  ["unfinished admission", 0, true, false],
+] as const)(
+  "handles a legacy null-identity lease from %s",
+  (_, openedAt, bootReadable, reclaimed) => {
+    const { params, state } = createLeaseOwner();
+    const leaseId = claimOpenClawAgentDatabaseLease(params);
+    state.db
+      .prepare(
+        "UPDATE agent_database_leases SET owner_start_time = NULL, opened_at = ? WHERE lease_id = ?",
+      )
+      .run(openedAt, leaseId);
+    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => {
+      if (!bootReadable) {
+        throw new Error("OS boot time unavailable");
+      }
+      return { platform: "win32", identity: "1970-01-01T00:16:40.0000000Z" };
+    });
+    const inspect = () => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: params.env });
+    const repair = () => assertNoOpenClawAgentDatabaseLeases("main", { env: params.env });
+    if (reclaimed) {
+      expect(inspect).not.toThrow();
+      expect(repair).not.toThrow();
+    } else {
+      expect(inspect).toThrow("database is still open");
+      expect(repair).toThrow("database is still open");
     }
-    return { platform: "win32", identity: "1970-01-01T00:16:40.0000000Z" };
-  });
-  const inspect = () => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: params.env });
-  const repair = () => assertNoOpenClawAgentDatabaseLeases("main", { env: params.env });
-  if (reclaimed) {
-    expect(inspect).not.toThrow();
-    expect(repair).not.toThrow();
-  } else {
-    expect(inspect).toThrow("database is still open");
-    expect(repair).toThrow("database is still open");
-  }
-  expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual(
-    reclaimed ? [] : [{ lease_id: leaseId }],
-  );
-});
+    expectRows(
+      state.db,
+      "SELECT lease_id FROM agent_database_leases",
+      reclaimed ? [] : [{ lease_id: leaseId }],
+    );
+  },
+);
 
 it("excludes cleaned stale claims while retaining unknown peers until their release", () => {
   const { params, state } = createLeaseOwner();
@@ -81,20 +89,56 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
 
   claimOpenClawAgentDatabaseLease(params, "first", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(false, true, "predecessor-admission-incomplete");
-  expect(
-    state.db.prepare("SELECT lease_id FROM agent_database_leases ORDER BY lease_id").all(),
-  ).toEqual([{ lease_id: "first" }, { lease_id: "unknown-peer" }]);
+  expect(verification).toHaveBeenLastCalledWith(
+    false,
+    true,
+    "predecessor-admission-incomplete",
+    undefined,
+  );
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
+    { lease_id: "first" },
+    { lease_id: "unknown-peer" },
+  ]);
 
   releaseOpenClawAgentDatabaseLease("unknown-peer", { env: params.env }, "read-only");
   releaseOpenClawAgentDatabaseLease("first", { env: params.env }, "read-only");
   claimOpenClawAgentDatabaseLease(params, "second", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(true, false, undefined);
-  expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
-    { lease_id: "second" },
-  ]);
+  expect(verification).toHaveBeenLastCalledWith(true, false, undefined, undefined);
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "second" }]);
   releaseOpenClawAgentDatabaseLease("second", { env: params.env }, "read-only");
+});
+
+it.each([
+  ["an admitted live peer", 1, false, "same", true],
+  ["a peer with unfinished admission", 0, false, "same", false],
+  ["a peer on an alias path", 1, true, "same", false],
+  ["a peer that admitted a replaced file", 1, false, "other", false],
+  ["a peer without provenance", 1, false, null, false],
+] as const)("lends integrity only from %s", (_, openedAt, alias, peer, lends) => {
+  const { params, state } = createLeaseOwner();
+  vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockReturnValue("process-v1:same");
+  const peerStartTime = getFileLockProcessStartTime(process.ppid);
+  expect(peerStartTime).not.toBeNull();
+  claimOpenClawAgentDatabaseLease(
+    alias ? { ...params, path: `${params.path}.alias` } : params,
+    "peer",
+  );
+  state.db
+    .prepare(
+      "UPDATE agent_database_leases SET owner_pid = ?, owner_start_time = ?, opened_at = ?, provenance = ? WHERE lease_id = 'peer'",
+    )
+    .run(process.ppid, peerStartTime, openedAt, peer && `process-v1:${peer}`);
+  const verification = vi.fn();
+
+  claimOpenClawAgentDatabaseLease(params, "borrower", verification);
+
+  expect(verification).toHaveBeenCalledWith(
+    false,
+    false,
+    "live-or-unknown-owner",
+    lends ? "process-v1:same" : undefined,
+  );
 });
 
 it("records admission on its held claim and refuses to resurrect a released claim", () => {
@@ -116,5 +160,5 @@ it("records admission on its held claim and refuses to resurrect a released clai
     `Agent database open lost its runtime lease: ${params.path}`,
   );
   expect(controls).not.toHaveBeenCalled();
-  expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
 });

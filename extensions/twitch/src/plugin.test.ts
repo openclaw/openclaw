@@ -1,7 +1,93 @@
-import { describe, expect, it } from "vitest";
+import {
+  createStartAccountContext,
+  expectLifecyclePatch,
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { twitchPlugin } from "./plugin.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
+import { makeTwitchChannelTestConfig } from "./test-fixtures.js";
+
+const monitorTwitchProvider = vi.hoisted(() => vi.fn());
+vi.mock("./monitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor.js")>()),
+  monitorTwitchProvider,
+}));
+
+const startAccount = twitchPlugin.gateway!.startAccount!;
+const lifecycleAccount = {
+  accountId: "default",
+  username: "testbot",
+  accessToken: "oauth:test-token",
+  clientId: "test-client-id",
+  channel: "#testchannel",
+  enabled: true,
+};
+function withChannelRuntime(ctx: Parameters<typeof startAccount>[0]) {
+  return { ...ctx, channelRuntime: createPluginRuntimeMock().channel };
+}
+function trackLifecycle() {
+  return startAccountAndTrackLifecycle({
+    startAccount: (ctx) => startAccount(withChannelRuntime(ctx)),
+    account: lifecycleAccount,
+  });
+}
+
+describe("twitch startAccount lifecycle", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  it("publishes starting, stays pending until abort, then stops the monitor", async () => {
+    const stop = vi.fn();
+    monitorTwitchProvider.mockResolvedValue({ stop });
+    const { patches, abort, task, isSettled } = trackLifecycle();
+    await expectStopPendingUntilAbort({
+      waitForStarted: async () => {
+        await waitForStartedMocks(monitorTwitchProvider)();
+        expectLifecyclePatch(patches, { lifecycle: "starting", running: true });
+        expect(monitorTwitchProvider).toHaveBeenCalledWith(
+          expect.objectContaining({ statusSink: expect.any(Function) }),
+        );
+      },
+      isSettled,
+      abort,
+      task,
+      stop,
+    });
+  });
+
+  it("stops immediately with an already-aborted signal", async () => {
+    const stop = vi.fn();
+    monitorTwitchProvider.mockResolvedValue({ stop });
+    const abort = new AbortController();
+    abort.abort();
+    await startAccount(
+      withChannelRuntime(
+        createStartAccountContext({ account: lifecycleAccount, abortSignal: abort.signal }),
+      ),
+    );
+    expect(monitorTwitchProvider).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("clears running status when monitor startup fails", async () => {
+    monitorTwitchProvider.mockRejectedValue(new Error("irc join failed"));
+    const { task, patches } = trackLifecycle();
+    await expect(task).rejects.toThrow("irc join failed");
+    expectLifecyclePatch(patches, { running: true });
+    expectLifecyclePatch(patches, { running: false });
+  });
+
+  it("rejects startup without its registered context builder", async () => {
+    await expect(
+      startAccount(createStartAccountContext({ account: lifecycleAccount })),
+    ).rejects.toThrow("Twitch requires its registered channel runtime context builder");
+    expect(monitorTwitchProvider).not.toHaveBeenCalled();
+  });
+});
 
 function multiAccountConfig(defaultAccount?: string, selectedToken = "oauth:secondary-token") {
   const account = (name: string, accessToken: string) => ({
@@ -11,17 +97,13 @@ function multiAccountConfig(defaultAccount?: string, selectedToken = "oauth:seco
     clientId: `${name}-client`,
     enabled: true,
   });
-  return {
-    channels: {
-      twitch: {
-        defaultAccount,
-        accounts: {
-          default: account("default", "oauth:default-token"),
-          secondary: account("secondary", selectedToken),
-        },
-      },
+  return makeTwitchChannelTestConfig({
+    defaultAccount,
+    accounts: {
+      default: account("default", "oauth:default-token"),
+      secondary: account("secondary", selectedToken),
     },
-  } as OpenClawConfig;
+  }) as OpenClawConfig;
 }
 
 describe("twitchPlugin", () => {

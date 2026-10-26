@@ -23,7 +23,8 @@ import { flushPendingSessionsChangedEvents } from "./server-methods/session-chan
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
-const { createQueuedReservation, requestContext, operatorClient } = useQueuedCollectorFixture();
+const { createQueuedReservation, requestContext, requestOptions, expectChanged } =
+  useQueuedCollectorFixture();
 
 it.for(["settled", "rejected", "session replaced"] as const)(
   "qualifies queued cancellation only after owned cleanup: %s",
@@ -34,21 +35,29 @@ it.for(["settled", "rejected", "session replaced"] as const)(
     const cleanupEntered = createDeferred();
     const releaseCleanup = createDeferred();
     const failure = new Error("owned queued cleanup failed");
-    const publications = () =>
-      vi
+    const readSession = () => loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+    const expectUnpublished = () => {
+      const changes = vi
         .mocked(context.broadcastToConnIds)
         .mock.calls.filter(([event]) => event === "sessions.changed")
         .map(([, payload]) => payload);
-    let cleanupSettled = false;
+      expect(changes).not.toContainEqual(expect.objectContaining({ lastRunId: entry.runId }));
+    };
+    const replacement = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-lifecycle",
+      lastRunId: "replacement-terminal",
+      status: "done" as const,
+      abortedLastRun: false,
+    };
     const start = vi.fn(async () => {});
-    const cleanup = vi.fn(async () => {
+    const cleanup = async () => {
       cleanupEntered.resolve();
       await releaseCleanup.promise;
       if (transition === "rejected") {
         throw failure;
       }
-      cleanupSettled = true;
-    });
+    };
     const respond = vi.fn();
     let stopping: Promise<void> | undefined;
     try {
@@ -60,15 +69,12 @@ it.for(["settled", "rejected", "session replaced"] as const)(
         onRemoved: cleanup,
       });
       stopping = Promise.resolve(
-        expectDefined(
-          sessionAbortHandlers["sessions.abort"],
-          "Stop handler",
-        )({
-          req: { type: "req", id: "settled-queued-stop", method: "sessions.abort" },
-          params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-          context,
+        sessionAbortHandlers["sessions.abort"]!({
+          ...requestOptions(context, "sessions.abort", {
+            key: entry.childSessionKey,
+            runId: entry.runId,
+            agentId: "main",
+          }),
           respond,
         }),
       );
@@ -81,27 +87,18 @@ it.for(["settled", "rejected", "session replaced"] as const)(
         signal,
       );
       // Current-row notices may arrive later; terminal qualification must await cleanup.
-      expect(publications()).not.toContainEqual(
-        expect.objectContaining({ lastRunId: entry.runId }),
-      );
-      expect(cleanupSettled).toBe(false);
-      expect(
-        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry?.lastRunId,
-      ).toBeUndefined();
+      expectUnpublished();
+      expect((await readSession()).entry?.lastRunId).toBeUndefined();
       expect(respond).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
 
       if (transition === "session replaced") {
-        const selected = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+        const selected = await readSession();
         await replaceSessionEntry(
           { storePath: selected.storePath, sessionKey: entry.childSessionKey },
           {
             ...expectDefined(selected.entry, "selected session"),
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-lifecycle",
-            lastRunId: "replacement-terminal",
-            status: "done",
-            abortedLastRun: false,
+            ...replacement,
           },
         );
       }
@@ -109,17 +106,13 @@ it.for(["settled", "rejected", "session replaced"] as const)(
       await withinTest(stopping, signal);
       await flushPendingSessionsChangedEvents(context);
 
-      const stored = expectDefined(
-        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
-        "terminal session",
-      );
+      const stored = expectDefined((await readSession()).entry, "terminal session");
       const stopped = expectDefined(
         getCurrentSubagentRunOwner(subagentRuns, entry),
         "cancelled collector owner",
       );
       expect(stopped.execution.startedAt).toBeUndefined();
       expect(start).not.toHaveBeenCalled();
-      expect(cleanup).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledOnce();
       if (transition === "settled") {
         expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -128,23 +121,16 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           lastRunId: entry.runId,
           abortedLastRun: true,
         });
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: entry.childSessionKey,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            lastRunId: entry.runId,
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        expectChanged(context, {
+          sessionKey: entry.childSessionKey,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          lastRunId: entry.runId,
+        });
       } else {
         expect(respond.mock.calls[0]?.[0]).toBe(false);
-        expect(publications()).not.toContainEqual(
-          expect.objectContaining({ lastRunId: entry.runId }),
-        );
+        expectUnpublished();
         expect(stored.lastRunId).toBe(
           transition === "session replaced" ? "replacement-terminal" : undefined,
         );
@@ -154,15 +140,10 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           });
           await expect(closeSwarmScheduler()).rejects.toMatchObject({ errors: [failure] });
         } else {
-          expect(stored).toMatchObject({
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-lifecycle",
-            status: "done",
-          });
+          expect(stored).toMatchObject(replacement);
         }
       }
-      expect(stored.startedAt).toBeUndefined();
-      expect(stored.runtimeMs).toBeUndefined();
+      expect([stored.startedAt, stored.runtimeMs]).toEqual([undefined, undefined]);
     } finally {
       releaseCleanup.resolve();
       await Promise.allSettled([stopping]);

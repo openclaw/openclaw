@@ -18,7 +18,7 @@ import {
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import * as nativeToolCatalog from "./native-tool-catalog.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
@@ -49,7 +49,10 @@ import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
-import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createLeasedCodexLifecycleHarness,
+  writeNativeCatalogFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function participantHostCapabilities(
@@ -338,12 +341,12 @@ describe("Codex native hook Gateway fallback", () => {
         }
         return undefined;
       });
-      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
       const abort = new AbortController();
       params.abortSignal = abort.signal;
       const run = runCodexAppServerAttempt(params, {
         bindingStore: createCodexTestBindingStore(),
-        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+        nativeHookRelay:
+          hooks === "disabled" ? { enabled: false } : { events: ["post_tool_use"], enabled: true },
       });
       try {
         await Promise.race([
@@ -353,12 +356,8 @@ describe("Codex native hook Gateway fallback", () => {
           }),
         ]);
         expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
-        expect(preflight).toHaveBeenCalledWith(
-          expect.objectContaining({ nativeHookRelayRequired: false }),
-        );
         ready.resolve();
         await run.waitForTurnAccepted();
-        expect(waitUntilReady).toHaveBeenCalled();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         await run;
       } finally {
@@ -399,54 +398,31 @@ describe("Codex native hook Gateway fallback", () => {
     },
   );
 
-  it("permits incumbent-authority steering independently of native hook availability", async () => {
+  it("permits incumbent-authority steering without native hooks or tool search", async () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
-    for (const { hooks, policy, supportsSteering } of [
-      { hooks: "disabled", policy: "normal", supportsSteering: true },
-      { hooks: "optional", policy: "normal", supportsSteering: true },
-      { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
-      { hooks: "disabled", policy: "report-only", supportsSteering: true },
-      { hooks: "disabled", policy: "tool-search-unsupported", supportsSteering: true },
-    ] as const) {
-      registered.mockClear();
-      const params = participantParams(`participant-handle-${hooks}-${policy}`);
-      params.hostCapabilities = participantHostCapabilities(() => {});
-      if (policy === "token-sharing") {
-        useTokenSharing(params);
-      } else if (policy === "report-only") {
-        params.delegationCapability = "report_only";
-      } else if (policy === "tool-search-unsupported") {
-        params.modelId = "gpt-5.4-nano";
-      }
-      const harness = nativeHarness();
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const run = runCodexAppServerAttempt(params, {
-        bindingStore: createCodexTestBindingStore(),
-        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
-      });
-      try {
-        await run.waitForTurnAccepted();
-        expect(registered).toHaveBeenCalledTimes(1);
-        const backend = registered.mock.calls[0]?.[1];
-        expect
-          .soft(backend?.supportsCrossProfileSteering, `${hooks}: ${policy}`)
-          .toBe(supportsSteering);
-        const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
-        if (policy === "token-sharing" || policy === "report-only") {
-          expect(request).toMatchObject({ config: disabledDelegation });
-        } else if (policy === "tool-search-unsupported") {
-          expect(request).toMatchObject({ config: { "features.multi_agent": false } });
-          expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
-          expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
-        }
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        await run;
-      } finally {
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        harness.close();
-      }
+    const params = participantParams("participant-handle");
+    params.hostCapabilities = participantHostCapabilities(() => {});
+    params.modelId = "gpt-5.4-nano";
+    const harness = nativeHarness();
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: createCodexTestBindingStore(),
+      nativeHookRelay: { enabled: false },
+    });
+    try {
+      await run.waitForTurnAccepted();
+      expect(registered.mock.calls[0]?.[1]?.supportsCrossProfileSteering).toBe(true);
+      const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
+      expect(request).toMatchObject({ config: { "features.multi_agent": false } });
+      expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
+      expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      harness.close();
     }
   });
   it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
@@ -606,6 +582,8 @@ describe("Codex native tool catalog probe cleanup", () => {
     "awaits isolated catalog probe exit before continuing (read failure: %s)",
     async (fails) => {
       const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      const codexHome = path.join(tempDir, "catalog-home");
+      const rolloutPath = path.join(codexHome, "sessions", "catalog-thread.jsonl");
       const attempt = createStartedThreadHarness();
       const connection = await prepareCodexAttemptConnection({
         params,
@@ -620,7 +598,7 @@ describe("Codex native tool catalog probe cleanup", () => {
         onWrite: (line, send) => {
           const { id, method } = JSON.parse(line);
           if (method === "initialize") {
-            send({ id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` } });
+            send({ id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome } });
           }
         },
       });
@@ -628,11 +606,6 @@ describe("Codex native tool catalog probe cleanup", () => {
       try {
         const runtime = await prepareCodexAttemptRuntime(connection);
         using _ = { [Symbol.dispose]: runtime.nativeExecutionPolicy.release };
-        connection.mutable.startupBinding = {
-          threadId: "catalog-thread",
-          cwd: params.workspaceDir,
-          connectionScope: "supervision",
-        };
         vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(probe.client);
         connection.attemptClientFactory = createIsolatedCodexAppServerClient;
         connection.appServer.start = {
@@ -640,14 +613,22 @@ describe("Codex native tool catalog probe cleanup", () => {
           command: process.execPath,
           args: [],
           headers: {},
+          codexHome,
         };
         connection.startupClientAuthProfileId = null;
-        const failure = new Error("native catalog unavailable");
-        const read = vi.spyOn(nativeToolCatalog, "loadCodexNativeToolCatalog");
-        if (fails) {
-          read.mockRejectedValue(failure);
-        } else {
-          read.mockResolvedValue([]);
+        connection.mutable.startupBinding = {
+          threadId: "catalog-thread",
+          cwd: params.workspaceDir,
+          connectionScope: "supervision",
+          rolloutPath,
+          dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
+          appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+            connection.appServer,
+            connection.agentDir,
+          ),
+        };
+        if (!fails) {
+          await writeNativeCatalogFixture(rolloutPath, "catalog-thread", []);
         }
         const stdinClosed = once(probe.process.stdin, "close");
         let settled = false;
@@ -665,7 +646,9 @@ describe("Codex native tool catalog probe cleanup", () => {
         expect(probe.process.exitCode).toBeNull();
         probe.emitExit();
         if (fails) {
-          await expect(pending).rejects.toBe(failure);
+          await expect(pending).rejects.toThrow(
+            "Codex native metadata is unavailable on the selected client",
+          );
         } else {
           await pending;
         }

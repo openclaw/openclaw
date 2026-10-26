@@ -33,7 +33,7 @@ import {
   readRetainedLocalKeys,
 } from "./server-prefs-storage.ts";
 import { serverUiPrefsOutbox as sync } from "./server-prefs.ts";
-import type { UiSettings } from "./settings-contract.ts";
+import type { UiPreferences, UiSettings } from "./settings-contract.ts";
 import {
   loadSettings,
   loadUiPreferences,
@@ -81,7 +81,7 @@ function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   shadowPrefs: ServerUiPrefs | null,
-  settings: UiSettings,
+  settings: UiPreferences,
   canSync?: boolean | null,
   profilePrefs?: SyncedServerUiPrefs | null,
 ): ServerUiPrefState<SyncedPrefValue<K>> {
@@ -126,7 +126,7 @@ function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     serverValue !== undefined &&
     (!specification.canApply ||
       // SAFETY: serverValue is selected from this key descriptor; canApply belongs to that same key.
-      (specification.canApply as (value: unknown, settings: UiSettings) => boolean)(
+      (specification.canApply as (value: unknown, settings: UiPreferences) => boolean)(
         serverValue,
         settings,
       ));
@@ -175,56 +175,6 @@ function isServerUiPrefReady(
   return isNavigationPref(key) ? navigationReady : appearanceReady || !isAppearancePref(key);
 }
 
-function serverUiPrefsSnapshotDelta(
-  prefs: ServerUiPrefs,
-  lastSeen: ServerUiPrefs,
-  {
-    appearanceReady,
-    navigationReady = appearanceReady,
-    scopeChanged,
-    firstSnapshot,
-    shadowPrefs,
-    retainedLocalKeys,
-  }: {
-    appearanceReady: boolean;
-    navigationReady?: boolean;
-    scopeChanged: boolean;
-    firstSnapshot: boolean;
-    shadowPrefs: ServerUiPrefs | null;
-    retainedLocalKeys: ReadonlySet<SyncedPrefKey>;
-  },
-): ServerUiPrefs {
-  const changed: ServerUiPrefs = {};
-  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
-  // fields would revert unpushable local edits whenever any other server field moves.
-  for (const prefKey of SYNCED_PREF_KEYS) {
-    if ((shadowPrefs && prefKey in shadowPrefs) || retainedLocalKeys.has(prefKey)) {
-      continue;
-    }
-    const ready = isServerUiPrefReady(prefKey, {
-      appearanceReady,
-      navigationReady,
-    });
-    if (Object.hasOwn(prefs, prefKey)) {
-      if (
-        ready &&
-        (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
-      ) {
-        Object.assign(changed, { [prefKey]: prefs[prefKey] });
-      }
-    } else if (
-      !(prefKey in prefs) &&
-      SYNCED_PREFS[prefKey].write &&
-      ((ready && Object.hasOwn(lastSeen, prefKey)) || (scopeChanged && isAppearancePref(prefKey)))
-    ) {
-      // A new identity also clears appearance values absent from its last-seen
-      // snapshot, so it never inherits the previous identity's rendered look.
-      changed[prefKey] = null;
-    }
-  }
-  return changed;
-}
-
 function serverPrefsLocalPatch(
   prefs: ServerUiPrefs,
   settings: UiSettings,
@@ -268,44 +218,6 @@ function serverPrefsLocalPatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-/** Profile navigation uses profile snapshots; profileless navigation remains browser-owned. */
-function reconcileNavigationSnapshot(
-  prefs: ServerUiPrefs,
-  lastSeen: ServerUiPrefs,
-  profilePrefs: ServerUiPrefs | null,
-  shadowPrefs: ServerUiPrefs | null,
-  hasProfile: boolean,
-  identityChanged: boolean,
-  localNavigation: ReturnType<typeof loadLocalNavigationPreferences> = null,
-  retainedLocalKeys: ReadonlySet<SyncedPrefKey> = new Set(),
-): ServerUiPrefs {
-  const changed: ServerUiPrefs = {};
-  if (!hasProfile) {
-    // Retired shared-config mirrors are not authority to reset browser-owned shortcuts.
-    delete lastSeen.sidebarEntries;
-  } else if (profilePrefs === null) {
-    // Incomplete reads retain confirmed profile values, never inferred absence.
-    delete prefs.sidebarEntries;
-    if (Object.hasOwn(lastSeen, "sidebarEntries")) {
-      prefs.sidebarEntries = lastSeen.sidebarEntries;
-    }
-  } else if (!Object.hasOwn(prefs, "sidebarEntries")) {
-    prefs.sidebarEntries = [...DEFAULT_SIDEBAR_ENTRIES];
-  }
-  if (identityChanged) {
-    const confirmedDelta =
-      profilePrefs !== null &&
-      !retainedLocalKeys.has("sidebarEntries") &&
-      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries);
-    changed.sidebarEntries =
-      shadowPrefs?.sidebarEntries ??
-      (localNavigation && !confirmedDelta
-        ? localNavigation.sidebarEntries
-        : (prefs.sidebarEntries ?? null));
-  }
-  return changed;
-}
-
 function retainPendingAppearanceSnapshot(
   prefs: ServerUiPrefs,
   lastSeen: ServerUiPrefs,
@@ -326,7 +238,7 @@ export function resolveServerUiPrefState<K extends SyncedPrefKey>(
   configObject: unknown,
   key: K,
   scope = "",
-  settings = loadSettings(scope || undefined),
+  settings: UiPreferences = loadSettings(scope || undefined),
   options: { canSync?: boolean | null; profileId?: string | null } = {},
 ): ServerUiPrefState<SyncedPrefValue<K>> {
   const disconnectedProfile = !options.profileId && isProfilePref(key) && options.canSync === null;
@@ -434,28 +346,69 @@ export function applyServerUiPrefs(
   }
   retainPendingAppearanceSnapshot(prefs, lastSeen, readiness.appearanceReady);
   const navigationIdentityChanged = sync.lastReconciledScope !== scope;
-  const navigationPatch = reconcileNavigationSnapshot(
-    prefs,
-    lastSeen,
-    profilePrefs,
-    shadowPrefs,
-    Boolean(hooks.profileId),
-    navigationIdentityChanged && Boolean(hooks.profileId || scopeChanged),
-    loadLocalNavigationPreferences(gatewayScope, hooks.profileId),
-    retainedLocalKeys,
-  );
+  const hasProfile = Boolean(hooks.profileId);
+  const identityChanged = navigationIdentityChanged && Boolean(hooks.profileId || scopeChanged);
+  const localNavigation = loadLocalNavigationPreferences(gatewayScope, hooks.profileId);
+  const navigationPatch: ServerUiPrefs = {};
+  // Profile navigation uses profile snapshots; profileless navigation remains browser-owned.
+  if (!hasProfile) {
+    // Retired shared-config mirrors are not authority to reset browser-owned shortcuts.
+    delete lastSeen.sidebarEntries;
+  } else if (profilePrefs === null) {
+    // Incomplete reads retain confirmed profile values, never inferred absence.
+    delete prefs.sidebarEntries;
+    if (Object.hasOwn(lastSeen, "sidebarEntries")) {
+      prefs.sidebarEntries = lastSeen.sidebarEntries;
+    }
+  } else if (!Object.hasOwn(prefs, "sidebarEntries")) {
+    prefs.sidebarEntries = [...DEFAULT_SIDEBAR_ENTRIES];
+  }
+  if (identityChanged) {
+    const confirmedDelta =
+      profilePrefs !== null &&
+      !retainedLocalKeys.has("sidebarEntries") &&
+      !prefValuesEqual(prefs.sidebarEntries, lastSeen.sidebarEntries);
+    navigationPatch.sidebarEntries =
+      shadowPrefs?.sidebarEntries ??
+      (localNavigation && !confirmedDelta
+        ? localNavigation.sidebarEntries
+        : (prefs.sidebarEntries ?? null));
+  }
   if (!navigationIdentityChanged && JSON.stringify(prefs) === JSON.stringify(lastSeen)) {
     publishConfirmedPrefs(sync, scope, prefs);
     finishReconciliation();
     return false;
   }
-  const changed = serverUiPrefsSnapshotDelta(prefs, lastSeen, {
-    ...readiness,
-    scopeChanged,
-    firstSnapshot: lastSeenSnapshot === null,
-    shadowPrefs,
-    retainedLocalKeys,
-  });
+  const { appearanceReady, navigationReady } = readiness;
+  const firstSnapshot = lastSeenSnapshot === null;
+  const changed: ServerUiPrefs = {};
+  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
+  // fields would revert unpushable local edits whenever any other server field moves.
+  for (const prefKey of SYNCED_PREF_KEYS) {
+    if ((shadowPrefs && prefKey in shadowPrefs) || retainedLocalKeys.has(prefKey)) {
+      continue;
+    }
+    const ready = isServerUiPrefReady(prefKey, {
+      appearanceReady,
+      navigationReady,
+    });
+    if (Object.hasOwn(prefs, prefKey)) {
+      if (
+        ready &&
+        (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
+      ) {
+        Object.assign(changed, { [prefKey]: prefs[prefKey] });
+      }
+    } else if (
+      !(prefKey in prefs) &&
+      SYNCED_PREFS[prefKey].write &&
+      ((ready && Object.hasOwn(lastSeen, prefKey)) || (scopeChanged && isAppearancePref(prefKey)))
+    ) {
+      // A new identity also clears appearance values absent from its last-seen
+      // snapshot, so it never inherits the previous identity's rendered look.
+      changed[prefKey] = null;
+    }
+  }
   if (!backgroundReady) {
     delete changed.background;
   }

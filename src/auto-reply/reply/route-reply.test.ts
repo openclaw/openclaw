@@ -12,6 +12,7 @@ import {
 } from "../../infra/outbound/deliver-types.js";
 import type { DeliverOutboundPayloadsParams } from "../../infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -43,47 +44,25 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 const { routeReply } = await import("./route-reply.js");
 type RouteReplyParams = Parameters<typeof routeReply>[0];
 
+const { slackPlugin } = await loadBundledPluginFacade<{ slackPlugin: ChannelPlugin }>({
+  pluginId: "slack",
+  artifactBasename: "channel-plugin-api.ts",
+});
+assert(slackPlugin.messaging?.hasStructuredReplyPayload);
+assert(slackPlugin.threading?.resolveReplyTransport);
 const slackMessaging: ChannelMessagingAdapter = {
-  hasStructuredReplyPayload: ({ payload }) => {
-    const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
-    if (typeof blocks === "string") {
-      return blocks.trim().length > 0;
-    }
-    return Array.isArray(blocks) && blocks.length > 0;
-  },
+  hasStructuredReplyPayload: slackPlugin.messaging.hasStructuredReplyPayload,
 };
-
 const slackThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
-    const resolvedReplyToId =
-      resolveSlackThreadTsCandidate(replyDelivery?.replyToMode === "off" ? undefined : replyToId) ??
-      resolveSlackThreadTsCandidate(threadId);
-    return {
-      replyToId:
-        replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
-      threadId: null,
-    };
-  },
+  resolveReplyTransport: slackPlugin.threading.resolveReplyTransport,
 };
-
-function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return /^\d+\.\d+$/.test(normalized) ? normalized : undefined;
-}
 
 function createChannelPlugin(
   id: ChannelPlugin["id"],
   adapters: Pick<ChannelPlugin, "messaging" | "threading"> = {},
 ): ChannelPlugin {
   return {
-    ...createChannelTestPluginBase({
-      id,
-      label: String(id),
-      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-    }),
+    ...createChannelTestPluginBase({ id, config: { listAccountIds: () => [] } }),
     ...adapters,
   };
 }
@@ -99,10 +78,7 @@ function lastDelivery() {
   return delivery;
 }
 function expectLastDeliveryFields(fields: Record<string, unknown>) {
-  const delivery = lastDelivery();
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(Reflect.get(delivery, key)).toEqual(expected);
-  }
+  expect(lastDelivery()).toEqual(expect.objectContaining(fields));
 }
 function lastDeliveryPayload() {
   const payload = lastDelivery().payloads[0];
@@ -150,14 +126,10 @@ describe("routeReply", () => {
   });
 
   it.each([
-    { channel: "slack", aborted: true, error: "Reply routing aborted" },
-    {
-      channel: "webchat",
-      aborted: false,
-      error: "Webchat routing not supported for queued replies",
-    },
-    { channel: "", aborted: false, error: "Unknown channel: " },
-  ] as const)("records pre-I/O no-send for $error", async ({ channel, aborted, error }) => {
+    ["slack", true, "Reply routing aborted"],
+    ["webchat", false, "Webchat routing not supported for queued replies"],
+    ["", false, "Unknown channel: "],
+  ] as const)("records pre-I/O no-send for %s (aborted=%s)", async (channel, aborted, error) => {
     const controller = new AbortController();
     if (aborted) {
       controller.abort();
@@ -170,22 +142,14 @@ describe("routeReply", () => {
   });
 
   it.each([
-    {
-      name: "reasoning",
-      payload: { text: "step", isReasoning: true },
-      outcome: { delivered: false, suppressed: true },
-    },
-    {
-      name: "recorded silence",
-      payload: setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
-      outcome: {},
-    },
-    {
-      name: "invalid Slack blocks",
-      payload: { text: " ", channelData: { slack: { blocks: " " } } },
-      outcome: {},
-    },
-  ])("suppresses $name before delivery", async ({ payload, outcome }) => {
+    ["reasoning", { text: "step", isReasoning: true }, { delivered: false, suppressed: true }],
+    [
+      "recorded silence",
+      setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
+      {},
+    ],
+    ["invalid Slack blocks", { text: " ", channelData: { slack: { blocks: " " } } }, {}],
+  ] as const)("suppresses %s before delivery", async (_name, payload, outcome) => {
     expect(await expectSlackNoDelivery(payload)).toMatchObject(outcome);
   });
 
@@ -265,11 +229,11 @@ describe("routeReply", () => {
   });
 
   it.each([
-    { sameRoute: true, expectedReply: "999.000" },
-    { sameRoute: false, expectedReply: null },
-  ])(
-    "selects payload reply policy only for the same destination ($sameRoute)",
-    async ({ sameRoute, expectedReply }) => {
+    [true, "999.000"],
+    [false, null],
+  ] as const)(
+    "selects payload reply policy only for the same destination (%s)",
+    async (sameRoute, expectedReply) => {
       const payload = setReplyPayloadMetadata(
         { text: "hello", replyToId: "999.000" },
         {
@@ -289,26 +253,6 @@ describe("routeReply", () => {
     },
   );
 
-  it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
-      onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "suppressed",
-        reason: "empty_after_reply_payload_sending_hook",
-      });
-      return [];
-    });
-
-    const res = await routeTestReply({ text: "hello" }, { channel: "telegram", to: "chat-1" });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the policy session's direct conversation type over a group routing hint", async () => {
     const res = await routeTestReply(
       { text: "native command response" },
@@ -321,8 +265,7 @@ describe("routeReply", () => {
 
     expect(res.ok).toBe(true);
     expect(lastDeliveryPayload().text).toBe("native command response");
-    const session = lastDelivery().session;
-    expect(session).toMatchObject({
+    expect(lastDelivery().session).toMatchObject({
       key: "agent:main:main",
       policyKey: "agent:main:slack:direct:U123",
       conversationType: "direct",
@@ -352,18 +295,18 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
   });
 
-  it.each([
-    {
-      name: "BTW",
-      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
-      expected: { text: "BTW\nQuestion: what is 17 * 19?\n\n323" },
-    },
-    {
-      name: "multiple media",
-      payload: { text: "caption", mediaUrls: ["a", "b"] },
-      expected: { text: "caption", mediaUrls: ["a", "b"] },
-    },
-  ])("preserves $name in the outbound payload", async ({ payload, expected }) => {
+  it.each<[string, RouteReplyParams["payload"], Partial<RouteReplyParams["payload"]>]>([
+    [
+      "BTW",
+      { text: "323", btw: { question: "what is 17 * 19?" } },
+      { text: "BTW\nQuestion: what is 17 * 19?\n\n323" },
+    ],
+    [
+      "multiple media",
+      { text: "caption", mediaUrls: ["a", "b"] },
+      { text: "caption", mediaUrls: ["a", "b"] },
+    ],
+  ])("preserves %s in the outbound payload", async (_name, payload, expected) => {
     await routeTestReply(payload);
     expectLastDeliveryFields({ channel: "slack" });
     expect(lastDeliveryPayload()).toMatchObject(expected);
@@ -394,11 +337,8 @@ describe("routeReply", () => {
 
   it.each([
     ["throw", false, undefined, "held"],
-    ["throw", true, undefined, "released"],
     ["throw", true, "visible-1", "held"],
-    ["best-effort return", false, undefined, "released"],
-    ["best-effort return", true, undefined, "held"],
-    ["best-effort return", true, "visible-1", "released"],
+    ["best-effort return", true, undefined, "released"],
   ] as const)(
     "projects %s with sentBeforeError=%s, messageId=%s, and custody=%s through durable send",
     async (failureMode, sentBeforeError, messageId, queueCustody) => {

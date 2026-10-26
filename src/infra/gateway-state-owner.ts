@@ -18,6 +18,7 @@ import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
   describeGatewayLockHolder,
   type LockPayload,
+  LockPayloadSchema,
   parseGatewayLockPayload,
 } from "./gateway-lock-payload.js";
 import {
@@ -230,23 +231,19 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-  const observed: { raw?: string; holder: LockPayload | null } = { holder: null };
-  const parsePayload = (raw: string) => {
-    // Physical verification still reads the lock; immutable bytes need decoding only once.
-    if (raw !== observed.raw) {
-      observed.holder = parseGatewayLockPayload(raw);
-      observed.raw = raw;
-    }
-    return observed.holder;
+  const observed: { holder: LockPayload | null } = { holder: null };
+  const stale = ({ payload: value }: { payload: unknown }) => {
+    observed.holder = LockPayloadSchema.safeParse(value).data ?? null;
+    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname);
   };
-  const stale = ({ payload: value }: { payload: unknown }) =>
-    isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
     try {
-      const previous = parsePayload(fs.readFileSync(pathname, "utf8"));
+      const previous = (observed.holder = parseGatewayLockPayload(
+        fs.readFileSync(pathname, "utf8"),
+      ));
       if (
         previous &&
-        !stale({ payload: previous }) &&
+        !isGatewayStateOwnerDefinitelyStale(previous, pathname) &&
         (previous.pid === process.pid ||
           ((previous.role ?? "gateway") === "gateway" && isPidAlive(previous.pid)))
       ) {
@@ -273,7 +270,7 @@ function acquireOwnerFile(
         staleRecovery: "remove-if-unchanged",
         reentrantOwner: payload.ownerId,
         payload: () => payload,
-        parsePayload,
+        // Reclamation validates foreign payloads; held custody compares exact bytes and token.
         shouldReclaim: stale,
         shouldRemoveStaleLock: stale,
       });

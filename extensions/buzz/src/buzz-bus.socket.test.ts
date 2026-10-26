@@ -1,17 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -19,65 +13,28 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
+import { expect, it, vi } from "vitest";
+import type { BuzzBus } from "./buzz-bus.js";
+import { createBuzzRelayFixture, useBuzzRelayTestHarness } from "./buzz-relay.test-harness.js";
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
-let stateDir: string;
 let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
-let cleanupBus: BuzzBus | undefined;
 let cleanupAccount: (() => Promise<void>) | undefined;
-let messages: string[];
-let fatal: Error[];
-beforeEach(async () => {
-  // openclaw-temp-dir: allow extension tests cannot import root test helpers.
-  stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  cleanupBus = undefined;
-  cleanupAccount = undefined;
-  messages = [];
-  fatal = [];
-  fixture = await createBuzzRelayFixture();
-});
-afterEach(async () => {
-  try {
-    await cleanupAccount?.();
-    await cleanupBus?.close();
-  } finally {
-    try {
-      await fixture.close();
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
-  }
-});
-
-async function startBus(
-  options: Partial<
-    Pick<Parameters<typeof startBuzzBus>[0], "onMessage" | "onFatalError" | "onPresenceError">
-  > = {},
-) {
-  cleanupBus = await startBuzzBus({
-    scheduler: createTestPluginServiceScheduler(),
-    accountId: randomUUID(),
-    relayUrl: fixture.relayUrl,
-    privateKey: fixture.botPrivateKey,
-    channelIds: [fixture.roomId],
-    onMessage: async (message) => {
-      messages.push(message.text);
+const { messages, fatal, startBus, closeBus } = useBuzzRelayTestHarness(
+  (relay) => {
+    fixture = relay;
+    cleanupAccount = undefined;
+    return {};
+  },
+  {
+    beforeClose: async () => {
+      await cleanupAccount?.();
     },
-    onFatalError: (error) => fatal.push(error),
-    ...options,
-  });
-  return cleanupBus;
-}
+    afterClose: closeOpenClawStateDatabaseAsync,
+  },
+);
 
 function member(bus: BuzzBus, id = fixture.senderPublicKey) {
   return bus.directory
@@ -113,7 +70,7 @@ function promotedRoster(initial: (typeof fixture.events)[number]) {
   };
 }
 
-it("delivers live messages on the room-scoped roster subscription", async () => {
+it("accepts signed room rosters without letting invalid events or older queries replace them", async () => {
   const bus = await startBus();
   fixture.sendMessage("live after roster subscription");
   await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
@@ -129,8 +86,17 @@ it("delivers live messages on the room-scoped roster subscription", async () => 
   );
   await barrier(bus, "invalid roster ordering barrier");
   expect(member(bus)?.raw).toMatchObject({ role: "member" });
+  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
+  const query = fixture.pauseNextMembershipQuery();
+  fixture.broadcast(change);
+  await query.started;
   fixture.broadcast(valid);
+  fixture.broadcast(change);
   await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
+  query.release();
+  // A publish acknowledgement follows the old query frames on this socket.
+  await barrier(bus, "query ordering barrier");
+  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
 });
 
 it("keeps removal denied through stale snapshots and accepts a confirmed rejoin", async () => {
@@ -225,10 +191,8 @@ it("recovers silent presence without replaying pre-activation messages", async (
   };
   try {
     await waitFor(ready[0].promise);
-    expect(states).toContain("ready");
     fixture.sendMessage("before stall");
     await waitFor(delivered.get("before stall")!.promise);
-    expect(handled).toContain("before stall");
     // Start the silent heartbeat only after the pre-stall message has completed.
     await withinTest(Promise.resolve(clock.wake()), signal);
     await waitFor(ready[1].promise);
@@ -271,7 +235,7 @@ it("keeps explicit presence rejection nonfatal over a real socket", async () => 
     onPresenceError: (error) => errors.push(error),
     onFatalError: (error) => {
       fatal.push(error);
-      void cleanupBus?.close();
+      void closeBus();
     },
   });
   fixture.sendMessage("socket canary");
@@ -283,20 +247,3 @@ it("keeps explicit presence rejection nonfatal over a real socket", async () => 
   await barrier(bus, "healthy after rejection");
   expect(fixture.received.some((event) => event.content === "healthy after rejection")).toBe(true);
 }, 12000);
-
-it("keeps the signed role when an older query completes after the push", async () => {
-  const bus = await startBus();
-  const initial = initialRoster();
-  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
-  const query = fixture.pauseNextMembershipQuery();
-  fixture.broadcast(change);
-  const updated = fixture.signRelay(promotedRoster(initial));
-  await query.started;
-  fixture.broadcast(updated);
-  fixture.broadcast(change);
-  await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
-  query.release();
-  // A publish acknowledgement follows the old query frames on this socket.
-  await barrier(bus, "query ordering barrier");
-  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
-});

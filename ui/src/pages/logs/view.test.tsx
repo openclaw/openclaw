@@ -9,7 +9,7 @@ import { LogsView, type LogsProps } from "./view.tsx";
 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
-    loading: false,
+    completion: null,
     refreshDisabled: false,
     status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 describe("LogsView", () => {
-  it("refreshes one formatter per locale, incoming-row, and filter update on the mounted view", async () => {
+  it("formats only new rows until the locale or effective timezone changes", async () => {
     const container = document.createElement("div");
     const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
     const allTimes = [...validTimes, "not a timestamp", "", null, undefined];
@@ -59,11 +59,20 @@ describe("LogsView", () => {
     const [filterText, setFilterText] = createSignal("");
     const NativeDateTimeFormat = Intl.DateTimeFormat;
     let timeZone = "UTC";
+    const formatCalls = vi.fn();
     // Model an OS timezone change while retaining native Intl timestamp formatting.
     const formatterSetups = vi
       .spyOn(Intl, "DateTimeFormat")
       .mockImplementation(function (locales, options) {
-        return new NativeDateTimeFormat(locales, { ...options, timeZone });
+        const formatter = new NativeDateTimeFormat(locales, { ...options, timeZone });
+        const format = formatter.format.bind(formatter);
+        Object.defineProperty(formatter, "format", {
+          value: (value?: number | Date) => {
+            formatCalls(value);
+            return format(value);
+          },
+        });
+        return formatter;
       });
     const timeCalls = vi.spyOn(Date.prototype, "toLocaleTimeString");
     mountSolid(
@@ -96,6 +105,7 @@ describe("LogsView", () => {
       );
       timeCalls.mockClear();
       formatterSetups.mockClear();
+      formatCalls.mockClear();
     };
 
     flush();
@@ -106,17 +116,30 @@ describe("LogsView", () => {
       expectTimes(allTimes, locale);
     }
 
-    timeZone = "America/Los_Angeles";
     const appendedTime = "2026-09-22T18:10:00Z";
-    setEntries([...props.entries, { time: appendedTime, raw: "keep appended" }]);
+    const appendedEntry = { time: appendedTime, raw: "keep appended" };
+    setEntries([...props.entries, appendedEntry]);
     flush();
+    expect(formatCalls).toHaveBeenCalledTimes(1);
     expectTimes([...allTimes, appendedTime], "en");
 
-    timeZone = "Asia/Tokyo";
     filterInput.value = "keep";
     filterInput.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+    expect(formatCalls).not.toHaveBeenCalled();
     expectTimes([validTimes[0], appendedTime], "en");
+
+    timeZone = "America/Los_Angeles";
+    const nextTime = "2026-09-22T20:00:00Z";
+    setEntries([...props.entries, appendedEntry, { time: nextTime, raw: "keep next" }]);
+    flush();
+    expectTimes([validTimes[0], appendedTime, nextTime], "en");
+
+    timeZone = "Asia/Tokyo";
+    filterInput.value = "initial";
+    filterInput.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expectTimes([validTimes[0]], "en");
   });
 
   it("keeps the visible export filename suffix stable when labels are localized", async () => {

@@ -1,8 +1,49 @@
-import { expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
 import type { Tool } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { applyCommonResponsesParams } from "./openai-responses-shared.js";
+import { streamOpenAIResponses } from "./openai-responses.js";
+import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
+import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
+
+it.each(["openai-completions", "openai-responses"] as const)(
+  "isolates payload-hook schema edits from published compatibility schemas for %s",
+  async (api) => {
+    const source = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: { action: { type: "string", description: null } },
+    }).schema;
+    const parameters = normalizeOpenAIStrictCompatSchema(source);
+    const context = {
+      messages: [{ role: "user" as const, content: "hello", timestamp: 0 }],
+      tools: [{ name: "choose", description: "Choose", parameters }],
+    };
+    const options = {
+      apiKey: "fixture",
+      onPayload(payload: unknown) {
+        assert(isRecord(payload) && Array.isArray(payload.tools));
+        const tool = payload.tools[0];
+        assert(isRecord(tool));
+        const schema = isRecord(tool.function) ? tool.function.parameters : tool.parameters;
+        assert(isRecord(schema) && isRecord(schema.properties));
+        assert(isRecord(schema.properties.action));
+        expect(schema.properties.action.type).toBe("string");
+        schema.properties.action.type = "number";
+        throw new Error("hook edited its detached schema");
+      },
+    };
+    for (let request = 0; request < 2; request++) {
+      const stream =
+        api === "openai-completions"
+          ? streamOpenAICompletions(makeOpenAIProviderModel(api), context, options)
+          : streamOpenAIResponses(makeOpenAIProviderModel(api), context, options);
+      expect((await stream.result()).errorMessage).toContain("hook edited its detached schema");
+    }
+    expect(parameters).toHaveProperty("properties.action.type", "string");
+  },
+);
 
 it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
   const onPayload = vi.fn(() => {

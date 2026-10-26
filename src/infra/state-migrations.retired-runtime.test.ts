@@ -24,6 +24,24 @@ const collection = (key: string, entry: unknown) => ({ version: 1, [key]: [entry
 const voiceFile = "settings/voicewake.json";
 const bindingsFile = "bindings/current-conversations.json";
 const approvalsFile = "plugin-binding-approvals.json";
+const imports = [
+  [voiceFile, { triggers: ["damaged"] }, "config_machine_state"],
+  [
+    "settings/voicewake-routing.json",
+    { routes: [], defaultTarget: { agentId: "damaged" } },
+    "config_machine_state",
+  ],
+  [
+    bindingsFile,
+    collection("bindings", { ...binding, targetSessionKey: "damaged" }),
+    "current_conversation_bindings",
+  ],
+  [
+    approvalsFile,
+    collection("approvals", { ...approval, pluginName: "damaged" }),
+    "plugin_binding_approvals",
+  ],
+] as const;
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -51,6 +69,13 @@ function migrate() {
 function expectArchived({ file, bytes }: ReturnType<typeof write>, suffix = ".migrated") {
   expect(fs.existsSync(file)).toBe(false);
   expect(fs.readFileSync(`${file}${suffix}`)).toEqual(bytes);
+}
+function countImportedRowsSql(table: string) {
+  const where =
+    table === "config_machine_state"
+      ? " WHERE state_key IN ('voicewake.triggers', 'voicewake.routing')"
+      : "";
+  return `SELECT COUNT(*) AS count FROM ${table}${where}`;
 }
 
 it("preserves meaningful settings and bindings while archiving every retired source", async () => {
@@ -135,12 +160,28 @@ it("archives malformed meaningful data with recovery instructions and still admi
   expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();
 });
 
-it.each([
-  [voiceFile, { triggers: ["retained"] }, "config_machine_state"],
-  ["settings/voicewake-routing.json", { version: 1, routes: [] }, "config_machine_state"],
-  [bindingsFile, collection("bindings", binding), "current_conversation_bindings"],
-  [approvalsFile, collection("approvals", approval), "plugin_binding_approvals"],
-] as const)(
+it.each(imports)(
+  "refuses malformed UTF-8 in %s without blocking independent imports",
+  async (relative, value, table) => {
+    const source = write(relative, value);
+    source.bytes[source.bytes.indexOf("damaged")] = 0xff;
+    fs.writeFileSync(source.file, source.bytes);
+    const valid = write("update-check.json", { lastCheckedAt: 1 });
+
+    const result = await migrate();
+
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(result.changes).not.toContainEqual(expect.stringContaining(`Migrated ${relative}`));
+    expect(
+      openOpenClawStateDatabase({ env }).db.prepare(countImportedRowsSql(table)).get(),
+    ).toMatchObject({ count: 0 });
+    expectArchived(source);
+    expectArchived(valid);
+    expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();
+  },
+);
+
+it.each(imports)(
   "retains %s after SQLite rejection and retries the import",
   async (relative, value, table) => {
     const source = write(relative, value);
@@ -152,7 +193,7 @@ it.each([
       await expect(migrate()).rejects.toThrow("synthetic runtime import failure");
       expect(fs.readFileSync(source.file)).toEqual(source.bytes);
       expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).toThrow("doctor --fix");
-      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+      expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
         count: 0,
       });
     } finally {
@@ -160,7 +201,7 @@ it.each([
     }
     await migrate();
     expectArchived(source);
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+    expect(db.prepare(countImportedRowsSql(table)).get()).toMatchObject({
       count: 1,
     });
     expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();

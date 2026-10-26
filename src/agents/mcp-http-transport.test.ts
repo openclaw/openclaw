@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import {
@@ -831,15 +832,10 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           expect(response.status).toBe(200);
           await response.arrayBuffer();
           return new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode("bye"));
-              },
-              cancel() {
-                return cancellation === "rejecting"
-                  ? Promise.reject(new Error("synthetic cancellation rejection"))
-                  : new Promise(() => {});
-              },
+            makeStallingStream([new TextEncoder().encode("bye")], () => {
+              return cancellation === "rejecting"
+                ? Promise.reject(new Error("synthetic cancellation rejection"))
+                : new Promise(() => {});
             }),
             {
               status: response.status,
@@ -961,7 +957,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     );
     await expect(
       disposeMcpClient({ client, transport, transportType: "streamable-http" }),
-    ).resolves.toBe("uncertain");
+    ).resolves.toBe("closed");
     expect(onDelete).toHaveBeenCalledTimes(3);
   });
 

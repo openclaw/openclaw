@@ -40,6 +40,30 @@ function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
   });
 }
 
+function resolvedSegment(
+  name: string,
+  tail: string[],
+  resolvedPath?: string,
+  policyBlocked = false,
+): ExecCommandSegment {
+  const executable = {
+    kind: "executable" as const,
+    rawExecutable: name,
+    resolvedPath,
+    executableName: path.win32.basename(resolvedPath ?? name),
+  };
+  return {
+    raw: [name, ...tail].join(" "),
+    argv: [name, ...tail],
+    resolution: {
+      kind: "command",
+      execution: executable,
+      policy: executable,
+      ...(policyBlocked ? { policyBlocked } : {}),
+    },
+  };
+}
+
 function runExecutable(params: {
   argv: string[];
   cwd: string;
@@ -68,25 +92,9 @@ function runExecutable(params: {
 describe("resolveSystemRunExecArgv", () => {
   it("pins Windows shell execution to the resolved allowlisted executable", async () => {
     const trustedExecutable = "C:\\trusted-bin\\safe.exe";
-    const result = await resolveWindowsShellExecArgv({
-      raw: "safe --version",
-      argv: ["safe", "--version"],
-      resolution: {
-        kind: "command",
-        execution: {
-          kind: "executable",
-          rawExecutable: "safe",
-          resolvedPath: trustedExecutable,
-          executableName: "safe.exe",
-        },
-        policy: {
-          kind: "executable",
-          rawExecutable: "safe",
-          resolvedPath: trustedExecutable,
-          executableName: "safe.exe",
-        },
-      },
-    });
+    const result = await resolveWindowsShellExecArgv(
+      resolvedSegment("safe", ["--version"], trustedExecutable),
+    );
 
     expect(result).toEqual([trustedExecutable, "--version"]);
   });
@@ -103,56 +111,21 @@ describe("resolveSystemRunExecArgv", () => {
 
   it("fails closed for Windows opaque shell transports before inner argv rewrite", async () => {
     const trustedExecutable = "C:\\trusted-bin\\safe-tool.exe";
-    const result = await resolveSystemRunExecArgv({
-      plannedAllowlistArgv: undefined,
+    const result = await resolveArgv({
       argv: ["nu.exe", "--commands", "safe-tool arg"],
-      security: "allowlist",
       isWindows: true,
-      policy: {
-        approvedByAsk: false,
-        analysisOk: true,
-        allowlistSatisfied: true,
-      },
       shellCommand: "safe-tool arg",
-      segments: [
-        {
-          raw: "safe-tool arg",
-          argv: ["safe-tool", "arg"],
-          resolution: {
-            kind: "command",
-            execution: {
-              kind: "executable",
-              rawExecutable: "safe-tool",
-              resolvedPath: trustedExecutable,
-              executableName: "safe-tool.exe",
-            },
-            policy: {
-              kind: "executable",
-              rawExecutable: "safe-tool",
-              resolvedPath: trustedExecutable,
-              executableName: "safe-tool.exe",
-            },
-          },
-        },
-      ],
+      segments: [resolvedSegment("safe-tool", ["arg"], trustedExecutable)],
       segmentSatisfiedBy: ["allowlist"],
-      authorizationPlan: undefined,
     });
 
     expect(result).toBeNull();
   });
 
   it("fails closed when the Windows shell execution plan is blocked", async () => {
-    const result = await resolveWindowsShellExecArgv({
-      raw: "safe --version",
-      argv: ["safe", "--version"],
-      resolution: {
-        kind: "command",
-        policyBlocked: true,
-        execution: { kind: "executable", rawExecutable: "safe", executableName: "safe" },
-        policy: { kind: "executable", rawExecutable: "safe", executableName: "safe" },
-      },
-    });
+    const result = await resolveWindowsShellExecArgv(
+      resolvedSegment("safe", ["--version"], undefined, true),
+    );
 
     expect(result).toBeNull();
   });

@@ -170,14 +170,6 @@ function normalizeUrlPath(pathname: string): string {
     .replace(/\/v1$/i, "");
 }
 
-function isLikelyHostBaseUrl(value: string): boolean {
-  return (
-    /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,}|[^/\s?#]+:\d+)(?:[/?#].*)?$/i.test(
-      value,
-    ) && !value.startsWith("/")
-  );
-}
-
 function normalizeConfiguredReasoningEffortMap(
   value: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -211,7 +203,14 @@ function normalizeLmstudioConfiguredCompat(
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {
-  if (/^https?:\/\//i.test(value) || !isLikelyHostBaseUrl(value)) {
+  if (
+    /^https?:\/\//i.test(value) ||
+    !(
+      /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,}|[^/\s?#]+:\d+)(?:[/?#].*)?$/i.test(
+        value,
+      ) && !value.startsWith("/")
+    )
+  ) {
     return value;
   }
   return `http://${value}`;

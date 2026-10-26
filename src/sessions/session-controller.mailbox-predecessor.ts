@@ -38,14 +38,6 @@ function retainsPreExecutionClaimCustody(claim: SessionControllerMailboxClaim): 
   );
 }
 
-export type SessionControllerClaimPredecessor = {
-  input: SessionControllerInput;
-  /** False when another owner reserved this input; only its creator may retire it. */
-  created: boolean;
-  /** Resolves true only after the retained claim owns the mailbox again. */
-  restored: Promise<boolean>;
-};
-
 function orderSessionControllerClaimPredecessor(
   claim: SessionControllerMailboxClaim,
   predecessor: SessionControllerInput,
@@ -122,7 +114,13 @@ function waitForSessionControllerClaimRestoration(
 export function reserveSessionControllerClaimPredecessor(
   claim: SessionControllerMailboxClaim,
   params: Parameters<typeof reserveSessionControllerSource>[1],
-): SessionControllerClaimPredecessor {
+): {
+  input: SessionControllerInput;
+  /** False when another owner reserved this input; only its creator may retire it. */
+  created: boolean;
+  /** Resolves true only after the retained claim owns the mailbox again. */
+  restored: Promise<boolean>;
+} {
   const mailbox = claim.mailbox;
   const firstEligible = mailbox.entries.find((input) => input.phase !== "consumed");
   if (

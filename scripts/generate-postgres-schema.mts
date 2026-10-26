@@ -11,11 +11,15 @@ import {
   LOGBOOK_SCHEMA_VERSION,
   SCHEMA as LOGBOOK_SCHEMA_SQL,
 } from "../extensions/logbook/src/store-schema.ts";
-import { TEAM_REPORTS_SCHEMA_SQL } from "../extensions/team-reports/src/store-schema.ts";
+import {
+  TEAM_REPORTS_SCHEMA_SQL,
+  TEAM_REPORTS_SCHEMA_VERSION,
+} from "../extensions/team-reports/src/store-schema.ts";
 import {
   SCHEMA_VERSION,
   WORKBOARD_SCHEMA_SQL,
 } from "../extensions/workboard/src/workboard-schema.ts";
+import { MEMORY_PATH_POSTGRES_INDEXES } from "../packages/memory-host-sdk/src/host/memory-path-postgres.ts";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../src/infra/client-credential-schema.ts";
 import {
   assertPostgresCatalog,
@@ -23,6 +27,7 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
+import { withLegacyPostgresIndexOrdering } from "../src/infra/database-engine/postgres-index-ordering.ts";
 import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.ts";
 import { AGENT_TRANSCRIPT_SEARCH_POSTGRES_SQL } from "../src/state/openclaw-agent-search-schema.ts";
 import { DOCTOR_OWNED_STATE_TABLES } from "../src/state/openclaw-state-db-contract.ts";
@@ -96,6 +101,11 @@ async function generateClientCredentialSource() {
   try {
     db.exec(CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
     const data = catalog(db, "");
+    for (const item of data.objects) {
+      if (item.kind === "index" && item.sql) {
+        item.sql = withLegacyPostgresIndexOrdering(item.sql);
+      }
+    }
     const sql = tableStatements(data).join("\n\n");
     return {
       sql,
@@ -252,6 +262,19 @@ export async function generatePostgresSchemas(
     const data = catalogs[name]!;
     if (name === "agent") {
       translatePostgresTriggers(data);
+      const sources = data.tables.find((table) => table.name === "memory_index_sources");
+      if (sources) {
+        sources.indexes += MEMORY_PATH_POSTGRES_INDEXES.length;
+        for (const index of MEMORY_PATH_POSTGRES_INDEXES) {
+          data.objects.push({
+            kind: "index",
+            table: sources.name,
+            name: index.name,
+            source: "PostgreSQL-only derived exact-path identity",
+            sql: index.sql,
+          });
+        }
+      }
       data.notes.push(
         "Voice indexes: the sole writer (src/talk/client-voice-session-store.ts) uses JSON.stringify; agentId/sessionKey are strings, origin is client/relay, status is open/closed. src/talk/client-voice-session-lookup.worker.ts compares strings only. Non-string members cannot match; no boolean/numeric coercion is needed. Duplicate-key JSON is unreachable from writers: SQLite resolves first-wins, PostgreSQL last-wins. P3-6 preflight must refuse duplicate-key voice rows before copying, with row evidence. Canonical JSON remains text.",
       );
@@ -303,7 +326,7 @@ export async function generatePostgresSchemas(
               "idx_state_leases_owner",
             ].includes(item.name)
           ) {
-            preWriteIndexesV27Sql[item.table] = item.sql;
+            preWriteIndexesV27Sql[item.table] = withLegacyPostgresIndexOrdering(item.sql);
           }
         }
         assert.equal(Object.keys(preWriteIndexesV27Sql).length, 3);
@@ -311,7 +334,7 @@ export async function generatePostgresSchemas(
           (item) => item.kind === "index" && item.name === "idx_state_leases_owner",
         );
         assert.ok(leaseIndex?.sql);
-        writeIndexesV27Sql = `${STATE_WRITE_INDEX_RETIREMENT_V27_SQL}\n${leaseIndex.sql}`;
+        writeIndexesV27Sql = `${STATE_WRITE_INDEX_RETIREMENT_V27_SQL}\n${withLegacyPostgresIndexOrdering(leaseIndex.sql)}`;
       }
       if (root === ROOT) {
         for (const pending of pendingPromotion) {
@@ -348,10 +371,10 @@ export async function generatePostgresSchemas(
               item.kind === "index" && item.table === "task_runs" && item.name === indexName,
           );
           assert.ok(
-            index && index.sql?.startsWith("CREATE INDEX "),
+            index?.sql && index.sql.startsWith("CREATE INDEX "),
             `Missing translated shared-state v24 index: ${indexName}`,
           );
-          return index.sql;
+          return withLegacyPostgresIndexOrdering(index.sql);
         });
         files["state-v23-v24.postgres.sql"] = `${[
           "-- Generated v23-to-v24 forward DDL; the owner supplies search_path, transaction, and version publication.",
@@ -626,7 +649,7 @@ async function generateTeamReportsPostgresSchema(verify: boolean) {
   ].join("\n\n")}\n`;
   const metadata = generateDatabasePortMetadata(db, data, {
     id: "team-reports",
-    version: 1,
+    version: TEAM_REPORTS_SCHEMA_VERSION,
     sqlite: TEAM_REPORTS_SCHEMA_SQL,
     postgres,
   });

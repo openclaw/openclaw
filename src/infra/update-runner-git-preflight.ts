@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -7,6 +8,7 @@ import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
@@ -35,6 +37,7 @@ import {
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
+import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
 import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -334,12 +337,12 @@ async function testPreflightCandidate(
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     // Exposure can run another install after postbuild. Its final topology, not
     // the earlier build graph, must own the packaged plugin dependency links.
-    const metadataScript = "scripts/copy-bundled-plugin-metadata.mjs";
+    const metadataScript = fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl("sourcePluginMetadata", params.worktreeDir),
+    );
     if (
       params.prepareGitExposure &&
-      (
-        await fs.stat(path.join(params.worktreeDir, metadataScript)).catch(ignoreMissingPath)
-      )?.isFile()
+      (await fs.stat(metadataScript).catch(ignoreMissingPath))?.isFile()
     ) {
       const relink = await runCandidateCheck(
         "bundled-plugin-dependency-links",
@@ -440,7 +443,6 @@ export async function runGitCandidatePreflight(params: {
   const devTargetRef = params.devTarget
     ? normalizeNullableString(resolveDevUpdateTargetRevision(params.devTarget))
     : null;
-  let preflightBaseSha: string;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
   let localDevBranchExists: boolean | null = null;
@@ -455,14 +457,12 @@ export async function runGitCandidatePreflight(params: {
     if (result.code !== 0 || !result.stdout.trim()) {
       return { status: "error", reason: "no-target-sha" };
     }
-    preflightBaseSha = result.stdout.trim();
-    candidates = [preflightBaseSha];
+    candidates = [result.stdout.trim()];
   } else if (devTargetRef) {
     const targetSha = await resolveExplicitTarget({ ...params, devTargetRef });
     if (!targetSha) {
       return { status: "error", reason: "no-target-sha" };
     }
-    preflightBaseSha = targetSha;
     candidates = [targetSha];
     if (params.devTarget?.mode === "tracked") {
       const ancestryStep = await runStep(
@@ -513,13 +513,65 @@ export async function runGitCandidatePreflight(params: {
     if (candidates.length === 0) {
       return { status: "error", reason: "preflight-no-candidates" };
     }
-    preflightBaseSha = upstreamSha;
   }
 
   // Reference builds must consume operator inputs even when their Git HEAD is current.
   // Source identity alone cannot prove the installed build is complete.
   const canSkipActivation =
     !params.referenceSource && !params.prepareGitExposure && params.beforeRuntimeVerified;
+  const rebaseFrom = params.referenceSource
+    ? params.referenceSource.branch === DEV_BRANCH
+      ? undefined
+      : (params.beforeSha ?? undefined)
+    : !params.targetRevision && !params.devTarget && localDevBranchExists !== false
+      ? params.needsCheckoutMain
+        ? DEV_BRANCH
+        : (params.beforeSha ?? undefined)
+      : undefined;
+
+  const checkNodeRuntime = async (sha: string) => {
+    if (params.referenceSource || (canSkipActivation && sha === params.beforeSha)) {
+      return true;
+    }
+    // A local rebase can change the manifest; its final runtime check owns that result.
+    if (
+      rebaseFrom &&
+      (
+        await params.runCommand(
+          ["git", "-C", params.gitRoot, "merge-base", "--is-ancestor", rebaseFrom, sha],
+          { cwd: params.gitRoot, timeoutMs: params.timeoutMs },
+        )
+      ).code !== 0
+    ) {
+      return true;
+    }
+    const target = await readGitTargetSchemaVersions({
+      ...params,
+      root: params.gitRoot,
+      revision: sha,
+    });
+    if (target.status !== "ok") {
+      return true;
+    }
+    const runtime = await prepareGitCandidateNodeRuntime(
+      params.artifactRoot,
+      params.defaultCommandEnv,
+      "package-tooling",
+      target.nodeEngine,
+    );
+    if (!runtime.step) {
+      return true;
+    }
+    params.steps.push(runtime.step);
+    return false;
+  };
+  while (candidates.length > 0 && !(await checkNodeRuntime(candidates[0]!))) {
+    candidates.shift();
+  }
+  if (candidates.length === 0) {
+    return { status: "error", reason: "preflight-node-runtime-incompatible" };
+  }
+  const preflightBaseSha = candidates[0]!;
   if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
@@ -530,15 +582,6 @@ export async function runGitCandidatePreflight(params: {
       return { status: "error", reason: admission.failureReason };
     }
   }
-  const rebaseFrom = params.referenceSource
-    ? params.referenceSource.branch === DEV_BRANCH
-      ? undefined
-      : (params.beforeSha ?? undefined)
-    : !params.targetRevision && !params.devTarget && localDevBranchExists !== false
-      ? params.needsCheckoutMain
-        ? DEV_BRANCH
-        : (params.beforeSha ?? undefined)
-      : undefined;
 
   // Worktree checkout can execute filters, and subsequent checks run target code.
   // Admit its metadata before either operation, then admit each distinct fallback.
@@ -575,6 +618,9 @@ export async function runGitCandidatePreflight(params: {
         return { status: "skipped", reason: "already-current" };
       }
       if (sha !== preflightBaseSha) {
+        if (!(await checkNodeRuntime(sha))) {
+          continue;
+        }
         await params.beforeCandidate(sha);
       }
       const candidate = await testPreflightCandidate({

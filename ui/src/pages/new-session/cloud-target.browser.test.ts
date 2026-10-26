@@ -1,34 +1,14 @@
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import type { CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+import { SessionMenuItem } from "./cloud-target-view.tsx";
+import { mountCloudProfiles } from "./cloud-target.test-support.ts";
 
 function mountSessionItem(item: Parameters<typeof SessionMenuItem>[0]["item"]) {
   return mountSolid(() => createComponent(SessionMenuItem, { item, submitting: false }), {
     container,
   });
-}
-
-function mountCloudProfiles(initial: CloudProfileMenuItemsOptions) {
-  const [params, setParams] = createSignal(initial);
-  const mounted = mountSolid(
-    () =>
-      createComponent(CloudProfileMenuItems, {
-        get params() {
-          return params();
-        },
-      }),
-    { container },
-  );
-  return {
-    ...mounted,
-    update: (next: CloudProfileMenuItemsOptions) => {
-      setParams(next);
-      flush();
-    },
-  };
 }
 
 const container = document.createElement("div");
@@ -49,39 +29,41 @@ describe("cloud target accessibility", () => {
   it.each([
     { providerId: "crabbox", providerDisplayId: "azure", provider: "Azure" },
     { providerId: "custom-worker", providerDisplayId: undefined, provider: "custom-worker" },
-  ])("keeps compact and Move names separate from $provider descriptions", async (profile) => {
+  ])("keeps cloud profile names separate from $provider descriptions", async (profile) => {
     const params = {
       profiles: [{ id: "aws", ...profile, trust: "persistent" as const }],
       selectedId: "",
       submitting: false,
       onSelect: vi.fn(),
     };
-    const { update } = mountCloudProfiles({ ...params, compact: true });
+    const { update } = mountCloudProfiles(params, container);
     await expectChoice("aws", `Cloud worker provider: ${profile.provider}`);
 
-    update(params);
-    await expectChoice("Cloud · aws Persistent", `Cloud worker provider: ${profile.provider}`);
+    update({ ...params, profiles: [{ ...params.profiles[0]!, id: "production" }] });
+    await expectChoice("production", `Cloud worker provider: ${profile.provider}`);
   });
 
   it("retains the provider in the configuration tooltip description", async () => {
-    mountCloudProfiles({
-      profiles: [
-        {
-          id: "production",
-          providerId: "crabbox",
-          providerDisplayId: "aws",
-          operatingSystems: [
-            { id: "linux", label: "Linux", default: true },
-            { id: "windows", label: "Windows" },
-          ],
-          machines: [{ id: "standard", label: "Standard", default: true }],
-        },
-      ],
-      selectedId: "production",
-      compact: true,
-      submitting: false,
-      onSelect: vi.fn(),
-    });
+    mountCloudProfiles(
+      {
+        profiles: [
+          {
+            id: "production",
+            providerId: "crabbox",
+            providerDisplayId: "aws",
+            operatingSystems: [
+              { id: "linux", label: "Linux", default: true },
+              { id: "windows", label: "Windows" },
+            ],
+            machines: [{ id: "standard", label: "Standard", default: true }],
+          },
+        ],
+        selectedId: "production",
+        submitting: false,
+        onSelect: vi.fn(),
+      },
+      container,
+    );
     const choice = await expectChoice("production Linux · Standard", /Cloud worker provider: AWS/);
     await expect
       .element(choice)

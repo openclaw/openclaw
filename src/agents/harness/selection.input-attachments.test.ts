@@ -111,7 +111,7 @@ it("refuses remembered consent revoked after admission before native dispatch", 
     { ownerPluginId: "codex" },
   );
   const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
-  const dispatch = vi
+  using dispatch = vi
     .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
     .mockImplementation(async (harness, prepared, execute) => {
       setRuntimeConfigSnapshot({
@@ -120,13 +120,10 @@ it("refuses remembered consent revoked after admission before native dispatch", 
       });
       return original(harness, prepared, execute);
     });
-  try {
-    await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(nativeStart).not.toHaveBeenCalled();
-  } finally {
-    dispatch.mockRestore();
-  }
+
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(nativeStart).not.toHaveBeenCalled();
 });
 
 function createAttributionRecorder(registered = true) {
@@ -158,7 +155,6 @@ describe("registered harness input attachment preparation", () => {
         "tool_result_persist",
         "before_compaction",
         "after_compaction",
-        "heartbeat_prompt_contribution",
       ] as const
     ).map((hook) => ({ name: hook, hook, waits: true })),
     { name: "internal bootstrap", bootstrap: true, waits: true },
@@ -188,8 +184,7 @@ describe("registered harness input attachment preparation", () => {
     const pending = runAgentHarnessAttempt({
       ...createAttemptParams(),
       agentHarnessId: "openclaw",
-      trigger:
-        scenario.hook === "heartbeat_prompt_contribution" && scenario.waits ? "heartbeat" : "user",
+      trigger: "user",
       awaitSessionDiffBaseline: awaitBaseline,
     });
     try {

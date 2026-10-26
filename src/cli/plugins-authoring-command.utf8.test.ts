@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,6 +40,38 @@ export default defineToolPlugin({
 const files = ["package.json", "openclaw.plugin.json"] as const;
 
 describe("plugin authoring JSON encoding", () => {
+  it.skipIf(process.platform === "win32")(
+    "rejects a special-device package before parsing",
+    async () => {
+      const root = await createProject();
+      const target = path.join(root, "package.json");
+      fs.unlinkSync(target);
+      fs.symlinkSync("/dev/null", target);
+
+      await expect(runPluginsBuildCommand({ root })).rejects.toThrow(/regular file/);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(files)(
+    "rejects a FIFO %s without rewriting metadata",
+    async (file) => {
+      const root = await createProject();
+      const target = path.join(root, file);
+      const other = path.join(
+        root,
+        file === "package.json" ? "openclaw.plugin.json" : "package.json",
+      );
+      const before = fs.readFileSync(other);
+      fs.unlinkSync(target);
+      execFileSync("mkfifo", [target]);
+
+      await expect(runPluginsBuildCommand({ root })).rejects.toThrow(/regular file/);
+      expect(fs.lstatSync(target).isFIFO()).toBe(true);
+      expect(fs.readFileSync(other)).toEqual(before);
+    },
+  );
+
   it.each(files)("rejects malformed UTF-8 in %s without rewriting metadata", async (file) => {
     const root = await createProject();
     const target = path.join(root, file);

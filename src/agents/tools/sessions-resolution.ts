@@ -123,7 +123,11 @@ export async function lookupRequesterSessionOwnership(params: {
       },
       gatewayCall,
     );
-    return ok(resolved?.key === params.targetSessionKey);
+    return ok(
+      resolved?.key === params.targetSessionKey &&
+        (resolved.agentId ?? parseAgentSessionKey(resolved.key)?.agentId) ===
+          (params.targetAgentId ?? params.requesterAgentId),
+    );
   } catch (error) {
     if (isExpectedSessionLookupMiss(error)) {
       return ok(false);

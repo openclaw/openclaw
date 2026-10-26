@@ -11,7 +11,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
   type MarkdownFileLinkTarget,
 } from "../../../components/markdown-file-links.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
@@ -21,22 +20,26 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
+import "../../../components/tooltip.ts";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+} from "../../../lib/chat/canvas-embed-policy.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -50,6 +53,8 @@ import {
 import { SidebarFile } from "./chat-sidebar-file-view.tsx";
 import { SidebarImage, SidebarSvgFile, SidebarFileFallback } from "./chat-sidebar-image-view.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -98,11 +103,9 @@ export type SidebarPanelProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   attachmentRuntime: AttachmentSidebarRuntime;
-  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
+  attachmentDownload?: AttachmentDownload;
   onClick: (event: MouseEvent) => void;
   onKeydown: (event: KeyboardEvent) => void;
 };
@@ -213,6 +216,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
     >
       <div
         class="sidebar-panel"
+        data-file-entry-id={
+          props.content?.kind === "file"
+            ? props.content.sessionFileSource?.messageEntryId
+            : undefined
+        }
         data-file-session-key={
           props.content?.kind === "markdown"
             ? props.content.fileLinkSessionKey
@@ -239,7 +247,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
           </div>
         </Show>
         <Show when={props.filePresentation === "mobile" && props.content?.kind === "image"}>
-          <SidebarFileMobileRail name={title()} identity={title()} back={props.fileBack} />
+          <SidebarFileMobileRail
+            name={title()}
+            identity={title()}
+            back={props.fileBack}
+            attachment={props.fileView?.fileAttachment}
+          />
         </Show>
         <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
           <Show
@@ -259,7 +272,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
           >
             <Switch fallback={<div class="muted">{t("chat.detailPanel.noContent")}</div>}>
               <Match when={props.content?.kind === "mcp-app" ? props.content : undefined}>
-                {(content) => <McpAppPanel launch={content().launch} />}
+                {(content) => (
+                  <McpAppPanel
+                    launch={content().launch}
+                    observeRetirement={content().observeRetirement}
+                  />
+                )}
               </Match>
               <Match
                 when={
@@ -338,7 +356,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView &&
-                  (props.content?.kind === "markdown" || props.content?.kind === "attachment") &&
+                  (props.content?.kind === "markdown" ||
+                    (props.content?.kind === "attachment" &&
+                      !props.content.src &&
+                      !props.content.resolveSource)) &&
                   props.content.file
                     ? props.content.file
                     : undefined
@@ -427,6 +448,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       runtime={props.attachmentRuntime}
                       embedSandboxMode={props.embedSandboxMode ?? "scripts"}
                       download={props.attachmentDownload}
+                      attachment={props.fileView?.fileAttachment}
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
@@ -441,7 +463,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       {(file) => (
                         <div class="sidebar-file-view__path-bar">
                           <div class="sidebar-file-view__path-field">
-                            <span class="sidebar-file-view__path" title={file().path}>
+                            <span
+                              ref={createTextOverflow(() => file().path)}
+                              class="sidebar-file-view__path"
+                              title={file().path}
+                            >
                               {file().path}
                             </span>
                             <CopyButton
@@ -459,6 +485,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
                               download={(signal) => file().download(signal)}
                               class="btn btn--sm sidebar-file-view__action"
                             />
+                            <Show when={props.fileView?.fileAttachment}>
+                              <FileSessionMenu attachment={props.fileView?.fileAttachment} />
+                            </Show>
                             <Show when={props.fileView?.onReveal}>
                               <openclaw-tooltip prop:content={t("chat.detailPanel.showInFiles")}>
                                 <button
@@ -513,8 +542,6 @@ export function SidebarPanel(props: SidebarPanelProps) {
                           content: toSanitizedMarkdownHtml(content().content, {
                             codeBlockInteraction: "interactive",
                             fileLinks: true,
-                            githubRepo: props.githubRepo ?? null,
-                            githubRepositories: props.githubRepositories,
                             interactiveImages: props.onOpenImage !== undefined,
                             sessionLinks: true,
                           }),

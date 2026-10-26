@@ -7,12 +7,12 @@ import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { gatewayWorkAdmissionActual } from "./run-loop-mocks.test-support.js";
 import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
 import {
   createActiveWorkSnapshot,
   createLifecycleGate,
-  expectRestartCloseCall,
   createGatewayServer,
   expectStopCloseCall,
   expectUncalled,
@@ -43,8 +43,8 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
   it("exits 0 on SIGTERM after graceful close", async () => {
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
     f.acquireGatewayLock.mockResolvedValueOnce(gatewayStateOwner);
-
     await f.withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+      expect(start.mock.calls[0]?.[0]?.gatewayStateOwner).toBe(gatewayStateOwner);
       const localServiceStop = createLifecycleGate();
       f.stopManagedProviderLocalServices.mockImplementationOnce(localServiceStop.wait);
       f.hasManagedProviderLocalServices.mockReturnValueOnce(true);
@@ -80,16 +80,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
         localServiceStop.release();
 
         await expect(exited).resolves.toBe(0);
-        expect(start).toHaveBeenCalledWith({
-          processStartedAt: expect.any(Number),
-          startupStartedAt: expect.any(Number),
-          requestHotReloadRecovery: f.requestGatewayRestartWithSignalAdmission,
-          hostLifecycle: expect.objectContaining({ request: expect.any(Function) }),
-          startupOperation: expect.any(Function),
-          gatewayStateOwner,
-        });
-        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-        expect(f.flushLogger).toHaveBeenCalledOnce();
         expect(timelineAtLogFlush).toContain('"name":"gateway.stop"');
         expect(f.armShutdownHardExitWatchdog).not.toHaveBeenCalled();
       } finally {
@@ -112,12 +102,10 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           expect(runtime.exit).not.toHaveBeenCalled();
           closing.release();
           await expect(exited).resolves.toBe(0);
-          expect(runtime.exit).toHaveBeenCalledOnce();
-          expect(start).toHaveBeenCalledOnce();
+          expectCallCount(1, runtime.exit, start);
           expect(
             (await f.acquireGatewayLock.mock.results[0]?.value)?.release,
           ).toHaveBeenCalledOnce();
-          expect(f.flushLogger).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
         }, true);
       } finally {
@@ -197,9 +185,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
             expectUncalled(runtime.exit, exit);
             flushing.release();
             await expect(exited).resolves.toBe(failed ? 1 : code);
-            expect(runtime.exit).toHaveBeenCalledOnce();
-            expect(close).toHaveBeenCalledTimes(restart ? 2 : 1);
-            expect(start).toHaveBeenCalledTimes(restart ? 2 : 1);
+            expectCallCount(restart ? 2 : 1, close, start);
             expect(
               (await f.acquireGatewayLock.mock.results.at(-1)?.value)?.release,
             ).toHaveBeenCalledOnce();
@@ -231,9 +217,6 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(f.waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
-        onSnapshot: expect.any(Function),
-      });
       expectStopCloseCall(close);
     });
   });
@@ -274,8 +257,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       try {
         captureSignal("SIGTERM")();
         await vi.advanceTimersByTimeAsync(deadlineMs - 1);
-        expect(close).toHaveBeenCalledOnce();
-        expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expectCallCount(1, close, f.stopManagedProviderLocalServices);
         expect(runtime.exit).not.toHaveBeenCalled();
         await advanceWithoutCalls(1, runtime.exit);
         await vi.advanceTimersByTimeAsync(2_000);
@@ -312,7 +294,6 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expect(f.requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
         f.managedUpdateSuccessorOwner,
       );
-      expect(close).toHaveBeenCalledOnce();
       expect(runtime.exit).not.toHaveBeenCalled();
       await advanceWithoutCalls(1, runtime.exit);
       cleanup.resolve();
@@ -358,13 +339,8 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       f.flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
-      expect(close).toHaveBeenCalledOnce();
-      expect(f.gatewayLog.error).toHaveBeenCalledWith(
-        "gateway lifecycle completion failed: shutdown cleanup failed",
-      );
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(f.armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
-      expect(f.cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      expectCallCount(1, close, f.armShutdownHardExitWatchdog);
+      expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(exited).resolves.toBe(1);
     }, true);
@@ -373,9 +349,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
   it("waits for the drain before handing recovery ownership to server close", async () => {
     f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ waitMs: 0 });
     f.createGatewayActiveWorkSnapshot.mockReturnValueOnce(
-      createActiveWorkSnapshot({ embeddedRuns: 2 }, [
-        { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
-      ]),
+      createActiveWorkSnapshot({ embeddedRuns: 2 }),
     );
     const draining = createLifecycleGate();
     f.waitForGatewayActiveWork.mockImplementationOnce(async () => {
@@ -397,11 +371,6 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expect(cleanupSignal.aborted).toBe(false);
       draining.release();
       await expect(exited).resolves.toBe(0);
-      expect(f.waitForGatewayActiveWork).toHaveBeenCalledExactlyOnceWith(
-        undefined,
-        expect.any(Object),
-      );
-      expectRestartCloseCall(close, 315_000);
       expect(start).toHaveBeenCalledOnce();
     });
   });

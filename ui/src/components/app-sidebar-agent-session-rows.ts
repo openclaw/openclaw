@@ -1,7 +1,10 @@
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { filterVisibleSessionRows, sessionMatchesArchivedFilter } from "../lib/sessions/index.ts";
+import {
+  filterVisibleSessionRows,
+  sessionMatchesArchivedFilter,
+} from "../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isSubagentSessionKey,
@@ -93,17 +96,8 @@ export function projectSidebarAgentSessionRows({
     archivedFilter: host.sessionsStatusFilter,
   } as const;
   const visibility = projectSidebarArchiveVisibility({
-    sessionData: grouped
-      ? {
-          sessionsAgentId: selected,
-          sessionsResult: result,
-          sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-          childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-          loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-          loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-          childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-        }
-      : host.sessionData,
+    sessionData: host.sessionData,
+    sourceRows: (grouped ? result : host.sessionData.resultForAgent(selected))?.sessions ?? [],
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),
@@ -167,14 +161,13 @@ export function projectSidebarAgentSessionRows({
   ) {
     scopedRootRows.push(lineageRoot);
   }
-  // The shared window includes archives; supplemental child loads must obey
-  // the same status and Gateway-owned involvement membership as group roots.
+  // Supplemental children obey Gateway-owned involvement in every sidebar mode;
+  // the shared window also includes archives that need the selected status filter.
   const visibleRowsByKey = new Map(
     [...sessionRowsByKey].filter(
       ([key, row]) =>
-        !grouped ||
-        (sessionMatchesArchivedFilter(row, host.sessionsStatusFilter) &&
-          (!host.sessionInvolvingMeFilterActive || rowsByKey.has(key))),
+        (!grouped || sessionMatchesArchivedFilter(row, host.sessionsStatusFilter)) &&
+        (!host.sessionInvolvingMeFilterActive || rowsByKey.has(key)),
     ),
   );
   // A directly opened Home can live only in the accepted lineage descriptor,
@@ -193,6 +186,8 @@ export function projectSidebarAgentSessionRows({
     for (const row of [...scopedRootRows, ...(selectedFallback ? [selectedFallback] : [])]) {
       visibleRowsByKey.set(row.key, row);
     }
+  }
+  if (grouped || host.sessionInvolvingMeFilterActive) {
     for (const [key, row] of visibleRowsByKey) {
       const childSessions = row.childSessions?.filter(
         (childKey) =>
@@ -267,6 +262,7 @@ export function projectSidebarAgentSessionRows({
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
     isChildSessionVisible,
+    compareSessions,
     resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });
@@ -303,18 +299,9 @@ export function projectSidebarHomeSession({
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarHomeSession {
   const visibility = projectSidebarArchiveVisibility({
-    sessionData:
-      result !== undefined
-        ? {
-            childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-            loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-            loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-            childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-            sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-            sessionsAgentId: agentId,
-            sessionsResult: result,
-          }
-        : host.sessionData,
+    sessionData: host.sessionData,
+    sourceRows:
+      (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),
