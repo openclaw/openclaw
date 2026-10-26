@@ -256,7 +256,8 @@ it.each([
   const summary = query("summary")!;
   const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
   expect(label()).toBe(expected);
-  expect([icon?.getAttribute("aria-label"), icon?.getAttribute("title")]).toEqual([name, name]);
+  expect(icon?.getAttribute("aria-label")).toBe(name);
+  expect(icon?.hasAttribute("title")).toBe(false);
   expect(icon?.querySelector("svg")).not.toBeNull();
   if (phase === "start") {
     expect(summary.textContent?.trim()).toBe(expected);
