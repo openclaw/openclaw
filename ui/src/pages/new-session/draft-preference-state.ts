@@ -2,13 +2,12 @@ import { USER_PREFS_ENTRY_LIMIT } from "../../../../packages/gateway-protocol/sr
 import type { ApplicationContext } from "../../app/context.ts";
 import { saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import * as catalog from "./catalog-target.ts";
 import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { isNewSessionCatalogTarget, type NewSessionRouteData } from "./location.ts";
 import {
   decodeIdentityPreferences,
   encodeIdentityPreferences,
@@ -20,7 +19,7 @@ import {
   type NewSessionPreference,
 } from "./preferences.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 export type SubmittedWorktreePreference = NewSessionPreference & {
   // Fresh drafts know the stored override; recovery only retains the effective create input.
@@ -168,7 +167,7 @@ export class DraftPreferenceState {
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
     if (
-      catalog.isTarget(snapshot.data) ||
+      isNewSessionCatalogTarget(snapshot.data) ||
       snapshot.data?.group ||
       snapshot.pendingPlacementSessionKey
     ) {
@@ -222,7 +221,7 @@ export class DraftPreferenceState {
       this.read();
     const accepted = expected !== undefined;
     const persist =
-      !catalog.isTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
+      !isNewSessionCatalogTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
     if ((!persist && !accepted) || !source) {
       return undefined;
     }
