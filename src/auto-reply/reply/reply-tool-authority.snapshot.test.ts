@@ -111,11 +111,36 @@ const classificationEntry: SessionEntry = {
     delegatedBy: { type: "agent", id: "parent" },
   },
 };
-it.each([
-  { name: "unrelated metadata", patch: { updatedAt: 2, label: "Renamed" }, current: true },
-  {
-    name: "reordered actor keys",
-    patch: {
+function retain(entry: SessionEntry, assertCurrent = () => {}) {
+  const key = `agent:main:${entry.sessionId}`;
+  const databaseIdentity = `${entry.sessionId}-test`;
+  const retained = retainReplyToolAuthorityClassification(
+    {
+      storePath: `/synthetic/${entry.sessionId}`,
+      canonicalKey: key,
+      storeKeys: [key],
+      agentId: "main",
+      source: { agentId: "main", path: `/synthetic/${entry.sessionId}.db`, databaseIdentity },
+      sources: undefined,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+    },
+    entry,
+    assertCurrent,
+  );
+  return {
+    retained,
+    publish: (patch: Partial<SessionEntry>) => {
+      const next = { ...entry, ...patch };
+      publishRetainedSessionEntryChange(databaseIdentity, key, next, entry, true, next);
+    },
+  };
+}
+it.each<[string, Partial<SessionEntry>, boolean]>([
+  ["unrelated metadata", { updatedAt: 2, label: "Renamed" }, true],
+  [
+    "reordered actor keys",
+    {
       createdActor: {
         delegatedBy: { id: "parent", type: "agent" },
         id: "creator",
@@ -123,110 +148,62 @@ it.each([
         type: "human",
       },
     },
-    current: true,
-  },
-  { name: "session identity", patch: { sessionId: "replacement" }, current: false },
-  { name: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
-  { name: "sandbox requirement", patch: { sandbox: undefined }, current: false },
-  { name: "sandbox mode", patch: { sandboxMode: undefined }, current: false },
-  {
-    name: "creator identity",
-    patch: { createdActor: { ...classificationEntry.createdActor!, id: "replacement" } },
-    current: false,
-  },
-  {
-    name: "nested creator identity",
-    patch: {
+    true,
+  ],
+  ["session identity", { sessionId: "replacement" }, false],
+  ["lifecycle", { lifecycleRevision: "replacement" }, false],
+  ["sandbox requirement", { sandbox: undefined }, false],
+  ["sandbox mode", { sandboxMode: undefined }, false],
+  [
+    "creator identity",
+    { createdActor: { ...classificationEntry.createdActor!, id: "replacement" } },
+    false,
+  ],
+  [
+    "nested creator identity",
+    {
       createdActor: {
         ...classificationEntry.createdActor!,
         delegatedBy: { type: "human", source: "profile", id: "creator" },
       },
     },
-    current: false,
-  },
-  {
-    name: "explicit undefined actor property",
-    patch: { createdActor: { ...classificationEntry.createdActor!, label: undefined } },
-    current: false,
-  },
-  { name: "removed creator", patch: { createdActor: undefined }, current: false },
-] satisfies { name: string; patch: Partial<SessionEntry>; current: boolean }[])(
-  "retained classification observes $name on publication",
-  ({ patch, current }) => {
-    const original = {
-      storePath: "/synthetic/classification",
-      canonicalKey: "agent:main:classification",
-      storeKeys: ["agent:main:classification"],
-      agentId: "main",
-      source: {
-        agentId: "main",
-        path: "/synthetic/classification.db",
-        databaseIdentity: "classification-test",
-      },
-      sources: undefined,
-      sessionId: classificationEntry.sessionId,
-      lifecycleRevision: classificationEntry.lifecycleRevision,
-    };
-    const retained = retainReplyToolAuthorityClassification(
-      original,
-      classificationEntry,
-      () => {},
-    );
-    expect(retained).toBeDefined();
-    try {
-      const entry = { ...classificationEntry, ...patch };
-      publishRetainedSessionEntryChange(
-        "classification-test",
-        original.canonicalKey,
-        entry,
-        classificationEntry,
-        true,
-        entry,
-      );
-      if (current) {
-        expect(() => retained!.assertCurrent()).not.toThrow();
-      } else {
-        expect(() => retained!.assertCurrent()).toThrow("classification session changed");
-      }
-    } finally {
-      retained?.release();
+    false,
+  ],
+  [
+    "explicit undefined actor property",
+    { createdActor: { ...classificationEntry.createdActor!, label: undefined } },
+    false,
+  ],
+  ["removed creator", { createdActor: undefined }, false],
+])("retained classification observes %s on publication", (_name, patch, current) => {
+  const { retained, publish } = retain(classificationEntry);
+  expect(retained).toBeDefined();
+  try {
+    publish(patch);
+    if (current) {
+      expect(() => retained!.assertCurrent()).not.toThrow();
+    } else {
+      expect(() => retained!.assertCurrent()).toThrow("classification session changed");
     }
-  },
-);
+  } finally {
+    retained?.release();
+  }
+});
 it("treats absent and undefined classification fields equally but still checks live authority", () => {
   const entry: SessionEntry = { sessionId: "optional", updatedAt: 1 };
   let active = true;
-  const original = {
-    storePath: "/synthetic/optional",
-    canonicalKey: "agent:main:optional",
-    storeKeys: ["agent:main:optional"],
-    agentId: "main",
-    source: { agentId: "main", path: "/synthetic/optional.db", databaseIdentity: "optional-test" },
-    sources: undefined,
-    sessionId: entry.sessionId,
-    lifecycleRevision: undefined,
-  };
-  const retained = retainReplyToolAuthorityClassification(original, entry, () => {
+  const { retained, publish } = retain(entry, () => {
     if (!active) {
       throw new Error("Caller revoked");
     }
   });
   try {
-    const next = {
-      ...entry,
+    publish({
       sandbox: undefined,
       sandboxMode: undefined,
       lifecycleRevision: undefined,
       createdActor: undefined,
-    };
-    publishRetainedSessionEntryChange(
-      "optional-test",
-      original.canonicalKey,
-      next,
-      entry,
-      true,
-      next,
-    );
+    });
     expect(() => retained!.assertCurrent()).not.toThrow();
     active = false;
     expect(() => retained!.assertCurrent()).toThrow("Caller revoked");

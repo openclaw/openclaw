@@ -28,30 +28,24 @@ import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript
 import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
-import {
-  baseParams,
-  createInboundTurn,
-  createSessionTurn,
-  createProviderSurface,
-} from "./get-reply-run.test-support.js";
+import { baseParams, createProviderSurface } from "./get-reply-run.test-support.js";
 
+type ReplyParams = Parameters<typeof runPreparedReply>[0];
 export function registerPendingRequesterAuthorityCases({
   runPrepared,
   loadSessionEntryMock,
   requireRunReplyAgentCall,
   turn,
 }: {
-  runPrepared: (
-    overrides?: Partial<Parameters<typeof runPreparedReply>[0]>,
-  ) => ReturnType<typeof runPreparedReply>;
+  runPrepared: (overrides?: Partial<ReplyParams>) => ReturnType<typeof runPreparedReply>;
   loadSessionEntryMock: { mockReturnValue(value: SessionEntry): unknown };
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: (
     body: string,
-    common: Parameters<typeof runPreparedReply>[0]["ctx"],
-    session?: Partial<Parameters<typeof runPreparedReply>[0]["sessionCtx"]>,
-    inbound?: Partial<Parameters<typeof runPreparedReply>[0]["ctx"]>,
-  ) => Pick<Parameters<typeof runPreparedReply>[0], "ctx" | "sessionCtx">;
+    common: ReplyParams["ctx"],
+    session?: Partial<ReplyParams["sessionCtx"]>,
+    inbound?: Partial<ReplyParams["ctx"]>,
+  ) => Pick<ReplyParams, "ctx" | "sessionCtx">;
 }): void {
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
@@ -91,49 +85,34 @@ export function registerPendingRequesterAuthorityCases({
     });
   });
 
-  it.each([
-    {
-      name: "direct From without sender fields",
-      context: { ChatType: "direct", From: " discord:alice " },
-      senderId: "discord:alice",
-      senderE164: undefined,
-    },
-    {
-      name: "direct From with blank sender fields",
-      context: { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
-      senderId: "discord:alice",
-      senderE164: undefined,
-    },
-    {
-      name: "group input without a sender",
-      context: { ChatType: "group", From: "discord:alice" },
-      senderId: undefined,
-      senderE164: undefined,
-    },
-    {
-      name: "conversation-shaped From without chat type",
-      context: { From: "discord:channel:123" },
-      senderId: undefined,
-      senderE164: undefined,
-    },
-    {
-      name: "explicit raw sender fields",
-      context: {
+  type IdentityCase = [string, ReplyParams["ctx"], string?, string?];
+  it.each<IdentityCase>([
+    ["direct From", { ChatType: "direct", From: " discord:alice " }, "discord:alice"],
+    [
+      "blank sender",
+      { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
+      "discord:alice",
+    ],
+    ["senderless group", { ChatType: "group", From: "discord:alice" }],
+    ["conversation From", { From: "discord:channel:123" }],
+    [
+      "raw sender",
+      {
         ChatType: "direct",
         From: "discord:alice",
         SenderId: "transport-identity",
         SenderE164: "+15550100100",
       },
-      senderId: "transport-identity",
-      senderE164: "+15550100100",
-    },
-    {
-      name: "phone identity without a sender id",
-      context: { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
-      senderId: undefined,
-      senderE164: "+15550100100",
-    },
-  ])("captures requester identity for $name", async ({ context, senderId, senderE164 }) => {
+      "transport-identity",
+      "+15550100100",
+    ],
+    [
+      "phone only",
+      { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
+      undefined,
+      "+15550100100",
+    ],
+  ])("captures requester identity for %s", async (_name, context, senderId, senderE164) => {
     const params = baseParams();
     params.command.senderId = "configured-owner-alias";
     await runPrepared({
@@ -147,8 +126,7 @@ export function registerPendingRequesterAuthorityCases({
       readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder),
     ]) {
       expect(origin).toBeDefined();
-      expect(origin?.senderId).toBe(senderId);
-      expect(origin?.senderE164).toBe(senderE164);
+      expect([origin?.senderId, origin?.senderE164]).toEqual([senderId, senderE164]);
     }
   });
   it.each(["fresh-non-owner", "fresh-owner", "inter-session", "replay"] as const)(
@@ -231,19 +209,13 @@ export function registerPendingRequesterAuthorityCases({
           sessionKey,
           sessionId,
           sessionEntry,
-          ctx: {
-            ...createInboundTurn("new request", "discord", "group"),
+          ...turn("new request", {
+            ...createProviderSurface("discord"),
+            ChatType: "group",
             SenderId: "sender",
             InputProvenance: provenance,
-          },
-          sessionCtx: {
-            ...createSessionTurn("new request", "discord", "group"),
-            SenderId: "sender",
-            InputProvenance: provenance,
-          },
-          opts: {
-            suppressNextUserMessagePersistence: kind === "replay",
-          },
+          }),
+          opts: { suppressNextUserMessagePersistence: kind === "replay" },
         });
         expect(runReplyAgent).toHaveBeenCalledOnce();
         await captureRequesterContinuationCaller({

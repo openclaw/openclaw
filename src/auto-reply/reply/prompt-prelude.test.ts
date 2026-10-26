@@ -163,72 +163,58 @@ it("labels the current message after thread starter", async () => {
   expect(envelope.transcriptCommandBody).toBe("Can you pick a date?");
 });
 
-it("keeps recent room history in the initial prompt but not the resumed prompt", async () => {
-  const sessionCtx = context("Current room event", {
-    Provider: "slack",
-    ChatType: "group",
-    InboundEventKind: "room_event",
-    MessageSid: "35676",
-    SenderName: "Alice",
-    InboundHistory: [{ sender: "Bob", body: "Earlier room activity", messageId: "35675" }],
-    SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
-  });
-  const envelope = await envelopeFor(
-    sessionCtx,
-    { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
-    { threadContextNote: "Thread note", systemEventBlocks: ["System event"] },
-  );
-
-  expect(envelope).toMatchObject({
-    prefixedCommandBody: "#35676 Alice: Current room event",
-    queuedBody: "#35676 Alice: Current room event",
-    transcriptCommandBody: "#35676 Alice: Current room event",
-  });
-  expect(envelope.currentInboundContext?.text.split("Earlier room activity")).toHaveLength(2);
-  expect(envelope.currentInboundContext?.resumableText).not.toContain("Earlier room activity");
-  for (const text of [
-    envelope.currentInboundContext?.text,
-    envelope.currentInboundContext?.resumableText,
-  ]) {
-    expect(text).toContain("Conversation info:");
-    expect(text).toContain("Thread note");
-    expect(text).toContain("System event");
-    expect(text).not.toContain("Current room event");
-    expect(text).not.toContain(CURRENT_MESSAGE_MARKER);
-  }
-  expect(envelope.currentInboundContext?.fragments).toEqual(
-    expect.arrayContaining([
-      { kind: "conversation-data", text: "Thread note" },
-      { kind: "conversation-data", text: "System event" },
-    ]),
-  );
-});
-
-it("uses the raw current body for room-event current event text", async () => {
-  const sessionCtx = context("[Chat history]\nAlice: old context\n\nBob: current note", {
-    RawBody: "current note",
-    CommandBody: "current note",
-    Provider: "webchat",
-    Surface: "webchat",
-    ChatType: "group",
-    InboundHistory: [{ sender: "Alice", body: "old context" }],
-    InboundEventKind: "room_event",
-    MessageSid: "2002",
-    SenderName: "Bob",
-  });
-
-  const envelope = await envelopeFor(sessionCtx);
-
-  expect(envelope.currentInboundContext?.text).toContain("Room context:");
-  expect(envelope.currentInboundContext?.text).toContain("Alice: old context");
-  expect(envelope.queuedBody).toBe("#2002 Bob: current note");
-  expect(envelope.currentInboundContext?.text).toContain(
-    "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
-  );
-  expect(envelope.currentInboundContext?.text).not.toContain("message(action=send)");
-  expect(envelope.currentInboundContext?.text).not.toContain("your final text here stays private");
-  expect(envelope.queuedBody).not.toContain("[Chat history]");
-});
+it.each(["message_tool_only", "automatic"] as const)(
+  "projects raw room events separately from resumable history with %s delivery",
+  async (sourceReplyDeliveryMode) => {
+    const Provider = sourceReplyDeliveryMode === "automatic" ? "webchat" : "slack";
+    const envelope = await envelopeFor(
+      context("[Chat history]\nAlice: old context\n\nBob: current note", {
+        RawBody: "current note",
+        CommandBody: "current note",
+        Provider,
+        Surface: Provider,
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        MessageSid: "2002",
+        SenderName: "Bob",
+        InboundHistory: [{ sender: "Alice", body: "old context", messageId: "2001" }],
+        SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+      }),
+      { opts: { sourceReplyDeliveryMode } },
+      { threadContextNote: "Thread note", systemEventBlocks: ["System event"] },
+    );
+    expect(envelope).toMatchObject({
+      prefixedCommandBody: "#2002 Bob: current note",
+      queuedBody: "#2002 Bob: current note",
+      transcriptCommandBody: "#2002 Bob: current note",
+    });
+    const { text, resumableText, fragments } = envelope.currentInboundContext!;
+    expect(text).toContain("Room context:");
+    expect(text).toContain("Alice: old context");
+    expect(text.split("old context")).toHaveLength(2);
+    expect(resumableText).not.toContain("old context");
+    expect(text).toContain(
+      "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
+    );
+    for (const directive of ["message(action=send)", "your final text here stays private"]) {
+      expect(text.includes(directive)).toBe(sourceReplyDeliveryMode === "message_tool_only");
+    }
+    for (const prompt of [text, resumableText]) {
+      for (const part of ["Conversation info:", "Thread note", "System event"]) {
+        expect(prompt).toContain(part);
+      }
+      expect(prompt).not.toContain("current note");
+      expect(prompt).not.toContain(CURRENT_MESSAGE_MARKER);
+    }
+    expect(fragments).toEqual(
+      expect.arrayContaining([
+        { kind: "conversation-data", text: "Thread note" },
+        { kind: "conversation-data", text: "System event" },
+      ]),
+    );
+    expect(envelope.queuedBody).not.toContain("[Chat history]");
+  },
+);
 
 it("keeps completed audio transcripts in room-event bodies", async () => {
   const transcript = "turn left at the next light";
