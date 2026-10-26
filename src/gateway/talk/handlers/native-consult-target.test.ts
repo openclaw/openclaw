@@ -1,6 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { withinTest } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -166,6 +167,8 @@ function registerQueuedRun(
 const participationRequired = {
   details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
 };
+const privateActor = { type: "human", source: "profile", id: "another-person" } as const;
+const replyIdentity = { sessionKey: "global", agentId: "voice", resetTriggered: false };
 const steerRelay = (sessionId: string, handlers?: GatewayRequestHandlers) =>
   dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }, handlers);
 
@@ -183,6 +186,10 @@ function makeConsultBridge(submitToolResult = () => undefined) {
 }
 
 type RunTargetParams = Parameters<typeof resolveOwnedActiveTalkRunTarget>[0];
+function sessionScope(target: RunTargetParams["sessionTarget"]) {
+  return { agentId: target.agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
+}
+
 function runTarget(
   sessionTarget: RunTargetParams["sessionTarget"],
   scope: RunTargetParams["scope"] = { kind: "session" },
@@ -211,10 +218,8 @@ function control(
 
 function unrelatedRun(storePath: string, sessionId: string, runId: string) {
   const operation = createReplyOperation({
-    sessionKey: "global",
+    ...replyIdentity,
     sessionId,
-    agentId: "voice",
-    resetTriggered: false,
     target: captureSessionTarget({
       storeScope: `${storePath}.unrelated`,
       sessionKey: "global",
@@ -400,7 +405,7 @@ it("retains the opaque relay owner when Talk defaults change without a key", asy
       sessionId: "private-primary",
       updatedAt: 1,
       visibility: "draft",
-      createdActor: { type: "human", source: "profile", id: "another-person" },
+      createdActor: privateActor,
     },
   );
   config = { ...config, talk: { agentId: "primary" } };
@@ -418,15 +423,11 @@ it("enforces the retained relay's sharing policy without a key", async () => {
       sessionId: "shared-before-call",
       updatedAt: 1,
       visibility: "shared",
-      createdActor: { type: "human", source: "profile", id: "another-person" },
+      createdActor: privateActor,
     },
   );
   const { sessionId, target } = await createRelayCall();
-  const scope = {
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-    storePath: target.storePath,
-  };
+  const scope = sessionScope(target);
   await replaceSessionEntry(scope, {
     ...loadSessionEntry(scope)!,
     visibility: "read-only",
@@ -466,7 +467,7 @@ it("fences an opaque relay record replaced after authorization", async () => {
 it("rechecks RPC sharing authorization after the control runtime import", async () => {
   config.session = { scope: "global" };
   const target = await prepareTalkSessionTarget(config, "main");
-  const scope = { agentId: "voice", sessionKey: "global", storePath: target.storePath };
+  const scope = sessionScope(target);
   await replaceSessionEntry(scope, {
     sessionId: "acl-session",
     updatedAt: 1,
@@ -486,7 +487,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     sessionId: "acl-session",
     updatedAt: 2,
     visibility: "read-only",
-    createdActor: { type: "human", source: "profile", id: "another-person" },
+    createdActor: privateActor,
   });
   try {
     await expect(pending).rejects.toMatchObject({
@@ -639,10 +640,8 @@ it.each(["source", "claim"] as const)(
     }
     const claim = await claimSessionControllerTask(registration.entry.input, (selected) => {
       createReplyOperation({
-        sessionKey: "global",
-        agentId: "voice",
+        ...replyIdentity,
         sessionId,
-        resetTriggered: false,
         upstreamAbortSignal:
           signalOwner === "source"
             ? registration.entry.input.abortSignal
@@ -706,11 +705,9 @@ it.each(["source", "claim"] as const)(
       releaseSessionControllerClaim(claim);
       await claim.settlement.promise;
       const successor = createReplyOperation({
-        sessionKey: "global",
+        ...replyIdentity,
         sessionId: resolvedSessionId,
-        agentId: "voice",
         target: registration.entry.input.mailbox.owner.target,
-        resetTriggered: false,
       });
       try {
         expect(await control(targetRun)).toMatchObject({ active: false, aborted: false });
@@ -756,10 +753,7 @@ it("restores bounded relay history after the original voice provider finishes cl
   };
   configureProvider(provider, false);
   const original = await createRelayCall({ voice: "cove", capabilities: ["voice-selection"] });
-  const originalRequest = requests[0];
-  if (!originalRequest) {
-    throw new Error("Expected original relay provider");
-  }
+  const originalRequest = expectDefined(requests[0], "original relay provider");
   originalRequest.onReady?.();
   const utterances = Array.from(
     { length: 20 },
@@ -790,11 +784,7 @@ it("restores bounded relay history after the original voice provider finishes cl
     finishClose.resolve();
     expectOk(await closing, { ok: true });
 
-    const storedSessionId = loadSessionEntry({
-      agentId: original.target.agentId,
-      sessionKey: original.target.canonicalKey,
-      storePath: original.target.storePath,
-    })!.sessionId;
+    const storedSessionId = loadSessionEntry(sessionScope(original.target))!.sessionId;
     const transcript = readSessionTranscriptMessageEvents({
       agentId: original.target.agentId,
       sessionId: storedSessionId,
@@ -881,12 +871,11 @@ it.for(["status", "cancelled", "successor"] as const)(
     void consult.catch(() => {});
     try {
       const runId = await withinTest(
-        Promise.race([
+        awaitGateBeforeSettlement(
           entered.promise,
-          consult.then(() => {
-            throw new Error("Consult completed before voice registration");
-          }),
-        ]),
+          consult,
+          "Consult completed before voice registration",
+        ),
         signal,
       );
       expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
