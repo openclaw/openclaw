@@ -188,6 +188,18 @@ function toolParameterProperties(tool: ReturnType<typeof createTool>) {
   return parameters.properties ?? {};
 }
 
+function expectAudioReferences(tool: ReturnType<typeof createTool>, exposed: boolean) {
+  const properties = toolParameterProperties(tool);
+  for (const name of ["audioRef", "audioRefs", "audioRoles"]) {
+    if (exposed) {
+      expect(properties).toHaveProperty(name);
+      expect(properties[name]).toBeDefined();
+    } else {
+      expect(properties).not.toHaveProperty(name);
+    }
+  }
+}
+
 function resetVideoGenerateMocks(providerEnvVars: readonly string[]) {
   vi.restoreAllMocks();
   for (const key of providerEnvVars) {
@@ -266,13 +278,7 @@ describe("createVideoGenerateTool", () => {
         })[0]!;
       };
       const cold = construct("video-schema-first");
-      for (const name of ["audioRef", "audioRefs", "audioRoles"]) {
-        if (referenceAudioInputs) {
-          expect(cold.parameters).toHaveProperty(`properties.${name}`);
-        } else {
-          expect(cold.parameters).not.toHaveProperty(`properties.${name}`);
-        }
-      }
+      expectAudioReferences(cold, referenceAudioInputs);
       const bytes = JSON.stringify(cold.parameters);
       using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
 
@@ -328,12 +334,8 @@ describe("createVideoGenerateTool", () => {
       );
       createVideoGenerateTool({ config, workspaceDir });
       normalize.mockClear();
-      const properties = toolParameterProperties(createTool({ config, workspaceDir }));
+      expectAudioReferences(createTool({ config, workspaceDir }), phase.exposed);
       normalizationCounts.push(normalize.mock.calls.length);
-
-      for (const key of ["audioRef", "audioRefs", "audioRoles"]) {
-        expect(properties[key] !== undefined).toBe(phase.exposed);
-      }
     }
     expect(normalizationCounts[2]).toBeLessThanOrEqual(normalizationCounts[1]!);
     expect(normalizationCounts[3]).toBeLessThanOrEqual(normalizationCounts[2]!);
@@ -342,37 +344,27 @@ describe("createVideoGenerateTool", () => {
   it.each(["environment", "config"] as const)(
     "exposes reference-audio params with %s auth",
     (auth) => {
-      const agents = { defaults: { mediaModels: { video: { primary: "runway/gen4.5" } } } };
+      const defaults = { mediaModels: { video: { primary: "runway/gen4.5" } } };
       let config: OpenClawConfig;
       if (auth === "environment") {
         vi.stubEnv("FAL_KEY", "test-fal-key");
-        config = configWithDefaults(agents.defaults);
+        config = configWithDefaults(defaults);
       } else {
         config = {
-          agents,
+          agents: { defaults },
           models: {
             providers: {
-              fal: {
-                apiKey: "test-fal-key",
-                baseUrl: "https://fal.example",
-                models: [],
-              },
+              fal: { apiKey: "test-fal-key", baseUrl: "https://fal.example", models: [] },
             },
           },
         };
       }
-      const properties = toolParameterProperties(createTool({ config }));
-      for (const key of ["audioRef", "audioRefs", "audioRoles"]) {
-        expect(properties[key]).toBeDefined();
-      }
+      expectAudioReferences(createTool({ config }), true);
     },
   );
 
   it("runs explicit deployment refs and preserves timeout-only video defaults", async () => {
-    const provider = mockProvider({
-      models: [],
-      isConfigured: () => true,
-    });
+    const provider = mockProvider({ models: [], isConfigured: () => true });
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockImplementation(
       () => {
         throw new Error("prepared video execution should not rediscover runtime providers");
@@ -483,9 +475,7 @@ describe("createVideoGenerateTool", () => {
       videos: [videoAsset("valid", "valid.mp4"), { mimeType: "video/mp4" }],
     });
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
-    const tool = createConfiguredVideoTool("qwen/wan2.6-t2v");
-
-    await expect(tool.execute("call-invalid-asset", { prompt: "two videos" })).rejects.toThrow(
+    await expect(executeVideo("qwen/wan2.6-t2v", { prompt: "two videos" })).rejects.toThrow(
       "Provider qwen returned a video asset with neither buffer nor url — cannot deliver.",
     );
     expect(saveMediaBuffer).not.toHaveBeenCalled();
@@ -494,9 +484,7 @@ describe("createVideoGenerateTool", () => {
   it("starts background generation and wakes the session with URL and saved video names", async () => {
     const url = "https://example.com/generated-lobster.mp4";
     const name = "saved-lobster.mp4";
-    taskExecutorMocks.createOperation.mockReturnValue({
-      taskId: "task-123",
-    });
+    taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-123" });
     const wakeSpy = wakeCompletion();
     const savedId = "saved-lobster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.mp4";
     const savedPath = `/tmp/${savedId}`;
@@ -698,10 +686,7 @@ describe("createVideoGenerateTool", () => {
       }),
     });
 
-    const result = await createConfiguredVideoTool("video-plugin/text-video").execute("call-1", {
-      action: "list",
-    });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const { text } = await executeVideo("video-plugin/text-video", { action: "list" });
     expect(text).toContain(
       "model image-video: modes=imageToVideo, maxInputImages=1, maxDurationSeconds=15, supportedDurationSeconds=5/10/15, resolution, aspectRatio",
     );
