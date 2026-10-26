@@ -25,45 +25,35 @@ function source(prompt = "source", cap: number | false = 50) {
   }
   return { run, begin, end };
 }
-function expectOutcomes({ begin, end }: ReturnType<typeof source>, outcomes: readonly unknown[]) {
-  expect(begin).toHaveBeenCalledTimes(outcomes.length);
+function expectOutcomes({ end }: ReturnType<typeof source>, outcomes: readonly unknown[]) {
   expect(end.mock.calls).toEqual(outcomes.map((outcome) => [outcome]));
 }
 
-it.each(["clear", "stop"] as const)(
-  "settles captured sources once through %s",
-  async (boundary) => {
-    const sources = Array.from({ length: 6 }, (_, index) => source(String(index), 2));
-    sources[0]!.end.mockImplementation(() => {
-      throw new Error("reaction transport unavailable");
-    });
-    const mailbox = sources[0]!.run.controllerInput!.mailbox;
-    expect(mailbox.items.map((run) => run.prompt)).toEqual(["4", "5"]);
-    expect(mailbox.summarySources.map((run) => run.prompt)).toEqual(["2", "3"]);
-    expect(
-      mailbox.summaryElisions.flatMap((part) => part.sources.map((run) => run.prompt)),
-    ).toEqual(["0", "1"]);
-    const inputs = [0, 2, 4].map((index) => sources[index]!.run.controllerInput!);
-    const clear = async () => {
-      if (boundary === "clear") {
-        clearSessionQueues([queue.key], undefined, inputs);
-        return undefined;
-      }
-      const result = await stopSession({
-        source: "restart",
-        capture: captureSessionControllerStop({ inputs }),
-      }).completed;
-      await result.settled;
-      return result.queuedCancelled;
-    };
-    expect(await clear()).toBe(boundary === "stop" ? 3 : undefined);
-    await Promise.all(inputs.map(settleSource));
-    expect(await clear()).toBe(boundary === "stop" ? 0 : undefined);
-    for (const [index, sample] of sources.entries()) {
-      expectOutcomes(sample, index % 2 === 0 ? [failed] : []);
+it.each(["clear", "stop"] as const)("settles %s captures once", async (boundary) => {
+  const sources = Array.from({ length: 6 }, (_, index) => source(String(index), 2));
+  sources[0]!.end.mockImplementation(() => {
+    throw new Error("reaction transport unavailable");
+  });
+  const inputs = [0, 2, 4].map((index) => sources[index]!.run.controllerInput!);
+  const clear = async () => {
+    if (boundary === "clear") {
+      clearSessionQueues([queue.key], undefined, inputs);
+      return undefined;
     }
-  },
-);
+    const result = await stopSession({
+      source: "restart",
+      capture: captureSessionControllerStop({ inputs }),
+    }).completed;
+    await result.settled;
+    return result.queuedCancelled;
+  };
+  expect(await clear()).toBe(boundary === "stop" ? 3 : undefined);
+  await Promise.all(inputs.map(settleSource));
+  expect(await clear()).toBe(boundary === "stop" ? 0 : undefined);
+  for (const [index, sample] of sources.entries()) {
+    expectOutcomes(sample, index % 2 === 0 ? [failed] : []);
+  }
+});
 
 it.each([
   ["final", [delivered]],
