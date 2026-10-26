@@ -39,24 +39,22 @@ export function createHarness(params?: {
     answer: lane(answer),
     reasoning: lane(reasoning),
   };
-  const sendPayload = vi
-    .fn<DelivererOptions["sendPayload"]>()
-    .mockResolvedValue({ visibleReplySent: true });
-  const editStreamMessage = vi.fn().mockResolvedValue(undefined);
-  const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
-  const createPromptContextSequence = () =>
-    createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
-  const markDelivered = vi.fn();
-
+  const mocks = {
+    sendPayload: vi
+      .fn<DelivererOptions["sendPayload"]>()
+      .mockResolvedValue({ visibleReplySent: true }),
+    editStreamMessage: vi.fn().mockResolvedValue(undefined),
+    recordPromptContextPreview: vi.fn<PromptContextRecord>().mockResolvedValue(true),
+    markDelivered: vi.fn(),
+  };
   const deliverLaneText = createLaneTextDeliverer({
+    ...mocks,
     lanes,
-    sendPayload,
-    editStreamMessage,
-    createPromptContextSequence,
+    createPromptContextSequence: () =>
+      createTelegramPromptContextProjectionSequence({ record: mocks.recordPromptContextPreview }),
     resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
     resolveFinalPresentationText: params?.resolveFinalPresentationText,
     log: () => {},
-    markDelivered,
   });
 
   return {
@@ -64,10 +62,7 @@ export function createHarness(params?: {
     lanes,
     answer,
     reasoning,
-    sendPayload,
-    editStreamMessage,
-    recordPromptContextPreview,
-    markDelivered,
+    ...mocks,
   };
 }
 

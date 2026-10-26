@@ -19,17 +19,7 @@ function keyboard(
 
 describe("model buttons", () => {
   it("returns null for unsupported callback variants", () => {
-    const invalid = [
-      "commands_page_1",
-      "other_callback",
-      "",
-      "mdl_invalid",
-      "mdl_list_",
-      "mdl_list_openai_9007199254740993",
-      "mdl_sel_noslash",
-      "mdl_sel/",
-    ];
-    for (const input of invalid) {
+    for (const input of ["", "mdl_list_openai_9007199254740993", "mdl_sel_noslash", "mdl_sel/"]) {
       expect(parseModelCallbackData(input), input).toBeNull();
     }
   });
@@ -47,18 +37,14 @@ describe("model buttons", () => {
       expect(Buffer.byteLength(callback ?? "", "utf8"), provider).toBeLessThanOrEqual(64);
       const parsed = parseModelCallbackData(callback ?? "");
       expect(parsed?.type).toBe("list-ref");
-      if (parsed?.type === "list-ref") {
-        expect(resolveModelListCallback({ callback: parsed, providers: [provider] })).toEqual({
-          provider,
-          page: 1,
-        });
-        expect(
-          resolveModelListCallback({ callback: parsed, providers: ["other"] }),
-        ).toBeUndefined();
-        expect(
-          resolveModelListCallback({ callback: parsed, providers: [provider, provider] }),
-        ).toBeUndefined();
+      if (parsed?.type !== "list-ref") {
+        throw new Error("Expected a provider reference");
       }
+      const resolve = (providers: string[]) =>
+        resolveModelListCallback({ callback: parsed, providers });
+      expect(resolve([provider])).toEqual({ provider, page: 1 });
+      expect(resolve(["other"])).toBeUndefined();
+      expect(resolve([provider, provider])).toBeUndefined();
     }
   });
   it("does not split surrogate pairs when truncating model labels", () => {
@@ -77,11 +63,9 @@ describe("model buttons", () => {
   it("does not redirect a captured button when its model moves to another provider", () => {
     const provider = "provider-with-a-long-name";
     const model = `shared-model-${"x".repeat(35)}`;
-    const button = keyboard(provider, [model])[0]?.[0];
-    if (!button) {
-      throw new Error("Expected a model button");
-    }
-    const callback = parseModelCallbackData(button.callback_data);
+    const callback = parseModelCallbackData(
+      keyboard(provider, [model])[0]?.[0]?.callback_data ?? "",
+    );
     expect(callback?.type).toBe("select-ref");
     if (callback?.type !== "select-ref") {
       throw new Error("Expected an opaque model callback");

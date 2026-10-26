@@ -11,20 +11,14 @@ const statusTable = {
   headers: ["Key"],
   rows: [["Gateway"]],
 };
-const statusPayload = (text: string) => ({
+const presentationPayload = (
+  text: string,
+  presentationTextMode?: "fallback",
+  blocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [],
+) => ({
   text,
-  presentationTextMode: "fallback" as const,
-  presentation: { blocks: [statusTable] },
-});
-const canonicalPayload = (presentationTextMode?: "fallback") => ({
-  text: "Summary",
   presentationTextMode,
-  presentation: {
-    blocks: [
-      statusTable,
-      { type: "buttons" as const, buttons: [{ label: "Unavailable", value: "x", disabled: true }] },
-    ],
-  },
+  presentation: { blocks: [statusTable, ...blocks] },
 });
 const renderFinal = (payload: ReplyPayload) =>
   resolveFinalTelegramPresentationText({
@@ -38,7 +32,7 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
     async (kind) => {
       const text = kind === "text-only" ? "Hello final" : "Status summary as plain text";
       const expected = kind === "rich" ? "Final native table" : text;
-      const payload = kind === "text-only" ? { text } : statusPayload(text);
+      const payload = kind === "text-only" ? { text } : presentationPayload(text, "fallback");
       const resolveFinalPresentationText = vi.fn(
         (input: { payload: ReplyPayload; text: string }) => {
           expect(input.payload.presentationTextMode).toBe("fallback");
@@ -67,25 +61,20 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
 });
 describe("streamed final canonical presentation text", () => {
   it.each([undefined, "fallback"] as const)("renders capability-degraded controls (%s)", (mode) => {
-    const rendered = renderFinal(canonicalPayload(mode));
+    const rendered = renderFinal(
+      presentationPayload("Summary", mode, [
+        { type: "buttons", buttons: [{ label: "Unavailable", value: "x", disabled: true }] },
+      ]),
+    );
     for (const text of ["<table>", "Unavailable", ...(mode ? [] : ["Summary"])]) {
       expect(rendered).toContain(text);
     }
   });
 
   it("does not duplicate a dropped-control label", () => {
-    const payload: ReplyPayload = {
-      text: "Status summary\n\n- Copy manually",
-      presentation: {
-        blocks: [
-          statusTable,
-          {
-            type: "buttons",
-            buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
-          },
-        ],
-      },
-    };
+    const payload = presentationPayload("Status summary\n\n- Copy manually", undefined, [
+      { type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] },
+    ]);
     markTelegramDroppedControlFallback(payload, "Status summary", payload.text ?? "");
     const rendered = renderFinal(payload);
     expect(rendered).toContain("<table>");

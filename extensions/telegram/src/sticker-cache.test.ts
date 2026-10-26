@@ -32,17 +32,14 @@ describe("sticker-cache", () => {
 
   it("settles only after the backing write commits", async () => {
     const backingStore = fixture.store;
-    const original = sticker("original-file", {
-      fileUniqueId: "delayed-unique",
+    const expected = sticker("delayed-file");
+    const original = {
+      ...expected,
+      fileId: "original-file",
       description: "Original sticker",
-      setName: "OriginalSet",
       cachedAt: "2026-01-26T11:00:00.000Z",
-    });
-    const expected = sticker("delayed-file", {
-      fileUniqueId: "delayed-unique",
-      description: "A delayed sticker",
-      cachedAt: "2026-01-26T12:00:00.000Z",
-    });
+      setName: "OriginalSet",
+    };
     await stickerCache.cacheSticker(original);
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
@@ -64,14 +61,14 @@ describe("sticker-cache", () => {
       await entered.promise;
       await setImmediate();
       expect(settled).toBe(false);
-      expect(await stickerCache.getCachedSticker("delayed-unique")).toMatchObject(original);
+      expect(await stickerCache.getCachedSticker(expected.fileUniqueId)).toMatchObject(original);
     } finally {
       release.resolve();
       await pending;
     }
     resetPluginStateStoreForTests();
     fixture.install(fixture.open());
-    expect(await stickerCache.getCachedSticker("delayed-unique")).toStrictEqual(expected);
+    expect(await stickerCache.getCachedSticker(expected.fileUniqueId)).toStrictEqual(expected);
   });
 
   describe("searchStickers", () => {
@@ -93,11 +90,8 @@ describe("sticker-cache", () => {
     });
   });
 
-  it("returns count 0 when cache is empty", async () => {
+  it("reports empty and populated cache stats with timestamp bounds", async () => {
     expect(await stickerCache.getCacheStats()).toEqual({ count: 0 });
-  });
-
-  it("returns correct stats with cached stickers", async () => {
     for (const [fileId, day] of [
       ["old", "20"],
       ["new", "26"],

@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 const { emitTelegramLiveLocationMessageHook } = await import("./location-message-hook.js");
+const coordinates = { latitude: 43.8376, longitude: 18.4534 };
 
 function emitLocation(
   fields: Partial<Message> = {},
@@ -30,7 +31,7 @@ function emitLocation(
       date: 1_786_094_460,
       edit_date: 1_786_094_520,
       from: { id: 789, is_bot: false, first_name: "Pat" },
-      location: { latitude: 43.8376, longitude: 18.4534, live_period: 900 },
+      location: { ...coordinates, live_period: 900 },
       ...fields,
     } as Message,
   });
@@ -54,17 +55,10 @@ describe("Telegram location message hooks", () => {
     [
       "edited_message",
       9002,
-      {
-        location: {
-          latitude: 43.8376,
-          longitude: 18.4534,
-          horizontal_accuracy: 12,
-          live_period: 900,
-        },
-      },
+      { location: { ...coordinates, horizontal_accuracy: 12, live_period: 900 } },
       true,
     ],
-    ["edited_message", 9003, { location: { latitude: 43.8376, longitude: 18.4534 } }, false],
+    ["edited_message", 9003, { location: coordinates }, false],
     [
       "edited_channel_post",
       9004,
@@ -85,8 +79,7 @@ describe("Telegram location message hooks", () => {
           senderId: "789",
           timestamp: 1_786_094_520_000,
           location: expect.objectContaining({
-            latitude: 43.8376,
-            longitude: 18.4534,
+            ...coordinates,
             isLive,
             ...(id === 9002 ? { accuracy: 12, source: "live", livePeriodSeconds: 900 } : {}),
           }),

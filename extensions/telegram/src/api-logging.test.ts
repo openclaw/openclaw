@@ -8,20 +8,13 @@ const rejecting = (error: unknown) => async () => {
   throw error;
 };
 const safeFailure = 'network request failed transport={"code":"ECONNRESET","syscall":"read"}';
-
-async function expectLogged(error: HttpError, suffix = "", useRuntime = false) {
-  const logger = useRuntime ? vi.fn() : logs.apiError;
-  await expect(
-    withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      fn: rejecting(error),
-      ...(useRuntime ? { runtime: { error: logger } } : {}),
-    }),
-  ).rejects.toBe(error);
-  expect(logger).toHaveBeenCalledExactlyOnceWith(
-    `telegram sendMessage failed: network request failed${suffix}`,
-  );
-}
+const privateText = "https://example.test/bot-private-token request body";
+const transportError = () =>
+  Object.assign(new Error(privateText), {
+    code: "ECONNRESET",
+    syscall: "read",
+    address: "private-host",
+  });
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -48,31 +41,35 @@ describe("Telegram API error logging", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("retains safe transport diagnostics through grammY without logging nested request data", async () => {
-    const cause = Object.assign(new Error("https://example.test/bot-private-token request body"), {
-      code: "ECONNRESET",
-      syscall: "read",
-      address: "private-host",
-    });
-    const error = new HttpError(
-      "Network request failed: https://example.test/bot-private-token request body",
-      new TypeError("fetch failed", { cause }),
+  it.each(["nested", "unsafe-fields", "no-fields"])("redacts %s request data", async (kind) => {
+    const cause =
+      kind === "nested"
+        ? new TypeError("fetch failed", { cause: transportError() })
+        : kind === "unsafe-fields"
+          ? {
+              code: privateText,
+              syscall: privateText,
+              cause: { code: "UND_ERR_SOCKET", syscall: "connect" },
+            }
+          : new Error(privateText);
+    const error = new HttpError(privateText, cause);
+    const logger = kind === "unsafe-fields" ? vi.fn() : logs.apiError;
+    await expect(
+      withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        fn: rejecting(error),
+        ...(kind === "unsafe-fields" ? { runtime: { error: logger } } : {}),
+      }),
+    ).rejects.toBe(error);
+    const suffix =
+      kind === "nested"
+        ? ' transport={"code":"ECONNRESET","syscall":"read"}'
+        : kind === "unsafe-fields"
+          ? ' transport={"code":"UND_ERR_SOCKET","syscall":"connect"}'
+          : "";
+    expect(logger).toHaveBeenCalledExactlyOnceWith(
+      `telegram sendMessage failed: network request failed${suffix}`,
     );
-    await expectLogged(error, ' transport={"code":"ECONNRESET","syscall":"read"}');
-  });
-
-  it("does not serialize arbitrary cause fields as transport diagnostics", async () => {
-    const error = new HttpError("Network request for 'sendMessage' failed!", {
-      code: "https://example.test/bot-private-token",
-      syscall: "private request body",
-      cause: { code: "UND_ERR_SOCKET", syscall: "connect" },
-    });
-    await expectLogged(error, ' transport={"code":"UND_ERR_SOCKET","syscall":"connect"}', true);
-  });
-
-  it("does not print an HTTP error's request text when no transport fields are available", async () => {
-    const error = new HttpError("private request body", new Error("private nested request body"));
-    await expectLogged(error);
   });
 
   it.each([
@@ -88,13 +85,7 @@ describe("Telegram API error logging", () => {
     "routes failure logs (diagnostics=%s, API logging=%s, predicate=%s, HTTP=%s)",
     async (diagnostics, useApiErrorLogging, shouldLog, httpError, apiRecord, httpRecord) => {
       const error = httpError
-        ? new HttpError(
-            "private outer request text",
-            Object.assign(new Error("private nested request text"), {
-              code: "ECONNRESET",
-              syscall: "read",
-            }),
-          )
+        ? new HttpError(privateText, transportError())
         : new Error("expected API rejection");
       const request = createTelegramRequestWithDiag({
         cfg: { diagnostics: { flags: diagnostics ? ["telegram.http"] : [] } },
