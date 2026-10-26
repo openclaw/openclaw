@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveSwarmConfig } from "./swarm-config.js";
 
+type Swarm = NonNullable<NonNullable<Parameters<typeof resolveSwarmConfig>[0]>["tools"]>["swarm"];
+const withAgent = (global: Swarm, agent: Swarm) => ({
+  tools: { swarm: global },
+  agents: { entries: { main: { tools: { swarm: agent } } } },
+});
+
 describe("resolveSwarmConfig", () => {
   it("defaults on with the frozen limits", () => {
     expect(resolveSwarmConfig()).toEqual({
@@ -16,19 +22,17 @@ describe("resolveSwarmConfig", () => {
   it("merges per-agent values and clamps every number", () => {
     expect(
       resolveSwarmConfig(
-        {
-          tools: {
-            swarm: {
-              enabled: true,
-              maxConcurrent: 1,
-              maxChildrenPerGroup: 20_000,
-              maxTotalPerGroup: 2,
-              waitTimeoutSecondsMax: 100_000,
-              defaultAgentId: " reviewer ",
-            },
+        withAgent(
+          {
+            enabled: true,
+            maxConcurrent: 1,
+            maxChildrenPerGroup: 20_000,
+            maxTotalPerGroup: 2,
+            waitTimeoutSecondsMax: 100_000,
+            defaultAgentId: " reviewer ",
           },
-          agents: { entries: { main: { tools: { swarm: { maxConcurrent: 4 } } } } },
-        },
+          { maxConcurrent: 4 },
+        ),
         "main",
       ),
     ).toEqual({
@@ -58,59 +62,23 @@ describe("resolveSwarmConfig", () => {
   });
 
   it.each([
-    { name: "omitted tools", config: {}, enabled: true },
-    { name: "omitted swarm", config: { tools: {} }, enabled: true },
-    { name: "empty swarm", config: { tools: { swarm: {} } }, enabled: true },
-    {
-      name: "limits-only swarm",
-      config: { tools: { swarm: { maxConcurrent: 2 } } },
-      enabled: true,
-    },
-    { name: "boolean opt-in", config: { tools: { swarm: true } }, enabled: true },
-    { name: "boolean opt-out", config: { tools: { swarm: false } }, enabled: false },
-    {
-      name: "object opt-out",
-      config: { tools: { swarm: { enabled: false } } },
-      enabled: false,
-    },
-    {
-      name: "per-agent opt-out",
-      config: { agents: { entries: { main: { tools: { swarm: false } } } } },
-      enabled: false,
-    },
-    {
-      name: "per-agent limits inherit global opt-out",
-      config: {
-        tools: { swarm: false },
-        agents: { entries: { main: { tools: { swarm: { maxConcurrent: 2 } } } } },
-      },
-      enabled: false,
-    },
-    {
-      name: "per-agent empty object inherits global opt-out",
-      config: {
-        tools: { swarm: { enabled: false } },
-        agents: { entries: { main: { tools: { swarm: {} } } } },
-      },
-      enabled: false,
-    },
-    {
-      name: "per-agent opt-in overrides global opt-out",
-      config: {
-        tools: { swarm: false },
-        agents: { entries: { main: { tools: { swarm: true } } } },
-      },
-      enabled: true,
-    },
-    {
-      name: "per-agent object opt-out overrides global opt-in",
-      config: {
-        tools: { swarm: true },
-        agents: { entries: { main: { tools: { swarm: { enabled: false } } } } },
-      },
-      enabled: false,
-    },
-  ])("honors $name", ({ config, enabled }) => {
+    ["omitted tools", {}, true],
+    ["omitted swarm", { tools: {} }, true],
+    ["empty swarm", { tools: { swarm: {} } }, true],
+    ["limits-only swarm", { tools: { swarm: { maxConcurrent: 2 } } }, true],
+    ["boolean opt-in", { tools: { swarm: true } }, true],
+    ["boolean opt-out", { tools: { swarm: false } }, false],
+    ["object opt-out", { tools: { swarm: { enabled: false } } }, false],
+    ["per-agent opt-out", { agents: { entries: { main: { tools: { swarm: false } } } } }, false],
+    ["per-agent limits inherit global opt-out", withAgent(false, { maxConcurrent: 2 }), false],
+    ["per-agent empty object inherits global opt-out", withAgent({ enabled: false }, {}), false],
+    ["per-agent opt-in overrides global opt-out", withAgent(false, true), true],
+    [
+      "per-agent object opt-out overrides global opt-in",
+      withAgent(true, { enabled: false }),
+      false,
+    ],
+  ] as const)("honors %s", (_name, config, enabled) => {
     expect(resolveSwarmConfig(config, "main").enabled).toBe(enabled);
   });
 });
