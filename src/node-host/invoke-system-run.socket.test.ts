@@ -1,9 +1,10 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { text } from "node:stream/consumers";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as runtimeConfig from "../config/config.js";
 import {
@@ -29,24 +30,52 @@ it.runIf(process.platform !== "win32")(
           const token = "enforced-exec-host-test-token";
           const marker = path.join(dir, "executions");
           const command = ["/bin/sh", "-c", 'printf "START\\nCOMPLETE\\n" >> "$1"', "_", marker];
+          const order: string[] = [];
           const sockets: net.Socket[] = [];
+          const closes: Promise<void>[] = [];
           const failures: unknown[] = [];
           let handler = Promise.resolve();
           const server = net.createServer({ allowHalfOpen: true }, (socket) => {
             sockets.push(socket);
+            closes.push(
+              new Promise<void>((resolve) => {
+                socket.once("close", resolve);
+              }),
+            );
             socket.on("error", (error) => failures.push(error));
+            let wire = "";
+            socket.setEncoding("utf8");
+            socket.on("data", (chunk: string) => {
+              wire += chunk;
+            });
             handler = (async () => {
-              // Signed-envelope validation belongs to exec-host.socket.test.ts.
-              const envelope = JSON.parse(await text(socket)) as { requestJson: string };
+              await once(socket, "end");
+              const envelope = JSON.parse(wire) as {
+                nonce: string;
+                ts: number;
+                hmac: string;
+                requestJson: string;
+              };
+              expect(envelope.hmac).toBe(
+                crypto
+                  .createHmac("sha256", token)
+                  .update(`${envelope.nonce}:${envelope.ts}:${envelope.requestJson}`)
+                  .digest("hex"),
+              );
               const request = JSON.parse(envelope.requestJson) as ExecHostRequest;
               expect(request.command).toEqual(command);
-              const child = spawn("/bin/sh", request.command.slice(1), {
+              const [executable, ...args] = request.command;
+              assert.ok(executable, "Exec peer received an empty command");
+              const child = spawn(executable, args, {
                 cwd: dir,
                 env: { HOME: dir, PATH: "/usr/bin:/bin" },
                 stdio: "ignore",
               });
               expect(await once(child, "close")).toEqual([0, null]);
+              expect(await fs.readFile(marker, "utf8")).toBe("START\nCOMPLETE\n");
+              order.push("child-completed");
               socket.end();
+              order.push("response-dropped");
             })().catch((error: unknown) => {
               failures.push(error);
               socket.destroy();
@@ -77,6 +106,7 @@ it.runIf(process.platform !== "win32")(
             });
             await handler;
             expect(failures).toEqual([]);
+            expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
             expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith({
               ok: false,
@@ -96,7 +126,10 @@ it.runIf(process.platform !== "win32")(
               socket.destroy();
             }
             await handler;
-            await server[Symbol.asyncDispose]();
+            await Promise.all(closes);
+            await new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+            });
             approvalsTesting.reset();
             await closeOpenClawStateDatabaseAsync();
           }
