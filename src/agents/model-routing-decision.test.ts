@@ -1,4 +1,4 @@
-import { expect, it, onTestFinished } from "vitest";
+import { beforeEach, expect, it, onTestFinished } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
@@ -11,38 +11,36 @@ const route = {
   selectedModel: "gpt-5.6",
   selectionMode: "automatic",
 } as const;
+const auditConfig = { logging: { audit: { executionIdentity: true } } };
+type Route = Partial<Parameters<typeof recordAdmittedModelRoutingDecision>[0]>;
+let captured: ExecutionDecisionWork[];
 
-function captureWork() {
-  const captured: ExecutionDecisionWork[] = [];
-  const restore = configureExecutionDecisionWorkSink((work) => {
-    captured.push(work);
-    return true;
-  });
-  onTestFinished(restore);
-  return captured;
-}
+beforeEach(() => {
+  captured = [];
+  onTestFinished(
+    configureExecutionDecisionWorkSink((work) => {
+      captured.push(work);
+      return true;
+    }),
+  );
+});
 
 async function admitRoute(runId: string) {
-  const admission = prepareSystemAgentRunAdmission(
-    { logging: { audit: { executionIdentity: true } } },
-    runId,
-    "main",
-    "model-routing-test",
-  );
+  const admission = prepareSystemAgentRunAdmission(auditConfig, runId, "main", "test");
   onTestFinished(() => admission.close());
-  return { admission, admittedRunContext: await admission.admit("embedded") };
+  const admittedRunContext = await admission.admit("embedded");
+  const record = (overrides: Route = {}) =>
+    recordAdmittedModelRoutingDecision({ ...route, admittedRunContext, ...overrides });
+  return { admission, admittedRunContext, record };
 }
 
 it("keeps a selected credential raw only in the private work ref", async () => {
-  const captured = captureWork();
-  const { admittedRunContext } = await admitRoute("model-route-run");
+  const { admittedRunContext, record } = await admitRoute("model-route-run");
   const rawProfile = "openai:user@example.test";
   const rawTargetSecret = "Authorization: Bearer selected-model-secret";
 
   expect(
-    recordAdmittedModelRoutingDecision({
-      ...route,
-      admittedRunContext,
+    record({
       selectedModel: rawTargetSecret,
       selectionMode: "explicit",
       credentialProfileId: rawProfile,
@@ -66,11 +64,9 @@ it("keeps a selected credential raw only in the private work ref", async () => {
 });
 
 it("does not fabricate work without admission and marks an unknown credential owner", async () => {
-  const captured = captureWork();
-
   expect(recordAdmittedModelRoutingDecision(route)).toBe(false);
-  const { admittedRunContext } = await admitRoute("unknown-owner-run");
-  expect(recordAdmittedModelRoutingDecision({ ...route, admittedRunContext })).toBe(true);
+  const { record } = await admitRoute("unknown-owner-run");
+  expect(record()).toBe(true);
   expect(captured).toHaveLength(1);
   expect(captured[0]?.receipt).toMatchObject({
     enforcement: { coverageState: "unknown" },
@@ -83,17 +79,13 @@ it.each(["close", "replace"] as const)(
   "rejects %s authority without queuing private work",
   async (loss) => {
     const runId = `model-route-${loss}`;
-    const { admission, admittedRunContext } = await admitRoute(runId);
+    const { admission, record } = await admitRoute(runId);
     if (loss === "replace") {
       await admitRoute(runId);
     } else {
       admission.close();
     }
-    const captured = captureWork();
-
-    expect(() => recordAdmittedModelRoutingDecision({ ...route, admittedRunContext })).toThrow(
-      "admitted run authority is no longer active",
-    );
+    expect(() => record()).toThrow("admitted run authority is no longer active");
     admission.close();
 
     expect(captured).toEqual([]);

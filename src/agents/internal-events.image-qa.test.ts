@@ -66,7 +66,6 @@ describe("image completion producer context through the QA provider", () => {
           body: JSON.stringify({
             model: "gpt-5.6-luna",
             stream: false,
-            instructions: "Read source and docs; report worked, failed, blocked.",
             tools: [{ type: "function", name: "message" }],
             input: [
               user("Image generation check: generate a QA lighthouse image."),
@@ -74,15 +73,12 @@ describe("image completion producer context through the QA provider", () => {
                 type: "function_call",
                 name: "image_generate",
                 call_id: "qa-image",
-                arguments: JSON.stringify({ prompt: "A QA lighthouse" }),
+                arguments: "{}",
               },
               {
                 type: "function_call_output",
                 call_id: "qa-image",
-                output: JSON.stringify({
-                  content: [{ type: "text", text: "Background image generation started." }],
-                  details: { async: true, status: "started" },
-                }),
+                output: "Background image generation started.",
               },
               completion,
               ...(projection === "queued host delivery" ? [user(provenance)] : []),

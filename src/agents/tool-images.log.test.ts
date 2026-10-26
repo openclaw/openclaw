@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { imageResultFromFile } from "../plugin-sdk/channel-actions.js";
@@ -35,11 +35,7 @@ import { sanitizeContentBlocksImages } from "./tool-images.js";
 
 describe("tool-images log context", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let png: Buffer;
-
-  beforeAll(() => {
-    png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
-  });
+  const png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
 
   beforeEach(() => {
     infoMock.mockClear();
@@ -65,12 +61,10 @@ describe("tool-images log context", () => {
         imageSanitization: { maxBytes },
       });
 
+      const error = `[sdk:image] omitted image payload: Error: Image could not be reduced below ${limit} (got ${actual})`;
       expect(result.content).toEqual([
         { type: "text", text: "image caption" },
-        {
-          type: "text",
-          text: `[sdk:image] omitted image payload: Error: Image could not be reduced below ${limit} (got ${actual})`,
-        },
+        { type: "text", text: error },
       ]);
       expect(result.details).toMatchObject({
         path: filePath,
@@ -84,14 +78,11 @@ describe("tool-images log context", () => {
     { sourceBytes: 200, outputBytes: 250, label: "+25%" },
   ])("logs the signed byte delta for $label", async ({ sourceBytes, outputBytes, label }) => {
     resizeToJpegMock.mockResolvedValue(Buffer.alloc(outputBytes, 2));
-    const blocks = [
-      {
-        type: "image" as const,
-        data: Buffer.alloc(sourceBytes, 1).toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-    await sanitizeContentBlocksImages(blocks, "read:/tmp/images/sample-diagram.png");
+    const data = Buffer.alloc(sourceBytes, 1).toString("base64");
+    await sanitizeContentBlocksImages(
+      [{ type: "image", data, mimeType: "image/png" }],
+      "read:/tmp/images/sample-diagram.png",
+    );
     const [message] = infoMock.mock.calls.at(-1) ?? [];
     expect(message).toContain(
       `sample-diagram.png 2001x8px ${sourceBytes}B -> ${outputBytes}B (${label})`,
