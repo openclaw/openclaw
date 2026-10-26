@@ -1,8 +1,9 @@
-// Zalo tests cover api plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Zalo tests cover api plugin behavior.
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 
 const effectGate = await vi.hoisted(async () =>
   (
@@ -125,12 +126,7 @@ describe("Zalo API request methods", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
-          preparing.promise,
-          dispatched.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-        ]);
+        await waitForEffectPreparation(preparing.promise, dispatched.promise);
         expect(fetch).not.toHaveBeenCalled();
         if (retired) {
           caller.abort(failure);

@@ -106,6 +106,31 @@ function heapBytesUnder(
   );
 }
 
+it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
+  const { closed, stdout, stderr } = spawnFixture(
+    [
+      "--import",
+      preloadUrl,
+      "--input-type=module",
+      "-e",
+      `
+      const { Worker } = await import("node:worker_threads");
+      const { once } = await import("node:events");
+      const worker = new Worker('import("node:worker_threads").then(({ parentPort }) => parentPort.postMessage("ready"))', { eval: true });
+      await once(worker, "message");
+      await once(worker, "exit");
+      process.disconnect();
+      `,
+    ],
+    undefined,
+    true,
+    { ...process.env, OPENCLAW_BENCH_TRACE_GC: "1" },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  expect(stdout()).toContain('"phase":"identify-stop"');
+  expect(stdout()).toMatch(/gc=|"gc":/u);
+});
+
 it("preserves native trace-flag inheritance and explicit worker baseline preload propagation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "transcript-worker-preload-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));

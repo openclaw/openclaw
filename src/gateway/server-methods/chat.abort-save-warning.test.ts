@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 // Preserve registry mocks before the cancellation entrypoints load.
 // oxfmt-ignore
@@ -62,10 +63,7 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
 });
 
 const fixture = useChatAbortRegistryFixture();
-const abortSession = sessionAbortHandlers["sessions.abort"];
-if (!abortSession) {
-  throw new Error("sessions.abort handler is not registered");
-}
+const abortSession = expectDefined(sessionAbortHandlers["sessions.abort"], "sessions.abort");
 
 async function queueCollector(sessionKey: string, groupId: string, runId: string) {
   fixture.queueRun({

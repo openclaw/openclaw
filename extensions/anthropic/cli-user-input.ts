@@ -3,7 +3,7 @@ import type {
   CliBackendToolPermissionResult,
   CliBackendUserInputQuestion,
 } from "openclaw/plugin-sdk/cli-backend";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function createClaudeCliUserInputAuthorizer(context: CliBackendExecuteContext) {
   const requests = new Map<string, Promise<CliBackendToolPermissionResult>>();
@@ -102,7 +102,8 @@ function readClaudeUserInputQuestions(input: Record<string, unknown>): ParsedQue
       if (!label.ok) {
         return { ok: false, failure: `${optionPath}.label ${label.failure}` };
       }
-      const description = readBoundedText(rawOption.description, 1_024);
+      // Display-only, so shorten it; labels and questions come back as answers and stay exact.
+      const description = readBoundedText(rawOption.description, 1_024, { shorten: true });
       if (!description.ok) {
         return { ok: false, failure: `${optionPath}.description ${description.failure}` };
       }
@@ -123,6 +124,7 @@ function readClaudeUserInputQuestions(input: Record<string, unknown>): ParsedQue
 function readBoundedText(
   value: unknown,
   maxLength: number,
+  options: { shorten?: boolean } = {},
 ): { ok: true; text: string } | { ok: false; failure: string } {
   if (typeof value !== "string") {
     return { ok: false, failure: "must be a string" };
@@ -131,7 +133,9 @@ function readBoundedText(
     return { ok: false, failure: "must not be empty" };
   }
   if (value.length > maxLength) {
-    return { ok: false, failure: `must be at most ${maxLength} characters` };
+    return options.shorten
+      ? { ok: true, text: `${truncateUtf16Safe(value, maxLength - 1)}\u2026` }
+      : { ok: false, failure: `must be at most ${maxLength} characters` };
   }
   return { ok: true, text: value };
 }

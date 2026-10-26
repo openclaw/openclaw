@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { tryBeginGatewaySuspendAdmission } from "../../process/gateway-work-admission.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
@@ -19,8 +20,7 @@ const payload = { version: 1 as const, rawEvent: JSON.stringify(raw) };
 
 function createFixture(queue: ChannelIngressQueue<StoredEvent>) {
   const monitors: ReturnType<typeof createMonitor>[] = [];
-  const entered = createDeferred();
-  const released = createDeferred();
+  const gate = createEnteredGate();
   const deliver = vi.fn();
   const track = async (monitor: ReturnType<typeof createMonitor>) => {
     monitors.push(monitor);
@@ -32,16 +32,13 @@ function createFixture(queue: ChannelIngressQueue<StoredEvent>) {
     queue,
     deliver,
     track,
-    entered: entered.promise,
-    release: released.resolve,
-    ack: async () => {
-      entered.resolve();
-      await released.promise;
-    },
+    entered: gate.entered,
+    release: gate.release,
+    ack: gate.wait,
     start: (options: Parameters<typeof createMonitor>[2] = { pollIntervalMs: 60_000 }) =>
       track(createMonitor(queue, deliver, options)),
     stop: async () => {
-      released.resolve();
+      gate.release();
       for (const monitor of monitors) {
         await monitor.stop();
       }

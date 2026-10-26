@@ -1,3 +1,4 @@
+import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
@@ -81,6 +82,10 @@ export async function prepareCronRunInference(params: {
           authProfileIdSource: "user",
         });
       } catch (error) {
+        // Store and lifecycle failures retain their own recovery advice and terminal facts.
+        if (!(error instanceof CliExecutionAuthProfileError)) {
+          throw error;
+        }
         throw incompatibleCandidateError(true, error);
       }
       if (profileId !== binding.profileId) {

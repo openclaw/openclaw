@@ -1608,15 +1608,13 @@ describe("runAgentHarnessAttempt", () => {
       }).map((tool) => tool.name);
       return createAttemptResult("openclaw");
     });
-    const params = createAttemptParams(
-      providerRuntimeConfig("codex", "openclaw"),
-    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
-    params.toolsAllow = ["openclaw"];
-    params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
     const onContextAccountingEvent = vi.fn();
     const onCompactionRequestBudget = vi.fn();
-    Object.assign(params, {
-      compactionCountOwner: "caller",
+    const params = Object.freeze({
+      ...createAttemptParams(providerRuntimeConfig("codex", "openclaw")),
+      toolsAllow: ["openclaw"],
+      systemAgentTool: { surface: "gateway" as const, proposalRef: {}, directiveRef: {} },
+      compactionCountOwner: "caller" as const,
       onContextAccountingEvent,
       onCompactionRequestBudget,
     });
@@ -1624,13 +1622,15 @@ describe("runAgentHarnessAttempt", () => {
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
-    expect(agentRunAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        compactionCountOwner: "caller",
-        onContextAccountingEvent,
-        onCompactionRequestBudget,
-      }),
-    );
+    const attempt = agentRunAttempt.mock.calls[0]?.[0];
+    expect(attempt).toMatchObject({
+      compactionCountOwner: "caller",
+      onContextAccountingEvent,
+      onCompactionRequestBudget,
+      operationalRunInstance: selectionAdmittedRunContext.operationalRunInstance,
+    });
+    expect(params).not.toHaveProperty("operationalRunInstance");
+    expect(attempt).not.toHaveProperty("systemAgentTool");
     expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });

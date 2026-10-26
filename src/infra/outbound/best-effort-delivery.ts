@@ -8,22 +8,19 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 
-/** Optional external destination for best-effort delivery from session-only flows. */
-export type ExternalBestEffortDeliveryTarget = {
-  deliver: boolean;
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string;
-};
-
 /** Normalizes an optional best-effort destination into a deliver/no-deliver decision. */
 export function resolveExternalBestEffortDeliveryTarget(params: {
   channel?: string | null;
   to?: string | null;
   accountId?: string | null;
   threadId?: string | number | null;
-}): ExternalBestEffortDeliveryTarget {
+}): {
+  deliver: boolean;
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+} {
   const normalizedChannel = normalizeMessageChannel(params.channel);
   const channel =
     normalizedChannel && isDeliverableMessageChannel(normalizedChannel)

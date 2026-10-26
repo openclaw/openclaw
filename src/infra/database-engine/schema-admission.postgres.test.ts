@@ -41,9 +41,6 @@ function fixture(
         schema: selected,
         existingVersion,
         input: { connection: connection!, schemaPrefix: "r2" },
-        openSqlite: () => {
-          throw new Error("Unexpected SQLite bootstrap");
-        },
       });
       if (!(db instanceof PostgresSyncConnection)) {
         throw new Error("Expected PostgreSQL connection");
@@ -114,9 +111,6 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
           schema,
           input: { connection: connection!, schemaPrefix: "r2" },
           existingOnly: true,
-          openSqlite: () => {
-            throw new Error("Unexpected SQLite bootstrap");
-          },
         });
         try {
           expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);

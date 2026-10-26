@@ -63,6 +63,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
@@ -162,18 +163,6 @@ function exhaustedThreadRecovery() {
 }
 
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai:secondary@example.test";
-
-function requireMockCallArg(
-  mockFn: { mock: { calls: unknown[][] } },
-  label: string,
-  index = 0,
-): Record<string, unknown> {
-  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
-  if (!arg) {
-    throw new Error(`expected ${label} call #${index + 1}`);
-  }
-  return arg;
-}
 
 function expectEntryFields(
   entry: SessionEntry,
@@ -850,7 +839,7 @@ describe("initSessionState thread forking", () => {
           preparedSessionEntry: result.sessionEntry,
         }).sandboxed,
       ).toBe(true);
-      const forkCall = requireMockCallArg(sessionForkMocks.forkSessionFromParent, "fork session");
+      const forkCall = mockFirstRecordArg(sessionForkMocks.forkSessionFromParent, "fork session");
       expect(forkCall.parentEntry).toMatchObject({
         sessionId: parentSessionId,
       });
@@ -1444,6 +1433,43 @@ describe("initSessionState RawBody", () => {
       expect(
         resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry: stored }),
       ).toMatchObject({ sandboxed: required, sandboxRequired: required });
+    },
+  );
+
+  it.each([
+    { trigger: "/reset", idle: false },
+    { trigger: "/new", idle: false },
+    { trigger: "continue", idle: true },
+  ] as const)(
+    "keeps a project session folder without a worktree through $trigger",
+    async ({ trigger, idle }) => {
+      const storePath = await makeStorePath("openclaw-rollover-project-");
+      const sessionKey = "agent:main:dashboard:project-rollover";
+      const updatedAt = idle ? Date.now() - 120_000 : Date.now();
+      const project = {
+        projectId: "project-1",
+        spawnedCwd: "/work/project/packages/app",
+        sessionRoot: "/work/project",
+      };
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: "project-session",
+          updatedAt,
+          sessionStartedAt: updatedAt,
+          lastInteractionAt: updatedAt,
+          ...project,
+        },
+      });
+      const result = await initSessionState({
+        cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } } },
+        ctx: { RawBody: trigger, ChatType: "direct", SessionKey: sessionKey },
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(!idle);
+      expect(result.sessionEntry).toMatchObject(project);
+      expect(loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })).toMatchObject(
+        project,
+      );
     },
   );
 
@@ -2064,7 +2090,7 @@ describe("initSessionState browser tab cleanup", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    const cleanupParams = requireMockCallArg(
+    const cleanupParams = mockFirstRecordArg(
       browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
       "closeTrackedBrowserTabsForSessions",
     );
@@ -2320,29 +2346,17 @@ describe("initSessionState reset authorization", () => {
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {
-  async function seedSessionStore(params: {
-    storePath: string;
-    sessionKey: string;
-    sessionId: string;
-  }): Promise<void> {
-    await writeSessionStoreFast(params.storePath, {
-      [params.sessionKey]: {
-        sessionId: params.sessionId,
-        updatedAt: Date.now(),
-      },
-    });
-  }
-
   it("supports mention-prefixed Slack reset commands and preserves args", async () => {
     setMinimalCurrentConversationBindingRegistryForTests();
     const existingSessionId = "existing-session-123";
     const sessionKey = "agent:main:slack:channel:c2";
     const body = "<@U123> /new take notes";
     const storePath = await makeStorePath("openclaw-slack-channel-new-");
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
     });
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
@@ -2375,21 +2389,6 @@ describe("initSessionState reset triggers in Slack channels", () => {
 });
 
 describe("initSessionState preserves behavior overrides across /new and /reset", () => {
-  async function seedSessionStoreWithOverrides(params: {
-    storePath: string;
-    sessionKey: string;
-    sessionId: string;
-    overrides: Record<string, unknown>;
-  }): Promise<void> {
-    await writeSessionStoreFast(params.storePath, {
-      [params.sessionKey]: {
-        sessionId: params.sessionId,
-        updatedAt: Date.now(),
-        ...params.overrides,
-      },
-    });
-  }
-
   it("rejects replacement of a restart-tombstoned model-locked session", async () => {
     const storePath = await makeStorePath("openclaw-reset-tombstone-model-locked-");
     const sessionKey = "agent:main:telegram:dm:tombstone-model-locked";
@@ -2574,11 +2573,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const sessionKey = "agent:main:telegram:dm:provider-authoritative";
     const existingSessionId = "existing-session-provider-authoritative";
 
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: {},
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
     });
 
     const cfg = {
@@ -2612,11 +2611,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       const storePath = await makeStorePath(`openclaw-archive-old-${slug}-`);
       const sessionKey = `agent:main:telegram:dm:user-archive-${slug}`;
       const existingSessionId = `existing-session-archive-${slug}`;
-      await seedSessionStoreWithOverrides({
-        storePath,
-        sessionKey,
-        sessionId: existingSessionId,
-        overrides: { verboseLevel: "on" },
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+          verboseLevel: "on",
+        },
       });
       await appendTranscriptMessage(
         { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },

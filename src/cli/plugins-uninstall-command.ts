@@ -1,4 +1,5 @@
 // Terminal preview and confirmation for the shared plugin uninstall owner.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
@@ -48,7 +49,7 @@ export async function runPluginUninstallCommand(
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
     runtime.log(
-      `Plugin: ${theme.command(preview.name)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,6 +8,7 @@ import {
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
+import { writeFacadeFiles } from "../../plugin-sdk/facade-runtime.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -26,24 +26,19 @@ function createInstalledRuntimePluginDir(pluginId: string, marker: string) {
   const bundledDir = tempDirs.make(`openclaw-runtime-contract-bundled-${pluginId}-`);
   const stateDir = tempDirs.make(`openclaw-runtime-contract-state-${pluginId}-`);
   const pluginRoot = path.join(stateDir, "extensions", pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "runtime-api.js"),
-    `export const marker = ${JSON.stringify(marker)};\n`,
-    "utf8",
-  );
-  const writeJson = (name: string, value: unknown) =>
-    fs.writeFileSync(path.join(pluginRoot, name), JSON.stringify(value), "utf8");
-  writeJson("package.json", {
-    name: `@openclaw/${pluginId}`,
-    version: "0.0.0",
-    type: "module",
-    openclaw: { extensions: ["./runtime-api.js"], channel: { id: pluginId } },
-  });
-  writeJson("openclaw.plugin.json", {
-    id: pluginId,
-    channels: [pluginId],
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  writeFacadeFiles(pluginRoot, {
+    "runtime-api.js": `export const marker = ${JSON.stringify(marker)};\n`,
+    "package.json": {
+      name: `@openclaw/${pluginId}`,
+      version: "0.0.0",
+      type: "module",
+      openclaw: { extensions: ["./runtime-api.js"], channel: { id: pluginId } },
+    },
+    "openclaw.plugin.json": {
+      id: pluginId,
+      channels: [pluginId],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    },
   });
   return { bundledDir, stateDir, pluginRoot };
 }

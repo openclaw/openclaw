@@ -3,7 +3,6 @@ import { issueFactoryGitHubProof } from "../factory-github-proof.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
-import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../agents/github-host-runtime.js", async (importOriginal) => ({
@@ -43,7 +42,7 @@ function issue(assertCurrent = () => {}) {
 }
 
 function expectForbidden(respond: Awaited<ReturnType<typeof rpc>>) {
-  expectRpcError(respond, { code: "FORBIDDEN" });
+  expect(respond).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
 }
 
 const broker: GatewayClient = {
@@ -75,20 +74,20 @@ async function rpc(
     hasCurrentClientAuthority: () => true,
     ...requestOverrides,
   });
-  return respond;
+  return respond.mock.lastCall;
 }
 
-it("redeems the exact session read once through the registered direct private method", async () => {
+it("redeems once through the registered direct private method", async () => {
   const issued = issue();
-  expect(await rpc(issued.proof)).toHaveBeenCalledWith(
+  expect(await rpc(issued.proof)).toMatchObject([
     true,
-    expect.objectContaining({
+    {
       ...claim,
       actorId: 101,
       actorPrincipal: "github:example.ghe.com:101",
       profileId: "person-1",
-    }),
-  );
+    },
+  ]);
   expectForbidden(await rpc(issued.proof));
 });
 
@@ -130,10 +129,7 @@ it.each([
     const issued = issue();
     expectForbidden(await rpc(issued.proof, client, request));
     expect(issued.wasRedeemed()).toBe(false);
-    expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ actorId: 101 }),
-    );
+    expect(await rpc(issued.proof)).toMatchObject([true, { actorId: 101 }]);
   },
 );
 

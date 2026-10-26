@@ -29,6 +29,7 @@ import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
+  prepareExecApprovalsCurrentRead,
   readExecApprovalsPolicyReadOnlyAsync,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -36,6 +37,7 @@ import {
   updateExecApprovals,
 } from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 const loggerWarn = vi.hoisted(() => vi.fn());
@@ -286,18 +288,78 @@ it("reuses prepared policy until a native or worker policy write", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const initial = await loadExecApprovalsReadOnlyAsync({ env });
-  initial.agents!.main!.mcpTools!.length = 0;
+  expect(await loadExecApprovalsReadOnlyAsync({ env })).toBe(initial);
+  expect(() => {
+    initial.agents!.main!.mcpTools!.length = 0;
+  }).toThrow(TypeError);
   expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([grant]);
   expect(read).toHaveBeenCalledTimes(1);
 
   seed(env, "native-change");
-  expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([
-    { ...grant, tool: "native-change" },
-  ]);
+  const changed = await loadExecApprovalsReadOnlyAsync({ env });
+  expect(changed).not.toBe(initial);
+  expect(initial.agents?.main?.mcpTools).toEqual([grant]);
+  expect(changed.agents?.main?.mcpTools).toEqual([{ ...grant, tool: "native-change" }]);
   await updateExecApprovals({
     update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
   });
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+});
+
+it("shares immutable current policy while refusing pending writes and replacing committed facts", async () => {
+  const { env } = fixture(true);
+  await updateExecApprovals({
+    update: {
+      kind: "replace",
+      file: {
+        version: 1,
+        agents: {
+          main: { mcpTools: [grant], allowlist: [{ id: "tool", pattern: "/synthetic/bin/r?" }] },
+        },
+      },
+    },
+  });
+  const readCurrent = await prepareExecApprovalsCurrentRead(
+    captureOpenClawStateWorkerContext({ env }),
+  );
+  const initial = readCurrent();
+  const matchCurrent = () =>
+    matchAllowlist(readCurrent().agents?.main?.allowlist ?? [], {
+      kind: "executable",
+      rawExecutable: "rg",
+      executableName: "rg",
+      resolvedPath: "/synthetic/bin/rg",
+    });
+  expect(matchCurrent()?.id).toBe("tool");
+  expect(matchCurrent()?.id).toBe("tool");
+  expect(readCurrent()).toBe(initial);
+  expect(() => {
+    initial.agents!.main!.mcpTools![0]!.tool = "changed";
+  }).toThrow(TypeError);
+  let pendingChecked = false;
+  const release = execApprovalsPublication.subscribeFacts((change) => {
+    if (change.kind === "pending") {
+      pendingChecked = true;
+      expect(matchCurrent).toThrow("changing before execution");
+    }
+  });
+  try {
+    await updateExecApprovals({
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+    });
+  } finally {
+    release();
+  }
+  expect(pendingChecked).toBe(true);
+  const denied = readCurrent();
+  expect(denied).not.toBe(initial);
+  expect(readCurrent()).toBe(denied);
+  expect(denied.defaults?.security).toBe("deny");
+  expect(matchCurrent()).toBeNull();
+  expect(() => {
+    denied.defaults!.security = "full";
+  }).toThrow(TypeError);
+  expect(initial.agents?.main?.mcpTools).toEqual([grant]);
 });
 
 it("joins an admitted policy read before its disposable source is released", async () => {

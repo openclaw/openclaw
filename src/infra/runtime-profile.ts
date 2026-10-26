@@ -1,27 +1,14 @@
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import {
-  getStandaloneRuntimeBuild,
-  isEmbeddedStandaloneModule,
-  type StandaloneBuildInfo,
-} from "../../cli-invocation.mjs";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type RuntimeExecutionProfile = "dynamic-execution" | "embedded-aot";
+export {
+  getRuntimeExecutionProfile,
+  type RuntimeExecutionProfile,
+} from "../../standalone-runtime-profile.mjs";
 export type RuntimeDynamicExecutionFeature = "plugins" | "code-mode" | "qa";
-
-let runtimeExecutionProfile: RuntimeExecutionProfile | undefined;
-
-export function resolveRuntimeExecutionProfile(
-  build: Pick<StandaloneBuildInfo, "mode"> | undefined,
-): RuntimeExecutionProfile {
-  return build?.mode === "aot" ? "embedded-aot" : "dynamic-execution";
-}
-
-/** Artifact capabilities stay fixed for this process, including its workers. */
-export function getRuntimeExecutionProfile(): RuntimeExecutionProfile {
-  return (runtimeExecutionProfile ??= resolveRuntimeExecutionProfile(getStandaloneRuntimeBuild()));
-}
 
 const features = {
   plugins: { bit: 1, label: "Fetched plugin code" },

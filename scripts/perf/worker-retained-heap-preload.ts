@@ -1,4 +1,5 @@
 // Synthetic benchmarks only. Controllers serialize snapshots and keep them outside timed windows.
+// OPENCLAW_BENCH_TRACE_GC=1 is a separate promotion pass; use untraced runs for timing gates.
 import {
   existsSync,
   mkdirSync,
@@ -6,17 +7,28 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { GCProfiler, getHeapStatistics, writeHeapSnapshot } from "node:v8";
+import {
+  GCProfiler,
+  getHeapCodeStatistics,
+  getHeapSpaceStatistics,
+  getHeapStatistics,
+  setFlagsFromString,
+  writeHeapSnapshot,
+} from "node:v8";
 import workerThreads, { isMainThread, threadId } from "node:worker_threads";
 
 const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
+const traceGc = process.env.OPENCLAW_BENCH_TRACE_GC === "1";
+const sampleAllocation = process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION === "1";
+const sampleCpu = process.env.OPENCLAW_BENCH_SAMPLE_CPU === "1";
 if ((!output && !baseline) || (output && !path.isAbsolute(output))) {
   throw new Error("Worker heap preload requires an absolute synthetic benchmark output directory");
 }
@@ -62,6 +74,9 @@ workerThreads.Worker = class extends NativeWorker {
           : {
               ...(options.env ?? process.env),
               ...(output ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
+              ...(output && traceGc ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
+              ...(output && sampleAllocation ? { OPENCLAW_BENCH_SAMPLE_ALLOCATION: "1" } : {}),
+              ...(output && sampleCpu ? { OPENCLAW_BENCH_SAMPLE_CPU: "1" } : {}),
               ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
             },
     });
@@ -110,15 +125,31 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(script)
+  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
+    script,
+  )
 ) {
   mkdirSync(output, { recursive: true });
   const prefix = path.join(output, `worker-${process.pid}-${threadId}`);
   const commandPath = `${prefix}.command.json`;
-  const identity = { pid: process.pid, threadId, script, node: process.version };
+  const identity = {
+    pid: process.pid,
+    threadId,
+    script,
+    node: process.version,
+    traceGc,
+    sampleAllocation,
+    sampleCpu,
+  };
+  const traceMarker = (marker: string, commandId: string) => {
+    writeSync(1, `${marker} pid=${process.pid} threadId=${threadId} command=${commandId}\n`);
+  };
   const memory = () => ({
     ...process.memoryUsage(),
+    allocatedBytes: Reflect.get(getHeapStatistics(), "total_allocated_bytes"),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
+    heapSpaces: getHeapSpaceStatistics(),
+    code: getHeapCodeStatistics(),
   });
   const publish = (suffix: string, value: object) => {
     const file = `${prefix}.${suffix}.json`;
@@ -126,6 +157,7 @@ if (
       `${file}.tmp`,
       JSON.stringify({
         ...identity,
+        commandId: suffix,
         atEpochMs: Date.now(),
         baselineModules: [...baselineModules],
         ...value,
@@ -145,6 +177,9 @@ if (
         gc: Map<string, number[]>;
         count: number;
         complete: boolean;
+        peakHeapUsedBytes: number;
+        heapSamples: number;
+        reclaimedBytes: number;
       }
     | undefined;
   const drainGc = (restart: boolean) => {
@@ -156,6 +191,14 @@ if (
       profiler.start();
     }
     for (const entry of profile?.statistics ?? []) {
+      measured.reclaimedBytes += Math.max(
+        0,
+        entry.beforeGC.heapStatistics.usedHeapSize - entry.afterGC.heapStatistics.usedHeapSize,
+      );
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        entry.beforeGC.heapStatistics.usedHeapSize,
+      );
       measured.count++;
       if (measured.count > 100_000) {
         measured.complete = false;
@@ -200,6 +243,38 @@ if (
       if (measured) {
         throw new Error("Worker heap measurement is already active");
       }
+      if (sampleAllocation) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("HeapProfiler.startSampling", {
+          samplingInterval: 32768,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
+      if (sampleCpu) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("Profiler.enable");
+        await inspector.post("Profiler.start");
+      }
+      if (traceGc) {
+        // Identify the isolate before starting counters; forced collections are not workload GC.
+        traceMarker("WORKER_GC_IDENTIFY_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+        try {
+          await collect();
+        } finally {
+          setFlagsFromString("--no-trace-gc-nvp");
+          traceMarker("WORKER_GC_IDENTIFY_END", command.id);
+        }
+        traceMarker("WORKER_GC_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+      }
       measured = {
         startedAtEpochMs: Date.now(),
         startedAt: performance.now(),
@@ -208,6 +283,9 @@ if (
         gc: new Map(),
         count: 0,
         complete: true,
+        peakHeapUsedBytes: process.memoryUsage().heapUsed,
+        heapSamples: 0,
+        reclaimedBytes: 0,
       };
       loop.reset();
       loop.enable();
@@ -220,20 +298,52 @@ if (
       const endedAtEpochMs = Date.now();
       const elapsedMs = performance.now() - measured.startedAt;
       const cpu = process.threadCpuUsage(measured.cpu);
+      const allocation = sampleAllocation
+        ? (await inspector!.post("HeapProfiler.stopSampling")).profile
+        : undefined;
+      const cpuProfile = sampleCpu ? (await inspector!.post("Profiler.stop")).profile : undefined;
+      if (traceGc) {
+        setFlagsFromString("--no-trace-gc-nvp");
+        traceMarker("WORKER_GC_END", command.id);
+      }
       loop.disable();
       drainGc(false);
       const result = measured;
       measured = undefined;
+      const finalMemory = memory();
+      const allocationProfilePath = allocation ? `${prefix}.${command.id}.heapprofile` : undefined;
+      const cpuProfilePath = cpuProfile ? `${prefix}.${command.id}.cpuprofile` : undefined;
+      if (allocationProfilePath) {
+        writeFileSync(allocationProfilePath, JSON.stringify(allocation));
+      }
+      if (cpuProfilePath) {
+        writeFileSync(cpuProfilePath, JSON.stringify(cpuProfile));
+      }
       publish(command.id, {
         ok: true,
         operation: command.operation,
         complete: result.complete,
+        peakHeapUsedBytes: result.peakHeapUsedBytes,
+        reclaimedBytes: result.reclaimedBytes,
+        heapSamples: result.heapSamples,
         startedAtEpochMs: result.startedAtEpochMs,
         endedAtEpochMs,
         elapsedMs,
         cpu,
+        allocationProfilePath,
+        cpuProfilePath,
+        ...(allocation
+          ? {
+              allocation: {
+                sampledBytes: allocation.samples.reduce((sum, sample) => sum + sample.size, 0),
+                samples: allocation.samples.length,
+                samplingInterval: 32768,
+                includesCollectedObjects: true,
+              },
+            }
+          : {}),
         initialMemory: result.initialMemory,
-        finalMemory: memory(),
+        finalMemory,
         gc: Object.fromEntries(
           [...result.gc].map(([kind, samples]) => [kind, distribution(samples)]),
         ),
@@ -268,6 +378,16 @@ if (
     }
   };
   let polling = false;
+  // GC boundaries capture synchronous allocation bursts that timer samples can miss.
+  setInterval(() => {
+    if (measured) {
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        process.memoryUsage().heapUsed,
+      );
+      measured.heapSamples++;
+    }
+  }, 5).unref();
   setInterval(() => {
     drainGc(true);
     if (polling || !existsSync(commandPath)) {

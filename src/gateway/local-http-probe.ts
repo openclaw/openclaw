@@ -19,11 +19,6 @@ type GatewayHttpProbeResponse = {
   tlsFingerprint?: string;
 };
 
-type GatewayLocalProbeTarget = {
-  url: string;
-  tlsFingerprint?: string;
-};
-
 export type ConfiguredGatewayLocalProbe = {
   requestHttp(params: {
     host: string;
@@ -35,7 +30,10 @@ export type ConfiguredGatewayLocalProbe = {
   resolveWebSocketTarget(
     port: number,
     signal?: AbortSignal,
-  ): Promise<GatewayLocalProbeTarget | null>;
+  ): Promise<{
+    url: string;
+    tlsFingerprint?: string;
+  } | null>;
 };
 
 function normalizeGatewayHttpProbeHost(host: string): string {

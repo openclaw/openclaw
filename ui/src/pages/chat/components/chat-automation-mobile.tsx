@@ -1,4 +1,4 @@
-import { createMemo, For, isPending, Loading } from "solid-js";
+import { createMemo, For, isPending } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
@@ -6,6 +6,7 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
 import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   SessionAutomationRead,
   type SessionAutomationInventory,
@@ -13,7 +14,7 @@ import {
 import "../../../styles/chat/automation-mobile.css";
 import "../../../styles/chat/summary-automations.css";
 import { SessionAutomationResult } from "./session-automation-result.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -26,6 +27,7 @@ export type SessionAutomationMobileListProps = {
 };
 export function SessionAutomationMobileList(props: SessionAutomationMobileListProps) {
   const inventory = () => props.inventory;
+  const formatSchedule = createSessionAutomationSchedule();
   const errorNotice = () => (
     <div
       class={[
@@ -56,7 +58,7 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
     </p>
   );
   return (
-    <Loading
+    <ChatLazyBoundary
       fallback={
         <div class="session-automation-mobile" aria-busy="true">
           {loadingNotice()}
@@ -96,10 +98,13 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
         <div class="session-automation-mobile__group">
           <For each={inventory().jobs()} keyed={(job) => job.id}>
             {(job) => {
-              const schedule = createMemo(() => {
-                const value = job().schedule;
-                return value ? sessionAutomationSchedule(value) : "";
-              });
+              const schedule = createMemo(
+                () => {
+                  const value = job().schedule;
+                  return value ? formatSchedule(value) : "";
+                },
+                { lazy: true },
+              );
               return (
                 <a
                   class="session-automation-mobile__list-row"
@@ -150,6 +155,6 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
           </button>
         )}
       </div>
-    </Loading>
+    </ChatLazyBoundary>
   );
 }

@@ -47,12 +47,9 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
 const preparedSnapshots = vi.hoisted(() => new Map<string, unknown>());
 
 // mock-isolation: Model-resolution fixtures own prepared auth snapshots; provider discovery must not add host credentials or registries.
-vi.mock("../../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../../plugins/provider-external-auth-core.js", async () =>
+  (await import("../../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -651,7 +648,10 @@ describe("resolveModel", () => {
       if (apiOverride) {
         expect(model.thinkingLevelMap).toEqual({ off: null });
       } else {
-        expect(model.compat).toMatchObject(deepSeekCatalogCompat);
+        expect(model.compat).toMatchObject({
+          ...deepSeekCatalogCompat,
+          supportsReasoningEffort: mode !== "fallback",
+        });
       }
       if (mode === "fallback") {
         expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({

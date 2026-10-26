@@ -45,7 +45,7 @@ let server: ControlUiE2eServer;
 
 describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer(undefined, { source: true });
+    server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath });
   });
   afterAll(async () => {

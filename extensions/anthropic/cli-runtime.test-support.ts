@@ -9,6 +9,7 @@ import type {
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { expect, vi } from "vitest";
+import { isProcessAlive as running } from "../test-support/process.test-support.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
@@ -49,10 +50,7 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
         useResume: false,
         timeoutMs: 10_000,
         abortSignal: AbortSignal.timeout(10_000),
-        requestToolPermission: async () => ({
-          behavior: "deny",
-          message: "No tools in this probe.",
-        }),
+        requestToolPermission: async () => ({ behavior: "deny", message: "No tools." }),
         requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
         ...overrides,
       };
@@ -116,15 +114,11 @@ export async function prepareClaudeCli(
   } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
     | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
     | undefined;
-  if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
+  const { execute, secretInput, cleanup } = prepared ?? {};
+  if (!execute || !secretInput || !cleanup) {
     throw new Error("Expected provider-owned credential execution.");
   }
-  return {
-    ...prepared,
-    execute: prepared.execute,
-    secretInput: prepared.secretInput,
-    cleanup: prepared.cleanup,
-  };
+  return { ...prepared, execute, secretInput, cleanup };
 }
 
 export function recordCredentialBuffers(input: ClaudeCliSecretInput) {
@@ -140,22 +134,8 @@ export function recordCredentialBuffers(input: ClaudeCliSecretInput) {
 
 // The transport joins its root and signal dispatch, not foreign descendant extinction.
 export async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
-  const running = (pid: number) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  try {
-    while (pids.some(running)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (cause) {
-    throw new Error(`Claude process tree ${pids.join(", ")} did not exit before the test aborted`, {
-      cause,
-    });
+  while (pids.some(running)) {
+    await waitForProcessTick(10, undefined, { signal });
   }
 }
 

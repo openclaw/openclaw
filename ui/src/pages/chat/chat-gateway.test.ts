@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
+import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -98,34 +100,6 @@ const expectAssistant = (state: ChatState, ...texts: string[]) =>
   expectTranscript(state, ...texts.map((text): [string, string] => ["assistant", text]));
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
-
-function createState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
-    chatAttachments: [],
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    chatToolMessages: [],
-    toolStreamById: new Map(),
-    toolStreamOrder: [],
-    chatRunStartup: null,
-    chatVerboseLevel: null,
-    client: null,
-    connected: true,
-    connectionEpoch: 0,
-    hello: null,
-    lastError: null,
-    sessionKey: "main",
-    ...overrides,
-  };
-}
 
 it.each([true, false])(
   "keeps identical injected notes separate without adopting a run (persisted first=%s)",
@@ -334,23 +308,17 @@ function runningSession(chatStream: string, overrides: Partial<ChatState> = {}):
   return {
     ...createState({ chatRunId: runId, chatStream, chatStreamStartedAt: 100, ...overrides }),
     knownAgentRunIds: new Set([runId]),
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          hasActiveRun: true,
-          activeRunIds: [runId],
-          status: "running",
-          startedAt: 100,
-        },
-      ],
-    },
+    sessionsResult: sessionListResult(0, [
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+        startedAt: 100,
+      },
+    ]),
   };
 }
 

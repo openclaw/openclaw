@@ -26,6 +26,7 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import * as sessionMessageRewrite from "../../config/sessions/session-message-rewrite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPassthroughEngineMethods } from "../../context-engine/context-engine.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
@@ -48,6 +49,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { convertToLlm } from "../sessions/messages.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -206,19 +208,15 @@ async function prepareAdmission(
 }
 
 async function holdTranscriptWriter(target: Parameters<typeof resolveSqliteTranscriptScope>[0]) {
-  const entered = createDeferred();
-  const release = createDeferred();
+  const writerGate = createEnteredGate();
   const locked = runExclusiveSqliteSessionWrite(
     resolveSqliteTranscriptScope(target),
-    async () => {
-      entered.resolve();
-      await release.promise;
-    },
+    writerGate.wait,
     "session.transcript.batch",
   );
-  await entered.promise;
+  await writerGate.entered;
   return async () => {
-    release.resolve();
+    writerGate.release();
     await locked;
   };
 }
@@ -432,9 +430,7 @@ describe("host-owned current admission annotation", () => {
               turnAdvancementIdempotency: "atomic-idempotent-v1",
             },
           },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
+          ...createPassthroughEngineMethods(),
           commitTurn,
         };
         const lease: ContextEngineLogicalTurnLease = {

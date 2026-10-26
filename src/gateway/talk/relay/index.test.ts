@@ -32,6 +32,7 @@ import {
   type RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { expectObjectFields as expectRecordFields } from "../../../test-utils/mock-call-assertions.js";
 import { createChatRunState } from "../../server-chat-state.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
@@ -1266,17 +1267,6 @@ describe("talk realtime gateway relay", () => {
     expect(toolEvents()).toHaveLength(1);
     expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
-
-  function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-    if (!record || typeof record !== "object") {
-      throw new Error("Expected record");
-    }
-    const actual = record as Record<string, unknown>;
-    for (const [key, value] of Object.entries(expected)) {
-      expect(actual[key]).toEqual(value);
-    }
-    return actual;
-  }
 
   function findEventPayload(
     events: Array<{ payload: unknown }>,

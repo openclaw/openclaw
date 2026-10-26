@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type {
   SessionEventOptions,
   SessionEventTarget,
@@ -14,6 +15,15 @@ import {
   clearGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
+
+it("keeps plugin runtime snapshot readers independent of config IO and mutation facades", () => {
+  expect(
+    findSourceImportBackedges(
+      ["src/plugins/registry-runtime.ts", "src/plugins/runtime/system-events.ts"],
+      ["src/config/config.ts", "src/config/io.ts", "src/config/mutate.ts"],
+    ),
+  ).toEqual([]);
+});
 
 const host = vi.hoisted(() => ({
   capture: vi.fn<(...args: unknown[]) => Promise<SessionEventTarget>>(),

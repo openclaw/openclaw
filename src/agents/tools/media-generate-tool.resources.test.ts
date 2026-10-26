@@ -14,12 +14,15 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupNativeFixture,
+  nativeFixtureEnv,
+} from "../../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
@@ -228,25 +231,12 @@ ${
     resumeProvider,
     lookupStarted,
     resumeLookup,
-    withEnvironment: (run: () => Promise<void>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: dir,
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+    withEnvironment: (run: () => Promise<void>) => withEnvAsync(nativeFixtureEnv(dir), run),
     cleanup() {
       resumeLookup.resolve();
       resumeProvider.resolve();
       resumeGeneration.resolve();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+      cleanupNativeFixture(key, connections);
     },
   };
 }
@@ -279,7 +269,6 @@ async function prepareSnapshot(
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();

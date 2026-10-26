@@ -25,6 +25,7 @@ import {
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
 import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
 import { isRecord } from "./scripts/lib/record-shared.mjs";
+import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
@@ -34,6 +35,7 @@ import {
   standaloneRuntimeProcessBuildEntries,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
+import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
@@ -48,7 +50,7 @@ import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
-import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
+import { rootRuntimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -83,6 +85,8 @@ type ExternalOptionFunction = (
   parentId: string | undefined,
   isResolved: boolean,
 ) => boolean | null | undefined;
+
+const repoRoot = resolveRepoRoot(import.meta.url);
 
 const env = {
   NODE_ENV: "production",
@@ -529,7 +533,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...createRootRuntimeProcessBuildEntries(pluginIds),
-    ...runtimeProcessDeclarationEntries,
+    ...rootRuntimeProcessDeclarationEntries,
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -1100,5 +1104,14 @@ const configs: UserConfig[] = [
       )
     : []),
 ];
+
+for (const config of configs) {
+  if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
+    continue;
+  }
+  config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
+    .flat()
+    .filter(Boolean);
+}
 
 export default cacheTsdownRuntimeConfigs(configs);

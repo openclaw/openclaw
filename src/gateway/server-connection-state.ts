@@ -25,6 +25,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
@@ -81,7 +82,12 @@ export function createGatewayConnectionState(params: {
     isConnectionActive,
     forgetConnectionAncestors,
   );
-  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig);
+  // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
+  let sessionViewers: SessionViewerPresenceDeclarations | undefined;
+  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig, {
+    isViewedOnDevice: (deviceId, sessionKey) =>
+      sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+  });
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -227,6 +233,9 @@ export function createGatewayConnectionState(params: {
           clearConnectionRows();
         }
       };
+    },
+    attachSessionViewerPresence(this: void, declarations: SessionViewerPresenceDeclarations) {
+      sessionViewers = declarations;
     },
     clients,
     forgetConnectionAncestors,

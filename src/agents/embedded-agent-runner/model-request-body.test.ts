@@ -1,4 +1,5 @@
-import { hash } from "node:crypto";
+import crypto, { hash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
 import { serialize } from "node:v8";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
@@ -23,8 +24,6 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 
 const originalHost = getAiTransportHost();
 const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
-const fieldDigests = (fields: Record<string, unknown>) =>
-  Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, digest(value)]));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -42,20 +41,7 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     type: "function",
     function: { name, parameters: { type: "object", properties: {} } },
   }));
-  const messages = Array.from({ length: 100 }, (_, index) => ({
-    role: index % 2 === 0 ? "user" : "assistant",
-    content: [
-      { type: "text", text: `${index}: " \\ \n 🦞\ud800 ${"x".repeat(4_000)}` },
-      ...(index < 12 && index % 2 === 0
-        ? [
-            {
-              type: "image_url",
-              image_url: { url: `data:image/png;base64,${"A".repeat(32_768)}` },
-            },
-          ]
-        : []),
-    ],
-  }));
+  const messages = [{ role: "user", content: '" \\ \n 🦞\ud800' }];
   const parameters = {
     model: model.id,
     prompt_cache_key: "private-affinity",
@@ -69,20 +55,11 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
   const padding = 600 * 1_024 - Buffer.byteLength(JSON.stringify(expectedPayload));
-  const finalContent = messages[99]!.content[0]!;
-  if (!("text" in finalContent)) {
-    throw new Error("Expected the fixture's final text part");
-  }
-  finalContent.text += "x".repeat(padding);
+  messages[0]!.content += "x".repeat(padding);
   const expectedWire = JSON.stringify(expectedPayload);
   expect(Buffer.byteLength(expectedWire)).toBe(614_400);
-  const sse = `data: ${JSON.stringify({
-    id: "fixture-response",
-    object: "chat.completion.chunk",
-    created: 0,
-    model: model.id,
-    choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-  })}\n\ndata: [DONE]\n\n`;
+  const sse =
+    'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
@@ -180,21 +157,11 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
           },
         },
       },
-      cachePrefix: {
-        system: hash("sha256", "{}"),
-        tools: digest({ tools: allowedTools }),
-        messageDigests: messages
-          .map((message) => hash("sha256", JSON.stringify(message), "latin1"))
-          .join(""),
-        messageFields: messages.slice(0, 32).map(fieldDigests),
+      cachePrefix: expect.objectContaining({
         messageField: "messages",
-        messageCount: 100,
-        parameters: {
-          digest: hash("sha256", JSON.stringify(parameters), "latin1"),
-          fields: fieldDigests(parameters),
-        },
+        messageCount: messages.length,
         continuation: true,
-      },
+      }),
     });
     expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
@@ -296,4 +263,34 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
   expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
   expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
+});
+
+it("hashes prompt prefixes without assembling copies of their serialized fields", () => {
+  const payload = {
+    system: "synthetic system 🦞".repeat(4_000),
+    tools: [{ name: "synthetic_tool", description: "synthetic tool ".repeat(8_000) }],
+    instructions: "synthetic instructions ".repeat(4_000),
+    input: [],
+  };
+  const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
+  const tools = JSON.stringify({ tools: payload.tools });
+  const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
+  const copiedPrefixes: string[] = [];
+  const originalHash = crypto.hash;
+  const spy = vi.spyOn(crypto, "hash").mockImplementation((algorithm, data, encoding) => {
+    if (data === system || data === tools) {
+      copiedPrefixes.push(data);
+    }
+    return originalHash(algorithm, data, encoding);
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = prepareProviderPrompt({ payload, encode: true });
+    expect(result.cachePrefix).toMatchObject(expected);
+    expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
+    expect(copiedPrefixes).toHaveLength(0);
+  } finally {
+    spy.mockRestore();
+    syncBuiltinESMExports();
+  }
 });

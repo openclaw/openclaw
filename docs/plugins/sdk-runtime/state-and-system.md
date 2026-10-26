@@ -206,6 +206,8 @@ keep the existing synchronous fallback.
 
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
+    The Gateway keeps complete active namespace views in memory and updates them from committed write receipts before acknowledging a write. Ordinary reads reuse those views without SQL. Residency is bounded to 64 namespaces, 16 MiB of accounted data in total, and 8 MiB or 10,000 rows per namespace. Cold or evicted namespaces load on demand; oversized namespaces and transaction-local reads use SQL. Eviction never deletes durable rows. Synchronous compatibility writers publish to the same owner. A restart rebuilds the views from the database.
+
     Expired values become unavailable immediately at their TTL deadline. Namespace mutations remove expired rows in bounded batches; the Gateway does not run a periodic keyed-state expiry sweep. An inactive namespace may retain expired rows on disk until a later mutation, without making those values readable or counting them toward live capacity.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
@@ -232,11 +234,11 @@ keep the existing synchronous fallback.
     Retained storage does not add a database-version fence. Older OpenClaw binaries still apply older cache and plugin-quota rules and must not write to expanded retained state. Before downgrading, restore a compatible pre-update backup; matching SQLite schema versions alone do not establish safe retention behavior.
     </Warning>
 
-    `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one SQLite selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
+    `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one complete resident view or SQL selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
 
     Current host factories provide `lookupMany`, but the public store types keep it optional for existing third-party adapters and declared older host versions. A plugin supporting those hosts must check the method and use its existing sequential `lookup` path when absent; never retry a failed bulk read through that path. Matrix, Microsoft Teams, and Voice Call retain this compatibility until their declared minimum host supplies the capability. Do not import a new helper export from an older host just to detect this method.
 
-    `count()` returns the number of live stored rows in the runtime-bound plugin and namespace without loading or decoding their JSON values. A row expires when its expiry timestamp is at or before the call's cutoff. Counting does not delete expired rows, create a missing database, or join the writable database lifecycle. Corrupt JSON still occupies a live row and is counted; `lookup` and `entries` retain their decoding errors. Database acquisition and query failures propagate with operation `count`. A count and a later write are separate operations; the write remains responsible for enforcing capacity.
+    `count()` returns the number of live stored rows in the runtime-bound plugin and namespace without decoding their JSON values. A cold namespace may load raw rows into the bounded owner. A row expires when its expiry timestamp is at or before the call's cutoff. Counting does not delete expired rows, create a missing database, or join the writable database lifecycle. Corrupt JSON still occupies a live row and is counted; `lookup` and `entries` retain their decoding errors. Database acquisition and query failures propagate with operation `count`. A count and a later write are separate operations; the write remains responsible for enforcing capacity.
 
     Current host factories provide `count`, but it remains optional in the public async and synchronous store types for supported older hosts and adapters. Callers supporting those stores can use `store.count ? await store.count() : (await store.entries()).length`; synchronous callers omit `await`. The fallback retains the older store's enumeration and decoding behavior. Only fall back when the method is absent, never after a failed count.
 
@@ -387,7 +389,8 @@ including exact-identity rollback through the upstream-link worker.
 
 Final ClickClack and Codex binding/revocation checks still use native reads where
 compound binding settlement invalidates a fact without publishing its replacement.
-The bounded observation cache is not complete authority for a cold or evicted key.
+The complete namespace owner retires uncertain views; cold or evicted namespaces
+cannot supply authority until reloaded.
 These security reads remain migration debt until the owner can publish every
 replacement and deletion; they must continue to deny revoked actions immediately.
 
@@ -408,8 +411,9 @@ must describe that timing rather than claim the write has already committed.
 
 For new atomic mutations, use `observe` and `compareAndApply`, which are required
 on V2 stores and optional only in the legacy structural store contract.
-`observe(key)` prepares a mutation through canonical writable database
-admission and may create or open state. It returns `{ value, comparison }`; use
+`observe(key)` prepares a mutation from the admitted resident view when available.
+Its fallback uses canonical writable database admission and may create or open
+state. It returns `{ value, comparison }`; use
 `lookup` for a plain, noncreating read. No transaction remains open while the
 caller prepares the next value.
 
@@ -507,6 +511,20 @@ An empty `writeStores` array selects a noncreating read. Supply `missingValue`
 when an absent physical database has a defined result, including explicit
 `undefined`; the host returns that value without creating the database or
 executing the handler. An absent source without `missingValue` refuses the call.
+
+Read-only operations capture all resident namespace views together and carry their
+raw rows to the worker handler. They require no SQL read transaction. If any view
+is unavailable or the combined payload exceeds the worker message limit, the whole
+operation uses one SQL snapshot instead. It never mixes resident and SQL views.
+This applies to SQLite and PostgreSQL; both have one active Gateway writer.
+
+Read-only operations may supply `ifEmpty: { store, value }` when an empty namespace
+determines the result. Once the operation handler is prepared, a resident empty
+view returns `value` without a worker request. Otherwise the worker checks emptiness
+in the same snapshot used by the handler. The shortcut preserves namespace scope,
+expiry, `watchStores`, and receipt invalidation. A write after an empty read is
+observed by the next operation; callers must permit that ordinary read boundary.
+This option cannot be combined with nonempty `writeStores`.
 
 The Gateway owns online database mutation. Operation receipts use its in-process
 write publications, pending-mutation invalidation, expiry, and lifecycle state.

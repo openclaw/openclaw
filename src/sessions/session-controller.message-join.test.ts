@@ -38,136 +38,196 @@ import {
 } from "./session-controller.message-injection.js";
 import { prepareReplyMessageJoin } from "./session-controller.message-join.js";
 import { testing } from "./session-controller.test-support.js";
+import { createReplyTurnParticipants } from "./session-controller.tool-authority.js";
 
 afterEach(() => testing.resetSessionControllerForTest());
 
-it.each([
-  "resolved defaults",
-  "retained predecessor",
-  "retained predecessor pending",
-  "retained predecessor without source",
-  "retained predecessor without observation",
-  "claim added after empty observation",
-  "claim replaced before preparation",
-  "claim replaced before preparation without source",
-  "claim replaced after preparation",
-  "claim replaced after preparation without source",
-  "unqualified profile pin",
-  "legacy profile pin",
-  "legacy automatic profile",
-  "automatic profile rotation",
-  "caps-only",
-  "headless-to-web",
-  "protocol-only",
-  "narrower caps",
-  "new target",
-  "removed target",
-  "changed non-owner target",
-  "changed binding",
-  "cross-profile caps",
-  "missing selection compatible",
-  "missing selection expanded caps",
-  "session-only",
-  "current tool policy",
-  "saved elevation",
-  "exec configuration",
-  "workspace",
-  "saved working directory",
-  "narrowed scopes",
-  "revoked after preparation",
-  "replaced backend",
-  "saved settings after preparation",
-  "activity after preparation",
-  "delivery closed before final submission",
-] as const)("joins the selected execution with current admission checks: %s", async (change) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const key = `agent:main:join-${change.replaceAll(" ", "-")}`;
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const entry: SessionEntry = {
-      sessionId: "join-session",
-      lifecycleRevision: "join-revision",
-      updatedAt: 1,
-      permissionMode: "full",
-    };
-    if (change.startsWith("retained predecessor") || change.startsWith("claim replaced")) {
-      Object.assign(entry, {
-        restartRecoveryDeliveryRunId: "unresolved-predecessor",
-        restartRecoveryDeliverySourceRunId: "unresolved-predecessor",
-        ...(change === "retained predecessor pending"
+it("copies private turn participants and freezes only their shared command target", () => {
+  let current = true;
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "participant",
+    scopes: ["operator.read"],
+    assertCurrent() {
+      if (!current) {
+        throw new Error("revoked");
+      }
+    },
+  });
+  const freeze = vi.spyOn(Object, "freeze");
+  const participants = createReplyTurnParticipants({
+    operatorAuthority: authority,
+    senderId: "original",
+    gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
+  });
+  try {
+    expect(freeze).toHaveBeenCalledTimes(1);
+    const exposed = participants.resolve()!;
+    Object.assign(exposed, { senderId: "changed", name: "changed" });
+    expect(Reflect.set(exposed.gatewayUiCommandTarget!, "connId", "changed")).toBe(false);
+    expect(participants.resolve()).toMatchObject({
+      senderId: "original",
+      gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
+    });
+    current = false;
+    expect(() => exposed.assertCurrent()).toThrow("access changed");
+  } finally {
+    freeze.mockRestore();
+    participants.close();
+  }
+});
+
+type JoinCase = {
+  predecessor?: boolean | "pending";
+  claim?: "before" | "after" | "added";
+  source?: false;
+  legacy?: true;
+  profile?: "pin" | "auto" | "legacy-pin" | "legacy-auto";
+  headless?: true;
+  caps?: "expand" | "narrow" | "protocol";
+  target?: "new" | "removed" | "foreign";
+  mismatch?:
+    | "binding"
+    | "profile"
+    | "tools"
+    | "elevation"
+    | "exec"
+    | "workspace"
+    | "cwd"
+    | "scopes";
+  after?: "settings" | "activity" | "revoke" | "backend" | "delivery";
+  sessionOnly?: true;
+};
+type Outcome = "accepted" | "deferred" | "rejected" | "revoked";
+const recoveryClaim = (id: string) => ({
+  restartRecoveryDeliveryRunId: id,
+  restartRecoveryDeliverySourceRunId: id,
+});
+const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
+
+it.each<[string, Outcome, JoinCase?]>([
+  ["resolved defaults", "accepted"],
+  ["retained predecessor", "accepted", { predecessor: true }],
+  ["retained predecessor pending", "deferred", { predecessor: "pending" }],
+  ["retained predecessor without source", "accepted", { predecessor: true, source: false }],
+  ["retained predecessor without observation", "rejected", { predecessor: true, legacy: true }],
+  ["claim added after empty observation", "deferred", { claim: "added" }],
+  ["claim replaced before preparation", "deferred", { predecessor: true, claim: "before" }],
+  [
+    "claim replaced before preparation without source",
+    "deferred",
+    { predecessor: true, claim: "before", source: false },
+  ],
+  ["claim replaced after preparation", "rejected", { predecessor: true, claim: "after" }],
+  [
+    "claim replaced after preparation without source",
+    "rejected",
+    { predecessor: true, claim: "after", source: false },
+  ],
+  ["unqualified profile pin", "deferred", { profile: "pin" }],
+  ["legacy profile pin", "deferred", { profile: "legacy-pin" }],
+  ["legacy automatic profile", "accepted", { profile: "legacy-auto" }],
+  ["automatic profile rotation", "accepted", { profile: "auto" }],
+  ["caps-only", "accepted", { headless: true, caps: "expand" }],
+  ["headless-to-web", "accepted", { headless: true, caps: "expand", target: "new" }],
+  ["protocol-only", "accepted", { caps: "protocol" }],
+  ["narrower caps", "deferred", { caps: "narrow" }],
+  ["new target", "accepted", { headless: true, target: "new" }],
+  ["removed target", "deferred", { target: "removed" }],
+  ["changed non-owner target", "deferred", { target: "foreign" }],
+  ["changed binding", "deferred", { mismatch: "binding" }],
+  ["cross-profile caps", "deferred", { headless: true, caps: "expand", mismatch: "profile" }],
+  ["missing selection compatible", "accepted", { legacy: true }],
+  ["missing selection expanded caps", "deferred", { legacy: true, caps: "expand" }],
+  ["session-only", "accepted", { sessionOnly: true }],
+  ["current tool policy", "deferred", { mismatch: "tools" }],
+  ["saved elevation", "deferred", { mismatch: "elevation" }],
+  ["exec configuration", "deferred", { mismatch: "exec" }],
+  ["workspace", "deferred", { mismatch: "workspace" }],
+  ["saved working directory", "deferred", { mismatch: "cwd" }],
+  ["narrowed scopes", "deferred", { mismatch: "scopes" }],
+  ["revoked after preparation", "revoked", { after: "revoke" }],
+  ["replaced backend", "rejected", { after: "backend" }],
+  ["saved settings after preparation", "rejected", { after: "settings" }],
+  ["activity after preparation", "accepted", { after: "activity" }],
+  ["delivery closed before final submission", "rejected", { after: "delivery" }],
+])(
+  "joins the selected execution with current admission checks: %s",
+  async (name, outcome, c = {}) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const key = `agent:main:join-${name.replaceAll(" ", "-")}`;
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const entry: SessionEntry = {
+        sessionId: "join-session",
+        lifecycleRevision: "join-revision",
+        updatedAt: 1,
+        permissionMode: "full",
+        ...(c.predecessor ? recoveryClaim("unresolved-predecessor") : {}),
+        ...(c.predecessor === "pending"
           ? { restartRecoveryDeliveryReceiptState: "terminal-pending" as const }
           : {}),
+      };
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+      const address = { agentId: "main", sessionKey: key, storePath };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+      const run = createQueueTestRun({ prompt: "original work", originatingChannel: "webchat" });
+      Object.assign(run.run, {
+        agentId: "main",
+        agentDir: state.agentDir(),
+        sessionKey: key,
+        sessionId: entry.sessionId,
+        workspaceDir: state.workspaceDir,
+        messageProvider: "webchat",
+        senderIsOwner: true,
+        permissionMode: "full",
+        config: cfg,
+        traceAuthorized: false,
+        clientCaps: c.headless ? [] : ["ui-commands"],
+        gatewayUiCommandTarget:
+          c.headless || c.caps === "protocol"
+            ? undefined
+            : uiTarget(
+                "original-connection",
+                c.target === "foreign" ? "destination-owner" : "join-owner",
+              ),
       });
-    }
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
-    const run = createQueueTestRun({ prompt: "original work", originatingChannel: "webchat" });
-    Object.assign(run.run, {
-      agentId: "main",
-      agentDir: state.agentDir(),
-      sessionKey: key,
-      sessionId: entry.sessionId,
-      workspaceDir: state.workspaceDir,
-      messageProvider: "webchat",
-      senderIsOwner: true,
-      permissionMode: "full",
-      config: cfg,
-      traceAuthorized: false,
-    });
-    if (change === "unqualified profile pin" || change === "automatic profile rotation") {
-      run.run.authProfileId = "synthetic-profile-a";
-      run.run.authProfileIdSource = change === "automatic profile rotation" ? "auto" : undefined;
-    }
-    const headless = ["caps-only", "headless-to-web", "new target", "cross-profile caps"].includes(
-      change,
-    );
-    const noTarget = headless || change === "protocol-only";
-    const nonOwnerTarget = change === "changed non-owner target";
-    Object.assign(run.run, {
-      clientCaps: headless ? [] : ["ui-commands"],
-      gatewayUiCommandTarget: noTarget
-        ? undefined
-        : {
-            connId: "original-connection",
-            profileId: nonOwnerTarget ? "destination-owner" : "join-owner",
-          },
-    });
-    const originalCaps = structuredClone(run.run.clientCaps);
-    const originalTarget = structuredClone(run.run.gatewayUiCommandTarget);
-    let sourceCurrent = true;
-    const assertSource = () => {
-      if (!sourceCurrent) {
-        throw new Error("Caller revoked");
+      if (c.profile === "pin" || c.profile === "auto") {
+        run.run.authProfileId = "synthetic-profile-a";
+        run.run.authProfileIdSource = c.profile === "auto" ? "auto" : undefined;
       }
-    };
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "join-owner",
-      scopes: ["operator.admin"],
-      gatewayAccessGrant: null,
-      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
-      assertCurrent: assertSource,
-    });
-    run.operatorAuthority = operatorAuthority;
-    await withSessionTurn(
-      { sessionKey: key, sessionId: entry.sessionId, agentId: "main", storePath },
-      async (operation) => {
+      const original = structuredClone([run.run.clientCaps, run.run.gatewayUiCommandTarget]);
+      let sourceCurrent = true;
+      const assertSource = () => {
+        if (!sourceCurrent) {
+          throw new Error("Caller revoked");
+        }
+      };
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "join-owner",
+        scopes: ["operator.admin"],
+        gatewayAccessGrant: null,
+        modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
+        assertCurrent: assertSource,
+      });
+      run.operatorAuthority = operatorAuthority;
+      await withSessionTurn({ ...address, sessionId: entry.sessionId }, async (operation) => {
         if (!operation) {
           throw new Error("Expected direct execution owner");
         }
         await operation.bindToolAuthoritySnapshotAsync(
-          change.startsWith("missing selection") ||
-            change === "retained predecessor without observation"
-            ? prepareReplyToolAuthority(run)
-            : prepareReplyRunToolAuthority(run, entry),
+          c.legacy ? prepareReplyToolAuthority(run) : prepareReplyRunToolAuthority(run, entry),
         );
         const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
         const delivered = vi.fn();
         const replacement = vi.fn();
-        operation.attachBackend({
-          kind: "embedded",
+        const backend = {
+          kind: "embedded" as const,
           toolAuthorityFingerprint: fingerprint,
-          terminalReplyExpectation: "required",
+          terminalReplyExpectation: "required" as const,
           cancel() {},
+        };
+        operation.attachBackend({
+          ...backend,
           messageInjectionV2: {
             version: 2,
             isAvailable: () => true,
@@ -184,9 +244,8 @@ it.each([
           },
         });
         operation.setPhase("running");
-        const originalParticipant = operation.personalToolParticipants?.resolve();
-        const originalParticipantTarget = structuredClone(
-          originalParticipant?.gatewayUiCommandTarget,
+        const originalParticipant = structuredClone(
+          operation.personalToolParticipants?.resolve()?.gatewayUiCommandTarget,
         );
         const target = captureReplyMessageInjectionTarget(operation);
         if (!target) {
@@ -197,137 +256,98 @@ it.each([
           prompt: "change the current work",
           run: {
             ...run.run,
-            traceAuthorized: true,
-            elevatedLevel: "off" as const,
-            bashElevated: {
-              enabled: true,
-              allowed: false,
-              defaultLevel: "off" as const,
-            },
+            ...(c.legacy
+              ? {}
+              : {
+                  traceAuthorized: true,
+                  elevatedLevel: "off" as const,
+                  bashElevated: { enabled: true, allowed: false, defaultLevel: "off" as const },
+                }),
           },
         };
-        const unchangedLegacy =
-          change.startsWith("missing selection") ||
-          change === "retained predecessor without observation";
-        if (unchangedLegacy) {
-          incoming.run.traceAuthorized = run.run.traceAuthorized;
-          incoming.run.elevatedLevel = run.run.elevatedLevel;
-          incoming.run.bashElevated = run.run.bashElevated;
+        if (c.caps) {
+          incoming.run.clientCaps =
+            c.caps === "narrow"
+              ? []
+              : [
+                  ...(c.caps === "expand" ? (run.run.clientCaps ?? []) : []),
+                  "ui-commands",
+                  "usage-refreshing",
+                ];
         }
-        if (
-          [
-            "caps-only",
-            "headless-to-web",
-            "cross-profile caps",
-            "missing selection expanded caps",
-          ].includes(change)
-        ) {
-          incoming.run.clientCaps = [
-            ...(run.run.clientCaps ?? []),
-            "ui-commands",
-            "usage-refreshing",
-          ];
+        if (c.target) {
+          incoming.run.gatewayUiCommandTarget =
+            c.target === "removed"
+              ? undefined
+              : c.target === "foreign"
+                ? uiTarget("other-destination", "different-destination-owner")
+                : uiTarget("new-connection");
         }
-        if (change === "protocol-only") {
-          incoming.run.clientCaps = ["ui-commands", "usage-refreshing"];
-        }
-        if (change === "narrower caps") {
-          incoming.run.clientCaps = [];
-        }
-        if (["headless-to-web", "new target"].includes(change)) {
-          incoming.run.gatewayUiCommandTarget = {
-            connId: "new-connection",
-            profileId: "join-owner",
-          };
-        }
-        if (change === "removed target") {
-          incoming.run.gatewayUiCommandTarget = undefined;
-        }
-        if (change === "changed non-owner target") {
-          incoming.run.gatewayUiCommandTarget = {
-            connId: "other-destination",
-            profileId: "different-destination-owner",
-          };
-        }
-        if (change === "changed binding") {
-          incoming.run.toolBindings = { synthetic: "different-binding" };
-        }
-        if (change === "cross-profile caps") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
-            ...operatorAuthority,
-            profileId: "another-owner",
-          });
-        }
-        const incomingCaps = structuredClone(incoming.run.clientCaps);
-        const incomingTarget = structuredClone(incoming.run.gatewayUiCommandTarget);
-        const assertFrozenParticipants = () => {
-          expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
-          expect(run.run.clientCaps).toEqual(originalCaps);
-          expect(run.run.gatewayUiCommandTarget).toEqual(originalTarget);
-          expect(incoming.run.clientCaps).toEqual(incomingCaps);
-          expect(incoming.run.gatewayUiCommandTarget).toEqual(incomingTarget);
-          expect(operation.personalToolParticipants?.resolve()?.gatewayUiCommandTarget).toEqual(
-            originalParticipantTarget,
-          );
-        };
-        let currentEntry = entry;
-        if (change === "unqualified profile pin" || change === "automatic profile rotation") {
+        if (c.profile === "pin" || c.profile === "auto") {
           incoming.run.authProfileId = "synthetic-profile-b";
         }
-        if (change === "legacy profile pin" || change === "legacy automatic profile") {
+        if (c.mismatch === "binding") {
+          incoming.run.toolBindings = { synthetic: "different-binding" };
+        }
+        if (c.mismatch === "tools") {
+          incoming.run.config = { ...cfg, tools: { deny: ["exec"] } };
+        }
+        if (c.mismatch === "exec") {
+          incoming.run.config = { ...cfg, tools: { exec: { security: "deny" } } };
+        }
+        if (c.mismatch === "workspace") {
+          incoming.run.workspaceDir = `${state.workspaceDir}/other`;
+        }
+        if (c.mismatch === "profile" || c.mismatch === "scopes") {
+          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
+            ...operatorAuthority,
+            ...(c.mismatch === "profile"
+              ? { profileId: "another-owner" }
+              : { scopes: ["operator.read"] }),
+          });
+        }
+        let currentEntry = entry;
+        if (c.profile === "legacy-pin" || c.profile === "legacy-auto") {
           currentEntry = {
             ...entry,
             authProfileOverride: "synthetic-legacy-profile",
-            authProfileOverrideCompactionCount:
-              change === "legacy automatic profile" ? 0 : undefined,
+            authProfileOverrideCompactionCount: c.profile === "legacy-auto" ? 0 : undefined,
           };
         }
-        if (change === "current tool policy") {
-          incoming.run.config = { ...cfg, tools: { deny: ["exec"] } };
-        }
-        if (change === "saved elevation") {
+        if (c.mismatch === "elevation") {
           currentEntry = { ...entry, elevatedLevel: "full" };
         }
-        if (change === "exec configuration") {
-          incoming.run.config = { ...cfg, tools: { exec: { security: "deny" } } };
-        }
-        if (change === "workspace") {
-          incoming.run.workspaceDir = `${state.workspaceDir}/other`;
-        }
-        if (change === "saved working directory") {
+        if (c.mismatch === "cwd") {
           currentEntry = { ...entry, spawnedCwd: `${state.workspaceDir}/other` };
         }
-        if (change === "narrowed scopes") {
-          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
-            ...operatorAuthority,
-            scopes: ["operator.read"],
-          });
+        if (c.claim === "before" || c.claim === "added") {
+          currentEntry = { ...entry, ...recoveryClaim("later-source") };
+          await upsertSessionEntryCore(address, currentEntry);
         }
-        if (
-          change.startsWith("claim replaced before preparation") ||
-          change === "claim added after empty observation"
-        ) {
-          currentEntry = {
-            ...entry,
-            restartRecoveryDeliveryRunId: "later-source",
-            restartRecoveryDeliverySourceRunId: "later-source",
-          };
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: key, storePath },
-            currentEntry,
+        const incomingShape = structuredClone([
+          incoming.run.clientCaps,
+          incoming.run.gatewayUiCommandTarget,
+        ]);
+        const assertFrozen = () => {
+          expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+          expect([
+            run.run.clientCaps,
+            run.run.gatewayUiCommandTarget,
+            operation.personalToolParticipants?.resolve()?.gatewayUiCommandTarget,
+          ]).toEqual([...original, originalParticipant]);
+          expect([incoming.run.clientCaps, incoming.run.gatewayUiCommandTarget]).toEqual(
+            incomingShape,
           );
-        }
+        };
         const {
           traceAuthorized: _trace,
           allowCollaborativeSteering: _collaboration,
           ...caller
         } = toolAuthorityOverlay(incoming);
         const delivery = prepareSteeringDelivery({
-          agentId: "main",
-          storePath,
-          sessionKey: key,
+          ...address,
           sessionId: entry.sessionId,
-          sourceTurnId: change.endsWith("without source") ? undefined : "current-execution",
+          sourceTurnId: c.source === false ? undefined : "current-execution",
           entry: currentEntry,
           assertCurrent: assertSource,
         });
@@ -343,86 +363,49 @@ it.each([
             config: incoming.run.config,
             selectedRoute: { provider: incoming.run.provider, model: incoming.run.model },
             fallbackAvailability: { kind: "none_configured", source: "inherited" },
-            executionSelection:
-              change === "session-only"
-                ? captureReplySessionExecutionSelection({
-                    config: cfg,
-                    agentId: "main",
-                    sessionEntry: currentEntry,
-                  })
-                : captureReplyExecutionSelection({ run: incoming.run, sessionEntry: currentEntry }),
+            executionSelection: c.sessionOnly
+              ? captureReplySessionExecutionSelection({
+                  config: cfg,
+                  agentId: "main",
+                  sessionEntry: currentEntry,
+                })
+              : captureReplyExecutionSelection({ run: incoming.run, sessionEntry: currentEntry }),
           },
         });
-        const allowed = [
-          "resolved defaults",
-          "retained predecessor",
-          "retained predecessor without source",
-          "retained predecessor without observation",
-          "claim replaced after preparation",
-          "claim replaced after preparation without source",
-          "legacy automatic profile",
-          "automatic profile rotation",
-          "caps-only",
-          "headless-to-web",
-          "protocol-only",
-          "new target",
-          "missing selection compatible",
-          "session-only",
-          "revoked after preparation",
-          "replaced backend",
-          "saved settings after preparation",
-          "activity after preparation",
-          "delivery closed before final submission",
-        ].includes(change);
-        expect(joined.kind).toBe(allowed ? "prepared" : "deferred");
-        if (change === "claim added after empty observation") {
+        expect(joined.kind).toBe(outcome === "deferred" ? "deferred" : "prepared");
+        if (c.claim === "added") {
           expect(joined).toMatchObject({ kind: "deferred", reason: "reply-owner-ended" });
         }
-        assertFrozenParticipants();
+        assertFrozen();
         if (joined.kind !== "prepared") {
           expect(delivered).not.toHaveBeenCalled();
           return;
         }
-        if (change === "revoked after preparation") {
+        if (c.after === "revoke") {
           sourceCurrent = false;
         }
-        if (
-          change === "saved settings after preparation" ||
-          change === "activity after preparation"
-        ) {
-          const updated = await patchSessionEntryCore(
-            { agentId: "main", sessionKey: key, storePath },
-            () =>
-              change === "saved settings after preparation"
-                ? { elevatedLevel: "full" }
-                : { updatedAt: 2 },
+        if (c.after === "settings" || c.after === "activity") {
+          const settings = c.after === "settings";
+          const updated = await patchSessionEntryCore(address, () =>
+            settings ? { elevatedLevel: "full" } : { updatedAt: 2 },
           );
           expect(updated).toMatchObject({
             sessionId: entry.sessionId,
             lifecycleRevision: entry.lifecycleRevision,
-            ...(change === "saved settings after preparation" ? { elevatedLevel: "full" } : {}),
+            ...(settings ? { elevatedLevel: "full" } : {}),
           });
-          if (change === "activity after preparation") {
+          if (!settings) {
             expect(updated?.updatedAt).toBeGreaterThan(entry.updatedAt);
           }
         }
-        if (change.startsWith("claim replaced after preparation")) {
-          await patchSessionEntryCore({ agentId: "main", sessionKey: key, storePath }, () => ({
-            restartRecoveryDeliveryRunId: "later-source",
-            restartRecoveryDeliverySourceRunId: "later-source",
-          }));
+        if (c.claim === "after") {
+          await patchSessionEntryCore(address, () => recoveryClaim("later-source"));
         }
-        if (change === "replaced backend") {
-          operation.attachBackend({
-            kind: "embedded",
-            toolAuthorityFingerprint: fingerprint,
-            terminalReplyExpectation: "required",
-            cancel() {},
-            queueMessage: replacement,
-          });
+        if (c.after === "backend") {
+          operation.attachBackend({ ...backend, queueMessage: replacement });
         }
         try {
-          if (change === "revoked after preparation") {
+          if (outcome === "revoked") {
             const refused = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
               assertCurrent: assertSource,
             });
@@ -435,6 +418,11 @@ it.each([
             expect(replacement).not.toHaveBeenCalled();
             return;
           }
+          const readAuthority = () => {
+            joined.toolAuthority.read();
+          };
+          const closed = c.after === "delivery";
+          const unobserved = c.predecessor && c.legacy;
           const attempt = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
             assertCurrent: assertSource,
             isInboundUserMessage: true,
@@ -443,21 +431,13 @@ it.each([
             toolAuthorityPreparation: bindPreparedToolAuthority(
               bindWorkerToolPreparation({
                 authorityKind: "source-bound" as const,
-                assertCurrent:
-                  change === "delivery closed before final submission"
-                    ? assertSource
-                    : () => {
-                        joined.toolAuthority.read();
-                      },
-                compatAssertCurrent: () => {
-                  joined.toolAuthority.read();
-                },
+                assertCurrent: closed ? assertSource : readAuthority,
+                compatAssertCurrent: readAuthority,
                 prepareCurrent:
-                  change === "delivery closed before final submission" ||
-                  change === "retained predecessor without observation"
+                  closed || unobserved
                     ? async () => {
                         await joined.prepareCurrent();
-                        if (change === "delivery closed before final submission") {
+                        if (closed) {
                           if (isToolAuthorityReadCaptureActive()) {
                             delivery.release();
                           }
@@ -469,34 +449,24 @@ it.each([
               }),
             ),
           });
-          const outcome = await attempt.outcome;
-          const rejected =
-            change === "replaced backend" ||
-            change === "delivery closed before final submission" ||
-            change === "retained predecessor without observation" ||
-            change === "saved settings after preparation" ||
-            change.startsWith("claim replaced after preparation");
-          expect(outcome.status).toBe(rejected ? "rejected" : "accepted");
-          expect(delivered).toHaveBeenCalledTimes(rejected ? 0 : 1);
+          expect((await attempt.outcome).status).toBe(outcome);
+          expect(delivered).toHaveBeenCalledTimes(outcome === "rejected" ? 0 : 1);
           expect(replacement).not.toHaveBeenCalled();
-          assertFrozenParticipants();
+          assertFrozen();
         } finally {
           joined.toolAuthority.release();
         }
-      },
-    );
-    if (change === "retained predecessor") {
-      const retained = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-      expect(
-        resolveRestartRecoveryTerminalDeliveryDisposition(retained, {
-          sessionId: entry.sessionId,
-          sourceTurnId: "current-execution",
-        }),
-      ).toBe("stale");
-      expect(retained).toMatchObject({
-        restartRecoveryDeliveryRunId: "unresolved-predecessor",
-        restartRecoveryDeliverySourceRunId: "unresolved-predecessor",
       });
-    }
-  });
-});
+      if (name === "retained predecessor") {
+        const retained = loadSessionEntry(address);
+        expect(
+          resolveRestartRecoveryTerminalDeliveryDisposition(retained, {
+            sessionId: entry.sessionId,
+            sourceTurnId: "current-execution",
+          }),
+        ).toBe("stale");
+        expect(retained).toMatchObject(recoveryClaim("unresolved-predecessor"));
+      }
+    });
+  },
+);

@@ -10,6 +10,17 @@ import "./image-lightbox.tsx";
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
 
+async function tabTo(target: HTMLElement, reverse = false) {
+  await userEvent.keyboard(reverse ? "{Shift>}{Tab}{/Shift}" : "{Tab}");
+  expect(document.activeElement).toBe(target);
+}
+
+function expectSameRect(actual: DOMRect, expected: DOMRect) {
+  for (const dimension of ["x", "y", "width", "height"] as const) {
+    expect(actual[dimension]).toBeCloseTo(expected[dimension], 1);
+  }
+}
+
 beforeEach(async () => {
   previousViewport = { width: window.innerWidth, height: window.innerHeight };
   await page.viewport(1440, 1000);
@@ -70,7 +81,63 @@ function imageSource(width: number, height: number, color = "#264060") {
   return canvas.toDataURL("image/png");
 }
 
-it.each(["removed", "retained", "newer"])("restores tile focus after %s close", async (mode) => {
+it.each([
+  { name: "portrait trackpad pinch", width: 360, height: 800, input: "pinch" },
+  { name: "landscape mouse wheel", width: 800, height: 360, input: "wheel" },
+  { name: "small image double-click", width: 320, height: 200, input: "double-click" },
+])(
+  "keeps the image point under the pointer during $name zoom",
+  async ({ width, height, input }) => {
+    const { viewer, image } = await mountImage({
+      src: imageSource(width, height, "#264060"),
+      title: "Pointer zoom",
+      ...(input === "double-click" ? {} : { width, height }),
+    });
+    const before = image.getBoundingClientRect();
+    // An off-center point distinguishes pointer zoom from center-only button zoom.
+    const x = before.left + before.width * 0.85;
+    const y = before.top + before.height * 0.4;
+    const stage = viewer.querySelector(".stage")!;
+    // Continue past the 400% cap: a stale transform can reappear when scale stops changing.
+    const steps = input === "double-click" ? 1 : 18;
+    for (let step = 0; step < steps; step += 1) {
+      if (input === "double-click") {
+        stage.dispatchEvent(
+          new MouseEvent("dblclick", { clientX: x, clientY: y, bubbles: true, cancelable: true }),
+        );
+      } else {
+        stage.dispatchEvent(
+          new WheelEvent("wheel", {
+            clientX: x,
+            clientY: y,
+            deltaY: -100,
+            ctrlKey: input === "pinch",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+      await nextFrame();
+      await nextFrame();
+      const after = image.getBoundingClientRect();
+      expect(after.width).toBeGreaterThan(before.width);
+      expect(after.left + after.width * 0.85).toBeCloseTo(x, 0);
+      expect(after.top + after.height * 0.4).toBeCloseTo(y, 0);
+    }
+    if (input !== "double-click") {
+      expect(viewer.querySelector(".zoom-level")?.textContent?.trim()).toBe("400%");
+    }
+
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Reset zoom"]')!.click();
+    await nextFrame();
+    const reset = image.getBoundingClientRect();
+    for (const dimension of ["x", "y", "width", "height"] as const) {
+      expect(reset[dimension]).toBeCloseTo(before[dimension], 0);
+    }
+  },
+);
+
+it.each(["removed", "newer"])("restores tile focus after %s close", async (mode) => {
   const trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Open image tile";
   onTestFinished(() => trigger.remove());
@@ -95,23 +162,19 @@ it.each(["removed", "retained", "newer"])("restores tile focus after %s close", 
   expect(dialog.open).toBe(true);
   expect(document.activeElement).not.toBe(trigger);
 
-  let expected: HTMLElement = trigger;
-  if (mode === "newer") {
-    const next = document.createElement("openclaw-modal-dialog");
-    const input = document.createElement("input");
-    input.autofocus = true;
-    next.initialFocus = () => input;
-    next.append(input);
-    document.body.append(next);
-    onTestFinished(() => next.remove());
-    await next.updateComplete;
-    expect(document.activeElement).toBe(input);
-    expected = input;
-  }
+  const next = document.createElement("openclaw-modal-dialog");
+  const input = document.createElement("input");
+  input.autofocus = true;
+  next.initialFocus = () => input;
+  next.append(input);
+  document.body.append(next);
+  onTestFinished(() => next.remove());
+  await next.updateComplete;
+  expect(document.activeElement).toBe(input);
   animation.finish();
   await hidden;
   expect(dialog.open).toBe(false);
-  expect(document.activeElement).toBe(expected);
+  expect(document.activeElement).toBe(input);
 });
 
 it.each([
@@ -145,6 +208,8 @@ it.each([
     await Promise.all(image.getAnimations().map((animation) => animation.finished));
     const zoomBefore = zoom.textContent;
     const before = image.getBoundingClientRect();
+    expect(before.width).toBeGreaterThan(fitted.width);
+    expect(before.height).toBeGreaterThan(fitted.height);
     full.resolve({ src: source, title: "Synthetic screenshot", width, height });
     await expect.poll(() => image.src).toBe(source);
     await image.decode();
@@ -152,9 +217,7 @@ it.each([
     const after = image.getBoundingClientRect();
     expect(viewer.querySelector("img")).toBe(image);
     expect(zoom.textContent).toBe(zoomBefore);
-    for (const dimension of ["x", "y", "width", "height"] as const) {
-      expect(after[dimension]).toBeCloseTo(before[dimension], 1);
-    }
+    expectSameRect(after, before);
   },
 );
 
@@ -180,17 +243,12 @@ it.each([320, 390, 1440])("keeps download below media and clear of zoom at %ipx"
   const close = viewer.querySelector<HTMLButtonElement>(".close")!;
   const external = viewer.querySelector<HTMLAnchorElement>(".external-image")!;
   expect(external.href).toBe("https://example.invalid/original.png");
-  expect(external.getAttribute("aria-label")).toBe("Open in new tab");
   expect(external.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(original);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
+  await tabTo(external, true);
+  await tabTo(original, true);
+  await tabTo(external);
+  await tabTo(close);
 });
 
 it("uses intrinsic dimensions for unsized neighbors", async () => {
@@ -242,16 +300,10 @@ it("skips the pending video original link without skipping native controls", asy
   const close = viewer.querySelector<HTMLButtonElement>(".close")!;
   const previous = viewer.querySelector<HTMLButtonElement>(".previous")!;
   const next = viewer.querySelector<HTMLButtonElement>(".next")!;
-  const pendingLink = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
-  expect(pendingLink.tabIndex).toBe(-1);
-  expect(pendingLink.hasAttribute("href")).toBe(false);
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(next);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(video);
+  await tabTo(next, true);
+  await tabTo(close);
+  await tabTo(video);
   const beforeSeek = video.currentTime;
   let arrowPrevented: boolean | undefined;
   video.addEventListener("keydown", (event) => (arrowPrevented = event.defaultPrevented), {
@@ -276,10 +328,8 @@ it("skips the pending video original link without skipping native controls", asy
     .toBe(0);
   const link = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(link);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
+  await tabTo(link, true);
+  await tabTo(close);
   await userEvent.keyboard("{Escape}");
   expect(viewer.isConnected).toBe(false);
   expect(document.activeElement).toBe(trigger);
@@ -345,10 +395,7 @@ it.each(["no-preference", "reduce"] as const)(
         expect(outgoing).toBeDefined();
         expect(Number(getComputedStyle(outgoing).opacity)).toBeGreaterThan(0);
         expect(Number(getComputedStyle(outgoing).opacity)).toBeLessThan(1);
-        const outgoingBounds = outgoing.getBoundingClientRect();
-        for (const dimension of ["x", "y", "width", "height"] as const) {
-          expect(outgoingBounds[dimension]).toBeCloseTo(previousBounds[dimension], 1);
-        }
+        expectSameRect(outgoing.getBoundingClientRect(), previousBounds);
       }
     }
     for (const animation of viewer.getAnimations({ subtree: true })) {

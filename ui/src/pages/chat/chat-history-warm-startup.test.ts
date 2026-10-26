@@ -13,18 +13,21 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   resetChatHistoryProjection,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
   nativeHistoryMessage,
@@ -39,6 +42,7 @@ import {
   observeChatCache,
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
+  setChatHistoryCursor,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
@@ -240,6 +244,29 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it("keeps saved workspace icons passive until connection and route admission", () => {
+    const h = mountPane();
+    h.pane.context.gateway.connection.token = "saved-fixture-token";
+    const header = () =>
+      h.pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(h.state),
+        { key: sessionKey, kind: "direct" },
+        false,
+        "/workspace/project",
+        false,
+        null,
+      ).header;
+
+    expect(header().workspaceIcon).toBeNull();
+    h.connect();
+    h.pane.routeResolutionPending = true;
+    expect(header().workspaceIcon).toBeNull();
+    h.pane.routeResolutionPending = false;
+    expect(header().workspaceIcon).toMatchObject({ authReady: true });
+    h.state.connected = false;
+    expect(header().workspaceIcon).toBeNull();
+  });
+
   it.each(["hit", "miss", "error"] as const)(
     "waits for the cached title before painting a fallback (%s)",
     async (outcome) => {
@@ -267,7 +294,7 @@ describe("first chat startup snapshot ordering", () => {
       const network = h.pendingResponse();
       h.connect();
       const loading = h.start();
-      expect(h.request).not.toHaveBeenCalled();
+      expect(h.request).toHaveBeenCalledOnce();
       if (outcome === "hit") {
         h.read.resolve({
           ...stored,
@@ -344,7 +371,7 @@ describe("first chat startup snapshot ordering", () => {
     flush();
     h.connect();
     const loading = h.start();
-    expect(h.request).not.toHaveBeenCalled();
+    expect(h.request).toHaveBeenCalledOnce();
     const fresh = { ...h.liveResult, messages: structuredClone(stored.messages) };
     record.resolve(snapshotRecord(h, snapshot));
     await vi.advanceTimersByTimeAsync(0);
@@ -370,26 +397,102 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages[0]).not.toBe(cachedMessage);
   });
 
-  it("publishes history after the cache grace period and ignores a late snapshot", async () => {
+  it.each([false, true])(
+    "requests history without waiting for storage and ignores a late snapshot (subscription=%s)",
+    async (subscribe) => {
+      const h = mountPane();
+      const network = h.pendingResponse();
+      if (subscribe) {
+        connectSessionOwner(h);
+      } else {
+        h.connect();
+      }
+      const subscription = subscribe
+        ? syncSelectedSessionMessageSubscription(h.state, { initialHistory: true })
+        : undefined;
+      const loading = h.start();
+      await vi.waitFor(() =>
+        expect(h.request).toHaveBeenCalledExactlyOnceWith(
+          subscribe ? "sessions.messages.subscribe" : "chat.startup",
+          subscribe
+            ? expect.objectContaining({
+                initialHistory: expect.not.objectContaining({ cursor: expect.anything() }),
+              })
+            : expect.not.objectContaining({ cursor: expect.anything() }),
+          expect.anything(),
+        ),
+      );
+      network.resolve(
+        subscribe
+          ? { key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } }
+          : h.liveResult,
+      );
+      await subscription;
+      await loading;
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      h.read.resolve(stored);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("uses the subscribed full page when storage restores a cursor while it is pending", async () => {
     const h = mountPane();
     const network = h.pendingResponse();
-    h.connect();
+    connectSessionOwner(h);
+    const subscription = syncSelectedSessionMessageSubscription(h.state, { initialHistory: true });
     const loading = h.start();
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(h.request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.request).toHaveBeenCalledExactlyOnceWith(
+    await vi.waitFor(() =>
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.not.objectContaining({ cursor: expect.anything() }),
+        }),
+        expect.anything(),
+      ),
+    );
+    const historyState = {
+      stateRevision: startupRevision(),
+      pendingInputs: emptyPendingInputs(),
+      commands: startupCommands(),
+      sessionInfo: h.liveResult.sessionInfo,
+    };
+    await h.hydrate({ ...stored, historyState });
+    network.resolve({ key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } });
+    await subscription;
+    await loading;
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.state.chatMessages).toEqual(liveMessages);
+  });
+
+  it("requests the current cursor when a subscribed delta's cached cursor changes", async () => {
+    const h = mountPane();
+    await h.hydrate();
+    const network = h.pendingResponse();
+    connectSessionOwner(h);
+    const subscription = syncSelectedSessionMessageSubscription(h.state, { initialHistory: true });
+    const loading = h.start();
+    await vi.waitFor(() =>
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.objectContaining({ cursor: stored.deltaCursor }),
+        }),
+        expect.anything(),
+      ),
+    );
+    setChatHistoryCursor(h.state, "newer-cache-cursor");
+    network.resolve({ key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } });
+    await subscription;
+    await loading;
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(h.request).toHaveBeenLastCalledWith(
       "chat.startup",
-      expect.not.objectContaining({ cursor: expect.anything() }),
+      expect.objectContaining({ cursor: "newer-cache-cursor" }),
       expect.anything(),
     );
-    network.resolve(h.liveResult);
-    await loading;
     expect(h.state.chatMessages).toEqual(liveMessages);
-    h.read.resolve(stored);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.state.chatMessages).toEqual(liveMessages);
-    expect(h.request).toHaveBeenCalledOnce();
   });
 
   it.each(["unchanged", "changed", "empty", "replacement"] as const)(
@@ -621,9 +724,10 @@ describe("first chat startup snapshot ordering", () => {
     },
   );
 
-  it("retires the prior session capability while its request waits for cache", async () => {
+  it("retires the prior session capability while its history request is pending", async () => {
     const h = mountPane();
     const { gateway, sessions } = connectSessionOwner(h);
+    const network = h.pendingResponse();
     const retired = h.start();
     await vi.advanceTimersByTimeAsync(0);
     const replacement = createTestSessionCapability(gateway);
@@ -635,6 +739,7 @@ describe("first chat startup snapshot ordering", () => {
       scheduleScroll: false,
     });
     h.read.resolve(stored);
+    network.resolve(h.liveResult);
     await expect(retired).resolves.toBeUndefined();
     await current;
     expect(sessions.state.result).toBeNull();
@@ -642,10 +747,10 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual(liveMessages);
   });
 
-  it("sends retained cursor and receipts when the pane mounts after readiness", async () => {
+  it("sends the retained cursor and receipts once storage has settled", async () => {
     const record = createDeferred<unknown>();
     vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(record.promise);
-    prewarmChatSnapshot(
+    void prewarmChatSnapshot(
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey },
@@ -670,10 +775,9 @@ describe("first chat startup snapshot ordering", () => {
       metadata: {},
     });
     h.connect();
-    const loading = h.start();
-    expect(h.request).not.toHaveBeenCalled();
     record.resolve(snapshotRecord(h, { ...stored, historyState }));
-    await loading;
+    await chatHistoryRequests(h.state).initialSnapshotHydration?.promise;
+    await h.start();
     h.expectStartup({ cursor: "stored-cursor", knownState: stateRevision });
     expect(h.state.chatMessages).toEqual(stored.messages);
     expect(h.state.chatHistoryPagination.hasMore).toBe(false);
@@ -683,6 +787,7 @@ describe("first chat startup snapshot ordering", () => {
     "retires cache and history publication on %s",
     async (transition) => {
       const h = mountPane();
+      const network = h.pendingResponse();
       h.connect();
       const loading = h.start();
       await vi.advanceTimersByTimeAsync(0);
@@ -695,6 +800,7 @@ describe("first chat startup snapshot ordering", () => {
         h.state.sessionKey = "agent:main:another-session";
         resetChatHistoryProjection(h.state);
       }
+      network.resolve(h.liveResult);
       await expect(loading).resolves.toBeUndefined();
       h.read.resolve(stored);
       await vi.advanceTimersByTimeAsync(0);

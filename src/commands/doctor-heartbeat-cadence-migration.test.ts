@@ -11,7 +11,7 @@ import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadedCronStoreFromRows,
   loadCronRows,
@@ -87,23 +87,24 @@ function fixture(heartbeat: LegacyHeartbeatConfig = { every: "15m" }) {
     },
   };
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  return { root, env, cfg, storePath, storeKey: cronStoreKey(storePath) };
+  return { root, env, cfg, storePath };
 }
 type Fixture = ReturnType<typeof fixture>;
 
 function readState(f: Fixture) {
   return withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) => {
-      const rows = loadCronRows(db, f.storeKey);
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      const rows = loadCronRows(db, storeKey);
       const jobs = loadedCronStoreFromRows(rows).store.jobs;
-      loadCronRuntimeAuthorities({ db, storeKey: f.storeKey, jobs });
+      loadCronRuntimeAuthorities({ db, storeKey, jobs });
       return {
         rows,
         jobs,
-        receipt: readDefaultProactiveJobReceiptInDatabase(db, f.storePath, "main"),
+        receipt: readDefaultProactiveJobReceiptInDatabase(db, storeKey, "main"),
         history: readCronRunRecordsInDatabase(db),
         scratch: new Map(
-          jobs.map((job) => [job.id, readScratchStateFromDatabase(db, f.storeKey, job.id)]),
+          jobs.map((job) => [job.id, readScratchStateFromDatabase(db, storeKey, job.id)]),
         ),
       };
     },
@@ -114,8 +115,9 @@ function readState(f: Fixture) {
 function writeJob(f: Fixture, job: CronStoredJob) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      upsertCronJobRow(db, f.storeKey, job, 0);
-      replaceCronRuntimeAuthorityRows({ db, storeKey: f.storeKey, jobs: [job] });
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      upsertCronJobRow(db, storeKey, job, 0);
+      replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [job] });
     },
     { env: f.env },
   );
@@ -124,11 +126,12 @@ function writeJob(f: Fixture, job: CronStoredJob) {
 function deleteJob(f: Fixture, jobId: string) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
       executeSqliteQuerySync(
         db,
         getCronStoreKysely(db)
           .deleteFrom("cron_jobs")
-          .where("store_key", "=", f.storeKey)
+          .where("store_key", "=", storeKey)
           .where("job_id", "=", jobId),
       );
     },
@@ -170,9 +173,10 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
   };
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      upsertCronJobRow(db, f.storeKey, placeholder, 0);
-      replaceCronRuntimeAuthorityRows({ db, storeKey: f.storeKey, jobs: [placeholder] });
-      const row = loadCronRows(db, f.storeKey).find((candidate) => candidate.job_id === legacy.id)!;
+      const storeKey = resolveCronStoreKeyInDatabase(db, f.storePath, f.env);
+      upsertCronJobRow(db, storeKey, placeholder, 0);
+      replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [placeholder] });
+      const row = loadCronRows(db, storeKey).find((candidate) => candidate.job_id === legacy.id)!;
       executeSqliteQuerySync(
         db,
         getCronStoreKysely(db)
@@ -181,18 +185,18 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
             payload_kind: "heartbeat",
             job_json: JSON.stringify({ ...JSON.parse(row.job_json), payload: legacy.payload }),
           })
-          .where("store_key", "=", f.storeKey)
+          .where("store_key", "=", storeKey)
           .where("job_id", "=", legacy.id),
       );
       writeCronJobScratchInDatabase(db, {
-        storeKey: f.storeKey,
+        storeKey,
         jobId: legacy.id,
         content: "Check the backup.\n",
         expectedRevision: 0,
         nowMs: NOW - 1000,
       });
       recordCronRunInDatabase(db, {
-        storeKey: f.storeKey,
+        storeKey,
         jobId: legacy.id,
         runId: `cron:${legacy.id}:previous`,
         agentId: "main",
@@ -200,7 +204,7 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
         endedAt: NOW - 899_000,
         status: "succeeded",
         summary: "No change",
-        detail: { storeKey: f.storeKey },
+        detail: { storeKey },
       });
     },
     { env: f.env },
@@ -217,7 +221,7 @@ describe("heartbeat cadence Doctor cutover", () => {
       ({ db }) =>
         updateConfigMachineStateInDatabase(
           db,
-          `automation-default:${f.storeKey}:main`,
+          `automation-default:${resolveCronStoreKeyInDatabase(db, f.storePath, f.env)}:main`,
           () => ({ jobId: job.id, provisionedAtMs: NOW, phase: "pending" }),
           NOW,
         ),
@@ -312,9 +316,10 @@ describe("heartbeat cadence Doctor cutover", () => {
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       };
       const readRows = () =>
-        withExistingOpenClawStateDatabaseReadOnly(({ db }) => loadCronRows(db, f.storeKey), {
-          env,
-        });
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => loadCronRows(db, resolveCronStoreKeyInDatabase(db, f.storePath, f.env)),
+          { env },
+        );
       const before = readRows();
       const admission = prepareAutomaticHeartbeatRepair({ nonInteractive: true }, env);
       if (storedState === "invalid-legacy-row") {
@@ -354,7 +359,12 @@ describe("heartbeat cadence Doctor cutover", () => {
       const legacy = seedLegacyMonitor(f, { enabled, runtimeAuthority: authority });
       const previous = readState(f)!;
       const scratch = withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => readScratchStateFromDatabase(db, f.storeKey, legacy.id),
+        ({ db }) =>
+          readScratchStateFromDatabase(
+            db,
+            resolveCronStoreKeyInDatabase(db, f.storePath, f.env),
+            legacy.id,
+          ),
         { env: f.env },
       );
 
@@ -730,7 +740,7 @@ describe("heartbeat cadence Doctor cutover", () => {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           writeCronJobScratchInDatabase(db, {
-            storeKey: f.storeKey,
+            storeKey: resolveCronStoreKeyInDatabase(db, f.storePath, f.env),
             jobId: job.id,
             content:
               "tasks:\n  - name: recovery\n    interval: 1h\n    prompt: Check the backup.\n\nKeep this checklist.\n",
@@ -938,9 +948,10 @@ describe("heartbeat cadence Doctor cutover", () => {
       anchorMs: phase(supplied.deviceId, agentId),
     });
     expect(
-      withExistingOpenClawStateDatabaseReadOnly(({ db }) => loadCronRows(db, f.storeKey), {
-        env: ambientEnv,
-      }),
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => loadCronRows(db, resolveCronStoreKeyInDatabase(db, f.storePath, f.env)),
+        { env: ambientEnv },
+      ),
     ).toBeUndefined();
   });
 });

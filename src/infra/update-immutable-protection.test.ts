@@ -33,18 +33,12 @@ async function fixture() {
   fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
   openOpenClawStateDatabase({ env });
   fingerprintConfigSnapshotAuthoredConfig(config, { env });
-  const assertCurrent = () => {};
-  const snapshot = await captureImmutableProtection({
-    configPath,
-    stateDir: root,
-    env,
-    assertCurrent,
-  });
-  const context = { env, assertCurrent };
+  const context = { env, assertCurrent: () => {} };
+  const capture = () => captureImmutableProtection({ configPath, stateDir: root, ...context });
+  const snapshot = await capture();
   const migrate = (next: unknown) => {
-    const raw = JSON.stringify(next);
     const stage = `${configPath}.candidate`;
-    fs.writeFileSync(stage, raw, { mode: 0o600 });
+    fs.writeFileSync(stage, JSON.stringify(next), { mode: 0o600 });
     fs.renameSync(stage, configPath);
   };
   const additive = () => ({
@@ -57,7 +51,18 @@ async function fixture() {
       migrations: { webhookListeners: { telegram: [["channels", "telegram", "legacyWebhook"]] } },
     },
   });
-  return { root, configPath, config, snapshot, context, migrate, additive };
+  return {
+    root,
+    configPath,
+    config,
+    snapshot,
+    context,
+    migrate,
+    additive,
+    capture,
+    verify: () => verifyImmutableProtection(snapshot, context),
+    unchanged: () => assertImmutableProtectionUnchanged(snapshot, context),
+  };
 }
 
 describe("immutable activation protected identities", () => {
@@ -66,7 +71,7 @@ describe("immutable activation protected identities", () => {
     const durable = structuredClone(test.snapshot);
     expect(JSON.stringify(durable)).not.toContain("synthetic-protected-token");
     expect(ImmutableProtectionSnapshotSchema.parse(durable)).toEqual(test.snapshot);
-    expect(() => verifyImmutableProtection(test.snapshot, test.context)).not.toThrow();
+    expect(test.verify).not.toThrow();
     test.migrate(test.additive());
     test.migrate({ ...test.additive(), logging: { level: "info" } });
     expect(() => verifyImmutableProtection(durable, test.context)).not.toThrow();
@@ -77,9 +82,7 @@ describe("immutable activation protected identities", () => {
     const test = await fixture();
     test.migrate(test.additive());
     fs.chmodSync(test.configPath, 0o644);
-    expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(
-      /ownership or permissions/u,
-    );
+    expect(test.verify).toThrow(/ownership or permissions/u);
   });
 
   it.each([
@@ -92,9 +95,7 @@ describe("immutable activation protected identities", () => {
     const next: Record<string, unknown> = test.additive();
     if (kind === "changed value") {
       next.meta = { lastTouchedVersion: "2026.9.9", migration: true };
-      next.channels = {
-        telegram: { ...test.config.channels.telegram, allowFrom: ["other-peer"] },
-      };
+      next.channels = { telegram: { ...test.config.channels.telegram, allowFrom: ["other-peer"] } };
     } else if (kind === "removed value") {
       delete next.channels;
     } else if (kind === "added policy") {
@@ -103,18 +104,14 @@ describe("immutable activation protected identities", () => {
       next.channels = { telegram: { ...test.config.channels.telegram, groupPolicy: "open" } };
     }
     test.migrate(next);
-    expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(
-      /policy-preserving/u,
-    );
+    expect(test.verify).toThrow(/policy-preserving/u);
     expect(JSON.parse(fs.readFileSync(test.configPath, "utf8"))).toEqual(next);
   });
 
   it("refuses config changes during drain before any cutover", async () => {
     const test = await fixture();
     test.migrate(test.additive());
-    expect(() => assertImmutableProtectionUnchanged(test.snapshot, test.context)).toThrow(
-      /before immutable cutover/u,
-    );
+    expect(test.unchanged).toThrow(/before immutable cutover/u);
   });
 
   it("refuses database replacement while allowing its normal content writes", async () => {
@@ -122,28 +119,20 @@ describe("immutable activation protected identities", () => {
     writeConfigMachineState("immutable-protection-test", "written after capture", {
       env: test.context.env,
     });
-    expect(() => assertImmutableProtectionUnchanged(test.snapshot, test.context)).not.toThrow();
+    expect(test.unchanged).not.toThrow();
     await closeOpenClawStateDatabaseAsync();
     const database = test.snapshot.state.path;
     const replacement = `${database}.replacement`;
     fs.copyFileSync(database, replacement);
     fs.renameSync(replacement, database);
-    expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(
-      /state database identity/u,
-    );
+    expect(test.verify).toThrow(/state database identity/u);
   });
 
   it("never recreates an unavailable private journal key from the root updater", async () => {
     const test = await fixture();
     const key = path.join(test.root, "config-journal-fingerprint.key");
     fs.unlinkSync(key);
-    await expect(
-      captureImmutableProtection({
-        configPath: test.configPath,
-        stateDir: test.root,
-        ...test.context,
-      }),
-    ).rejects.toThrow(/fingerprints are unavailable/u);
+    await expect(test.capture()).rejects.toThrow(/fingerprints are unavailable/u);
     expect(fs.existsSync(key)).toBe(false);
   });
 
@@ -155,8 +144,6 @@ describe("immutable activation protected identities", () => {
         throw new Error("candidate boot changed");
       }
     };
-    expect(() => verifyImmutableProtection(test.snapshot, test.context)).toThrow(
-      "candidate boot changed",
-    );
+    expect(test.verify).toThrow("candidate boot changed");
   });
 });

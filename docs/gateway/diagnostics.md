@@ -587,7 +587,7 @@ node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
-dist Gateway and local mock model servers on loopback ports 19548–19550,
+dist Gateway and local mock model servers on loopback ports 41673–41675,
 seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
 reconnecting Control UI WebSocket clients. The workload polls session, history,
 model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
@@ -796,7 +796,10 @@ censuses with fixed structure labels, entry counts, approximate bytes, and
 aggregate generation, provider, and account counts where applicable. They never
 include catalog contents, object keys, provider or account identities, or secrets.
 The census uses the existing worker-memory sampling channel; it does not take a
-heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+heap snapshot. Unchanged immutable metadata and remote catalog publications reuse their
+size estimates; replacing, adding, or removing a publication refreshes its census on
+the next worker sample. Mutable data is measured on each sample.
+Byte counts estimate owner-held data, not V8 retained size; shared
 objects are counted once within each structure, and structures can overlap.
 `stringBytes` estimates string payload bytes, while `objects` counts traversed
 objects. Coverage includes the named structures, not module runtime or closure roots.
@@ -861,8 +864,10 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
-One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
-with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+One native `GCProfiler` per isolate supplies batches on a one-second timer on both
+main and worker threads, shared with the Code Mode thrash guard. Worker drains no
+longer restart Node's native profiler every 100 milliseconds. Orderly retirement
+explicitly flushes pending collections without waiting for the timer. It does not schedule JavaScript after each GC:
 per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
 Native counts and durations remain exact; callback flags are unavailable, so the
 `reason` label is `other`.

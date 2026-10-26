@@ -14,10 +14,10 @@ import * as sandboxInfo from "../sandbox-info.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type PromptAttempt = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"] &
-  Pick<EmbeddedRunAttemptParams, "workspaceDir" | "authStorage" | "modelRegistry">;
+type PromptAttempt = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"] & {
+  workspaceDir: string;
+};
 const provider = "openai";
 const modelId = "gpt-5.6-luna";
 
@@ -42,10 +42,11 @@ export async function withPromptFixture(
 ) {
   await withOpenClawTestState({ label: "prompt-elevation-read" }, async (state) => {
     const { workspaceDir } = state;
+    const runId = "prompt-elevation";
     const sessionKey = "agent:main:prompt-elevation";
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     writeSessionEntry(database, sessionKey, {
-      sessionId: "prompt-elevation",
+      sessionId: runId,
       updatedAt: 1,
       ...(testCase.required ? { sandbox: "required" } : {}),
     });
@@ -59,12 +60,7 @@ export async function withPromptFixture(
       session: { store: database.path },
       tools: { exec: { host: "gateway", mode: "full" } },
     } satisfies OpenClawConfig;
-    const admission = prepareSystemAgentRunAdmission(
-      config,
-      "prompt-elevation",
-      "main",
-      "system-prompt-test",
-    );
+    const admission = prepareSystemAgentRunAdmission(config, runId, "main", "system-prompt-test");
     const abort = new AbortController();
     const policyRead = vi.spyOn(sandboxInfo, "resolveEmbeddedSandboxInfoExecPolicy");
     const approvalRead = vi.spyOn(approvals, "loadExecApprovalsReadOnlyAsync");
@@ -81,18 +77,12 @@ export async function withPromptFixture(
         config,
         admittedRunContext: await admission.admit("embedded"),
         abortSignal: abort.signal,
-        sessionId: "prompt-elevation",
+        sessionId: runId,
         sessionKey,
         workspaceDir,
         promptMode: "full",
-        runId: "prompt-elevation",
+        runId,
         bashElevated: testCase.elevated,
-        get authStorage(): never {
-          throw new Error("Prompt fixture unexpectedly accessed auth storage");
-        },
-        get modelRegistry(): never {
-          throw new Error("Prompt fixture unexpectedly accessed model registry");
-        },
       } satisfies PromptAttempt;
       const tools = [createStubTool("exec")];
       const params = {

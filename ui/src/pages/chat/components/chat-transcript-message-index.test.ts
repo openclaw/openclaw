@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { makeMessage } from "../chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
@@ -11,14 +12,7 @@ import {
 } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
-function makeMessage(
-  id: string,
-  seq: number,
-  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
-) {
-  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
-  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
-}
+
 const finalAnswer = (id: string, seq: number, fields = {}) =>
   makeMessage(id, seq, { phase: "final_answer", stopReason: "stop", ...fields });
 function makeTool(
@@ -333,7 +327,7 @@ it.each([
   { name: "dashboard frame and queued tail", framed: true, searchActive: false },
   { name: "unframed stream without boundary", framed: false, searchActive: false },
   { name: "search projection", framed: true, searchActive: true },
-])("recomputes streamed history: $name", ({ framed, searchActive }) => {
+])("retains streamed structure until visibility changes: $name", ({ framed, searchActive }) => {
   const historical = (seq: number, fields: Record<string, unknown>) =>
     makeMessage(`history-${seq - 1}`, seq, {
       timestamp: seq,
@@ -426,15 +420,9 @@ it.each([
       if (!framed && owner?.kind === "stream-run") {
         expect(owner.boundaryId).toBeUndefined();
       }
-      if (framed && visible) {
-        const marker = index.positionIndex.markers.find((item) => item.id === "run:live");
-        expect(
-          index.positionIndex.liveMarkers?.find((item) => item.id === marker?.id)?.message ??
-            marker?.message,
-        ).toMatchObject({ content: [{ type: "text", text: stream }] });
-      }
       if ([3, 4, 6, 9].includes(delta)) {
         const previous = retained.at(-1)!;
+        expect(chain).toBe(previous.chain);
         expect(chain.transcriptItems[0]).toBe(previous.chain.transcriptItems[0]);
         expect(index.transcriptMessageKeys).toBe(previous.index.transcriptMessageKeys);
         expect(index.loadedReplySources).toBe(previous.index.loadedReplySources);

@@ -54,6 +54,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -213,49 +214,43 @@ vi.mock("../agents/command/assistant-transcript-repair.js", () => ({
 }));
 
 // mock-isolation: Command delivery fixtures record payloads without using live channel transports.
-vi.mock("../agents/command/delivery.runtime.js", () => {
-  return {
-    deliverAgentCommandResult: vi.fn(
-      async (
-        params: Pick<
-          Parameters<typeof deliverAgentCommandResult>[0],
-          "runtime" | "opts" | "result" | "payloads"
-        > & {
-          deps: {
-            telegram?: (
-              to: string,
-              text: string,
-              opts: Record<string, unknown>,
-            ) => Promise<unknown>;
-          };
-        },
-      ) => {
-        const payloads = params.payloads ?? [];
-        const deliveryResult = { payloads, meta: params.result.meta ?? {} };
-        if (params.opts.json) {
-          params.runtime.log(JSON.stringify(deliveryResult));
-          return deliveryResult;
-        }
-        if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
-          for (const payload of payloads) {
-            await params.deps.telegram?.(params.opts.to, payload.text ?? "", {
-              ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-              accountId: undefined,
-              verbose: false,
-            });
-          }
-          return deliveryResult;
-        }
+vi.mock("../agents/command/delivery.runtime.js", () => ({
+  deliverAgentCommandResult: vi.fn(
+    async (
+      params: Pick<
+        Parameters<typeof deliverAgentCommandResult>[0],
+        "runtime" | "opts" | "result" | "payloads"
+      > & {
+        deps: {
+          telegram?: (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
+        };
+      },
+    ) => {
+      const payloads = params.payloads ?? [];
+      const deliveryResult = { payloads, meta: params.result.meta ?? {} };
+      if (params.opts.json) {
+        params.runtime.log(JSON.stringify(deliveryResult));
+        return deliveryResult;
+      }
+      if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
         for (const payload of payloads) {
-          if (payload.text) {
-            params.runtime.log(payload.text);
-          }
+          await params.deps.telegram?.(params.opts.to, payload.text ?? "", {
+            ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+            accountId: undefined,
+            verbose: false,
+          });
         }
         return deliveryResult;
-      },
-    ),
-  };
-});
+      }
+      for (const payload of payloads) {
+        if (payload.text) {
+          params.runtime.log(payload.text);
+        }
+      }
+      return deliveryResult;
+    },
+  ),
+}));
 
 const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
@@ -429,6 +424,8 @@ function installThinkingTestProviders(channels: Parameters<typeof createTestRegi
   );
   setActivePluginRegistry(registry);
 }
+
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic", "xai"]);
 
 beforeEach(() => {
   vi.clearAllMocks();

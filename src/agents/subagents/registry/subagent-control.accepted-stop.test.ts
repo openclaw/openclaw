@@ -45,6 +45,7 @@ import {
 import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
+import { observeSettlement } from "../../promise-settlement.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import * as subagentKillSettlement from "./subagent-control-kill-settlement.js";
 import {
@@ -532,7 +533,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
   let registration: ReturnType<typeof registerChatAbortController> | undefined;
   let execution: Promise<void> | undefined;
   let pending: ReturnType<typeof killSubagentRunAdmin> | undefined;
-  let stopSettled = false;
   const onResult = vi.fn(() => undefined);
   try {
     // The fence blocks new admission. This existing lease is adopted after capture.
@@ -577,14 +577,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
       expectedRunId: runId,
       onResult,
     });
-    void pending.then(
-      () => {
-        stopSettled = true;
-      },
-      () => {
-        stopSettled = true;
-      },
-    );
+    const stopSettled = observeSettlement(pending);
     await awaitGateBeforeSettlement(
       claimGate.entered,
       pending,
@@ -628,7 +621,7 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     expect(owner.adapter.abortStopReason).toBe("rpc");
     expect(settlement.status).toBe("pending");
     expectIdle();
-    expect(stopSettled).toBe(false);
+    expect(stopSettled()).toBe(false);
     expect(onResult).not.toHaveBeenCalled();
     releaseTail.resolve();
     await expect(pending).resolves.toMatchObject({ found: true, killed: true });

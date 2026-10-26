@@ -34,6 +34,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     await import("../commands/doctor/shared/codex-route-warnings.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    modelReplacements: ctx.options.modelReplacements,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
@@ -101,4 +102,9 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
   );
   noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  const { noteScheduledContextReport } =
+    await import("../commands/doctor/cron/execution-context-check.js");
+  await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>
+    noteScheduledContextReport({ cfg: ctx.cfg, env: ctx.env }),
+  );
 }

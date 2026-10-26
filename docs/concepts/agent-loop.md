@@ -63,10 +63,14 @@ Finalization and retry owners retain access to the results while processing them
 Settled tool invocations release their pending-input observers from inherited
 async contexts. Those contexts keep assistant and tool-call attribution without
 keeping the completed agent and its transcript manager alive through the observer.
+Attempt teardown also releases abort and deferred-lifecycle callbacks, even when a
+retained cancellation reason keeps their completed owners reachable.
 
 ## Queueing and concurrency
 
 The session controller serializes turns by physical session identity before global capacity admission. Messaging channels choose a queue mode (steer/followup/collect/interrupt) over the same ordered inputs; direct native producers use that selector too. Nested compaction borrows the exact admitted turn rather than queuing behind itself. See [Command Queue](/concepts/queue).
+
+Transcript projection rebuilds normally finish before global admission. If hydration finds a rebuild after admission, the same turn releases global capacity while waiting, then rejoins the queue before retrying hydration once. Its session and writer ownership stay intact, and cancellation still stops the wait.
 
 Before streaming, an admitted run records its durable `activeWriterRunId` claim. Every transcript append or rewrite supplies `expectedWriterRunId`, and the synchronous commit transaction verifies that it still matches the active claim. A superseded run therefore cannot commit stale transcript data. The SQLite writer queue orders per-agent mutations, while the Gateway state-directory lock prevents another Gateway or `openclaw agent --local` process from owning the same state directory concurrently.
 
@@ -162,7 +166,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 Admission sets the default reply expectation. External direct, group, and channel turns can explicitly finish with a token-only `NO_REPLY`, even when a reply was required. Subagents, private completions, Control UI chat, and other internal result-required sessions need a completed current-source final result; progress-only mirrors never satisfy that obligation. See [Silent replies](/concepts/messages#silent-replies).
 
-An empty final is not silence. When bounded recovery exhausts with only reasoning or empty output, OpenClaw records a failed outcome. An admitted user request receives one short system notice that no answer was returned, rather than a fabricated assistant answer in history. Background and internal turns record the failure without posting that notice to chat; existing classified failure and alert paths stay unchanged. This also applies when compaction occurs between retries. Whitespace and zero-width characters alone do not count as a visible answer.
+An empty final is not silence. When bounded recovery exhausts with only reasoning or empty output, OpenClaw records a failed outcome. An admitted user request receives one short system notice that no answer was returned, rather than a fabricated assistant answer in history. Background and internal turns record the failure without posting that notice to chat; existing classified failure and alert paths stay unchanged. This also applies when compaction occurs between retries. Reasoning cut off at the output token limit gets no same-model continuation, because replay omits that partial turn. A replay-safe attempt can still use a configured fallback model; the host's output-limit warning does not count as an assistant answer. Whitespace and zero-width characters alone do not count as a visible answer.
 
 If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. This includes reasoning-only stops and output-limit stops with no visible text; a lone unfinished `<tool_call>` marker is not an answer. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. For embedded external turns, a current-source `final: false` text send can count as the answer at settlement only when it belongs to the last tool batch and the turn then ends empty or silent. Result-required internal turns still need an actual completed final result. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. When a tool failed anywhere in the turn and was never retried successfully, the pass is told to report the failure rather than claim completion, even when the last tool batch succeeded. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
 
@@ -374,8 +378,14 @@ The controller watchdog runs even when diagnostics are disabled. Its semantic-st
 Pending Code Mode `exec` and `wait` calls remain active tool work until they
 settle, including `awaitResults: true` calls waiting for nested work. Nested tool
 completion does not retire the outer call. The normal blocked-tool recovery
-allowance and enforced run/tool deadlines still apply; after the outer call
-settles, an embedded run that stops making progress remains recoverable.
+allowance and enforced run/tool deadlines still apply, except while a nested
+collector wait has verified an owned, pending collector. That wait registers
+with the current controller attempt and stays protected until a registry change,
+cancellation, or an execution deadline. A registry change revokes protection
+before rereading; a stalled read remains recoverable. A collector that never
+settles can retain its parent until Stop or a configured execution deadline.
+After the outer call settles, an embedded run that stops making progress remains
+recoverable.
 
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker

@@ -4,7 +4,6 @@ import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronRunLogEntryFromEvent } from "../run-event-codec.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
-import { cronStoreKey } from "../store/key.js";
 import { recordCronRun, type CronRunHistorySource } from "../store/run-history.js";
 import type { CronRunHistoryWrite } from "../store/run-history.types.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
@@ -63,7 +62,7 @@ export async function finishCronRun(
   const startedAt = entry.runAtMs ?? entry.ts;
   const job = result.job ?? result.event.job;
   const source = result.historySource;
-  const storeKey = source?.storeKey ?? cronStoreKey(state.deps.storePath);
+  const storeKey = source?.storeKey ?? state.deps.storeKey;
   await persistCronOutcome(
     state,
     {

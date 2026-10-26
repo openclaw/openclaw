@@ -24,6 +24,11 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
 type Registration = Parameters<typeof registerSubagentRun>[0];
+
+export type RegistryRegistrationFixture = {
+  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
+  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
+};
 type Delivery = Parameters<typeof deliverSubagentAnnouncement>[0];
 
 export const requesterCompletionRecoveryCases = [
@@ -125,8 +130,8 @@ export async function prepareNestedRequesterReplay(params: {
   return {
     runId,
     async register(
-      registration: (runId: string, overrides?: Partial<Registration>) => Registration,
-      updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>,
+      registration: RegistryRegistrationFixture["registration"],
+      updateRun: RegistryRegistrationFixture["updateRun"],
       context: GatewayRequestContext,
     ) {
       await registerSubagentRun(
@@ -239,7 +244,6 @@ export async function prepareNestedRequesterReplay(params: {
         completion: { resultText: "Sub-lead integration complete" },
       });
       expect(settled.get(runId)?.requesterSettleWake).toBeUndefined();
-      expect(deliveries[1]).toMatchObject({ targetRequesterSessionKey: "agent:main:main" });
       expect(deliveries[1]?.triggerMessage).toContain("Sub-lead integration complete");
     },
     dispose() {

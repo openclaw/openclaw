@@ -41,7 +41,6 @@ import {
 } from "./io.snapshot-preparation.js";
 import type { ValidationRequest } from "./io.snapshot-preparation.types.js";
 import {
-  collectInvalidConfigLegacyIssues,
   createConfigFileSnapshot,
   finalizeReadConfigSnapshotInternalResult,
 } from "./io.snapshot-shared.js";
@@ -55,12 +54,13 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
+
+let legacyIssuesModule: Promise<typeof import("./io.legacy-issues.runtime.js")> | undefined;
 
 type InternalReadOptions = {
   prepareValidation?: "runtime" | "strict";
@@ -298,14 +298,14 @@ async function readConfigSnapshot(
       const preparePluginDiagnostics = availableSnapshot
         ? undefined
         : () => preparePluginMetadataMachineStateAsync({ env: deps.env });
-      const collect = () =>
-        context.options.pluginValidation === "core-only"
-          ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
-          : collectInvalidConfigLegacyIssues(
-              effectiveConfigRaw,
-              effectiveParsed,
-              preparePluginDiagnostics,
-            );
+      const collect = async () => {
+        const { collectInvalidConfigLegacyIssues } = await (legacyIssuesModule ??=
+          import("./io.legacy-issues.runtime.js"));
+        return collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed, {
+          coreOnly: context.options.pluginValidation === "core-only",
+          preparePluginDiagnostics,
+        });
+      };
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
@@ -480,6 +480,7 @@ export async function prepareConfigRecoveryFromContext(
     );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
+      measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,

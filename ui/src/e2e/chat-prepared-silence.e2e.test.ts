@@ -38,12 +38,16 @@ suite.define(() => {
         }
         const historyLiteralCount = await literal.count();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const stop = page.getByRole("button", { name: "Stop generating", exact: true });
         await composer.fill("Show a prepared live literal marker.");
         await page.getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(send.params).idempotencyKey, "run id");
+        await stop.waitFor({ state: "visible" });
         await gateway.emitChatFinal({ runId, text: "NO_REPLY" });
-        await composer.waitFor({ state: "visible" });
+        // Mock dispatch can finish before the lazy live-event runtime applies the final.
+        await expect.poll(() => literal.count()).toBe(2);
+        await stop.waitFor({ state: "hidden" });
         if (proofDir) {
           await page.screenshot({
             path: path.join(proofDir, "02-prepared-live.png"),
@@ -57,11 +61,13 @@ suite.define(() => {
         const silentSend = await gateway.waitForRequest("chat.send", {
           match: { message: "Finish silently with no outbound payload." },
         });
+        await stop.waitFor({ state: "visible" });
         await gateway.emitGatewayEvent("chat", {
           sessionKey: "agent:main:main",
           runId: requireString(requireRecord(silentSend.params).idempotencyKey, "silent run id"),
           state: "final",
         });
+        await stop.waitFor({ state: "hidden" });
         if (proofDir) {
           await page.screenshot({
             path: path.join(proofDir, "03-absent-final.png"),

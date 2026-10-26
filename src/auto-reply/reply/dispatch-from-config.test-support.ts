@@ -41,6 +41,7 @@ import {
   messageAuditMocks,
   mockPluginBinding,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   parseGenericThreadSessionInfo,
   placementContextMocks,
@@ -53,6 +54,7 @@ import {
   threadInfoMocks,
   transcriptMocks,
   ttsMocks,
+  emptyConfig,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -105,6 +107,20 @@ export let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
+
+export function createMessageToolOnlyDispatchArgs(
+  ctx: DispatchReplyArgs["ctx"],
+  dispatcher: DispatchReplyArgs["dispatcher"],
+  replyResolver: DispatchReplyArgs["replyResolver"],
+): DispatchReplyArgs {
+  return {
+    ctx,
+    cfg: emptyConfig,
+    dispatcher,
+    replyResolver,
+    replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+  };
+}
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -552,7 +568,7 @@ export const describe0BeforeEach0 = () => {
   sessionStoreMocks.loadSessionStoreEntry.mockReset();
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
   sessionStoreMocks.resolveSessionStorePathCore.mockReset();
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();

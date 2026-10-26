@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
-import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentEntry, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import {
   prepareAppGitHubIdentity,
   configuredAppGitHubIdentityFacts,
@@ -89,7 +89,7 @@ export function resolveConfiguredGitHubToolIdentity(params: {
   scope: "system" | "agent";
 }): GitHubToolIdentityConfig | undefined {
   return params.scope === "agent"
-    ? resolveAgentConfig(params.config, params.agentId)?.tools?.github
+    ? resolveAgentEntry(params.config, params.agentId)?.tools?.github
     : params.config.tools?.github;
 }
 
@@ -549,7 +549,7 @@ export async function prepareGitHubPublicationOptionsIdentity(
   let nativeStale = false;
   const { prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, allowStale: true },
-    resolveGitHubToolIdentity(params),
+    selected,
     (env, requireAbsentProof, host) =>
       readCachedNativeGitHubToken(env, requireAbsentProof, host, {
         onStale: () => {

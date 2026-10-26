@@ -1,4 +1,14 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
@@ -7,9 +17,10 @@ import {
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
-import { i18nRevision } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
@@ -21,16 +32,17 @@ import { chatGoalOperations } from "./chat-goals.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  ChatProviderReviewDialog,
-  createChatProviderReview,
-  type ChatProviderReviewOwner,
-} from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+
+const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-controller.tsx"), {
+  export: "ChatProviderReviewHost",
+});
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
@@ -161,8 +173,27 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const state = runtime.state;
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
-      return owner && projectOwner(owner, (source) => source.snapshot);
+      return (
+        owner && {
+          view: projectOwner(
+            owner,
+            (source) => source.snapshot,
+            (previous, next) =>
+              Object.entries(previous).every(
+                ([key, value]) =>
+                  key === "realtimeTalkConversationState" ||
+                  Object.is(value, Reflect.get(next, key)),
+              ),
+          ),
+          conversation: projectOwner(
+            owner,
+            (source) => source.snapshot.realtimeTalkConversationState.entries,
+            Object.is,
+          ),
+        }
+      );
     });
+    const readRealtimeTalkConversation = () => realtime()?.conversation.read() ?? [];
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
@@ -246,6 +277,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Relative labels tick only while this retained pane is presented.
     const [relativeTime, setRelativeTime] = createSignal(Date.now());
     const minutePoll = useVisiblePoll(60_000, () => setRelativeTime(Date.now()));
+    const [providerReview, setProviderReview] = createSignal<ChatProviderReviewOwner>();
     const frame = createParkedProjection(
       () => {
         relativeTime();
@@ -255,7 +287,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         parentSession.read();
         transcriptPosition.read();
         progress.read();
-        realtime()?.read();
+        realtime()?.view.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
@@ -265,13 +297,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         i18nRevision();
         sources.forEach((source) => source?.read());
         prepareRender();
-        return runtime.render(() => providerReview);
+        return runtime.render(providerReview, readRealtimeTalkConversation);
       },
       () => runtime.presented && runtime.presentation.documentVisible,
     );
-    const providerReview: ChatProviderReviewOwner = createChatProviderReview({
-      source: () => frame().providerReviewSource,
-      readState: () => runtime.state,
+    // Keep an admitted review alive after its row clears or its dialog closes.
+    const reviewVisited = createMemo<boolean>((previous) => {
+      const source = frame().providerReviewSource;
+      return previous || Boolean(source && selectedChatSessionRow(source.state)?.providerReview);
     });
     const questions = createComposerQuestions(
       runtime.presentationId,
@@ -305,7 +338,26 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:sessionKey={runtime.sessionKey}
       >
         <PaneLayout layout={frame().layout} questions={questions} />
-        <ChatProviderReviewDialog owner={providerReview} />
+        <Show when={reviewVisited()}>
+          <Errored
+            fallback={(error, reset) => (
+              <div class="callout danger" role="alert">
+                {formatUiError(error())}
+                <button class="btn btn--sm" type="button" onClick={reset}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
+          >
+            <Loading>
+              <ChatProviderReviewHost
+                source={() => frame().providerReviewSource}
+                readState={() => runtime.state}
+                onReady={(owner) => setProviderReview(owner)}
+              />
+            </Loading>
+          </Errored>
+        </Show>
         <Show when={frame().capabilityDialogs}>
           {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
         </Show>

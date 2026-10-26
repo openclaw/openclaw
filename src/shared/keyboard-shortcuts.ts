@@ -29,7 +29,7 @@ export const COMMAND_PALETTE_SHORTCUTS = [
   { modifiers: ["mod", "shift"], key: "p", platformSpecific: true },
 ] as const satisfies readonly KeyboardShortcutDefinition[];
 
-// Serialized into sandbox documents before widget scripts run. Object methods
+// Bundled into sandbox script assets before widget scripts run. Object methods
 // keep the factory self-contained through bundling, with pristine operations
 // captured once so widget prototype changes cannot redefine a host shortcut.
 export function createKeyboardShortcutMatcher() {

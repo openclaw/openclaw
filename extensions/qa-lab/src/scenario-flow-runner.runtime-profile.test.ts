@@ -3,9 +3,9 @@ import { createQaBusState } from "./bus-state.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
-vi.mock("../../../cli-invocation.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+vi.mock("../../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => "embedded-aot",
 }));
 
 async function runActions(actions: unknown[]) {

@@ -161,7 +161,7 @@ export function createNativeConversationBridge(
   const bounded = <T>(
     work: (active: () => boolean, signal: AbortSignal) => Promise<T>,
     timeout: T,
-    deadline = Date.now() + RESPONSE_TIMEOUT_MS,
+    deadline = performance.now() + RESPONSE_TIMEOUT_MS,
   ): Promise<T> =>
     new Promise((resolve) => {
       let settled = false;
@@ -177,9 +177,9 @@ export function createNativeConversationBridge(
         resolve(result);
       };
       const expire = () => finish(timeout);
-      const timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
+      const timer = setTimeout(expire, Math.max(0, deadline - performance.now()));
       pending.add(expire);
-      void work(() => !settled && current() && Date.now() < deadline, abort.signal).then(
+      void work(() => !settled && current() && performance.now() < deadline, abort.signal).then(
         finish,
         expire,
       );
@@ -484,7 +484,7 @@ export function createNativeConversationBridge(
       return;
     }
     requests.add(key);
-    const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
+    const deadline = performance.now() + RESPONSE_TIMEOUT_MS;
     const previous = commands;
     // The receipt deadline includes queueing; expired continuations cannot publish
     // state or take ownership from the next command after a late loader resolves.

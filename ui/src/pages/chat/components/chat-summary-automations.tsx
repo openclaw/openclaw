@@ -30,8 +30,9 @@ import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { SessionAutomationResult } from "./session-automation-result.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -336,6 +337,8 @@ export function SessionAutomationRead(props: {
 }
 
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
+  /** Reset local reveal/focus intent without retiring the logical inventory. */
+  presentationIdentity?: object;
   /** Supplied only by the native desktop Details composition. */
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
   onNavigate?: (jobId: string) => void;
@@ -356,18 +359,22 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   const inventory = createSessionAutomationInventory(props, () => host);
   const presented = createMemo(() => props.presented);
   const sessionKey = createMemo(() => props.sessionKey);
-  // Reopening or replacing the session resets only the local reveal count.
+  const presentation = createMemo(() => props.presentationIdentity);
+  // Reopening or replacing the presentation resets only the local reveal count.
   const [shown, setShown] = createSignal(() => {
+    presentation();
     presented();
     sessionKey();
     return 10;
   });
   const jobs = () => inventory.jobs().slice(0, shown());
+  const formatSchedule = createSessionAutomationSchedule();
   const hasCachedRows = () => inventory.jobs().length > shown();
   const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
 
   async function reveal(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const first = jobs().length;
     const count = shown() + 10;
@@ -386,7 +393,9 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         return;
       }
     }
+    // Cancel the old presentation before reading props held by an async frame.
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       !props.presented ||
@@ -401,6 +410,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         const target = firstRevealedId ? jobLinks.get(firstRevealedId) : undefined;
         const activeElement = host.ownerDocument.activeElement;
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -416,10 +426,12 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
 
   async function retry(button: HTMLButtonElement) {
     const key = props.sessionKey;
+    const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const focused = host.ownerDocument.activeElement === button;
     await inventory.refresh();
     if (
+      latest(() => props.presentationIdentity) !== presentationIdentity ||
       props.sessionKey !== key ||
       props.gateway !== source ||
       inventory.error() ||
@@ -433,6 +445,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       onSettled(() => {
         const target = jobLinks.get(inventory.jobs()[0]?.id ?? "");
         if (
+          latest(() => props.presentationIdentity) === presentationIdentity &&
           props.sessionKey === key &&
           props.gateway === source &&
           props.presented &&
@@ -456,7 +469,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     if (inventory.connected() && job.runningAtMs !== undefined) {
       return t("common.running");
     }
-    return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
+    return job.schedule ? formatSchedule(job.schedule) : "";
   }
   const errorNotice = () =>
     inventory.connected() && (
@@ -577,7 +590,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
-      <Loading>
+      <ChatLazyBoundary>
         <Show when={inventory.readable()}>
           <Show when={inventory.jobs().length > 0}>
             <Show
@@ -618,7 +631,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             }
           />
         </Show>
-      </Loading>
+      </ChatLazyBoundary>
     </openclaw-chat-summary-automations>
   );
 }

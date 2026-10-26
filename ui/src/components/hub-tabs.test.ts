@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 
 const tabs = (...values: string[]) =>
@@ -16,20 +16,23 @@ function mountTabs(props: Partial<HubTabsProps<string>>, dir = "ltr") {
   const container = document.body.appendChild(document.createElement("div"));
   container.dir = dir;
   mountSolid(
-    () =>
-      createComponent(HubTabs, {
-        id: "example",
-        active: "first",
-        tabs: tabs("first", "second"),
-        ariaLabel: "Example sections",
-        panelId: "example-panel",
-        onSelect: vi.fn(),
-        ...props,
-      }),
-    { container },
+    HubTabs,
+    {
+      id: "example",
+      active: "first",
+      tabs: tabs("first", "second"),
+      ariaLabel: "Example sections",
+      panelId: "example-panel",
+      onSelect: vi.fn(),
+      ...props,
+    },
+    container,
   );
-  flush();
-  return container;
+  return {
+    tab: (value: string) =>
+      container.querySelector<HTMLElement>(`#${props.id ?? "example"}-tab-${value}`)!,
+    query: (selector: string) => container.querySelector(selector),
+  };
 }
 
 function pressKey(target: Element, key: string) {
@@ -42,58 +45,29 @@ afterEach(() => {
 });
 
 describe("HubTabs", () => {
-  it("renders a named sub tablist with counts and badges", async () => {
-    const container = mountTabs({
-      active: "files",
-      tabs: [
-        { value: "files", label: "Files", count: 3 },
-        { value: "memory", label: "Memory", badge: "New" },
-      ],
-      variant: "sub",
-    });
-    expect(container.querySelector('[role="tablist"]')?.classList).toContain("hub-tabs--sub");
-    expect(container.querySelector("#example-tab-files")?.hasAttribute("active")).toBe(true);
-    expect(container.querySelector(".hub-tab__badge--count")?.textContent).toBe("3");
-    expect(container.querySelector("#example-tab-memory .hub-tab__badge")?.textContent).toBe("New");
-    await Promise.resolve();
-    expect(container.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe(
-      "Example sections",
-    );
-  });
-
-  it("selects only enabled tabs from direct activation", () => {
+  it("selects only enabled tabs from its named tablist", async () => {
     const onSelect = vi.fn();
     const onActivate = vi.fn();
-    const container = mountTabs({
+    const { tab, query } = mountTabs({
       tabs: tabs("first", "second", "disabled"),
       onSelect,
       onActivate,
     });
 
     for (const value of ["second", "disabled", "first"]) {
-      container
-        .querySelector(`#example-tab-${value}`)
-        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    }
-    for (const value of ["Enter", " "]) {
-      pressKey(container.querySelector("#example-tab-first")!, value);
+      tab(value).dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     }
 
+    await Promise.resolve();
+    expect(query('[role="tablist"]')?.getAttribute("aria-label")).toBe("Example sections");
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("second");
-    expect(onActivate).toHaveBeenCalledExactlyOnceWith(
-      container.querySelector("#example-tab-second"),
-    );
-    expect(container.querySelector("#example-tab-first")?.getAttribute("aria-selected")).toBe(
-      "true",
-    );
+    expect(onActivate).toHaveBeenCalledExactlyOnceWith(tab("second"));
   });
 
   it("preserves an intentional no-selection state", () => {
-    const container = mountTabs({ active: null });
-
-    expect(container.querySelector('[role="tab"][active]')).toBeNull();
-    expect(container.querySelector<HTMLElement>("#example-tab-first")?.tabIndex).toBe(0);
-    expect(container.querySelector<HTMLElement>("#example-tab-second")?.tabIndex).toBe(-1);
+    const { query, tab } = mountTabs({ active: null });
+    expect(query('[role="tab"][active]')).toBeNull();
+    expect([tab("first").tabIndex, tab("second").tabIndex]).toEqual([0, -1]);
   });
 
   it.each([
@@ -101,19 +75,16 @@ describe("HubTabs", () => {
     { dir: "rtl", next: "last" },
   ])("moves focus without activating routes in $dir", async ({ dir, next }) => {
     const onSelect = vi.fn();
-    const container = mountTabs(
+    const { tab } = mountTabs(
       {
         id: "keyboard",
-        active: "first",
         tabs: tabs("first", "middle", "disabled", "last"),
-        ariaLabel: "Routes",
-        panelId: "route-panel",
         onSelect,
       },
       dir,
     );
     await Promise.resolve();
-    const first = container.querySelector<HTMLElement>("#keyboard-tab-first")!;
+    const first = tab("first");
     first.focus();
     pressKey(first, "ArrowRight");
     expect(document.activeElement?.id).toBe(`keyboard-tab-${next}`);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { renderRateLimitRetryExhaustion } from "../agents/failover/user-copy.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -15,6 +16,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
+  beginDiagnosticRetryWait,
   createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunStarted,
 } from "./diagnostic-run-activity.js";
@@ -83,13 +85,14 @@ it("reports a 54-second stall without requesting recovery from an observing cont
 });
 
 it.each([
-  { kind: "request", deadlineAtMs: 396_000 },
-  { kind: "retry", deadlineAtMs: 396_000 },
-  { kind: "backend", deadlineAtMs: 366_000 },
-  { kind: "tool", deadlineAtMs: 1_296_000 },
+  { kind: "request", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: true },
+  { kind: "backend", deadlineAtMs: 366_000, rateLimited: false },
+  { kind: "tool", deadlineAtMs: 1_296_000, rateLimited: false },
 ] as const)(
-  "uses the controller-owned $kind allowance through its exact boundary",
-  async ({ kind, deadlineAtMs }) => {
+  "uses the controller-owned $kind allowance through its exact boundary (rate-limited: $rateLimited)",
+  async ({ kind, deadlineAtMs, rateLimited }) => {
     const ref = {
       sessionKey: "agent:main:heartbeat-allowance",
       sessionId: "allowance-session",
@@ -123,6 +126,14 @@ it.each([
     } else if (kind === "tool") {
       // Explicit execution plus the existing 15-minute quiet-tool grace.
       attempt.beginTool({ toolName: "exec", toolCallId: "owned-command", deadlineAtMs: 396_000 });
+    } else if (rateLimited) {
+      beginDiagnosticRetryWait({
+        owner,
+        deadlineAtMs,
+        rateLimitStopMessage: renderRateLimitRetryExhaustion(9),
+        signal: operation.abortSignal,
+        assertCurrent() {},
+      });
     } else {
       // Backend traffic cannot rearm the six-minute semantic horizon.
       attempt.beginWait({
@@ -147,6 +158,14 @@ it.each([
     await waitForDiagnosticEventsDrained();
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    if (rateLimited) {
+      expect(operation.staleExpiryReason).toBe("rate_limited");
+      expect(operation.abortSignal.reason).toMatchObject({
+        name: "AbortError",
+        code: "OPENCLAW_SESSION_WATCHDOG",
+        message: renderRateLimitRetryExhaustion(9),
+      });
+    }
     expect(events.filter((event) => event.type === "session.recovery.requested")).toEqual([
       expect.objectContaining({ allowActiveAbort: true, reason: "semantic_stall" }),
     ]);

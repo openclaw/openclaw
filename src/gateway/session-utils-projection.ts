@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
@@ -111,6 +112,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
     parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
       updatedAt: entry.updatedAt,
       archivedAt: entry.archivedAt,
       status: entry.status,
@@ -118,11 +120,35 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
       endedAt: entry.endedAt,
       spawnedBy: entry.spawnedBy,
       parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
       createdActor: entry.createdActor,
       visibility: entry.visibility,
       incognito: entry.incognito,
     },
   }));
+}
+
+/** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
+export function reuseSessionRowChildLinks(
+  links: readonly SessionChildLink[],
+  previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
+) {
+  return previous &&
+    previous.length === links.length &&
+    links.every(({ key, entry }, index) => {
+      const before = previous[index]!;
+      return (
+        key === before.key &&
+        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
+        (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
+          (field) =>
+            entry[field] === before.entry[field] ||
+            isDeepStrictEqual(entry[field], before.entry[field]),
+        )
+      );
+    })
+    ? previous
+    : links;
 }
 
 export function resolveTranscriptUsageFallbacks(params: {

@@ -19,13 +19,16 @@ import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
   boardClient,
-  closeBoardDatabases as closeDatabases,
   htmlWidget,
   mcpContent,
   testBoard,
 } from "./board-store.fixtures.test-support.js";
 import type { BoardStore } from "./board-store.js";
-import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
+import {
+  closeBoardDatabases as closeDatabases,
+  readBoardHtml,
+  createTestBoardStore,
+} from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
@@ -246,12 +249,22 @@ it("requires current revisions and pending grants", async () => {
     "not pending",
   );
 });
-it("does not select the HTML BLOB when preparing board view metadata", async () => {
-  const { store, database, sessionKey, html } = fixture();
-  await html("status", "x".repeat(256 * 1024));
+it("prepares isolated board metadata without HTML BLOBs or full-layout copies", async () => {
+  const { store, database, sessionKey, put } = fixture();
+  await put({
+    name: "status",
+    content: { kind: "html", html: "x".repeat(256 * 1024) },
+    declared: health,
+  });
+  await put({ name: "card", content: pluginContent({ series: [1, 2, 3] }) });
   const prepare = vi.spyOn(database.db, "prepare");
+  const clone = vi.spyOn(globalThis, "structuredClone");
 
   const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
+  const layoutCopies = clone.mock.calls.filter(
+    ([value]) => value !== null && typeof value === "object" && "widgets" in value,
+  );
+  clone.mockRestore();
 
   const widgetSelects = prepare.mock.calls
     .map(([sql]) => sql)
@@ -262,6 +275,16 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   expect(prepared?.htmlViewMetadata.get("status")).not.toHaveProperty("html");
   prepare.mockRestore();
   expect(await store.getSnapshotWithHtmlViewMetadata({ sessionKey })).toEqual(prepared);
+  expect(layoutCopies).toHaveLength(0);
+  const widget = prepared!.snapshot.widgets.find((item) => item.name === "status")!;
+  widget.declared!.tools!.push("changed");
+  prepared!.snapshot.widgets.find((item) => item.name === "card")!.props!.series = [9];
+  expect(prepared!.htmlViewMetadata.get("status")!.declared).toEqual(health);
+  const reread = await store.getSnapshotWithHtmlViewMetadata({ sessionKey });
+  expect(reread.snapshot.widgets.find((item) => item.name === "status")!.declared).toEqual(health);
+  expect(reread.snapshot.widgets.find((item) => item.name === "card")!.props).toEqual({
+    series: [1, 2, 3],
+  });
 });
 
 describe("SqliteBoardStore native widgets", () => {

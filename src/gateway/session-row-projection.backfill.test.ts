@@ -812,13 +812,16 @@ it("backfills terminal fallback models and clears previews when the newest messa
       await withinTest(published, signal);
       expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject(expected);
     }
+    const retained = projection.describe(query)!.materialized;
+    expect(retained.row.lastMessagePreview).toBe("Finished");
     const appended = observeSessionRowBackfill([target.sessionKey]);
     await appendTranscript(target, { role: "assistant", content: "x".repeat(70 * 1024) });
     await withinTest(appended, signal);
-    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-      activeModel: undefined,
-      lastMessagePreview: undefined,
-      lastAssistantMessage: undefined,
-    });
+    expect(projection.describe(query)!.materialized.row).not.toHaveProperty("lastMessagePreview");
+    expect(retained.row.lastMessagePreview).toBe("Finished");
+    const cleared = projection.snapshot(query, { includeLastMessage: true }).row;
+    expect(cleared?.activeModel).toBeUndefined();
+    expect(cleared).not.toHaveProperty("lastMessagePreview");
+    expect(cleared).not.toHaveProperty("lastAssistantMessage");
   });
 });

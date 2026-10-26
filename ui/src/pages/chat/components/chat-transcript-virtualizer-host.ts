@@ -83,13 +83,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private headerHeight = 0;
   private appliedHeaderHeight = 0;
   private readonly initialRange: TranscriptInitialRange;
-  private readonly endAnchor = new TranscriptEndAnchor();
+  private readonly endAnchor = new TranscriptEndAnchor((fn) => this.renderer.queueAfterCommit(fn));
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
     this.endAnchor.recordLayoutCorrection(before, after);
     this.scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
-  private readonly followEnd = () => this.scrollToEnd({ source: "auto" });
+  private readonly followEnd = () =>
+    this.scrollToEnd({
+      source: "auto",
+      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
+    });
   private readonly reconcileEnd = () => {
     if (!this.connected || this.offsetState.pendingInteractionAnchor) {
       return;
@@ -149,16 +153,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.offsetState.pendingInteractionAnchor = anchor;
     queueMicrotask(() => this.offsetState.pendingInteractionAnchor === anchor && this.invalidate());
   };
-  private readonly handleGeometryCommit = (event: Event) => {
-    this.reconcileInteractionResize(event.target);
-    this.viewportRect.commit(
-      !(event instanceof CustomEvent && event.detail?.widthChanged === false),
-    );
+  private readonly handleGeometryCommit = (ev: Event) => {
+    this.reconcileInteractionResize(ev.target);
+    this.viewportRect.commit(!(ev instanceof CustomEvent) || ev.detail?.widthChanged !== false);
   };
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private messageRowKeysById: ReadonlyMap<string, string> = new Map();
-  private readonly prependAnchor = new TranscriptPrependAnchor(this.messageElements.elements);
+  private readonly prependAnchor = new TranscriptPrependAnchor(
+    this.messageElements.elements,
+    this.recordEndLayoutCorrection,
+  );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
@@ -207,8 +212,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       anchorTo: "end",
       followOnAppend: false,
-      scrollToFn: (offset, options, instance) =>
-        scrollTranscriptOffset(this.offsetState, offset, options, instance),
+      scrollToFn: (...args) =>
+        scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,
       observeElementOffset: (instance, callback) =>
         observeTranscriptOffset(
@@ -222,12 +227,13 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             cancelScroll: () => this.cancelScroll(),
             onLayoutCorrection: this.recordEndLayoutCorrection,
             invalidate,
-            onOffset: () => this.endAnchor.recordViewport(this.scrollElement),
-            onComposerLayout: (changed) => this.commitComposerResize(changed),
-            onReaderScroll: (towardEnd) => {
-              this.initialRange.finish();
-              this.callbacks.onReaderScroll?.(towardEnd);
+            onOffset: (readerMoved) => {
+              // Nested or canceled input must not admit offscreen measurements.
+              this.endAnchor.recordViewport(this.scrollElement);
+              return readerMoved ? this.initialRange.finish() : undefined;
             },
+            onComposerLayout: (changed) => this.commitComposerResize(changed),
+            onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
           },
           instance,
           callback,
@@ -242,19 +248,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+    const beforeMeasure = () => !this.initialRange.pending && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
       () => this.rowRefs.elements,
-      () => {
-        if (!this.initialRange.pending) {
-          this.offsetState.syncNativeOffset?.();
-        }
-      },
+      beforeMeasure,
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
         this.threadInnerElement?.contains(element) === true && this.rowIndexesByKey.has(key),
+      beforeMeasure,
       onMount: () => this.queueLayout(),
     });
     this.scrollRestoreHost = {
@@ -345,6 +349,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.positionRail.update();
     const { _willUpdate: updateVirtualizer } = this.virtualizer;
     updateVirtualizer();
+    this.rowRefs.observeConnected();
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.reconcileInteractionResize();
     if (
@@ -531,7 +536,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           measureRowRefFor: (key) => this.rowRefs.forKey(key),
           measureRows:
             // The first correction reveals new rows; their real sizes must land before retiring the anchor.
-            this.initialRange.pending ||
+            this.initialRange.measuring ||
             this.prependAnchor.messageKey !== null ||
             this.offsetState.scrollCommand?.target === "message" ||
             this.offsetState.scrollCommand?.target === "index",
@@ -564,8 +569,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   get isPositionSettled(): boolean {
-    const { pendingScrollOffset } = this.offsetState;
-    return this.contentReady && !this.initialRange.pending && !pendingScrollOffset;
+    return this.contentReady && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
   private canAutoFollow(): boolean {
@@ -612,13 +616,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     }
     // The smooth journey may already be automatic when its skipped sizes settle.
     if (measureSkippedRows) {
-      const adjustScroll = this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
-      this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-      try {
-        this.presentation.measureRows();
-      } finally {
-        this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
-      }
+      this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
     if (element) {
@@ -728,7 +726,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
 
   private queueLayout(): void {
     if (
-      (this.initialRange.pending && this.rowKeys.length) ||
+      (this.initialRange.measuring && this.rowKeys.length) ||
       this.offsetState.scrollCommand?.target === "message"
     ) {
       this.renderer.queueAfterCommit(this.completeLayout);
@@ -746,11 +744,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.messageRowKeysById,
       this.rowIndexesByKey,
     );
-    if (!this.initialRange.pending || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
+    if (!this.initialRange.measuring || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
       return;
     }
     this.syncViewportGeometry();
-    if (this.presentation.measureRows() || this.initialRange.extend(this.scrollElement)) {
+    const measured = this.presentation.measureRows();
+    if ((this.initialRange.pending && this.initialRange.extend(this.scrollElement)) || measured) {
       this.invalidate();
       return;
     }
@@ -759,15 +758,16 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       return;
     }
     if (
+      (this.initialRange.pending || this.offsetState.scrollCommand?.target === "end") &&
       this.canAutoFollow() &&
-      !this.offsetState.pendingInteractionAnchor &&
-      !this.offsetState.touchActive
+      !(this.offsetState.pendingInteractionAnchor || this.offsetState.touchActive)
     ) {
-      this.scrollToEnd({ source: "auto", behavior: "instant" });
+      const behavior = this.offsetState.scrollCommand?.behavior ?? "instant";
+      this.scrollToEnd({ source: "auto", behavior });
       this.offsetState.syncNativeOffset?.();
     }
     if (isTranscriptRangeCommitted(this.threadInnerElement, this.virtualizer)) {
-      this.initialRange.finish(true);
+      this.initialRange.complete();
       this.renderer.syncInitialPosition();
     }
     this.invalidate();

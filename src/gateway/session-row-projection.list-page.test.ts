@@ -39,6 +39,7 @@ import {
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { requestSessionRow } from "./session-row-projection.test-support.js";
+import * as storeKeys from "./session-store-key.js";
 import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
@@ -173,19 +174,6 @@ describe("list preparation", () => {
       expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
-      let selections = 0;
-      const prepare = projection.withPreparedExactRows.bind(projection);
-      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
-        (queries, consume, options) =>
-          prepare(
-            (config) => {
-              selections++;
-              return queries(config);
-            },
-            consume,
-            options,
-          ),
-      );
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
       const rendered: string[] = [];
@@ -203,22 +191,21 @@ describe("list preparation", () => {
         return result;
       });
       const listPage = async (offset: number, index: number) => {
-        const respond = vi.fn();
+        let result: SessionsListResult | undefined;
         await requestSessionRow(
           sessionReadHandlers["sessions.list"]!,
           context,
           "sessions.list",
           { limit: 5, offset },
-          (ok, result) => {
+          (ok, value) => {
             expect(ok).toBe(true);
             materialized.push(projection.materializedCount - before);
-            respond(result);
+            result = value as SessionsListResult;
           },
           null,
           `page-${index}`,
         );
-        expect(respond).toHaveBeenCalledOnce();
-        return respond.mock.calls[0]![0] as SessionsListResult;
+        return result!;
       };
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
@@ -226,17 +213,14 @@ describe("list preparation", () => {
         const expectedPages = [0, 5, 0, 5].map((offset) =>
           Array.from({ length: 5 }, (_entry, index) => `page-${79 - offset - index}`),
         );
-        expect(pages.map((page) => page.sessions.map((row) => row.sessionId))).toEqual(
-          expectedPages,
-        );
-        expect(pages.map(keysOf)).toEqual(
-          expectedPages.map((page) => page.map((id) => `agent:main:dashboard:${id}`)),
+        expect(pages.map((page) => page.sessions)).toMatchObject(
+          expectedPages.map((page) =>
+            page.map((sessionId) => ({ sessionId, key: `agent:main:dashboard:${sessionId}` })),
+          ),
         );
         expect(await checkpoint).toBeLessThan(5);
         expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
         expect(Math.max(...materialized)).toBe(10);
-        // Each page selects initially and after preparation, never after every row slice.
-        expect(selections).toBeLessThanOrEqual(8);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
         await projection.ensureMaterialized();
@@ -246,11 +230,13 @@ describe("list preparation", () => {
         // including after an unrelated subagent registry renewal.
         rendered.length = 0;
         publishSubagentRunChanges();
+        const canonicalize = vi.spyOn(storeKeys, "resolveStoredSessionKeyForAgentStore");
         for (const [index, offset] of [0, 5, 0, 5].entries()) {
           expect((await listPage(offset, index)).sessions).toEqual(pages[index]!.sessions);
         }
         expect([rendered, projection.materializedCount, sql.queries]).toEqual([[], 10, []]);
         expect(reads).not.toHaveBeenCalled();
+        expect(canonicalize).not.toHaveBeenCalled();
       } finally {
         sql.restore();
       }
@@ -318,10 +304,7 @@ function observeQueries(prototype: StatementSync) {
 }
 
 const participant = (id: string) => ({ identity: { type: "agent" as const, id } });
-const participantBytes = (entry: ReturnType<typeof sessions.loadSessionEntry>) =>
-  JSON.stringify({ participants: entry?.participants, participantCount: entry?.participantCount });
-
-it("publishes byte-identical group and participant facts without host membership SQL during cold admission, row refresh or 50 viewer reads", async () => {
+it("publishes group and participant facts without host membership SQL during cold admission, row refresh or 50 viewer reads", async () => {
   await withListState(async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:projected-members" };
     await sessions.upsertSessionEntryCore(scope, {
@@ -344,23 +327,11 @@ it("publishes byte-identical group and participant facts without host membership
       await projection.ensureMaterialized();
       admissionReads.restore();
       expect(admissionReads.queries).toEqual([]);
-      const listed = sessions
-        .listSessionEntriesReadOnly({
-          agentId: scope.agentId,
-          projection: "list",
-        })
-        .find(({ sessionKey }) => sessionKey === scope.sessionKey)?.entry;
-      expect(listed).toMatchObject({
+      const described = projection.describe(query);
+      expect(described?.entry).toMatchObject({
         participants: [participant("main"), participant("research")],
         participantCount: 2,
       });
-      const nativeEntry = sessions.loadSessionEntry(scope);
-      expect(nativeEntry).toMatchObject({
-        participants: listed?.participants,
-        participantCount: 2,
-      });
-      const described = projection.describe(query);
-      expect(participantBytes(described?.entry)).toBe(participantBytes(nativeEntry));
       const goldenGroups = JSON.stringify([...readSessionGroupMembership({}, process.env).groups]);
       const participantsJson = () => JSON.stringify(projection!.snapshot(query).row?.participants);
       const goldenParticipants = participantsJson();

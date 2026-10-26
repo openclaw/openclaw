@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Established session reconnect" });
@@ -76,9 +77,11 @@ suite.define(() => {
           await gateway.setMethodResponse("chat.startup", empty);
           await gateway.setMethodResponse("chat.history", empty);
         }
-        const startupCount = (await gateway.getRequests("chat.startup")).length;
+        const historyCount = (await getInitialHistoryRequests(gateway, sessionKey)).length;
         await gateway.setOnline(true);
-        await gateway.waitForRequest("chat.startup", { after: startupCount });
+        await expect
+          .poll(async () => (await getInitialHistoryRequests(gateway, sessionKey)).length)
+          .toBe(historyCount + 1);
         if (missing) {
           await expect.poll(() => conversation.count()).toBe(0);
           await expect.poll(() => notFound.count()).toBe(1);

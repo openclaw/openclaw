@@ -101,7 +101,7 @@ function wrapStreamFnWithCompactionReplayRepair(
       await joinRepairs();
       throw error;
     }
-    return wrapStreamObjectSettlement(response, joinRepairs);
+    return wrapStreamObjectSettlement(response, joinRepairs, () => repairs.length > 0);
   };
 }
 
@@ -215,6 +215,7 @@ export function installEmbeddedAttemptStreamGuards(
       cacheRetention: effectivePromptCacheRetention,
       streamStrategy,
       transport: effectiveAgentTransport,
+      getSystemPromptSeries: () => input.prepared.sessionRuntime.state.systemPromptSeries,
     },
     (observation, snapshot) => {
       if (observation.broke) {
@@ -227,6 +228,9 @@ export function installEmbeddedAttemptStreamGuards(
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
             `${turnFacts} ` +
+            (observation.systemPromptSeries
+              ? `systemPromptSeries=${observation.systemPromptSeries} `
+              : "") +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );

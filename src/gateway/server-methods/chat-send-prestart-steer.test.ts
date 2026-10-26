@@ -353,15 +353,14 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expect(fallback.input).toMatchObject({ runId: steerRunId, state: "queued", queued: true });
         expect(runtime.execute).toHaveBeenCalledOnce();
         expectUnconsumed();
+        // Let the queued input finish its debounce before releasing the active run.
+        clock += 500;
         expectDefined(operation, "initial run owner").complete();
         releaseRun.resolve();
         await withinTest(followupStarted.promise, signal);
         expect(runtime.execute).toHaveBeenCalledTimes(2);
-        expect(consumed).toEqual([
-          { runId: expect.any(String), text: expect.stringContaining(steerText) },
-        ]);
+        expect(consumed).toEqual([{ runId: steerRunId, text: expect.stringContaining(steerText) }]);
         expect(consumed[0]?.runId).not.toBe(createdSession.runId);
-        expect(consumed[0]?.runId).toBe(steerRunId);
         expect(earlyTerminals).toEqual([]);
         releaseFollowup.resolve();
         await withinTest(queuedSettled.promise, signal);
@@ -373,19 +372,13 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         );
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-      const slowSends = logGateway.info.mock.calls.filter(([message]) =>
-        message.startsWith("slow chat send"),
-      );
       // Independent requests can finish in either order; each keeps its own disposition.
-      const stages = injection === "accepted" ? ["steer"] : ["queued", "startup"];
-      expect(slowSends).toHaveLength(stages.length);
-      expect(slowSends).toEqual(
-        expect.arrayContaining(
-          stages.map((stage) => [
-            expect.stringContaining(`slow chat send 15800ms stage=${stage} ack=0ms`),
-          ]),
-        ),
-      );
+      expect(
+        logGateway.info.mock.calls
+          .filter(([message]) => message.startsWith("slow chat send"))
+          .map(([message]) => message.match(/stage=(\w+)/)?.[1])
+          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+      ).toEqual(injection === "accepted" ? ["steer"] : ["queued", "startup"]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expectSingleUserInput(storePath, sessionKey, steerText);
     } finally {

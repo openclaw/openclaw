@@ -87,16 +87,22 @@ it("keeps compact custom snooze keyboard input inside its popover", async () => 
 
 it("recreates the custom snooze picker when the menu opens at another anchor", async () => {
   const menu = await mountMenu({ snoozeAllowed: true });
-  await openSubmenu(menu, "Snooze");
-  await page.getByRole("menuitem", { name: "Choose another time", exact: true }).click();
-  const field = page.getByLabelText("Date and time", { exact: true });
+  const submenu = await openSubmenu(menu, "Snooze");
+  await page
+    .elementLocator(submenu)
+    .getByRole("menuitem", { name: "Choose another time", exact: true })
+    .click();
+  const field = page.elementLocator(menu).getByLabelText("Date and time", { exact: true });
   await expect.element(field).toHaveFocus();
   const previous = menu.querySelector(".session-menu__snooze-picker");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   menu.anchor = { x: 200, y: 150 };
   await settleSessionMenu(menu);
-  await openSubmenu(menu, "Snooze");
-  await page.getByRole("menuitem", { name: "Choose another time", exact: true }).click();
+  const reopenedSubmenu = await openSubmenu(menu, "Snooze");
+  await page
+    .elementLocator(reopenedSubmenu)
+    .getByRole("menuitem", { name: "Choose another time", exact: true })
+    .click();
   await expect.element(field).toHaveFocus();
   expect(menu.querySelector(".session-menu__snooze-picker")).not.toBe(previous);
 });

@@ -64,11 +64,8 @@ export async function withTelegramNativeOwners(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await withTestChannelRegistry(telegramPlugin, async () => {
       const fixture = await createFixture(asserted, state);
-      try {
-        await run(fixture);
-      } finally {
-        fixture.close();
-      }
+      using _ = { [Symbol.dispose]: () => fixture.close() };
+      await run(fixture);
     });
   });
 }

@@ -207,11 +207,7 @@ async function continueConnect(
   capabilities?: string[],
 ) {
   ws.emitOpen();
-  ws.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce, ts: challengeTs, ...(capabilities ? { capabilities } : {}) },
-  });
+  ws.emitConnectChallenge({ nonce, ts: challengeTs, ...(capabilities ? { capabilities } : {}) });
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
   } else {
@@ -308,6 +304,31 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it.each([false, true])(
+    "publishes recovery readiness without loading an empty legacy scope (foreign recovery=%s)",
+    async (foreignRecovery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      if (foreignRecovery) {
+        seedRecovery("agent:cloud:foreign", "another-principal");
+      }
+      const onRecoveryScopeChange = vi.fn();
+      const client = createClient({ onRecoveryScopeChange });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id, {
+        deviceToken: STORED_CRED,
+        recoveryMigrationAllowed: true,
+        recoveryScope: "server-current",
+      });
+
+      await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+      expect(client.recoveryScopeReady).toBe(true);
+      expect(client.recoveryScope).toBe("server-current");
+      expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
+      expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+      expect(sessionStorage.length).toBe(foreignRecovery ? 1 : 0);
+    },
+  );
 
   it.each([
     { advertised: false, modelCatalog: { agentId: "alpha" } },
@@ -481,11 +502,7 @@ describe("GatewayBrowserClient", () => {
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-missing-time" },
-    });
+    ws.emitConnectChallenge({ nonce: "nonce-missing-time" });
 
     await expectSocketClosed(ws);
     expect(ws.sent).toHaveLength(0);
@@ -746,11 +763,7 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(ws.sent).toEqual([]);
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "delayed-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "delayed-challenge", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(ws.sent).toHaveLength(1);
@@ -851,11 +864,7 @@ describe("GatewayBrowserClient", () => {
       readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
     ).toBeNull();
 
-    secondWs.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "nonce-current", ts: 1_800_000_000_000 },
-    });
+    secondWs.emitConnectChallenge({ nonce: "nonce-current", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
     const secondConnect = parseLatestConnectFrame(secondWs);
     emitHello(secondWs, secondConnect.id, {
@@ -910,11 +919,7 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(800);
     const nextWs = getLatestWebSocket();
     nextWs.emitOpen();
-    nextWs.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "next", ts: 1_800_000_000_000 },
-    });
+    nextWs.emitConnectChallenge({ nonce: "next", ts: 1_800_000_000_000 });
     await vi.advanceTimersByTimeAsync(0);
     emitHello(nextWs, parseLatestConnectFrame(nextWs).id, {
       scopes: ["operator.write"],

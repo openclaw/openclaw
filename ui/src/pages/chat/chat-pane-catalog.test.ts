@@ -9,17 +9,18 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { catalogList } from "./chat-pane-catalog.test-support.ts";
-import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionContext,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { catalogList } from "./chat-pane-catalog.test-support.ts";
+import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
@@ -41,20 +42,21 @@ const catalogSession: SessionCatalogSession = {
   canArchive: true,
 };
 
-function createCatalogPane(request: ReturnType<typeof vi.fn>, key = catalogKey) {
+function createCatalogPane(request: ReturnType<typeof vi.fn>, key = catalogKey, connected = false) {
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = {} as SessionCapability;
   const fixture = createTestChatPane({ client, sessions });
   const { pane } = fixture;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.sessionKey = buildCatalogSessionKey(key, "main");
+  fixture.state.sessionKey = pane.sessionKey;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: connected });
   return { ...fixture, client, key, sessions };
 }
 
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
-  const fixture = createCatalogPane(request);
+  const fixture = createCatalogPane(request, catalogKey, true);
   const { pane, state } = fixture;
-  state.sessionKey = pane.sessionKey;
   state.chatMessage = "Continue the original catalog conversation";
   state.handleChatDraftChange = vi.fn((draft: string) => {
     state.chatMessage = draft;
@@ -62,7 +64,6 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   state.handleSendChat = vi.fn(async () => undefined);
   pane.history.catalogSession = { ...catalogSession };
   pane.onPaneSessionChange = vi.fn();
-  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   return fixture;
 }
 
@@ -86,14 +87,11 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
-  it("reuses unchanged catalog history while admitting an older page", async () => {
+  it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
     const { pane, state, context } = createRefreshChatPane(createGatewayBrowserClientFixture());
-    const sessionKey = buildCatalogSessionKey(
-      { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
-      "main",
-    );
+    const sessionKey = buildCatalogSessionKey(catalogKey, "main");
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = state.sessionKey = sessionKey;
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
@@ -219,10 +217,8 @@ describe("chat pane catalog", () => {
         }),
       )
       .mockImplementationOnce(() => read.promise);
-    const { pane, state } = createCatalogPane(request);
-    state.sessionKey = pane.sessionKey;
+    const { pane, state } = createCatalogPane(request, key, true);
     state.assistantAgentId = "main";
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -238,18 +234,31 @@ describe("chat pane catalog", () => {
     expect(pane.history.catalogMessages).toEqual([]);
   });
 
-  it.each<[string, SessionCatalogTranscriptItem, string]>([
-    [
-      "raw tool command",
-      { type: "toolCall", raw: { command: "git status --short" } },
-      "Tool call\n\ngit status --short",
-    ],
-    ["empty reasoning", { type: "reasoning" }, "Thinking"],
-  ])("renders %s", (_name, item, expected) => {
-    const { pane } = createCatalogContinuationPane(vi.fn());
+  it("keeps raw and structured tool inputs visible without call IDs", () => {
+    const { pane } = createCatalogPane(vi.fn());
+    expect(
+      pane.catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
+    ).toMatchObject({
+      content: [{ type: "toolCall", arguments: "git status --short" }],
+    });
+    expect(
+      extractToolCardsCached(
+        pane.catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
+      ),
+    ).toMatchObject([{ args: { count: 2 }, outputText: "done", completed: true }]);
+  });
 
-    expect(pane.catalogItemMessage(item)).toMatchObject({
-      content: [{ type: "text", text: expected }],
+  it("keeps reasoning in thinking content and omits empty placeholders", () => {
+    const { pane } = createCatalogPane(vi.fn());
+    expect(pane.catalogItemMessage({ type: "reasoning" })).toBeNull();
+    expect(pane.catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
+      content: [{ type: "thinking", thinking: "…" }],
+      __openclaw: { catalogTruncated: true },
+    });
+    expect(
+      pane.catalogItemMessage({ type: "reasoning", text: "Check the evidence." }),
+    ).toMatchObject({
+      content: [{ type: "thinking", thinking: "Check the evidence." }],
     });
   });
 
@@ -261,26 +270,29 @@ describe("chat pane catalog", () => {
     const original = structuredClone(item);
 
     expect(pane.catalogItemMessage(item)).toMatchObject({
-      content: [{ type: "text", text: `Tool result\n\n${preview}\n\n[Output truncated]` }],
+      content: [
+        {
+          type: "toolResult",
+          content: [{ type: "text", text: preview }],
+        },
+      ],
+      __openclaw: { catalogTruncated: true },
     });
     expect(item).toEqual(original);
   });
 
   it("keeps paging when an advancing older page renders nothing new", async () => {
     const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
+      ...catalogKey,
       items: [{ id: "x1", type: "other" }],
       nextCursor: "cursor-2",
     };
-    const key = { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" };
-    const { pane, state } = createCatalogPane(
+    const { pane, key } = createCatalogPane(
       vi.fn(async () => readPage),
-      key,
+      catalogKey,
+      true,
     );
-    state.sessionKey = pane.sessionKey;
     pane.history.catalogCursor = "cursor-1";
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     expect(await pane.loadCatalogSession(key, true)).toBe(true);
     expect(pane.history.catalogCursor).toBe("cursor-2");
     expect(pane.history.catalogMessages).toHaveLength(0);

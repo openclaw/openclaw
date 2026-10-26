@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show, createMemo } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -23,7 +22,7 @@ import {
   formatRelativeTimestamp,
 } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
 
@@ -139,11 +138,7 @@ function Commit(props: AboutProps) {
 }
 
 export function AboutView(props: AboutProps) {
-  const branding = projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const palette =
     LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
     expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");

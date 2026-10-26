@@ -9,6 +9,7 @@ import type { AgentContextPruningConfig } from "../../config/types.agent-default
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
@@ -29,10 +30,10 @@ import { dropThinkingBlocks } from "./thinking.js";
 import {
   getToolResultProjectionBaseKey,
   getToolResultProjectionKeys,
-  getToolResultTextBlocks,
   hashToolResultText,
   TOOL_RESULT_PROJECTION_KEY,
 } from "./tool-result-projection-key.js";
+import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   estimateToolResultTextChars,
   isToolResultTextBlock,
@@ -170,7 +171,7 @@ function softPruneCacheTtlToolResult(
       ? text
       : `${sliceUtf16Safe(text, 0, 1_500)}\n...\n${sliceUtf16Safe(text, -1_500)}\n\n` +
         `[Tool result trimmed: kept first 1500 chars and last 1500 chars of ${text.length} chars.]`;
-  return { ...message, content: [{ type: "text", text: projected }] };
+  return { ...message, content: freezeTrustedJsonSnapshot([{ type: "text", text: projected }]) };
 }
 
 /** Projects expired cache-TTL history without mutating the transcript. */
@@ -279,7 +280,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
       }
       const cleared = {
         ...message,
-        content: [{ type: "text" as const, text: settings.placeholder }],
+        content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: settings.placeholder }]),
       };
       totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
@@ -734,7 +735,7 @@ export function restoreCacheTtlToolResultProjections(
     projectionState.frozen.add(key);
     if (texts) {
       projectionState.replacements.set(key, {
-        content: texts.map((text) => ({ type: "text", text })),
+        content: freezeTrustedJsonSnapshot(texts.map((text) => ({ type: "text" as const, text }))),
       });
     }
   }
@@ -755,9 +756,7 @@ export function reconcileToolResultPromptProjectionState(
     messages.flatMap((message, index) => {
       const key = keys[index];
       const source = key ? projectionState.sourceHashByKey.get(key) : undefined;
-      return key && (!source || source === hashToolResultText(getToolResultTextBlocks(message)))
-        ? [key]
-        : [];
+      return key && (!source || source === hashToolResultText(message)) ? [key] : [];
     }),
   );
   for (const key of [
@@ -779,43 +778,7 @@ export function reconcileToolResultPromptProjectionState(
   }
 }
 
-function mergeProjectedToolResultMessage(
-  message: AgentMessage,
-  projectedContent: CacheTtlToolResultMessage["content"],
-  sourceHash: string | undefined,
-  cacheTtl?: "soft" | "hard",
-): AgentMessage {
-  if (message.role !== "toolResult") {
-    return message;
-  }
-  const currentContent = message.content;
-  if (!Array.isArray(currentContent) || !Array.isArray(projectedContent)) {
-    return { ...message, content: projectedContent };
-  }
-  const projectedText = projectedContent.flatMap((block) =>
-    isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : [],
-  );
-  const currentText = getToolResultTextBlocks(message);
-  if (sourceHash && hashToolResultText(currentText) !== sourceHash) {
-    return message;
-  }
-  if (cacheTtl) {
-    return { ...message, content: projectedContent };
-  }
-  if (currentText.length !== projectedText.length) {
-    return message;
-  }
-  let textIndex = 0;
-  const mergedContent = currentContent.map((block) => {
-    if (!isRecord(block) || block.type !== "text") {
-      return block;
-    }
-    return Object.assign({}, block, { text: projectedText[textIndex++] });
-  });
-  return { ...message, content: mergedContent };
-}
-
-function projectToolResultMessages(params: {
+export function projectToolResultMessages(params: {
   messages: AgentMessage[];
   projectionState: ToolResultPromptProjectionState;
   recovering?: true;
@@ -834,23 +797,16 @@ function projectToolResultMessages(params: {
           ? params.projectionState.replacements.get(key)
           : undefined;
       if (key && !params.recovering && !params.projectionState.sourceHashByKey.has(key)) {
-        params.projectionState.sourceHashByKey.set(
-          key,
-          hashToolResultText(getToolResultTextBlocks(source)),
-        );
+        params.projectionState.sourceHashByKey.set(key, hashToolResultText(source));
       }
-      let message = projected
-        ? mergeProjectedToolResultMessage(
+      const message = projected
+        ? projectToolResultMessage(
             source,
-            projected.content,
+            projected,
+            key,
             key ? params.projectionState.sourceHashByKey.get(key) : undefined,
-            projected.cacheTtl,
           )
         : source;
-      if (key && projected?.cacheTtl && message !== source) {
-        // Carry canonical identity through content edits, including duplicate or absent tool ids.
-        message = Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key });
-      }
       // Dispatch retains frozen bytes; recovery follows a rejected provider prefix.
       aggregateEligible.push(params.recovering || !key || !frozen);
       return message;
@@ -887,12 +843,15 @@ function materializeRestoredCacheTtl(
     }
     const projected =
       mark.mode === "hard"
-        ? { ...message, content: [{ type: "text" as const, text: mark.placeholder }] }
+        ? {
+            ...message,
+            content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: mark.placeholder }]),
+          }
         : softPruneCacheTtlToolResult(message);
     recordToolResultPromptProjection(state, key, projected, mark.mode);
     state.frozen.add(key);
     if (!state.sourceHashByKey.has(key)) {
-      state.sourceHashByKey.set(key, hashToolResultText(getToolResultTextBlocks(message)));
+      state.sourceHashByKey.set(key, hashToolResultText(message));
     }
   }
   // Marks whose source left the branch (compaction, reset) are dropped with this pass.

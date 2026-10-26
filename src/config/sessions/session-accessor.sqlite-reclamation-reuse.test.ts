@@ -160,25 +160,17 @@ test.each(["two-leases-missing", "revoked-after-open"] as const)(
     validation.admissionPath = database.path;
     const source = createNativeReclamationSource(options);
     const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
-    validation.admissionPath = database.path;
-    let entries = 0;
+    const enter = vi.fn(async () => "opened");
     let peerLease: string | undefined;
     try {
-      await expect(
-        execution.runExisting(source, async () => {
-          entries += 1;
-          return "opened";
-        }),
-      ).resolves.toBe("opened");
-      expect(entries).toBe(1);
+      await expect(execution.runExisting(source, enter)).resolves.toBe("opened");
+      expect(enter).toHaveBeenCalledOnce();
       expect(loadSessionEntryReadOnly(scopes[0]!)).toMatchObject({ sessionId: "victim" });
-      if (proof.startsWith("two-leases")) {
+      if (proof === "two-leases-missing") {
         const before = readSqliteDatabaseIntegrityVerification(database.path);
         peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
         expect(readSqliteDatabaseIntegrityVerification(database.path)).toEqual(before);
-        if (proof === "two-leases-missing") {
-          removeAgentIntegrityMetadataForTest(database.path);
-        }
+        removeAgentIntegrityMetadataForTest(database.path);
       }
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
@@ -188,7 +180,7 @@ test.each(["two-leases-missing", "revoked-after-open"] as const)(
         invalidateOpenClawAgentDatabaseValidation(database.path);
       }
       await expect(reclaim({ plan: plans[0]! })).resolves.toMatchObject(removedArtifact);
-      expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
+      expect(fullChecks()).toBe(proof === "revoked-after-open" ? 1 : 0);
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
     } finally {
       try {
@@ -437,7 +429,6 @@ test("retains reclamation Workers across alternating databases and retires all i
   expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
   const spawned = observeReclamationWorkers();
-  const threads = fixtures.map(() => new Set<number>());
   for (let pass = 0; pass < 6; pass += 1) {
     const index = pass % fixtures.length;
     const fixture = fixtures[index]!;
@@ -451,10 +442,8 @@ test("retains reclamation Workers across alternating databases and retires all i
       kind: plan.kind,
     });
     expect(diagnostics.workerThreadId).toBe(spawned[index]!.threadId);
-    threads[index]!.add(diagnostics.workerThreadId!);
   }
   expect(spawned).toHaveLength(2);
-  expect(threads.map((ids) => ids.size)).toEqual([1, 1]);
   expect(fullChecks()).toBe(0);
   for (const fixture of fixtures) {
     expect(leasesFor(fixture)).toHaveLength(2);

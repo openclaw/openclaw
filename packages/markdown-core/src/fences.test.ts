@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
 describe("parseFenceSpans closing-fence rules", () => {
+  it("allows backticks in tilde-fence info strings", () => {
+    const text = "~~~literal`\ncode\n~~~\nParagraph";
+    const spans = parseFenceSpans(text);
+    expect(spans).toHaveLength(1);
+    expect(isSafeFenceBreak(spans, text.indexOf("code") + 1)).toBe(false);
+    expect(isSafeFenceBreak(spans, text.indexOf("Paragraph") + 1)).toBe(true);
+  });
+
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
     // CommonMark: a closing fence may be followed only by whitespace, so "``` not a close" is code
     // content and the block stays open until the real closing fence. Reporting an interior offset

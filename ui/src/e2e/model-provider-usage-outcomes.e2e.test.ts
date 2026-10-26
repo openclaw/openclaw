@@ -2,7 +2,9 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { configAuth } from "./model-catalog-fixtures.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -17,13 +19,7 @@ const config = {
   agents: { defaults: { model: "openai/gpt-5.5" } },
   models: { providers: { openai: { apiKey: "[redacted]" } } },
 };
-const configuredProvider = {
-  provider: "openai",
-  displayName: "OpenAI",
-  status: "static",
-  profiles: [],
-  apiKey: { source: "config" },
-};
+const configuredProvider = configAuth("openai", { displayName: "OpenAI", status: "static" });
 const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
 function withPage(run: (page: Page) => Promise<void>, width = 1440) {
   return suite.withPage(
@@ -111,15 +107,7 @@ suite.define(() => {
             valid: true,
           },
           "models.list": { models },
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
           "config.patch": { ok: true },
           "models.authStatus": {
             ts: now,

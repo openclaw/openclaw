@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
   createSidebarContentRecorder,
   loadedSidebarContent,
@@ -24,16 +22,12 @@ function createReferenceState(
   sessions: SessionWorkspaceHost["sessions"],
   methods: string[] = ["sessions.files.list", "sessions.files.set"],
 ): SessionWorkspaceHost {
-  return {
-    client: createGatewayBrowserClientFixture(),
-    connected: true,
-    connectionEpoch: 1,
+  return createSessionWorkspaceHost({
     handleOpenSidebar: createSidebarContentRecorder(),
     hello: gatewayHelloForMethods(methods),
     sessionKey: "agent:main:current",
-    sidebarContent: null,
     sessions,
-  };
+  });
 }
 
 describe("session workspace file reference resolution", () => {

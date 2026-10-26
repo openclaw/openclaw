@@ -1,6 +1,7 @@
 // Prove Stop, deletion, and yield of kept children through real Gateway tools.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
@@ -9,7 +10,6 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as announceOutput from "../agents/subagents/announce/subagent-announce-output.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../agents/subagents/registry/subagent-registry-helpers.js";
-import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as sweepKill from "../agents/subagents/registry/subagent-registry-sweep-kill.js";
 import {
@@ -20,7 +20,6 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import * as sessionReconciliation from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
-import { readProviderBody } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentStopFixture,
   findSubagentRecords,
@@ -65,7 +64,7 @@ async function startScriptedModel(handle: ModelHandler) {
     bindError: "Expected subagent model server address",
     onRequest: async (request, response) => {
       try {
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         responseSequence += 1;
         if (!(await handle(body, request, response, responseSequence))) {
           writeOpenAiResponsesText(response, {
@@ -125,174 +124,113 @@ function modelActions(response: ServerResponse, sequence: number) {
   };
 }
 
-function startStopFollowupModel(sourceState: "active" | "paused") {
-  const firstChildStarted = createDeferred();
-  const sourceIdentified = createDeferred<{ runId: string }>();
-  const allowParentStop = createDeferred();
-  const successorAccepted = createDeferred<string>();
-  const allowParentYield = createDeferred();
-  const completionDelivered = createDeferred();
-  const counts = { successorDeliveries: 0, stoppedDeliveries: 0 };
-  let parentRequestCount = 0;
+type ChildReceipt = { runId: string; sessionKey: string };
+
+/** Stop/follow-up and sibling retirement share transport and delivery, not turn ordering. */
+function startRetirementModel(kind: "active" | "paused" | "delete" | "stop") {
+  const followup = kind === "active" || kind === "paused";
+  const active = kind === "active" || kind === "stop";
+  const task = kind === "delete" ? deletedTask : stoppedTask;
+  const result = followup ? successorResult : siblingResult;
+  const source = createDeferred<ChildReceipt>();
+  const successor = createDeferred<{ runId: string }>();
+  const started = createDeferred();
+  const retire = createDeferred();
+  const yieldParent = createDeferred();
+  const delivered = createDeferred();
+  const counts = { delivered: 0, retired: 0 };
+  let turn = 0;
   return {
-    firstChildStarted: firstChildStarted.promise,
-    sourceIdentified: sourceIdentified.promise,
-    allowParentStop: () => allowParentStop.resolve(),
-    successorAccepted: successorAccepted.promise,
-    completionDelivered: completionDelivered.promise,
-    allowParentYield: () => allowParentYield.resolve(),
-    deliveryCounts: () => ({ ...counts }),
-    release: () => allowParentYield.resolve(),
+    source: source.promise,
+    successor: successor.promise,
+    started: started.promise,
+    delivered: delivered.promise,
+    retire: retire.resolve,
+    yieldParent: yieldParent.resolve,
+    counts,
+    release: followup ? yieldParent.resolve : retire.resolve,
     handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
       const { tool, spawn, pause, reply } = modelActions(response, sequence);
+      const spawnChild = (childTask: string) =>
+        spawn(childTask, followup || active ? { completionTarget: "parent" } : {});
       if (!body.includes(parentPrompt)) {
-        // A follow-up to the kept child starts a distinct successor execution.
-        if (body.includes(followupTask)) {
-          return reply(successorResult, "stop_followup_successor");
+        if (body.includes(followup ? followupTask : siblingTask)) {
+          return reply(result, followup ? "stop_followup_successor" : "retirement_sibling_result");
         }
-        if (!body.includes(stoppedTask)) {
+        if (!body.includes(task)) {
           return false;
         }
-        if (sourceState === "active") {
-          await holdUntilStopped(request, response, () => firstChildStarted.resolve());
+        if (active) {
+          await holdUntilStopped(request, response, started.resolve);
           return true;
         }
+        started.resolve();
         return body.includes("function_call_output") ? false : pause();
       }
-      // A stale notice or late result from the stopped source must never reach the requester.
+      // Stale notices/late output cannot reach the requester; success uses a new delivery turn.
       if (body.includes(stoppedResult) || body.includes(pauseNotice)) {
-        counts.stoppedDeliveries += 1;
+        counts.retired += 1;
         return false;
       }
-      // Completion reaches the requester through a fresh delivery-only agent turn.
-      if (body.includes(successorResult)) {
-        counts.successorDeliveries += 1;
-        completionDelivered.resolve();
-        return reply("PARENT_RECEIVED_SUCCESSOR");
+      if (body.includes(result)) {
+        counts.delivered += 1;
+        delivered.resolve();
+        return reply(followup ? "PARENT_RECEIVED_SUCCESSOR" : "PARENT_RECEIVED_SIBLING");
       }
-      parentRequestCount += 1;
-      if (parentRequestCount === 1) {
-        return spawn(stoppedTask, { completionTarget: "parent" });
+      turn += 1;
+      if (turn === 1) {
+        return spawnChild(task);
       }
-      const [child] = spawnReceipts(body);
-      if (!child) {
+      const children = spawnReceipts(body);
+      if (followup && !children[0]) {
         throw new Error("Parent transport did not retain the child spawn receipt");
       }
-      sourceIdentified.resolve({ runId: child.runId });
-      if (parentRequestCount === 2) {
-        await allowParentStop.promise;
-        return tool("sessions", {
-          action: "stop",
-          sessionKey: child.sessionKey,
-          runId: child.runId,
-        });
+      if (turn === 2) {
+        const child = children[0];
+        if (!child) {
+          throw new Error("Parent did not retain the retired-child spawn receipt");
+        }
+        source.resolve(child);
+        if (!followup) {
+          return spawnChild(siblingTask);
+        }
+        await retire.promise;
+        return tool("sessions", { action: "stop", ...child });
       }
-      if (parentRequestCount === 3) {
-        return tool("sessions_send", {
-          sessionKey: child.sessionKey,
-          mode: "followup",
-          timeoutSeconds: 0,
-          message: followupTask,
-        });
+      const retired = followup ? children[0]! : await source.promise;
+      if (turn === 3) {
+        if (followup) {
+          return tool("sessions_send", {
+            sessionKey: retired.sessionKey,
+            mode: "followup",
+            timeoutSeconds: 0,
+            message: followupTask,
+          });
+        }
+        const child = children.find((entry) => entry.runId !== retired.runId);
+        if (!child) {
+          throw new Error("Parent did not retain the sibling spawn receipt");
+        }
+        successor.resolve(child);
+        await retire.promise;
+        return active ? tool("sessions", { action: "stop", ...retired }) : pause();
       }
-      if (parentRequestCount === 4) {
-        const [followup] = findSubagentRecords(
+      if (turn === 4 && followup) {
+        const [accepted] = findSubagentRecords(
           JSON.parse(body) as unknown,
           (record) =>
             record.status === "accepted" &&
             record.targetDisposition === "queued" &&
             typeof record.runId === "string",
         );
-        if (!followup) {
-          throw new Error("Parent transport did not retain the queued follow-up receipt");
+        if (!accepted) {
+          throw new Error("Parent did not retain the queued follow-up receipt");
         }
-        successorAccepted.resolve(followup.runId as string);
-        await allowParentYield.promise;
-        return pause();
+        successor.resolve({ runId: accepted.runId as string });
+        await yieldParent.promise;
       }
-      return false;
-    },
-  };
-}
-
-/** One parent with a paused child it later retires and a sibling that completes. */
-function startRetiredSiblingModel(retirement: "delete" | "stop") {
-  const retiredChild = createDeferred<{ runId: string; sessionKey: string }>();
-  const retiredChildStarted = createDeferred();
-  const siblingChild = createDeferred<{ runId: string; sessionKey: string }>();
-  const allowParentRetirement = createDeferred();
-  const siblingDelivered = createDeferred();
-  const counts = { siblingDeliveries: 0, retiredDeliveries: 0 };
-  let parentRequestCount = 0;
-  return {
-    retiredChild: retiredChild.promise,
-    retiredChildStarted: retiredChildStarted.promise,
-    siblingChild: siblingChild.promise,
-    siblingDelivered: siblingDelivered.promise,
-    allowParentRetirement: () => allowParentRetirement.resolve(),
-    deliveryCounts: () => ({ ...counts }),
-    release: () => allowParentRetirement.resolve(),
-    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
-      const { tool, spawn, pause, reply } = modelActions(response, sequence);
-      const childSpawn = (task: string) =>
-        spawn(task, retirement === "stop" ? { completionTarget: "parent" } : {});
-      if (!body.includes(parentPrompt)) {
-        if (body.includes(siblingTask)) {
-          return reply(siblingResult, "retirement_sibling_result");
-        }
-        if (!body.includes(deletedTask) && !body.includes(stoppedTask)) {
-          return false;
-        }
-        if (retirement === "stop") {
-          await holdUntilStopped(request, response, () => retiredChildStarted.resolve());
-          return true;
-        }
-        retiredChildStarted.resolve();
-        return body.includes("function_call_output") ? false : pause();
-      }
-      if (body.includes(pauseNotice) || body.includes(stoppedResult)) {
-        counts.retiredDeliveries += 1;
-        return false;
-      }
-      if (body.includes(siblingResult)) {
-        counts.siblingDeliveries += 1;
-        siblingDelivered.resolve();
-        return reply("PARENT_RECEIVED_SIBLING");
-      }
-      parentRequestCount += 1;
-      if (parentRequestCount === 1) {
-        return childSpawn(retirement === "stop" ? stoppedTask : deletedTask);
-      }
-      const children = spawnReceipts(body);
-      if (parentRequestCount === 2) {
-        const [child] = children;
-        if (!child) {
-          throw new Error("Parent did not retain the retired-child spawn receipt");
-        }
-        retiredChild.resolve(child);
-        return childSpawn(siblingTask);
-      }
-      const retired = await retiredChild.promise;
-      if (parentRequestCount === 3) {
-        const child = children.find((entry) => entry.runId !== retired.runId);
-        if (!child) {
-          throw new Error("Parent did not retain the sibling spawn receipt");
-        }
-        siblingChild.resolve(child);
-        await allowParentRetirement.promise;
-        return retirement === "stop"
-          ? tool("sessions", {
-              action: "stop",
-              sessionKey: retired.sessionKey,
-              runId: retired.runId,
-            })
-          : pause();
-      }
-      if (parentRequestCount === 4 && retirement === "stop") {
-        // Yield immediately behind the Stop, while the stopped sibling still settles.
-        return pause();
-      }
-      return false;
+      // Sibling Stop yields immediately, while the retired child is still settling.
+      return turn === 4 && (followup || active) ? pause() : false;
     },
   };
 }
@@ -368,24 +306,10 @@ function startChildModel(
   };
 }
 
-async function startProofGateway(modelUrl: string, label: string) {
-  const { state, start } = await createSubagentStopFixture(label, modelUrl);
-  const gateway = await start();
-  await gateway.server.startupSettled;
-  return {
-    client: gateway.client,
-    close: async () => {
-      await disconnectGatewayClient(gateway.client);
-      await gateway.server.close({ reason: `${label} proof complete` });
-      await state.cleanup();
-    },
-  };
-}
-
-async function startParentTurn(
-  client: Awaited<ReturnType<typeof startProofGateway>>["client"],
-  runId: string,
-) {
+type ProofClient = Awaited<
+  ReturnType<Awaited<ReturnType<typeof createSubagentStopFixture>>["start"]>
+>["client"];
+async function startParentTurn(client: ProofClient, runId: string) {
   // Sidecar readiness precedes chat recovery; preserve the receipt while awaiting admission.
   await vi.waitFor(
     () =>
@@ -426,7 +350,17 @@ async function waitForRun(
 const waitForRunOrRemoval = (runId: string, matches: (row: SubagentRunRecord) => boolean) =>
   waitForRun(runId, matches, true);
 
-type ProofClient = Awaited<ReturnType<typeof startProofGateway>>["client"];
+/** Drive fallback confirmation without rewriting a live kill owner's row. */
+async function sweepPastKillReconciliation() {
+  const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
+  try {
+    await subagentRegistryTesting.sweepOnceForTests();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
 const waitForAgent = (client: ProofClient, runId: string) =>
   expect(client.request("agent.wait", { runId, timeoutMs: 30_000 })).resolves.toMatchObject({
     status: "ok",
@@ -447,12 +381,16 @@ async function withProof(
   run: (client: ProofClient) => Promise<void>,
 ) {
   const model = await startScriptedModel(script.handle);
-  const gateway = await startProofGateway(model.url, label);
+  const { state, start } = await createSubagentStopFixture(label, model.url);
+  const gateway = await start();
+  await gateway.server.startupSettled;
   try {
     await run(gateway.client);
   } finally {
     script.release?.();
-    await gateway.close();
+    await disconnectGatewayClient(gateway.client);
+    await gateway.server.close({ reason: `${label} proof complete` });
+    await state.cleanup();
     await model.close();
   }
 }
@@ -473,24 +411,24 @@ afterEach(async () => {
 it.each(["active", "paused"] as const)(
   "delivers exactly one kept-child successor after exact-run Stop of an %s source",
   async (sourceState) => {
-    const script = startStopFollowupModel(sourceState);
+    const script = startRetirementModel(sourceState);
     const parentRunId = `subagent-stop-followup-parent-${sourceState}`;
     await withProof(script, `subagent-stop-followup-${sourceState}`, async (client) => {
       await startParentTurn(client, parentRunId);
-      const source = await script.sourceIdentified;
+      const source = await script.source;
       if (sourceState === "active") {
-        await script.firstChildStarted;
+        await script.started;
       } else {
         await waitForRun(source.runId, (row) => row.pauseReason === "sessions_yield");
       }
-      script.allowParentStop();
-      const successorRunId = await script.successorAccepted;
+      script.retire();
+      const { runId: successorRunId } = await script.successor;
       await waitForAgent(client, successorRunId);
-      script.allowParentYield();
+      script.yieldParent();
       await waitForAgent(client, parentRunId);
       await waitForRun(successorRunId, (row) => row.delivery?.status === "delivered");
-      await script.completionDelivered;
-      expect(script.deliveryCounts()).toEqual({ successorDeliveries: 1, stoppedDeliveries: 0 });
+      await script.delivered;
+      expect(script.counts).toEqual({ delivered: 1, retired: 0 });
       expect(owedControllerInputs(source.runId), "the stopped source owes nothing").toEqual([]);
       expect(owedControllerInputs(successorRunId), "the successor delivered once").toEqual([]);
     });
@@ -500,26 +438,26 @@ it.each(["active", "paused"] as const)(
 it.each(["delete", "stop"] as const)(
   "retires a %s child without blocking its completed sibling or the parent yield",
   async (retirement) => {
-    const script = startRetiredSiblingModel(retirement);
+    const script = startRetirementModel(retirement);
     const parentRunId = `subagent-retired-${retirement}-parent`;
     await withProof(script, `subagent-retired-${retirement}`, async (client) => {
       await startParentTurn(client, parentRunId);
-      const retired = await script.retiredChild;
-      await script.retiredChildStarted;
+      const retired = await script.source;
+      await script.started;
       if (retirement === "delete") {
         await waitForRun(retired.runId, (row) => row.pauseReason === "sessions_yield");
       }
-      const sibling = await script.siblingChild;
+      const sibling = await script.successor;
       await waitForAgent(client, sibling.runId);
       if (retirement === "delete") {
         await deleteChild(client, retired.sessionKey);
         expect(owedControllerInputs(retired.runId), "deletion retires its inputs").toEqual([]);
       }
-      script.allowParentRetirement();
+      script.retire();
       await waitForAgent(client, parentRunId);
       await waitForRun(sibling.runId, (row) => row.delivery?.status === "delivered");
-      await script.siblingDelivered;
-      expect(script.deliveryCounts()).toEqual({ siblingDeliveries: 1, retiredDeliveries: 0 });
+      await script.delivered;
+      expect(script.counts).toEqual({ delivered: 1, retired: 0 });
       expect(owedControllerInputs(retired.runId), "the retired child owes nothing").toEqual([]);
       expect(owedControllerInputs(sibling.runId), "the sibling delivered once").toEqual([]);
     });
@@ -608,16 +546,9 @@ it.each([
       } else {
         // A requester-wide Stop: the parent already knows, so its children report nothing.
         await client.request("sessions.abort", { key: parentSessionKey });
-        // The Stop's own kill owner publishes the termination; the sweeper confirms it after
-        // the reconciliation window. Age the kill past that window and drive one sweep, so the
-        // confirmation decides delivery inside this test.
-        await waitForRun(child.runId, (row) => row.killReconciliation !== undefined);
-        await mutateSubagentRuns([child.runId], (rows) => {
-          const row = structuredClone(rows.get(child.runId)!);
-          row.killReconciliation!.killedAt -= PROVISIONAL_KILL_RECONCILIATION_MS;
-          return { value: undefined, postimages: new Map([[row.runId, row]]) };
-        });
-        await subagentRegistryTesting.sweepOnceForTests();
+        // Wait for published termination, not the provisional kill that live settlement clears.
+        await waitForRunOrRemoval(child.runId, (row) => row.execution.status === "terminal");
+        await sweepPastKillReconciliation();
       }
       // Settled means the kill is confirmed and its cleanup finished, not just published.
       await waitForRunOrRemoval(
@@ -698,13 +629,7 @@ it("confirms a stopped child's kill without losing either of two overlapping con
       await readHeld.promise;
       // The sweeper confirms the same kill once it ages past the reconciliation window. Sweep
       // at that later time rather than rewriting the kill record the held confirmation owns.
-      const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
-      try {
-        await subagentRegistryTesting.sweepOnceForTests();
-      } finally {
-        clock.mockRestore();
-      }
+      await sweepPastKillReconciliation();
       releaseRead.resolve();
       for (const child of children) {
         await waitForRunOrRemoval(

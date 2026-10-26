@@ -3,9 +3,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { SidebarCatalogMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
-import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 const popupSelector = "openclaw-catalog-session-menu";
@@ -46,7 +46,7 @@ function fixture(beforeOpen = () => {}) {
       return (
         <>
           <output>{view.isOpenFor(request.key) ? "open" : "closed"}</output>
-          {view.render(CatalogSessionMenu)}
+          {view.render(SidebarCatalogMenu)}
         </>
       );
     });

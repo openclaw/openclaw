@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -699,7 +699,7 @@ export function scheduleRequesterSettleWake(
               },
               Math.max(0, waiting.deadline - Date.now()),
             );
-            waiting.timer.unref?.();
+            waiting.timer.unref();
           }
         }
       });

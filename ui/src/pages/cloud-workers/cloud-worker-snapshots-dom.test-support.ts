@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
@@ -63,14 +64,7 @@ export function mountPage(
       case "environments.destroy":
         return {};
       case "config.get":
-        return {
-          config,
-          sourceConfig: config,
-          raw: JSON.stringify(config),
-          hash: "snapshot-config",
-          valid: true,
-          issues: [],
-        };
+        return sourceConfigSnapshot(config, "snapshot-config");
       case "crabbox.images.list":
         return result;
       case "config.patch":

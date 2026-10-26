@@ -21,7 +21,6 @@ export type ChatRouteData =
       face: BoardFace;
       shortId?: string;
       routeLoadingSkeleton?: true;
-      deferSnapshotRows?: true;
       sessionResolutionFromCache?: "roster" | "snapshot";
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;

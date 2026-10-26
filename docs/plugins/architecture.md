@@ -164,7 +164,11 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
+Plugin enablement readers can pass `rootConfig` to `resolveEffectiveEnableState` without constructing a normalized `config` copy. The policy owner reuses the published runtime configuration's prepared policy and refreshes it on publication; an explicitly supplied normalized `config` still takes precedence. Public normalization helpers continue to return caller-owned mutable copies.
+
 Plugin inventory responses share prepared enablement and package-ownership facts between install-health diagnostics and catalog presentation. Those facts belong to one synchronous response preparation, after hosted catalog loading and before optional category loading; maintenance operations still prepare their own current ownership checks.
+
+Bundled official catalog identities are admitted and indexed once per process. Inventory reads reuse those static entries instead of rescanning the bundled catalog for each installed plugin. Hosted catalog refresh and installed-package provenance checks keep their own lifecycles.
 
 Runs outside the agent's resolved workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's resolved workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
 
@@ -251,7 +255,10 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 Inference verification fingerprints the artifact selected by the runtime's
 source/build preference, including explicit bundled source overrides. Loading an
 unchanged plugin preserves that proof; changing its selected runtime files
-invalidates it.
+invalidates it. For bundled modules embedded in a standalone executable, the
+fingerprint combines the image's build identity, compilation mode, and build
+flavor with the retained plugin sidecar files. Embedded JavaScript does not need
+a second copy on disk.
 
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. Non-bundled instances also own a captured source artifact.
@@ -631,6 +638,10 @@ without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
+Preparing a package module defers its capture resolver until an import or source
+inspection needs it. Explicit `JITI_TSCONFIG_PATHS` configuration still initializes
+the resolver at module preparation so later tsconfig edits cannot change the
+selected mapping. Preparation workers retain separate artifact isolation.
 Captures reuse resolution state for local TypeScript imports such as `./helper.js`
 when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
 file probing. Existing JavaScript and Jiti's alternative filename precedence remain
@@ -703,6 +714,12 @@ That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies
 until the owners that still need them have joined. These ownership rules do not
 make native plugins a sandbox or automatically close plugin-created resources.
+
+After admitted calls and plugin cleanup finish, captured-source membership retires
+before module resources begin asynchronous release. Unrelated public-surface
+lookups cannot re-enter a retiring capture worker; the registration and cleanup
+scope remain retained until resource release finishes.
+
 See [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup)
 for the plugin author's cleanup contract.
 

@@ -198,7 +198,8 @@ async function mutateConfiguredMcpServer(
     };
   }
 
-  const servers = structuredClone(loaded.mcpServers);
+  const next = loaded.config;
+  const servers: ConfigMcpServers = next.mcp?.servers ?? {};
   if (params.kind === "set") {
     const argvRestored = restoreMcpServerArgvSentinels({
       incoming: params.server,
@@ -237,7 +238,6 @@ async function mutateConfiguredMcpServer(
   const success = params.kind === "set" ? undefined : { [successKey]: true };
   const assertCurrent = params.kind === "update" ? undefined : params.assertCurrent;
   const assertCurrentAsync = params.kind === "unset" ? params.assertCurrentAsync : undefined;
-  const next = structuredClone(loaded.config);
   if (Object.keys(servers).length > 0) {
     next.mcp = { ...next.mcp, servers };
   } else if (next.mcp) {

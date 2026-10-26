@@ -97,22 +97,17 @@ it("detects stale local tokens from the active state view while checking legacy 
     const sourceDir = state.path("source-state");
     await fs.mkdir(`${sourceDir}/identity`, { recursive: true });
     await fs.writeFile(`${sourceDir}/identity/device-auth.json`, '{"version":1}');
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    try {
-      const findings = await collectDevicePairingHealthFindings({
-        cfg: { gateway: { mode: "local" } },
-        env: { ...state.env, OPENCLAW_STATE_DIR: sourceDir },
-      });
-      expect(findings.map(({ requirement }) => requirement)).toEqual([
-        "device-auth-store-legacy-file",
-        "local-token-stale",
-      ]);
-      expect(JSON.stringify(findings)).not.toContain("synthetic-stale-token");
-      expect(prepare.mock.calls.filter(([sql]) => sql.includes('"device_auth_tokens"'))).toEqual(
-        [],
-      );
-    } finally {
-      prepare.mockRestore();
-    }
+    using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+
+    const findings = await collectDevicePairingHealthFindings({
+      cfg: { gateway: { mode: "local" } },
+      env: { ...state.env, OPENCLAW_STATE_DIR: sourceDir },
+    });
+    expect(findings.map(({ requirement }) => requirement)).toEqual([
+      "device-auth-store-legacy-file",
+      "local-token-stale",
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("synthetic-stale-token");
+    expect(prepare.mock.calls.filter(([sql]) => sql.includes('"device_auth_tokens"'))).toEqual([]);
   });
 });

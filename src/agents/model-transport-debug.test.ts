@@ -176,7 +176,7 @@ describe("guarded model fetch logging", () => {
     "logs response status=$status elapsedMs=$elapsedMs at $level",
     async ({ status, elapsedMs, level }) => {
       let now = 1_000;
-      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      using _ = vi.spyOn(Date, "now").mockImplementation(() => now);
       fetchWithSsrFGuardMock.mockImplementationOnce(async () => {
         now += elapsedMs;
         return {
@@ -186,18 +186,14 @@ describe("guarded model fetch logging", () => {
         };
       });
 
-      try {
-        const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
-        await response.text();
+      const response = await buildGuardedModelFetch(model)(requestUrl, { method: "POST" });
+      await response.text();
 
-        expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
-        expect(log[level]).toHaveBeenCalledWith(
-          expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
-        );
-        expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
-      } finally {
-        nowSpy.mockRestore();
-      }
+      expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("[model-fetch] start "));
+      expect(log[level]).toHaveBeenCalledWith(
+        expect.stringContaining(`status=${status} elapsedMs=${elapsedMs}`),
+      );
+      expect(log.info).toHaveBeenCalledTimes(level === "info" ? 1 : 0);
     },
   );
 

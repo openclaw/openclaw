@@ -3083,6 +3083,47 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `stopped launchd startup surfaces recent ownership refusal without extra polling`() async throws {
+        let port = 19117
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask()
+        }
+        let payload = """
+        {"service":{"loaded":true,"runtime":{"status":"stopped"}},
+        "lastError":"Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it."}
+        """
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: payload) {
+            manager.lastFailureReason = nil
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            defer {
+                manager.lastFailureReason = nil
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            manager._testStartLaunchdGatewayReadiness(
+                port: port, pid: nil, firstInstallReadinessBudget: 0.1)
+            await manager.waitForStartupAttempt()
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("stopped Gateway did not expose its startup failure")
+                await connection.shutdown()
+                return
+            }
+            #expect(reason.contains("may be from an earlier run"))
+            #expect(reason.contains("openclaw gateway recover-lock"))
+            #expect(manager.lastFailureReason == reason)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "--json", "--no-probe"],
+            ])
+            await connection.shutdown()
+        }
+    }
+
     @Test func `reused launchd gateway still repairs after its bounded budget`() async throws {
         let port = 19120
         let url = try #require(URL(string: "ws://example.invalid"))

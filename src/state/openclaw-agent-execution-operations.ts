@@ -160,7 +160,10 @@ async function loadAgentEntryPatchOperations() {
     "session.entry.patch.prepare": (
       input: Parameters<typeof kernel.readSessionEntryPatchSnapshot>[1],
       { open },
-    ) => kernel.readSessionEntryPatchSnapshot(open(), input),
+    ) =>
+      kernel
+        .readSessionEntryPatchSnapshot(open(), input)
+        .map(({ sessionKey, entry }) => ({ sessionKey, entry })),
     "session.entry.patch.commit": kernel.commitSessionEntryPatch,
   } satisfies Handlers;
 }

@@ -2,20 +2,15 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { describe, expect, it, vi } from "vitest";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
+import { createCodeModeExecutorConfig } from "./code-mode-executor.test-support.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 
-vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => "embedded-aot",
 }));
 
-const config = {
-  timeoutMs: 7_000,
-  memoryLimitBytes: 64 * 1024 * 1024,
-  maxOutputBytes: 65_536,
-  maxSnapshotBytes: 10 * 1024 * 1024,
-  maxPendingToolCalls: 16,
-};
+const config = createCodeModeExecutorConfig(7_000);
 const completed = {
   status: "completed" as const,
   output: EMPTY_CODE_MODE_OUTPUT,

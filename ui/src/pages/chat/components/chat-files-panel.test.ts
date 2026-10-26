@@ -9,11 +9,9 @@ import {
 } from "../../../components/panel-hosted-tabs.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
   openSessionWorkspacePreview,
   pinSessionWorkspacePreview,
@@ -30,19 +28,6 @@ import {
 } from "./chat-session-workspace.ts";
 import type { SessionWorkspacePreview } from "./chat-sidebar-content-types.ts";
 import "./chat-files-panel.tsx";
-
-function host(): SessionWorkspaceHost {
-  return {
-    sessionKey: "agent:main:files",
-    connectionEpoch: 1,
-    connected: true,
-    client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
-    hello: null,
-    sidebarContent: null,
-    handleOpenSidebar: vi.fn(),
-  };
-}
 
 function textResponse(
   state: SessionWorkspaceHost,
@@ -66,7 +51,7 @@ function textResponse(
 }
 
 function fileFixture(path: string, content = "OLD", canonical = false) {
-  const state = host();
+  const state = createSessionWorkspaceHost();
   const response = textResponse(state, path, content, canonical ? { workspacePath: path } : {});
   if (canonical) {
     response.root = "/workspace";
@@ -444,7 +429,7 @@ describe("workspace file tabs", () => {
   });
 
   it("uses the newest explicit line when the same file is reopened during its read", async () => {
-    const state = host();
+    const state = createSessionWorkspaceHost();
     const read = createDeferred<SessionWorkspaceGetResult>();
     state.sessions.getFile = vi.fn().mockReturnValue(read.promise);
     void openSessionWorkspaceFile(state, { path: "pending.ts", line: 2 });
@@ -463,7 +448,7 @@ describe("workspace file tabs", () => {
   it.each(["preview", undefined] as const)(
     "opens the first file with its tree collapsed and preserves an explicit toggle (%s)",
     async (disposition) => {
-      const state = host();
+      const state = createSessionWorkspaceHost();
       state.sessions.getFile = vi
         .fn()
         .mockImplementation(async (_sessionKey, path) =>
@@ -494,7 +479,7 @@ describe("workspace file tabs", () => {
   );
 
   it("closes only the selected preview and scopes tabs to reconnect", async () => {
-    const state = host();
+    const state = createSessionWorkspaceHost();
     openPreview(state, "file:a");
     openPreview(state, "file:b");
     await requestCloseSessionWorkspacePreview(state, "file:a");
@@ -506,7 +491,7 @@ describe("workspace file tabs", () => {
   });
 
   it("replaces only the temporary preview in place and reuses pinned identities", () => {
-    const state = host();
+    const state = createSessionWorkspaceHost();
     const open = (id: string) => openPreview(state, id, true);
     open("first.md");
     const second = open("second.md");
@@ -544,7 +529,7 @@ describe("workspace file tabs", () => {
   });
 
   it("shows a held preview and recovers an unavailable file without duplicating its tab", async () => {
-    const state = host();
+    const state = createSessionWorkspaceHost();
     const first = createDeferred<SessionWorkspaceGetResult>();
     const retry = createDeferred<SessionWorkspaceGetResult>();
     const getFile = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
@@ -580,7 +565,7 @@ describe("workspace file tabs", () => {
   it("projects the shared hosted-tab contract and keeps inactive preview elements mounted", async () => {
     const warning = vi.spyOn(console, "warn");
     onTestFinished(() => warning.mockRestore());
-    const state = host();
+    const state = createSessionWorkspaceHost();
     const a = openPreview(state, "a.md", true);
     const b = openPreview(state, "b.txt");
     const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
@@ -726,7 +711,7 @@ describe("workspace file tabs", () => {
     const panel = mountPanel();
     panel.tabsInHeader = true;
     panel.workspace = {
-      ...createSessionWorkspaceProps(host(), { presentation: "desktop" }),
+      ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
       list: {
         sessionKey: "agent:main:files",
         root: "/workspace",
@@ -760,7 +745,7 @@ describe("workspace file tabs", () => {
     expect(changed).toHaveBeenCalledOnce();
 
     panel.workspace = {
-      ...createSessionWorkspaceProps(host(), { presentation: "desktop" }),
+      ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
       browserSearch: "Refreshed",
     };
     panel.renderDetail = () =>

@@ -5,6 +5,7 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  CyberAccessProgramSchema,
   SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
@@ -35,6 +36,7 @@ export const SessionsCreateParamsSchema = closedObject({
         "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
     }),
   ),
+  displayNameGenerated: Type.Optional(Type.Boolean()),
   titleSource: Type.Optional(
     Type.String({
       maxLength: 1_000,
@@ -47,6 +49,7 @@ export const SessionsCreateParamsSchema = closedObject({
   agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),
