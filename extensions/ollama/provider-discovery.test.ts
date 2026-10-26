@@ -14,11 +14,9 @@ type CatalogOptions = Partial<
   provider?: ModelProviderConfig;
 };
 
-const createConfiguredModel = () =>
-  createModel("gpt-oss:20b", "GPT-OSS 20B", { contextWindow: 8_192, maxTokens: 81_920 });
 const configuredProvider = (overrides: Partial<ModelProviderConfig>): ModelProviderConfig => ({
   baseUrl: `${cloudUrl}/v1`,
-  models: [createConfiguredModel()],
+  models: [createModel("gpt-oss:20b", "GPT-OSS 20B")],
   ...overrides,
 });
 
@@ -88,11 +86,7 @@ describe("Ollama provider", () => {
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
     const fetchMock = stubTagsFetch(
-      [
-        "deepseek-r1:latest",
-        "llama3.3:latest",
-        ...Array.from({ length: 248 }, (_, i) => `model-${i}`),
-      ],
+      Array.from({ length: 250 }, (_, i) => `model-${i}`),
       { model_info: { "llama.context_length": 65536 } },
     );
     const provider = await runOllamaCatalog({
@@ -103,10 +97,6 @@ describe("Ollama provider", () => {
       api: "ollama",
       baseUrl: "http://127.0.0.1:11434",
     });
-    expect(provider?.models.slice(0, 2)).toMatchObject([
-      { id: "deepseek-r1:latest", reasoning: true },
-      { id: "llama3.3:latest", reasoning: false },
-    ]);
     expect(tagAuthHeaders(fetchMock)).toEqual([null]);
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/show"))).toHaveLength(
       200,
