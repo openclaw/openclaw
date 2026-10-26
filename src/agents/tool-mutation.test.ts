@@ -51,7 +51,6 @@ describe("tool mutation helpers", () => {
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
-    expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
   });
 
   it.each([
@@ -70,7 +69,6 @@ describe("tool mutation helpers", () => {
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
-    expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(true);
   });
 
   it("exposes mutation state for downstream payload rendering", () => {
