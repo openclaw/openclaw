@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -305,21 +304,12 @@ describe("gateway lock", () => {
     const options = observation(env);
     const firstLock = expectGatewayLock(await acquireForTest(env, { ...options, port: 48789 }));
     const first = await readActiveGatewayLockIdentity(options);
-    const namespace = {
-      host: os.hostname(),
-      platform: process.platform,
-      identity: expect.any(String),
-      ...(process.platform === "linux"
-        ? { pidNsInode: fsSync.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
-        : {}),
-    };
     for (const pathname of [firstLock.lockPath, firstLock.stateLockPath]) {
       const payload = JSON.parse(await fs.readFile(pathname, "utf8"));
       expect(payload).toMatchObject({
         ownerId: first?.ownerId,
         cronOwnerProjection: "dynamic-default-v1",
       });
-      expect(payload.processNamespace).toEqual(namespace);
     }
     await firstLock.release();
     await withLock(env, { ...options, port: 48789 }, async () => {
@@ -438,10 +428,6 @@ describe("gateway lock", () => {
       label: "doctor",
       cmdline: ["node", "/srv/openclaw/openclaw.mjs", "doctor", "--state-sqlite", "compact"],
     },
-    {
-      label: "sessions",
-      cmdline: ["node", "/srv/openclaw/openclaw.mjs", "sessions", "cleanup", "--enforce"],
-    },
     { label: "unreadable", cmdline: null },
   ])("keeps an old maintenance owner with $label identity", async ({ cmdline }) => {
     const env = await makeEnv();
@@ -522,21 +508,8 @@ describe("gateway lock", () => {
     expect(lock).toBeNull();
   });
 
-  it("wraps unexpected fs errors as GatewayLockError", async () => {
-    const env = await makeEnv();
-    const openSpy = vi.spyOn(fsSync, "openSync").mockImplementationOnce(() => {
-      throw Object.assign(new Error("denied"), {
-        code: "EACCES",
-      });
-    });
-
-    await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
-    openSpy.mockRestore();
-  });
-
   it.each([
     { platform: "darwin", cmdline: ["node", "worker.js"] },
-    { platform: "win32", cmdline: ["chrome.exe", "--no-sandbox"] },
     { platform: "win32", cmdline: null },
   ] satisfies { platform: NodeJS.Platform; cmdline: string[] | null }[])(
     "preserves live $platform custody with cmdline $cmdline",

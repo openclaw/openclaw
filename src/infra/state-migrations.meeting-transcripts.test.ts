@@ -13,8 +13,8 @@ import { exportTranscriptLibrary } from "../transcripts/library.js";
 import { safeTranscriptPathSegment } from "../transcripts/store-artifacts.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
 import { restoreCanonicalMeetingTranscriptExports } from "./state-migrations.meeting-transcripts-files.js";
 import {
@@ -248,12 +248,12 @@ describe("meeting transcript Doctor migration", () => {
     "preserves malformed UTF-8 %s without importing replacement characters",
     async (fileName) => {
       const source = await h.seed("invalid-utf8", {
-        utteranceCount: fileName === "transcript.jsonl" ? 1_000 : 2,
+        utteranceCount: fileName === "transcript.jsonl" ? 1_003 : 2,
       });
       const file = path.join(source, fileName);
       const original = await fs.readFile(file);
       const malformed = Buffer.from(original);
-      const marker = fileName === "transcript.jsonl" ? "Line 1000" : "Design review";
+      const marker = fileName === "transcript.jsonl" ? "Line 1003" : "Design review";
       const offset = malformed.lastIndexOf(marker);
       expect(offset).toBeGreaterThan(-1);
       malformed[offset] = 0xff;
@@ -269,13 +269,20 @@ describe("meeting transcript Doctor migration", () => {
       h.expectEmpty("migration_sources");
       await fs.writeFile(file, original);
       expect((await h.migrate()).warnings).toEqual([]);
-      expect(await h.store.readSession("invalid-utf8")).toBeDefined();
+      const session = await h.store.readSession("invalid-utf8");
+      expect(session).toBeDefined();
+      if (fileName === "transcript.jsonl") {
+        const utterances = await h.store.readUtterancesForSession(session!);
+        expect(utterances).toHaveLength(1_003);
+        expect(utterances[0]).toMatchObject({ id: "u-1", text: "First line" });
+        expect(utterances.at(-1)).toMatchObject({ id: "u-1003", text: "Line 1003" });
+      }
     },
   );
 
   it("imports shipped dot-only session layouts into reserved SQLite selectors", async () => {
     for (const sessionId of [".", "..", "session"]) {
-      await h.seed(sessionId);
+      await h.seed(sessionId, { emptyMarkdown: true, omitSummaryJson: true });
     }
     const detected = h.detect();
     expect(detected.hasLegacy).toBe(true);
@@ -293,6 +300,7 @@ describe("meeting transcript Doctor migration", () => {
       const artifacts = await h.store.materializeSessionArtifacts(session!, "transcript");
       const lines = jsonLines(await fs.readFile(artifacts.transcriptPath, "utf8"));
       expect(lines.map((line) => line.text)).toEqual(["First line", "Second line"]);
+      await expect(h.store.readSummary(session!)).resolves.toEqual({ markdown: "" });
     }
   });
 
@@ -459,25 +467,6 @@ describe("meeting transcript Doctor migration", () => {
     await expect(h.restore(archiveRoot, path.join("2026-07-01", "linked-export"))).rejects.toThrow(
       /symlink/i,
     );
-  });
-
-  it("chunks large transcript imports while preserving exact order", async () => {
-    await h.seed("long-meeting", { utteranceCount: 530 });
-
-    await migrateClean();
-    const session = await h.store.readSession("long-meeting");
-    const utterances = await h.store.readUtterancesForSession(session!);
-    expect(utterances).toHaveLength(530);
-    expect(utterances[0]).toMatchObject({ id: "u-1", text: "First line" });
-    expect(utterances.at(-1)).toMatchObject({ id: "u-530", text: "Line 530" });
-  });
-
-  it("preserves an existing empty markdown summary", async () => {
-    await h.seed("empty-summary", { emptyMarkdown: true, omitSummaryJson: true });
-
-    await migrateClean();
-    const session = await h.store.readSession("empty-summary");
-    await expect(h.store.readSummary(session!)).resolves.toEqual({ markdown: "" });
   });
 
   it.each(["import", "archive"] as const)(
@@ -727,20 +716,14 @@ describe("meeting transcript Doctor oversized projections", () => {
     const sessionId = "notes-" + "x".repeat(300);
     await seedStoredSession(sessionId, { historicalSlug: sessionId });
     const before = h.snapshot();
-    const lock = await acquireGatewayLock({ allowInTests: true, env: h.env });
-    if (!lock) {
-      throw new Error("expected test Gateway lock");
-    }
-    try {
+    await withGatewayLockHeld(h.env, 18_791, async () => {
       const result = await h.migrate();
       expect(result.changes).toEqual([]);
       expect(result.warnings).toEqual([
         expect.stringContaining("exclusive state ownership is unavailable"),
       ]);
       expect(h.snapshot()).toEqual(before);
-    } finally {
-      await lock.release();
-    }
+    });
     expect((await h.migrate()).warnings).toEqual([]);
     expect(h.detect().hasLegacy).toBe(false);
   });
