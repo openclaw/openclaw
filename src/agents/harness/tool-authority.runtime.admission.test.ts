@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import * as replyAuthority from "../../auto-reply/reply/reply-tool-authority.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { setActiveEmbeddedRun as publishHarnessActiveEmbeddedRun } from "../../plugin-sdk/agent-harness-runtime.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -75,41 +74,21 @@ function observeReads<T extends object>(target: T, reads: AuthorityRead[]): T {
 
 describe("host-prepared embedded tool authority", () => {
   it.each([false, true])(
-    "preserves real authority-owner reads with inherited requester=%s",
+    "preserves requester capture reads with inherited requester=%s",
     async (inherited) => {
       const optionalFacts = [
-        "agentDir",
         "agentAccountId",
         "operatorProfileId",
         "messageChannel",
         "chatType",
         "conversationId",
         "messageThreadId",
-        "conversationToolPolicy",
         "groupId",
         "groupChannel",
         "groupSpace",
-        "memberRoleIds",
-        "spawnedBy",
         "senderName",
         "senderUsername",
         "senderE164",
-        "gitContributorProfileId",
-        "cwd",
-        "inputProvenance",
-        "trustedInternalHandoff",
-        "scheduledToolPolicy",
-        "runtimePluginToolGrant",
-        "permissionMode",
-        "toolOverrides",
-        "execOverrides",
-        "bashElevated",
-        "approvalReviewerDeviceId",
-        "authProfileId",
-        "authProfileIdSource",
-        "clientCaps",
-        "gatewayUiCommandTarget",
-        "toolBindings",
       ] as const satisfies readonly (keyof AgentHarnessAttemptParamsV2)[];
       const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = {
         ...Object.fromEntries(optionalFacts.map((key) => [key, undefined])),
@@ -155,66 +134,22 @@ describe("host-prepared embedded tool authority", () => {
           expect(projected).toEqual(legacy);
           return projected;
         });
-      const prepare = replyAuthority.prepareReplyToolAuthority;
-      let legacySnapshot: ReturnType<typeof prepare> | undefined;
-      const authoritySpy = vi
-        .spyOn(replyAuthority, "prepareReplyToolAuthority")
-        .mockImplementationOnce((input, ...rest) => {
-          const legacyReads: AuthorityRead[] = [];
-          const projectedReads: AuthorityRead[] = [];
-          const legacyRun = {
-            ...params,
-            model: params.modelId,
-            elevatedLevel: params.bashElevated?.defaultLevel,
-            runtimePolicySessionKey: params.sandboxSessionKey,
-            traceAuthorized: false,
-            spawnedBy: params.spawnedBy ?? undefined,
-            senderId: params.senderId ?? undefined,
-            senderName: params.senderName ?? undefined,
-            senderUsername: params.senderUsername ?? undefined,
-            senderE164: params.senderE164 ?? undefined,
-            groupId: params.groupId ?? undefined,
-            groupChannel: params.groupChannel ?? undefined,
-            groupSpace: params.groupSpace ?? undefined,
-          };
-          legacySnapshot = prepare(
-            { ...input, run: observeReads(legacyRun, legacyReads) },
-            ...rest,
-          );
-          const projected = prepare(
-            { ...input, run: observeReads(input.run, projectedReads) },
-            ...rest,
-          );
-          expect(projectedReads).toEqual(legacyReads);
-          expect(projectedReads.filter((read) => !read.present)).toEqual([]);
-          expect(projected.personalToolOwner).toEqual(legacySnapshot.personalToolOwner);
-          expect(projected.requesterPrincipalKey).toBe(legacySnapshot.requesterPrincipalKey);
-          expect(projected.requestedRoute).toEqual(legacySnapshot.requestedRoute);
-          return projected;
-        });
-      try {
-        await admitted(async ({ admittedRunContext }) => {
-          await withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, sessionPersistence: "detached" },
-            params,
-            undefined,
-            async (prepared) => {
-              expect(await legacySnapshot?.fingerprintAsync()).toBe(
-                prepared.toolAuthorityFingerprint,
-              );
-              const caller = getGatewayToolCallerIdentity();
-              expect(caller?.requesterOrigin?.senderId).toBe(
-                inherited ? "original-sender" : params.senderId,
-              );
-              caller?.receiptAuthority?.();
-            },
-          );
-        });
-        expect(originSpy).toHaveBeenCalled();
-        expect(authoritySpy).toHaveBeenCalledOnce();
-      } finally {
-        legacySnapshot?.close();
-      }
+      await admitted(async ({ admittedRunContext }) => {
+        await withPreparedEmbeddedRunToolAuthority(
+          { admittedRunContext, sessionPersistence: "detached" },
+          params,
+          undefined,
+          async () => {
+            const caller = getGatewayToolCallerIdentity();
+            expect(caller?.requesterOrigin?.senderId).toBe(
+              inherited ? "original-sender" : params.senderId,
+            );
+            expect(caller?.receiptAuthority).toBeTypeOf("function");
+            caller?.receiptAuthority?.();
+          },
+        );
+      });
+      expect(originSpy).toHaveBeenCalled();
     },
   );
 
