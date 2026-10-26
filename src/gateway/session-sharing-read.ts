@@ -381,6 +381,7 @@ export function prepareProjectedSessionSharing(params: {
       }
       let keys = revision && projectedSharingKeys.get(revision);
       const viewer = client ?? cfg;
+      const scopes = client?.connect.scopes;
       const facts = revision && [
         cfg,
         getRuntimeConfigSnapshotMetadata(),
@@ -394,15 +395,16 @@ export function prepareProjectedSessionSharing(params: {
         profile,
         policy,
         Boolean(cfg.gateway?.roles),
-        client?.connect.scopes !== undefined,
-        ...(client?.connect.scopes ?? []),
+        scopes !== undefined,
       ];
       const previous = keys?.get(viewer);
       if (
         facts &&
         previous &&
-        facts.length === previous.facts.length &&
-        facts.every((fact, i) => fact === previous.facts[i])
+        facts.length + (scopes?.length ?? 0) === previous.facts.length &&
+        previous.facts.every(
+          (fact, i) => fact === (i < facts.length ? facts[i] : scopes?.[i - facts.length]),
+        )
       ) {
         return (cacheKey = previous.key);
       }
@@ -412,13 +414,17 @@ export function prepareProjectedSessionSharing(params: {
         client?.authenticatedUserProfile?.profileId,
         client?.authenticatedUserId,
         Boolean(client?.authenticatedGitHubIdentitySync),
-        client?.connect.scopes?.toSorted(),
+        scopes?.toSorted(),
         profile?.profileId,
         profile && [...profile.aliases].toSorted(),
         policy,
         Boolean(cfg.gateway?.roles),
       ]);
       if (revision && facts) {
+        // Snapshot scopes only on a miss; hits compare the live values without expanding facts.
+        if (scopes) {
+          facts.push(...scopes);
+        }
         if (!keys) {
           keys = new WeakMap();
           projectedSharingKeys.set(revision, keys);

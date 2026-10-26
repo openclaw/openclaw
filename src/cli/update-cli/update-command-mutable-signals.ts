@@ -1,3 +1,4 @@
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import {
   finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
@@ -224,7 +225,12 @@ export async function withMutableUpdateSignals<T>(
       }
       assertCurrent();
       // Accepted worker writes have settled; the original interruption policy owns this row.
-      finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+      finishInterruptedUpdateBeforeActivation(
+        expected,
+        assertCurrent,
+        { env },
+        (payload) => void sendUpdateResultTelemetry(payload, { env }),
+      );
     };
   };
   let settle: (() => void) | undefined;

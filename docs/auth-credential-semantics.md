@@ -283,6 +283,21 @@ storage retry, it retries that storage operation, not the old token exchange.
 External tool homes retain their own refresh authority; this contract does not
 transfer their credentials into OpenClaw ownership.
 
+## Long-running custom transport requests
+
+The embedded run auth owner can supply a versioned, optional `requestAuth`
+capability to provider `createStreamFn` factories. A participating transport
+resolves it before each physical request, including private continuations, so a
+captured attempt bearer cannot hide canonical renewal or rotation. Resolution
+locks the original profile and account instead of trying another identity. Run
+closure, auth selection changes, automation revocation and cancellation refuse
+credentials, including after awaited preparation. Existing native OAuth owners
+still own refresh grants and independent durable settlement.
+
+Legacy hosts and entrypoints without this capability retain captured-key
+behavior; ordinary just-in-time refresh between separate runs does not imply
+renewal within one attempt. See [custom transport request credentials](/plugins/sdk-provider-plugins#per-request-credentials-in-custom-transports).
+
 ## Plugin SDK OAuth validation
 
 `resolveApiKeyForProfile`, exported from `openclaw/plugin-sdk/agent-runtime`,

@@ -94,7 +94,10 @@ function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
 }
 
 export async function installExtractedSkillRoot(
-  params: SkillRootInstallFiles & { policy?: SkillArchiveInstallPolicy },
+  params: SkillRootInstallFiles & {
+    policy?: SkillArchiveInstallPolicy;
+    beforePersistentEffect?: () => void | Promise<void>;
+  },
 ): Promise<SkillArchiveInstallResult> {
   try {
     const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
@@ -117,13 +120,21 @@ export async function installExtractedSkillRoot(
       );
     }
     const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
-    const { policy: _policy, ...files } = params;
+    const { policy: _policy, beforePersistentEffect, ...files } = params;
     params.beforePersistentApply?.();
     const result = await applyRoot({
       ...files,
+      ...(beforePersistentEffect
+        ? {
+            authorizeMutation: async () => {
+              await beforePersistentEffect();
+            },
+          }
+        : {}),
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
       beforeInstall: async (mode) => {
         if (!params.policy) {
+          await params.beforePersistentEffect?.();
           return undefined;
         }
         const scanResult = await evaluateSkillInstallPolicy({
@@ -138,6 +149,7 @@ export async function installExtractedSkillRoot(
           skillName: params.slug,
           sourceDir: params.extractedRoot,
         });
+        await params.beforePersistentEffect?.();
         params.beforePersistentApply?.();
         return scanResult?.blocked
           ? {

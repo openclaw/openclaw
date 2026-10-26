@@ -268,7 +268,7 @@ describe("snapshot write serialization and scheduling", () => {
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON omission/conversion is the persisted storage contract.
       const sanitized: ChatSessionSnapshot = JSON.parse(JSON.stringify(value));
       const envelope = {
-        projectionVersion: 4,
+        projectionVersion: 5,
         savedAt: Date.now(),
         sessionId: value.sessionId,
         sessionKey,
@@ -349,7 +349,7 @@ describe("snapshot write serialization and scheduling", () => {
       const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
       const completed = transactionComplete(transaction);
       transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
-        projectionVersion: 4,
+        projectionVersion: 5,
         savedAt: 1,
         sessionId: "session-1",
         sessionKey,

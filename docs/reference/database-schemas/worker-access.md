@@ -572,6 +572,14 @@ and only while the entry object remains unchanged. Cold or mismatched revisions
 and replaced entries carry the complete entry. Main resolves references within
 that command; live policy and revocation checks still run at every admission.
 
+Plain transcript append receipts use the same command-local reference when the
+entry is unchanged and initialization does not also expose it. Main restores the
+entry by reference to its deeply frozen replica preimage, without cloning it.
+Settlement, publication, and commit observers only read that entry; changed or
+unavailable preimages still transfer the complete entry. A missing or mismatched
+reference refuses receipt restoration. Stored bytes and write authority are
+unchanged.
+
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
 uses the admitted namespace and store ID. Symlinked and canonical paths therefore
@@ -4261,6 +4269,12 @@ cleanup lease, which excludes their shared writers until deletion settles.
 Each effect guard still rereads config files, includes, and environment substitutions,
 using the protected migration rows for validation. Source identity and durable
 lease checks remain live; prepared rows are not retained permission to delete.
+Runtime plugin, setup, and Claw package callers use the async lifecycle lease.
+Publication and shared-directory compensation await the original durable owner,
+then apply its synchronous liveness guard at the effect. A refused owner cannot
+resume settlement under a successor; caller cancellation does not remove the
+original owner's authority to undo its accepted publication. Native bootstrap,
+offline update, and synchronous SDK callers retain their native lease contract.
 Stored formats and update behavior are unchanged.
 
 Gateway cleanup of retired plugin artifacts first inspects managed and

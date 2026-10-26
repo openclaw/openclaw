@@ -523,6 +523,7 @@ describe("transcript projection", () => {
     const liveLabels = () => renderedText(view.container, ".chat-activity-group__label--live");
     view.draw();
     await view.settle();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(liveLabels()).toEqual(["Latest operation…"]));
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,

@@ -1,14 +1,11 @@
-// Config facts about the `memory` section, with no rendering imports.
-//
-// The Memory page is behind the lazy `import("./config-page.tsx")` route, but
-// settings search runs from app-host at startup. Both need the same answers
-// about which `memory.*` children are reachable and where a match lives, so
-// those answers live here rather than in the view module — importing the view
-// from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
+// Memory-only configuration and route facts, with no rendering imports.
+// Shared visible keys live in config-sections.ts so Settings search does not
+// initialize the Memory engine's plugin-slot selection.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
 import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
+import { MEMORY_SETTINGS_KEYS } from "./config-sections.ts";
 
 export type MemoryTab = MemoryRouteTab;
 
@@ -95,8 +92,6 @@ export function resolveMemoryEngineSelection(
   const slots = asConfigRecord(asConfigRecord(configObject.plugins)?.slots);
   return resolveSlotSelection("memory", slots?.memory);
 }
-
-export const MEMORY_SETTINGS_KEYS = ["citations", "search"] as const;
 
 // Stable schema identity keeps the config view's analysis cached across renders.
 const memorySettingsSchemas = new WeakMap<Record<string, unknown>, unknown>();

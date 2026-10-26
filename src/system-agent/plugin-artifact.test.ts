@@ -38,11 +38,12 @@ vi.mock("../plugins/install-config.js", () => ({
   loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
 }));
 vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
+  withPluginLifecycleLeaseAsync: async (
     _params: unknown,
-    run: (lease: { assertOwned: () => void }) => Promise<unknown>,
-  ) => await run({ assertOwned: () => {} }),
+    run: (lease: { assertOwned: () => void; assertCurrent: () => void }) => Promise<unknown>,
+  ) => await run({ assertOwned: () => {}, assertCurrent: () => {} }),
 }));
 
 describe("exact system-agent plugin artifacts", () => {

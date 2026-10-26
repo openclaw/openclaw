@@ -17,6 +17,7 @@ import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 
 async function createControlsFixture(
   scope: string,
@@ -117,6 +118,28 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it("uses live permission facts while the model catalog is still unavailable", async () => {
+    const { state, selectedSession, access } =
+      await createControlsFixture("operator.sessions.write");
+    state.chatModelCatalogInitialized = false;
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey: state.sessionKey },
+      {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: selectedSession.sessionId,
+        composer: { id: "saved", provider: "openai", name: "Saved", permissionMode: "full" },
+      },
+    );
+    const controls = renderControls(state, {
+      selectedSession: { ...selectedSession, permissionMode: "workspace" },
+      permissionAccess: access.permission,
+    });
+    expect(controls.composerControls.model.snapshot).toBeDefined();
+    expect(controls.permissionPicker).toMatchObject({ mode: "workspace", disabled: false });
+  });
   it("persists an explicit Standard choice over inherited speed", async () => {
     const { state, selectedSession, container } =
       await createControlsFixture("operator.sessions.write");
