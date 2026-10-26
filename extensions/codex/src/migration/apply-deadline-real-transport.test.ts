@@ -15,8 +15,7 @@ vi.mock("../app-server/shared-client.js", () => ({
     createRequestClientHarness((method, id, _params, send) => {
       if (method === "plugin/list") {
         const name = ++callCount.count === 1 ? "custom" : "openai-curated";
-        const path = callCount.count === 1 ? "/c" : "/curated";
-        send({ id, result: { marketplaces: [{ name, path, plugins: [] }] } });
+        send({ id, result: { marketplaces: [{ name, path: "/fixture", plugins: [] }] } });
       }
     }).client,
   releaseLeasedSharedCodexAppServerClient: vi.fn(() => true),
@@ -52,23 +51,20 @@ vi.mock("../app-server/auth-profile.js", () => ({
 import type { MigrationPlan, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyCodexMigrationPlan } from "./apply.js";
 
-let workspace: Awaited<ReturnType<typeof tempWorkspace>>;
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  await workspace?.cleanup();
 });
 
 it("keeps request allowances within the 30s discovery budget after a 120s rewind", async () => {
   vi.stubEnv("OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS", "30000");
-  workspace = await tempWorkspace({
+  await using workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "oc-codex-dl-",
   });
   callCount.count = 0;
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
+  vi.useFakeTimers({ now: 0 });
 
   const requestSpy = vi.spyOn(CodexAppServerClient.prototype, "request");
   const fakeSetTimeout = globalThis.setTimeout;
@@ -95,10 +91,7 @@ it("keeps request allowances within the 30s discovery budget after a 120s rewind
       ],
     } as unknown as MigrationPlan,
     ctx: {
-      config: {
-        agents: { defaults: { workspace: "/d/w" } },
-        plugins: { entries: { codex: { enabled: true, config: {} } } },
-      },
+      config: { agents: { defaults: { workspace: "/d/w" } } },
       stateDir: workspace.dir,
     } as unknown as MigrationProviderContext,
   });
