@@ -470,8 +470,28 @@ export default definePluginEntry({
                   "active-memory: lane-1 trigger recall skipped: preflight budget exhausted",
                 );
               }
-            } else if (invocationConfig.enabled && effectiveAgentId && !activeMemoryConfigured) {
-              const line = `active-memory: lane-1 skipped reason=agent-not-configured agent=${effectiveAgentId}`;
+            } else if (invocationConfig.enabled) {
+              let reason: string;
+              if (!effectiveAgentId) {
+                reason = "missing-agent";
+              } else if (!activeMemoryConfigured) {
+                reason = `agent-not-configured agent=${effectiveAgentId}`;
+              } else if (!laneOneSource) {
+                if (nativeRecallToolNames) {
+                  reason = !resolvedSessionKey
+                    ? "missing-session-key"
+                    : nativeRecallToolNames.length === 0
+                      ? "no-native-recall-tools"
+                      : `recall-tool-not-allowed tool=${nativeRecallToolNames.find((toolName) => !toolAuthority.allows(toolName))}`;
+                } else {
+                  reason = deterministicRecallToolName
+                    ? `recall-tool-not-allowed tool=${deterministicRecallToolName}`
+                    : "no-deterministic-recall-tool";
+                }
+              } else {
+                reason = !privateDestination ? "not-private-destination" : "chat-id-not-allowed";
+              }
+              const line = `active-memory: lane-1 skipped reason=${reason}`;
               api.logger.debug?.(line);
               if (invocationConfig.logging) {
                 api.logger.info?.(line);

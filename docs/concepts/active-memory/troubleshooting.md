@@ -28,9 +28,20 @@ settings. Remember across conversations can be on even when the agent is absent
 from `plugins.entries.active-memory.config.agents`. A session pause does not
 change those configuration settings; destination and tool policies still apply.
 
-When the agent is absent from that allowlist, debug logs include
-`lane-1 skipped reason=agent-not-configured agent=<id>`. With
-`config.logging: true`, the same diagnostic appears at info level.
+When trigger recall cannot run, debug logs include `lane-1 skipped reason=...`
+with the first failed eligibility condition. With `config.logging: true`, the
+same diagnostic appears at info level:
+
+- `agent-not-configured agent=<id>`: add the agent to `config.agents`.
+- `no-deterministic-recall-tool` or `no-native-recall-tools`: the selected memory
+  provider has not declared the recall tools needed for trigger recall.
+- `recall-tool-not-allowed tool=<name>`: check the parent agent's tool policy
+  and, for a legacy provider, `config.toolsAllow`.
+- `not-private-destination`: trigger recall requires a direct or explicit
+  private conversation.
+- `chat-id-not-allowed`: the conversation is outside `config.allowedChatIds`.
+- `missing-agent` or `missing-session-key`: the turn lacks the agent or session
+  identity required for recall.
 
 If memory hits are noisy, tighten `maxSummaryChars`. If active memory is too
 slow, lower `queryMode`, lower `timeoutMs`, or reduce recent turn counts and
