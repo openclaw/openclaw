@@ -32,6 +32,9 @@ async function createPeer() {
     socket.off("end", endPendingUpgrade);
     wsServer.handleUpgrade(request, socket, head, (ws) => {
       ws.on("error", () => {});
+      if (attempt === 2) {
+        ws.send("private-inbound-message");
+      }
       ws.send(JSON.stringify({ envelope: { timestamp: attempt } }));
       if (attempt === 2) {
         ws.close();
@@ -61,6 +64,7 @@ async function createPeer() {
 it("reconnects after opening timeout and closure and receives subsequent events", async () => {
   const peer = await createPeer();
   const abort = new AbortController();
+  const runtime = createRuntimeSpies();
   let stream: Promise<void> | undefined;
   try {
     const events: number[] = [];
@@ -71,7 +75,7 @@ it("reconnects after opening timeout and closure and receives subsequent events"
       transportKind: "container",
       timeoutMs: 250,
       abortSignal: abort.signal,
-      runtime: createRuntimeSpies(),
+      runtime,
       policy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
       statusSink,
       onEvent: (event) => {
@@ -87,6 +91,12 @@ it("reconnects after opening timeout and closure and receives subsequent events"
     await stream;
     expect(peer.attempts).toBe(3);
     expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "recovering" }));
+    expect(
+      runtime.error.mock.calls.filter(
+        ([line]) => line === "[signal-ws] parse error: invalid JSON frame",
+      ),
+    ).toHaveLength(1);
+    expect(runtime.error.mock.calls.flat().join("\n")).not.toContain("private-inbound-message");
   } finally {
     abort.abort();
     try {

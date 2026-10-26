@@ -99,23 +99,6 @@ describe("container receive health", () => {
 });
 
 describe("container receive lifecycle", () => {
-  it("reports malformed frames without logging inbound content and keeps receiving", async () => {
-    state.receive.mockImplementation((socket) => {
-      socket.emit("message", Buffer.from("private-inbound-message"));
-      socket.emit("message", Buffer.from('{"envelope":{"timestamp":3}}'));
-      socket.close();
-    });
-    const error = vi.fn();
-    const onEvent = vi.fn();
-    const stream = streamContainerEvents({ baseUrl, logger: { error }, onEvent });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await stream;
-
-    expect(onEvent).toHaveBeenCalledExactlyOnceWith({ envelope: { timestamp: 3 } });
-    expect(error).toHaveBeenCalledExactlyOnceWith("[signal-ws] parse error: invalid JSON frame");
-  });
-
   it("drains accepted and socket-buffered events before resolving shutdown", async () => {
     const delivery = createDeferred<void>();
     const timestamps: number[] = [];

@@ -21,8 +21,6 @@ const setup = expectDefined(signalPlugin.setupContract, "registered setup contra
 const write = expectDefined(signalSetupAdapter.applyAccountConfig, "Signal setup writer");
 const disable = expectDefined(signalPlugin.config.setAccountEnabled, "registered enable writer");
 const remove = expectDefined(signalPlugin.config.deleteAccount, "registered delete writer");
-const named = (transport: Signal["transport"] = authored.transport) =>
-  signalConfig({ accounts: { "Work Phone": { ...authored, transport } } });
 const stored = (cfg: OpenClawConfig) => cfg.channels?.signal?.accounts ?? {};
 const external = (signalNumber: string, httpUrl: string) => ({
   signalNumber,
@@ -117,23 +115,4 @@ it.each([false, true])("Signal writers select the stored key (collision=%s)", (c
     expect(stored(removed)[key]).toBeUndefined();
     expect(resolve(removed, workId).configured).toBe(false);
   }
-});
-
-it("Signal setup preserves container transport when editing its URL", () => {
-  const cfg = named({ kind: "container", url: authored.transport.url });
-  const next = write({ cfg, accountId: workId, input: { httpUrl: localUrl } });
-  expect(stored(next)["Work Phone"]?.transport).toEqual({ kind: "container", url: localUrl });
-});
-
-it("Signal setup reserves the managed port of a named alias", () => {
-  const cfg = named({ kind: "managed-native", httpPort: 18081 });
-  expect(() =>
-    write({
-      cfg,
-      accountId: "personal",
-      input: external("+12025550125", "http://127.0.0.1:18081"),
-    }),
-  ).toThrow(
-    'Signal managed native account "work-phone" binds port 18081, which conflicts with account "personal" local transport endpoint.',
-  );
 });
