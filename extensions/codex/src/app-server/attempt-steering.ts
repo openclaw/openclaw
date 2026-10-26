@@ -520,7 +520,7 @@ export function createCodexSteeringQueue(params: {
       sealQueueAdmission();
       if (closedError || dispatchedBatches.size === 0) {
         cancelQueue();
-        return;
+        return undefined;
       }
       // Codex records pending input after tool completion, before its next model request.
       // Give that receipt a bounded chance to arrive before interrupt drops the input.
