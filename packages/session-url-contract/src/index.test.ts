@@ -14,8 +14,10 @@ const SHARE_ROUTE = {
 } as const;
 
 type ChatParams = Omit<Parameters<typeof buildControlUiSessionPath>[0], "namespace">;
+type ChatCase = readonly [string, string, Omit<ChatParams, "sessionKey">?];
 
-const UUID_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const UUID = "12345678-90ab-cdef-1234-567890abcdef";
+const UUID_KEY = `agent:main:dashboard:${UUID}`;
 const buildChatPath = (params: ChatParams) =>
   buildControlUiSessionPath({ namespace: "chat", ...params });
 const THREAD_ID = "0123456789abcdef0123456789abcdef";
@@ -66,61 +68,45 @@ describe("buildControlUiCatalogSharePath", () => {
 describe("buildControlUiSessionPath", () => {
   it.each([
     [
-      { sessionKey: "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event", exactKey: true },
+      "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event",
       "/chat/ops/Matrix/Channel/!Room/Org/Thread/%24Event",
+      { exactKey: true },
     ],
+    ["agent:ops:catalog:fixture:Host:Thread", "/chat/ops/catalog/fixture/Host/Thread"],
+    ["agent:main:main", "/chat/main"],
+    ["main", "/chat/research", { fallbackAgentId: "research" }],
+    ["agent:research:workspace", "/chat/research", { mainKey: "workspace" }],
+    ["agent:research:main", "/chat/research/main", { mainKey: "workspace" }],
+    ["global", "/chat/ops", { fallbackAgentId: "ops", mainKey: "workspace", exactKey: true }],
+    ["agent:research:global", "/chat/research/~key/global", { fallbackAgentId: "main" }],
+    ["agent:research:global", "/chat/research/~key/global", { mainKey: "workspace" }],
+    ["AGENT:RESEARCH:GlObAl", "/chat/research/~key/GlObAl"],
+    ["agent:research:global", "/chat/research", { mainKey: "global", exactKey: true }],
+    ["agent:research:global:notes", "/chat/research/global/notes"],
     [
-      { sessionKey: "agent:ops:catalog:fixture:Host:Thread" },
-      "/chat/ops/catalog/fixture/Host/Thread",
-    ],
-    [{ sessionKey: "agent:main:main" }, "/chat/main"],
-    [{ sessionKey: "main", fallbackAgentId: "research" }, "/chat/research"],
-    [{ sessionKey: "agent:research:workspace", mainKey: "workspace" }, "/chat/research"],
-    [{ sessionKey: "agent:research:main", mainKey: "workspace" }, "/chat/research/main"],
-    [
-      { sessionKey: "global", fallbackAgentId: "ops", mainKey: "workspace", exactKey: true },
-      "/chat/ops",
-    ],
-    [
-      { sessionKey: "agent:research:global", fallbackAgentId: "main" },
-      "/chat/research/~key/global",
-    ],
-    [{ sessionKey: "agent:research:global", mainKey: "workspace" }, "/chat/research/~key/global"],
-    [{ sessionKey: "AGENT:RESEARCH:GlObAl" }, "/chat/research/~key/GlObAl"],
-    [{ sessionKey: "agent:research:global", mainKey: "global", exactKey: true }, "/chat/research"],
-    [{ sessionKey: "agent:research:global:notes" }, "/chat/research/global/notes"],
-    [
-      { sessionKey: "telegram:group:12345", fallbackAgentId: "research" },
+      "telegram:group:12345",
       "/chat/research/telegram/group/12345",
+      { fallbackAgentId: "research" },
     ],
+    ["channel:release.js", "/chat/research/channel/release%2Ejs", { fallbackAgentId: "research" }],
+    ["agent:main:cron:.:..:run", "/chat/main/cron/~dot/~dotdot/run"],
+    ["agent:main:channel:~dot", "/chat/main/channel/~~dot"],
+    ["agent:main:~key", "/chat/main/~~key"],
+    ["agent:main:12345678", "/chat/main/~key/12345678"],
+    ["agent:main:release-deadbeef", "/chat/main/~key/release-deadbeef"],
+    [UUID_KEY, "/chat/main/12345678"],
+    ...(["dashboard", "subagent", "internal-session-effects"] as const).map((surface): ChatCase => [
+      `agent:main:${surface}:incognito-${UUID}`,
+      `/chat/main/${surface}/incognito-${UUID}`,
+      { displayName: "Private task" },
+    ]),
     [
-      { sessionKey: "channel:release.js", fallbackAgentId: "research" },
-      "/chat/research/channel/release%2Ejs",
-    ],
-    [{ sessionKey: "agent:main:cron:.:..:run" }, "/chat/main/cron/~dot/~dotdot/run"],
-    [{ sessionKey: "agent:main:channel:~dot" }, "/chat/main/channel/~~dot"],
-    [{ sessionKey: "agent:main:~key" }, "/chat/main/~~key"],
-    [{ sessionKey: "agent:main:12345678" }, "/chat/main/~key/12345678"],
-    [{ sessionKey: "agent:main:release-deadbeef" }, "/chat/main/~key/release-deadbeef"],
-    [{ sessionKey: UUID_KEY }, "/chat/main/12345678"],
-    ...(["dashboard", "subagent", "internal-session-effects"] as const).map(
-      (surface): [ChatParams, string] => [
-        {
-          sessionKey: `agent:main:${surface}:incognito-12345678-90ab-cdef-1234-567890abcdef`,
-          displayName: "Private task",
-        },
-        `/chat/main/${surface}/incognito-12345678-90ab-cdef-1234-567890abcdef`,
-      ],
-    ),
-    [
-      {
-        sessionKey: "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
-        mainKey: "deadbeef",
-      },
+      "agent:main:dashboard:deadbeef-0aaa-4000-8000-000000000001",
       "/chat/main/deadbeef0",
+      { mainKey: "deadbeef" },
     ],
-  ] satisfies readonly (readonly [ChatParams, string])[])("builds %j", (params, expected) => {
-    expect(buildChatPath(params)).toBe(expected);
+  ] satisfies readonly ChatCase[])("builds %s", (sessionKey, expected, options) => {
+    expect(buildChatPath({ sessionKey, ...options })).toBe(expected);
   });
 
   it("preserves base paths and namespaces for qualified global keys", () => {

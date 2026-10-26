@@ -12,6 +12,14 @@ const SHARE_ID = "0123456789abcdef0123456789abcdef";
 const SLUG = "not-a-short-id";
 const literal = (sessionKey: string, agentId = "main") =>
   ({ namespace: "chat", kind: "literal", agentId, sessionKey }) as const;
+const short = (agentId: string, shortId: string, literalRest: string, slugHint?: string) =>
+  ({
+    kind: "short",
+    agentId,
+    shortId,
+    literalSessionKey: `agent:${agentId}:${literalRest}`,
+    ...(slugHint ? { slugHint } : {}),
+  }) as const;
 
 describe("parseControlUiSessionPath", () => {
   it.each([
@@ -23,40 +31,27 @@ describe("parseControlUiSessionPath", () => {
     ],
     [
       "/dashboard/main/12345678",
-      {
-        namespace: "dashboard",
-        kind: "short",
-        agentId: "main",
-        shortId: "12345678",
-        literalSessionKey: "agent:main:12345678",
-      },
+      { namespace: "dashboard", ...short("main", "12345678", "12345678") },
     ],
     [
       "/chat/wrong/wrong-slug-1234567890AB",
       {
         namespace: "chat",
-        kind: "short",
-        agentId: "wrong",
-        shortId: "1234567890ab",
-        literalSessionKey: "agent:wrong:wrong-slug-1234567890AB",
-        slugHint: "wrong-slug",
+        ...short("wrong", "1234567890ab", "wrong-slug-1234567890AB", "wrong-slug"),
       },
     ],
     [`/chat/main/${SLUG}`, { ...literal(`agent:main:${SLUG}`), slugCandidate: SLUG }],
+    ["/chat/main/~key/release-deadbeef", literal("agent:main:release-deadbeef")],
+    ["/chat/main/cron/~dot/~dotdot/run", literal("agent:main:cron:.:..:run")],
+    ["/chat/main/channel/~~dot", literal("agent:main:channel:~dot")],
+    ["/chat/main/boot", literal("agent:main:boot")],
+    [
+      `/control/chat/roboclaw/~key/dashboard/${UUID}`,
+      literal(`agent:roboclaw:dashboard:${UUID}`, "roboclaw"),
+      "/control",
+    ],
   ] satisfies readonly ParseCase[])("parses %s", (pathname, expected, basePath = "") => {
     expect(parseControlUiSessionPath(pathname, basePath)).toEqual(expected);
-  });
-
-  it.each([
-    ["/chat/main/~key/release-deadbeef", "agent:main:release-deadbeef"],
-    ["/chat/main/cron/~dot/~dotdot/run", "agent:main:cron:.:..:run"],
-    ["/chat/main/channel/~~dot", "agent:main:channel:~dot"],
-  ])("decodes literal path %s", (pathname, sessionKey) => {
-    expect(parseControlUiSessionPath(pathname)).toEqual(literal(sessionKey));
-  });
-
-  it("keeps reserved boot literal", () => {
-    expect(parseControlUiSessionPath("/chat/main/boot")).toEqual(literal("agent:main:boot"));
   });
 
   it("keeps configured and default main keys distinct", () => {
@@ -94,12 +89,6 @@ describe("parseControlUiSessionPath", () => {
 
     expect(path).toBe(expectedPath);
     expect(parseControlUiSessionPath(path ?? "")).toEqual(expected);
-  });
-
-  it("parses a tool-composed forced literal with multiple segments", () => {
-    expect(
-      parseControlUiSessionPath(`/control/chat/roboclaw/~key/dashboard/${UUID}`, "/control"),
-    ).toEqual(literal(`agent:roboclaw:dashboard:${UUID}`, "roboclaw"));
   });
 });
 
