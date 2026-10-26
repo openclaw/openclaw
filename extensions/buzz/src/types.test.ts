@@ -36,22 +36,18 @@ it("discovers the default account from a configured private-key SecretRef", () =
   expect(listBuzzAccountIds(cfg)).toEqual(["default"]);
 });
 it("isolates named identities and never fills missing fields from root credentials", () => {
+  const ada = { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" };
   const cfg = rootWithAmbientCredentials({
     groupPolicy: "open",
     groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
-    accounts: {
-      ada: { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" },
-      empty: {},
-    },
+    accounts: { ada, empty: {} },
   });
   expect(listBuzzAccountIds(cfg)).toEqual(["ada", "default", "empty"]);
   expect(resolveDefaultBuzzAccountId(cfg)).toBe("default");
   expect(resolveBuzzAccount({ cfg, accountId: "ada" })).toMatchObject({
     accountId: "ada",
-    name: "Ada",
-    privateKey: "33".repeat(32),
+    ...ada,
     authTag: "",
-    relayUrl: "wss://ada.example.com",
     config: { groupPolicy: "open", groups: undefined },
   });
   expect(resolveBuzzAccount({ cfg, accountId: "empty" })).toMatchObject({
@@ -99,18 +95,6 @@ it.each([
     { BUZZ_PRIVATE_KEY: "" },
     { configured: false, privateKey: "", tokenStatus: "missing" },
   ],
-  [
-    "never substitutes an ambient private key for an unavailable SecretRef",
-    { privateKey: secretRef("MISSING_BUZZ_PRIVATE_KEY") },
-    { BUZZ_PRIVATE_KEY: ENV_PRIVATE_KEY },
-    { ...UNAVAILABLE, privateKey: "", publicKey: "" },
-  ],
-  [
-    "never substitutes an ambient auth tag for an unavailable SecretRef",
-    { privateKey: PRIVATE_KEY, authTag: secretRef("MISSING_BUZZ_AUTH_TAG") },
-    { BUZZ_AUTH_TAG: "ambient-auth-tag" },
-    { ...UNAVAILABLE, privateKey: PRIVATE_KEY, authTag: "", publicKey: expect.stringMatching(/./) },
-  ],
 ] as const)("%s", (_label, credentials, env, expected) => {
   for (const [name, value] of Object.entries(env)) {
     vi.stubEnv(name, value);
@@ -119,3 +103,16 @@ it.each([
 
   expect(resolveBuzzAccount({ cfg })).toMatchObject(expected);
 });
+
+it.each(["privateKey", "authTag"] as const)(
+  "never substitutes ambient %s for a SecretRef",
+  (field) => {
+    const cfg = rootWithAmbientCredentials({ [field]: secretRef("MISSING_BUZZ_CREDENTIAL") });
+    expect(resolveBuzzAccount({ cfg })).toMatchObject({
+      ...UNAVAILABLE,
+      privateKey: field === "privateKey" ? "" : PRIVATE_KEY,
+      authTag: field === "authTag" ? "" : "root-auth",
+      publicKey: field === "privateKey" ? "" : expect.stringMatching(/./),
+    });
+  },
+);

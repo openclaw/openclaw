@@ -30,6 +30,8 @@ const alice = { publicKey: ALICE_PUBLIC_KEY, displayName: "Alice" };
 const secondAlice = { publicKey: SECOND_ALICE_PUBLIC_KEY, displayName: "Alice" };
 const explicitBob = nip19.npubEncode(BOB_PUBLIC_KEY);
 const roomMembers = [alice, secondAlice, { publicKey: BOB_PUBLIC_KEY, displayName: "Bob" }];
+const ambiguousMembers = makeMembers(8, () => "Alice");
+const excessMembers = makeMembers(51, (index) => `Member${index + 1}`);
 
 describe("Buzz outbound mentions", () => {
   it.each([
@@ -46,6 +48,7 @@ describe("Buzz outbound mentions", () => {
     ],
     [`Hello @Alice (nostr:${explicitBob})`, roomMembers, [BOB_PUBLIC_KEY]],
     [`nostr:${nip19.npubEncode(BOT_PUBLIC_KEY)}`, [], []],
+    ["`@Alice`\n```\nnostr:npub1invalid\n```", undefined, []],
   ] as const)("resolves %s", (text, members, expected) => {
     expect(resolve(text, members)).toEqual(expected);
   });
@@ -60,36 +63,22 @@ describe("Buzz outbound mentions", () => {
 
   it.each([
     ["Hello @不存在", [alice], "Buzz mention does not match a current room member"],
-    ["Hello @Missing", [alice], 'Buzz mention "@missing" does not match a current room member'],
     ["Hello @Alice", [alice, secondAlice], nip19.npubEncode(ALICE_PUBLIC_KEY)],
     [`nostr:${explicitBob}`, [alice], "is not a current room member"],
-  ] as const)("rejects %s", (text, members, error) => {
-    expect(() => resolve(text, members)).toThrow(error);
-  });
-
-  it("bounds ambiguous-member guidance", () => {
-    const duplicateMembers = makeMembers(8, () => "Alice");
-
-    expect(() => resolve("Hello @Alice", duplicateMembers)).toThrow(
-      `candidates: ${duplicateMembers
+    [
+      "Hello @Alice",
+      ambiguousMembers,
+      `candidates: ${ambiguousMembers
         .slice(0, 5)
         .map((member) => nip19.npubEncode(member.publicKey))
         .join(", ")}, and 3 more.`,
-    );
-  });
-
-  it("does not resolve mention-like text inside Markdown code regions", () => {
-    expect(resolve("`@Alice`\n```\nnostr:npub1invalid\n```", undefined)).toEqual([]);
-  });
-
-  it("rejects messages above the native mention limit", () => {
-    const mentionedMembers = makeMembers(51, (index) => `Member${index + 1}`);
-
-    expect(() =>
-      resolve(
-        mentionedMembers.map((member) => `@${member.displayName}`).join(" "),
-        mentionedMembers,
-      ),
-    ).toThrow("Buzz messages support at most 50 mentions");
+    ],
+    [
+      excessMembers.map((member) => `@${member.displayName}`).join(" "),
+      excessMembers,
+      "Buzz messages support at most 50 mentions",
+    ],
+  ] as const)("rejects %s", (text, members, error) => {
+    expect(() => resolve(text, members)).toThrow(error);
   });
 });

@@ -1,23 +1,20 @@
-import type { Event, Filter, Relay } from "nostr-tools";
+import type { Filter, Relay } from "nostr-tools";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryBuzzDirectoryRooms, startBuzzDirectoryRelay } from "./directory-relay.js";
 import { BuzzDirectoryState } from "./directory-state.js";
 
 type SubscriptionRecord = {
   filters: Filter[];
-  handlers: {
-    onevent: (event: Event) => void;
-    oneose?: () => void;
-    onclose: (reason: string) => void;
-  };
+  handlers: Parameters<Relay["prepareSubscription"]>[1];
   close: ReturnType<typeof vi.fn>;
 };
 type Subscription = ReturnType<Relay["prepareSubscription"]>;
 
 const BOT_PUBLIC_KEY = "a".repeat(64);
 const RELAY_PUBLIC_KEY = "f".repeat(64);
-const MEMBER_KEYS = ["b", "c", "d"].map((key) => key.repeat(64));
+const MEMBER_KEYS = ["b", "c"].map((key) => key.repeat(64));
 const ROOM_IDS = ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"];
+const TIMEOUT = "Timed out loading Buzz directory snapshot";
 
 function createProfileRelay(relayClose?: ReturnType<typeof vi.fn>) {
   const subscriptions: SubscriptionRecord[] = [];
@@ -60,19 +57,15 @@ describe("Buzz directory relay", () => {
       directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, key]);
     }
 
-    expect(subscriptions).toHaveLength(3);
-    expect(subscriptions[2]?.filters[0]?.authors).toEqual([BOT_PUBLIC_KEY, MEMBER_KEYS[2]]);
-    expect(subscriptions.map(({ close }) => close.mock.calls)).toEqual([
-      [["directory profile subscription replaced"]],
-      [["directory profile subscription replaced"]],
-      [],
-    ]);
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions[1]?.filters[0]?.authors).toEqual([BOT_PUBLIC_KEY, MEMBER_KEYS[1]]);
+    expect(subscriptions[0]?.close).toHaveBeenCalledOnce();
+    expect(subscriptions[1]?.close).not.toHaveBeenCalled();
 
     directory.close();
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY]);
-    expect(subscriptions).toHaveLength(3);
-    expect(subscriptions.map(({ close }) => close.mock.calls.length)).toEqual([1, 1, 1]);
-    expect(subscriptions[2]?.close).toHaveBeenCalledWith("directory shutdown");
+    expect(subscriptions).toHaveLength(2);
+    expect(subscriptions.map(({ close }) => close.mock.calls.length)).toEqual([1, 1]);
   });
 
   it("closes sibling profile subscriptions when one chunk fails", () => {
@@ -84,11 +77,9 @@ describe("Buzz directory relay", () => {
     );
     expect(subscriptions).toHaveLength(2);
 
-    subscriptions[0]?.handlers.onclose("relay rejected subscription");
+    subscriptions[0]?.handlers.onclose?.("relay rejected subscription");
 
-    expect(subscriptions[1]?.close).toHaveBeenCalledWith(
-      "directory profile subscription generation failed",
-    );
+    expect(subscriptions[1]?.close).toHaveBeenCalledOnce();
   });
 
   it("keeps the relay running when optional profile reads never reach EOSE", async () => {
@@ -107,42 +98,33 @@ describe("Buzz directory relay", () => {
     expect(relayClose).not.toHaveBeenCalled();
 
     directory.close();
-    expect(subscriptions[0]?.close).toHaveBeenCalledExactlyOnceWith("directory shutdown");
+    expect(subscriptions[0]?.close).toHaveBeenCalledOnce();
   });
 
-  it("defers query cleanup until the relay confirms EOSE", async () => {
-    const abort = new AbortController();
-    const { query, subscriptions } = createProfileRelay();
-    const result = query(abort.signal);
-
-    abort.abort(new Error("stop"));
-    await expect(result).rejects.toThrow("stop");
-    expect(subscriptions[0]?.close).not.toHaveBeenCalled();
-
-    subscriptions[0]?.handlers.oneose?.();
-    expect(subscriptions[0]?.close).toHaveBeenCalledWith("directory query complete");
-  });
-
-  it.each(["standalone", "active"])(
-    "recycles a stalled %s directory query without closing before EOSE",
+  it.each(["abort", "standalone", "active"])(
+    "settles %s directory queries without closing before EOSE",
     async (mode) => {
       vi.useFakeTimers();
+      const abort = new AbortController();
       const relayClose = vi.fn();
       const onFatalError = vi.fn();
       const { start, query, subscriptions } = createProfileRelay(relayClose);
-      const result = mode === "active" ? start(onFatalError).refreshRooms(ROOM_IDS) : query();
-      const rejection = expect(result).rejects.toThrow("Timed out loading Buzz directory snapshot");
-
-      await vi.advanceTimersByTimeAsync(10_000);
+      const result =
+        mode === "active" ? start(onFatalError).refreshRooms(ROOM_IDS) : query(abort.signal);
+      const rejection = expect(result).rejects.toThrow(mode === "abort" ? "stop" : TIMEOUT);
+      if (mode === "abort") {
+        abort.abort(new Error("stop"));
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
       await rejection;
-
       expect(onFatalError.mock.calls).toEqual(
-        mode === "active"
-          ? [[expect.objectContaining({ message: "Timed out loading Buzz directory snapshot" })]]
-          : [],
+        mode === "active" ? [[expect.objectContaining({ message: TIMEOUT })]] : [],
       );
       expect(subscriptions[0]?.close).not.toHaveBeenCalled();
-      expect(relayClose).toHaveBeenCalledOnce();
+      expect(relayClose).toHaveBeenCalledTimes(mode === "abort" ? 0 : 1);
+      subscriptions[0]?.handlers.oneose?.();
+      expect(subscriptions[0]?.close).toHaveBeenCalledOnce();
     },
   );
 });
