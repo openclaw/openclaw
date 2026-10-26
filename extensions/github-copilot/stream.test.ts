@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -83,93 +84,76 @@ it("preserves a single configured integration identity through completions strea
 });
 
 describe("wrapCopilotAnthropicStream", () => {
-  it.each([false, true])(
-    "normalizes Anthropic IDs after an async caller hook=%s",
-    async (asyncHook) => {
-      const long = "x".repeat(64);
-      const pairs = asyncHook
-        ? [
-            ["functions.read:0", "functions_read_0"],
-            ["a.b", "a_b_2"],
-            ["a:b", "a_b_3"],
-            ["a_b", "a_b"],
-            ["a.b", "a_b_4"],
-          ]
-        : [
-            ["a.b", "a_b_3"],
-            ["a:b", "a_b_4"],
-            ["a_b", "a_b"],
-            ["a_b_2", "a_b_2"],
-            ["a.b", "a_b_5"],
-            ["native_id", "native_id"],
-            ["native_id", "native_id_3"],
-            ["native_id_2", "native_id_2"],
-            [long + "first", "x".repeat(62) + "_2"],
-            [long + "second", "x".repeat(62) + "_3"],
-            [long, long],
-          ];
-      const sourceIds = pairs.map(([id]) => id!);
-      const expectedIds = pairs.map(([, id]) => id!);
-      const uses = sourceIds.map(toolUse),
-        results = [...sourceIds, ...(!asyncHook ? ["a.b"] : [])].map(toolResult);
-      const messages = [
-        ...(asyncHook ? [{ role: "system", content: "replacement system prompt" }] : []),
-        {
-          role: "assistant",
-          content: [...(asyncHook ? [{ type: "thinking", thinking: "private" }] : []), ...uses],
-        },
-        { role: "user", content: results },
-      ];
-      let returned: unknown;
-      const base = vi.fn<StreamFn>(async (model, _context, options) => {
-        const payload = {
-          messages: asyncHook ? [{ role: "user", content: "initial request" }] : messages,
-        };
-        returned = (await options?.onPayload?.(payload, model)) ?? payload;
-        if (!asyncHook) {
-          const once = structuredClone(payload);
-          await options?.onPayload?.(payload, model);
-          expect(payload).toEqual(once);
+  it("normalizes colliding Anthropic IDs and is idempotent", async () => {
+    const long = "x".repeat(64);
+    const pairs = [
+      ["functions.read:0", "functions_read_0"],
+      ["a.b", "a_b_3"],
+      ["a:b", "a_b_4"],
+      ["a_b", "a_b"],
+      ["a_b_2", "a_b_2"],
+      ["a.b", "a_b_5"],
+      ["native_id", "native_id"],
+      ["native_id", "native_id_3"],
+      ["native_id_2", "native_id_2"],
+      [long + "first", "x".repeat(62) + "_2"],
+      [long + "second", "x".repeat(62) + "_3"],
+      [long, long],
+    ];
+    const sourceIds = pairs.map(([id]) => id!);
+    const expectedIds = pairs.map(([, id]) => id!);
+    const uses = sourceIds.map(toolUse),
+      results = [...sourceIds, "a.b"].map(toolResult);
+    const messages = [
+      { role: "assistant", content: uses },
+      { role: "user", content: results },
+    ];
+    const base = vi.fn<StreamFn>(async (model, _context, options) => {
+      const payload = { messages };
+      await options?.onPayload?.(payload, model);
+      const once = structuredClone(payload);
+      await options?.onPayload?.(payload, model);
+      expect(payload).toEqual(once);
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    await runCopilotStream(base);
+    expect(uses.map(({ id }) => id)).toEqual(expectedIds);
+    expect(results.map(({ tool_use_id }) => tool_use_id)).toEqual([...expectedIds, "a_b_5"]);
+  });
+
+  it("patches an async caller's Anthropic payload after the hook", async () => {
+    const system = { role: "system", content: "replacement system prompt" };
+    const messages = [
+      system,
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private" }, toolUse("functions.read:0")],
+      },
+      { role: "user", content: [toolResult("functions.read:0")] },
+    ];
+    const payload = { messages: [{ role: "user", content: "initial request" }] };
+    let returned: unknown;
+    const base = vi.fn<StreamFn>(async (model, _context, options) => {
+      returned = (await options?.onPayload?.(payload, model)) ?? payload;
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    await runCopilotStream(base, "anthropic-messages", {
+      onPayload: async (value) => {
+        if (value && typeof value === "object") {
+          Object.assign(value, { messages });
         }
-        return { async *[Symbol.asyncIterator]() {} } as never;
-      });
-      await runCopilotStream(
-        base,
-        "anthropic-messages",
-        asyncHook
-          ? {
-              onPayload: async (payload) => {
-                if (payload && typeof payload === "object") {
-                  Object.assign(payload, { messages });
-                }
-              },
-            }
-          : {},
-      );
-      if (asyncHook) {
-        expect(JSON.stringify(returned)).toBe(
-          JSON.stringify({
-            messages: [
-              {
-                role: "system",
-                content: [
-                  {
-                    type: "text",
-                    text: "replacement system prompt",
-                    cache_control: { type: "ephemeral" },
-                  },
-                ],
-              },
-              ...toolMessages(expectedIds),
-            ],
-          }),
-        );
-      } else {
-        expect(uses.map(({ id }) => id)).toEqual(expectedIds);
-        expect(results.map(({ tool_use_id }) => tool_use_id)).toEqual([...expectedIds, "a_b_5"]);
-      }
-    },
-  );
+      },
+    });
+    expect(returned).toEqual({
+      messages: [
+        {
+          ...system,
+          content: [{ type: "text", text: system.content, cache_control: { type: "ephemeral" } }],
+        },
+        ...toolMessages(["functions_read_0"]),
+      ],
+    });
+  });
 
   it("sends uniquely paired IDs through the actual Anthropic SDK and loopback HTTP", async () => {
     const requests: Array<{
@@ -293,13 +277,8 @@ describe("wrapCopilotAnthropicStream", () => {
   });
 
   it("does not patch an unrelated provider's Anthropic stream", () => {
-    const toolId = "functions.read:0";
-    const payload = {
-      messages: [
-        { role: "assistant", content: [{ type: "tool_use", id: toolId }] },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: toolId }] },
-      ],
-    };
+    const payload = { messages: toolMessages(["functions.read:0"]) };
+    const original = structuredClone(payload);
     const baseStreamFn = payloadStream(payload);
     const streamModel = { provider: "kimi", id: "k2p5", api: "anthropic-messages" } as never;
     const context = { messages: [{ role: "user", content: "hi" }] } as never;
@@ -308,8 +287,7 @@ describe("wrapCopilotAnthropicStream", () => {
     void wrapCopilotTestStream(baseStreamFn)(streamModel, context, options as never);
 
     expect(baseStreamFn.mock.calls).toEqual([[streamModel, context, options]]);
-    expect(payload.messages[0]?.content[0]).toEqual({ type: "tool_use", id: toolId });
-    expect(payload.messages[1]?.content[0]).toEqual({ type: "tool_result", tool_use_id: toolId });
+    expect(payload).toEqual(original);
   });
 
   it("adds Copilot headers and rewrites message IDs before payload send", () => {
@@ -385,4 +363,3 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(wrapCopilotProviderStream({ streamFn: undefined } as never)).toBeUndefined();
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

@@ -113,20 +113,17 @@ describe("GitHub Copilot usage credential routing", () => {
 
 describe("fetchCopilotUsage", () => {
   it("cancels failed response bodies", async () => {
-    let canceled = false;
-    const body = new ReadableStream({
-      cancel() {
-        canceled = true;
-        throw new Error("stream already closed");
-      },
+    const cancel = vi.fn(() => {
+      throw new Error("stream already closed");
     });
+    const body = new ReadableStream({ cancel });
     const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
 
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
 
     expect(result.error).toBe("HTTP 500");
     expect(result.windows).toHaveLength(0);
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it.each([
