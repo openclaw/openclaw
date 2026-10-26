@@ -213,6 +213,27 @@ function expectRollback(
   );
 }
 
+function writeSource(
+  runtimeSourceConfig: Config,
+  secretsSourceConfig = runtimeSourceConfig,
+  expectedRuntimeConfigRevision = getRuntimeConfigSnapshotMetadata()!.revision,
+) {
+  return setSecretsRuntimeSourceSnapshotIfCurrent({
+    expectedSecretsRevision: getRevision(),
+    expectedRuntimeConfigRevision,
+    runtimeSourceConfig,
+    secretsSourceConfig,
+  });
+}
+
+function restoreSource(source: Config, expectedLineageRevision = getRevision()) {
+  return restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
+    expectedLineageRevision,
+    runtimeSourceConfig: source,
+    secretsSourceConfig: source,
+  });
+}
+
 describe("secrets runtime state", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -246,23 +267,10 @@ describe("secrets runtime state", () => {
         publication === "explicit-source" ? { runtimeSourceConfig: source } : {},
       );
       if (publication === "source-write" || publication === "restore") {
-        expect(
-          setSecretsRuntimeSourceSnapshotIfCurrent({
-            expectedSecretsRevision: getRevision(),
-            expectedRuntimeConfigRevision: getRuntimeConfigSnapshotMetadata()!.revision,
-            runtimeSourceConfig: { ...source, gateway: { port: 19_003 } },
-            secretsSourceConfig: source,
-          }),
-        ).toBe(true);
+        expect(writeSource({ ...source, gateway: { port: 19_003 } }, source)).toBe(true);
       }
       if (publication === "restore") {
-        expect(
-          restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
-            expectedLineageRevision: getRevision(),
-            runtimeSourceConfig: source,
-            secretsSourceConfig: source,
-          }),
-        ).toBe(true);
+        expect(restoreSource(source)).toBe(true);
       }
       const publishedSource = getRuntimeConfigSourceSnapshot()!;
       const input = captureRuntimeConfig(publishedSource);
@@ -355,14 +363,7 @@ describe("secrets runtime state", () => {
     const staleMetadata = getRuntimeConfigSnapshotMetadata()!;
     setRuntimeConfigSnapshot(concurrentConfig, concurrentConfig);
 
-    expect(
-      setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getRevision(),
-        expectedRuntimeConfigRevision: staleMetadata.revision,
-        runtimeSourceConfig: initialConfig,
-        secretsSourceConfig: initialConfig,
-      }),
-    ).toBe(false);
+    expect(writeSource(initialConfig, initialConfig, staleMetadata.revision)).toBe(false);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(concurrentConfig);
     expect(getSnapshot()?.sourceConfig).toEqual(initialConfig);
   });
@@ -383,14 +384,7 @@ describe("secrets runtime state", () => {
       runtimeSourceConfig: initialSource,
     });
     const runtimeMetadata = getRuntimeConfigSnapshotMetadata()!;
-    expect(
-      setSecretsRuntimeSourceSnapshotIfCurrent({
-        expectedSecretsRevision: getRevision(),
-        expectedRuntimeConfigRevision: runtimeMetadata.revision,
-        runtimeSourceConfig: nextSource,
-        secretsSourceConfig: nextSource,
-      }),
-    ).toBe(true);
+    expect(writeSource(nextSource, nextSource, runtimeMetadata.revision)).toBe(true);
     expect(getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.size).toBe(0);
     const committedRevision = getRevision();
     const active = getSnapshot()!;
@@ -402,13 +396,7 @@ describe("secrets runtime state", () => {
       preserveActivationLineage: true,
     });
 
-    expect(
-      restoreSecretsRuntimeSourceSnapshotIfLineageCurrent({
-        expectedLineageRevision: committedRevision,
-        runtimeSourceConfig: initialSource,
-        secretsSourceConfig: initialSource,
-      }),
-    ).toBe(true);
+    expect(restoreSource(initialSource, committedRevision)).toBe(true);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(initialSource);
     expect(
       getConfigResolutionFacts(getActiveSecretsRuntimeConfigSnapshot()?.config)?.has(
