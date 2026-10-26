@@ -80,8 +80,6 @@ async function createDiscordOutboundSendContext(ctx: DiscordOutboundContext) {
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
-    // Live caller cancellation must reach the abort-aware REST/retry path; the
-    // sender projections used to drop it (see issue #184060).
     signal: ctx.signal,
     onPlatformSendDispatch: delivery.onPlatformSendDispatch,
     assertPlatformSendAuthorized: delivery.assertPlatformSendAuthorized,
@@ -93,6 +91,7 @@ async function createDiscordOutboundSendContext(ctx: DiscordOutboundContext) {
   };
   const options = (reply = resolveReply()) => ({
     ...common,
+    verbose: false,
     reply,
     textLimit: ctx.formatting?.textLimit,
     maxLinesPerMessage: ctx.formatting?.maxLinesPerMessage,
@@ -260,28 +259,27 @@ export const discordOutbound: ChannelOutboundAdapter = {
         }
         payloadLog.warn("discord voice send failed; continuing without voice", { error: err });
         if (fallbackText) {
-          await sendContext.send(sendContext.target, fallbackText, {
-            verbose: false,
-            ...sendContext.options(voiceReply),
-          });
+          await sendContext.send(sendContext.target, fallbackText, sendContext.options(voiceReply));
         }
         voiceFailure = { error: err };
       }
       if (!voiceFailure) {
         await sendContext.onDeliveryResult?.(lastResult);
         if (payload.text?.trim()) {
-          lastResult = await sendContext.send(sendContext.target, payload.text, {
-            verbose: false,
-            ...sendContext.options(),
-          });
+          lastResult = await sendContext.send(
+            sendContext.target,
+            payload.text,
+            sendContext.options(),
+          );
         }
       }
       for (const mediaUrl of mediaUrls.slice(1)) {
         try {
-          lastResult = await sendContext.send(sendContext.target, "", {
-            verbose: false,
-            ...sendContext.mediaOptions(mediaUrl),
-          });
+          lastResult = await sendContext.send(
+            sendContext.target,
+            "",
+            sendContext.mediaOptions(mediaUrl),
+          );
         } catch (err) {
           if (!voiceFailure) {
             throw err;
@@ -330,7 +328,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
               filename,
             })
           : await sendContext.send(sendContext.target, payload.text ?? "", {
-              verbose: false,
               components: nativeComponents,
               embeds,
               filename,
@@ -344,7 +341,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
           });
         }
         return await sendContext.send(sendContext.target, text, {
-          verbose: false,
           ...sendContext.mediaOptions(mediaUrl),
           ...(!componentSpec
             ? {
@@ -410,7 +406,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       }
       const prepared = await createDiscordOutboundSendContext(ctx);
       return toDiscordOutboundDeliveryResult(
-        await prepared.send(prepared.target, ctx.text, { verbose: false, ...prepared.options() }),
+        await prepared.send(prepared.target, ctx.text, prepared.options()),
       );
     },
     sendMedia: async (ctx) => {
@@ -422,11 +418,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
           await prepared.sendVoice(target, ctx.mediaUrl, prepared.voiceOptions(reply)),
         );
       }
-      const options = { verbose: false, ...prepared.options(reply) };
-      const mediaOptions = {
-        verbose: false,
-        ...prepared.mediaOptions(ctx.mediaUrl, reply),
-      };
+      const options = prepared.options(reply);
+      const mediaOptions = prepared.mediaOptions(ctx.mediaUrl, reply);
       const trimmed = ctx.text.trim() && ctx.mediaUrl?.trim();
       if (trimmed) {
         let path: string;

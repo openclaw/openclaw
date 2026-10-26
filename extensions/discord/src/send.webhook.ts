@@ -42,7 +42,6 @@ type DiscordWebhookSendOpts = {
   avatarUrl?: string;
   tableMode?: MarkdownTableMode;
   wait?: boolean;
-  /** Live caller cancellation; combined with the per-send deadline below. */
   signal?: AbortSignal;
   /** Opt into configured line limits; omission preserves character-only chunking. */
   chunking?: { maxChars?: number; maxLines?: number };
