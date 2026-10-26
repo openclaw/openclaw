@@ -74,12 +74,15 @@ for (let sample = rows.length / 2; sample < samples; sample++) {
         source,
         directory,
       );
-      if (variant === "sparse") {
-        git(directory, "sparse-checkout", "set", "--no-cone", ...sparsePaths);
-      }
+      // Match a freshly initialized Actions checkout: configuring sparse patterns
+      // must not materialize the clone's default HEAD before measurement starts.
+      git(directory, "symbolic-ref", "HEAD", "refs/heads/materialization-fixture-unborn");
       const load = loadavg();
       traceFile = path.join(directory, "checkout-trace.jsonl");
       const start = performance.now();
+      if (variant === "sparse") {
+        git(directory, "sparse-checkout", "set", "--no-cone", ...sparsePaths);
+      }
       git(directory, "-c", `checkout.workers=${workers}`, "checkout", "--detach", revision);
       const seconds = (performance.now() - start) / 1000;
       traceFile = undefined;
