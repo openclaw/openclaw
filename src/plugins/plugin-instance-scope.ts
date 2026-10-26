@@ -26,6 +26,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
+  retainOwnerWork(): { run<T>(run: () => T): T; release(this: void): void };
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
@@ -35,6 +36,8 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
+  readonly admittedWorkCount: number;
+  waitForAdmittedWork(signal: AbortSignal): Promise<void>;
   waitForRetainedWork(
     signal: AbortSignal,
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
@@ -146,7 +149,6 @@ export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
   return (
     instance?.pluginId === pluginId &&
     instance.hasActiveCall &&
-    instance.acceptingCalls &&
     !instance.owner?.revoked &&
     !instance.lifecycle.signal.aborted
   );

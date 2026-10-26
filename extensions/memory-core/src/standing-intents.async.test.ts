@@ -186,12 +186,12 @@ const intentArgs = (action: string, id: string) => ({
 const promptHook = (runner: NonNullable<ReturnType<typeof getGlobalHookRunner>>) =>
   runner.runBeforePromptBuild({ prompt: "launch", messages: [] }, { ...context, trigger: "user" });
 
-function maintenance() {
+function maintenance(start = startStandingIntentMaintenance) {
   const clock = createGatewaySchedulerClock(1_000);
   const gateway = createTestGatewayScheduler(clock.clock);
   const scheduler = createTestPluginServiceScheduler(gateway);
   const warn = vi.fn();
-  const stop = startStandingIntentMaintenance({ agentIds: ["main"], scheduler, warn });
+  const stop = start({ agentIds: ["main"], scheduler, warn });
   releases.push(stop);
   writerDrains.push(async () => {
     await scheduler.stop();
@@ -274,6 +274,27 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 }
 
 describe("standing-intent admitted operations", () => {
+  it.each(["predecessor", "successor"] as const)(
+    "keeps maintenance live when the overlapping %s stops",
+    async (retiring) => {
+      const predecessor = maintenance();
+      await predecessor.clock.wake();
+      vi.resetModules();
+      const replacement = await import("./standing-intents.js");
+      expect(replacement.startStandingIntentMaintenance).not.toBe(startStandingIntentMaintenance);
+      const successor = maintenance(replacement.startStandingIntentMaintenance);
+      await successor.clock.wake();
+      const remaining = retiring === "predecessor" ? successor : predecessor;
+      (retiring === "predecessor" ? predecessor : successor).stop();
+      const intent = await seed({ nowMs: 1_000, expiresAt: 5_000 });
+      await remaining.clock.wake();
+      expect(remaining.gateway.nextWakeAtMs).toBe(5_000);
+      await remaining.clock.advanceTo(5_000);
+      expect(readStored(intent.id)?.status).toBe("expired");
+      expect(remaining.warn).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
     const { clock, stop } = maintenance();
     await clock.wake();

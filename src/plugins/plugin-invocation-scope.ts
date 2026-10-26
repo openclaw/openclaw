@@ -7,6 +7,7 @@ import {
   pluginInvocationContext,
   type PluginInstanceHandle,
   type PluginInvocationBinding,
+  type PluginInvocationContext,
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -66,24 +67,30 @@ export class PluginInvocationScope {
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
-    options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
+    options: {
+      retained?: boolean;
+      parent?: PluginInvocationContext;
+      kind?: "work" | "custody";
+      registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+    } = {},
   ) {
     const consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
+        const instanceRegistry = options.registryByInstance?.get(instance) ?? registry;
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, consumerKind, {
+            instance.retainConsumer((run) => this.run(run), instanceRegistry, consumerKind, {
               reason: "invocation-scope",
             });
-          const parent = options.parent?.consumer(instance);
+          const parent = options.parent?.lookup(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
           this.bindings.set(instance, consumer);
         } else {
           this.bindings.set(instance, {
-            run: (run) => this.run(() => instance.runInRegistry(registry, run)),
-            wrap: instance.createRegistryView(registry, (run) => this.run(run)),
+            run: (run) => this.run(() => instance.runInRegistry(instanceRegistry, run)),
+            wrap: instance.createRegistryView(instanceRegistry, (run) => this.run(run)),
           });
         }
       }
@@ -91,11 +98,6 @@ export class PluginInvocationScope {
       this.release();
       throw error;
     }
-  }
-
-  private consumer(instance: PluginInstanceHandle): PluginInstanceConsumer | undefined {
-    this.assertOpen();
-    return this.consumers.get(instance);
   }
 
   private assertOpen(): void {
@@ -124,6 +126,13 @@ export class PluginInvocationScope {
 
   run<T>(run: () => T): T {
     this.assertOpen();
+    if (this.consumers.size > 0 && pluginInvocationContext.getStore() !== this) {
+      // A child owns its streams; inherited caller tokens must not capture them.
+      // Consumer reentry within this scope keeps the token it just installed.
+      return pluginInstanceInvocation.exit(() =>
+        runWithAsyncStore(pluginInvocationContext, this, run),
+      );
+    }
     return runWithAsyncStore(pluginInvocationContext, this, run);
   }
 

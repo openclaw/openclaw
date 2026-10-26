@@ -338,6 +338,7 @@ describe("dreaming service reconciliation", () => {
 
   it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
+    const entered = Promise.withResolvers<void>();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
     const startupListPromise = new Promise<never>((_resolve, reject) => {
       rejectStartupList = reject;
@@ -348,6 +349,7 @@ describe("dreaming service reconciliation", () => {
       async list() {
         listCalls += 1;
         if (listCalls === 1) {
+          entered.resolve();
           return startupListPromise;
         }
         return [];
@@ -375,6 +377,7 @@ describe("dreaming service reconciliation", () => {
         getCron: () => cron,
       });
 
+      await entered.promise;
       let stopped = false;
       const stopping = triggerDreamingServiceStop(api).then(() => {
         stopped = true;

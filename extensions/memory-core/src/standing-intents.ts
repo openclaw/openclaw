@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getDatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { pathEntryExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
@@ -25,9 +26,18 @@ import {
 } from "./standing-intents-model.js";
 
 type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
-let scheduleMaintenance: ((path: string, nextDueAt: number | null) => void) | undefined;
-const lifecycleFacts = new Map<string, { empty: boolean }>();
-const operationQueues = new Map<string, StoreWriterQueue>();
+type MaintenanceSchedule = (path: string, nextDueAt: number | null) => void;
+// Queue, committed-absence facts, and the selected scheduler share one process owner.
+const maintenance = resolveGlobalSingleton(
+  Symbol.for("openclaw.memoryCore.standingIntents"),
+  () => ({
+    schedule: undefined as MaintenanceSchedule | undefined,
+    owners: new Set<MaintenanceSchedule>(),
+    lifecycleFacts: new Map<string, { empty: boolean }>(),
+    operationQueues: new Map<string, StoreWriterQueue>(),
+  }),
+);
+const { lifecycleFacts, operationQueues } = maintenance;
 
 export {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -75,7 +85,7 @@ async function executeStandingIntent(
         if (facts) {
           facts.empty = true;
         }
-        scheduleMaintenance?.(options.path, Infinity);
+        maintenance.schedule?.(options.path, Infinity);
         return undefined;
       }
       // Keep committed absence in owner order with creates and lifecycle transitions.
@@ -96,7 +106,7 @@ async function executeStandingIntent(
         if (facts) {
           facts.empty = result.nextDueAt === Infinity;
         }
-        scheduleMaintenance?.(options.path, result.nextDueAt);
+        maintenance.schedule?.(options.path, result.nextDueAt);
         return result.value;
       } finally {
         await worker.close();
@@ -120,7 +130,7 @@ export function startStandingIntentMaintenance(params: {
   const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
   const schedule = (path: string, nextDueAt: number | null) => {
     const target = targets.get(path);
-    if (!target || scheduler.signal.aborted) {
+    if (!target || !maintenance.owners.has(schedule) || scheduler.signal.aborted) {
       return;
     }
     jobs.get(path)?.cancel();
@@ -150,19 +160,28 @@ export function startStandingIntentMaintenance(params: {
       }),
     );
   };
-  scheduleMaintenance = schedule;
+  maintenance.owners.add(schedule);
+  maintenance.schedule = schedule;
+  const ownedFacts = new Map<string, { empty: boolean }>();
   // Restart must process overdue expiry/cooldown before trusting a retained deadline.
   for (const path of targets.keys()) {
-    lifecycleFacts.set(path, { empty: false });
+    const facts = { empty: false };
+    ownedFacts.set(path, facts);
+    lifecycleFacts.set(path, facts);
     schedule(path, null);
   }
   return () => {
-    scheduleMaintenance = undefined;
+    maintenance.owners.delete(schedule);
+    if (maintenance.schedule === schedule) {
+      maintenance.schedule = [...maintenance.owners].at(-1);
+    }
     for (const job of jobs.values()) {
       job.cancel();
     }
-    for (const path of targets.keys()) {
-      lifecycleFacts.delete(path);
+    for (const [path, facts] of ownedFacts) {
+      if (lifecycleFacts.get(path) === facts) {
+        lifecycleFacts.delete(path);
+      }
     }
   };
 }

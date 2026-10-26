@@ -6,7 +6,14 @@ import {
   retainPluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import {
+  pluginInvocationContext,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
@@ -17,6 +24,7 @@ import {
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
+  isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -41,6 +49,8 @@ import {
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
@@ -147,7 +157,7 @@ export function retainPreparedPluginRegistry(
     if (capturePluginRegistryLifecycleEpoch(registry)) {
       return undefined;
     }
-    if (isPluginRegistryRetired(registry)) {
+    if (isPluginRegistryRetired(registry) || !isPluginRegistryRecordSetAdmitting(registry)) {
       throw new PreparedModelRuntimePluginGenerationRetiredError(
         "Prepared plugin registry has retired",
       );
@@ -233,6 +243,67 @@ export function retainPreparedPluginGeneration(
   const release = ownPreparedPluginGeneration(generation).retain(true);
   return async () => {
     await release();
+  };
+}
+
+/** Each admitted lease owns callable authority independently of its parent's lifetime. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const registryByInstance = new Map<PluginInstanceHandle, PluginRegistry>();
+  const registries = [pluginGeneration.pluginRegistry, pluginGeneration.inboundPluginRegistry];
+  for (const registry of registries) {
+    if (registry) {
+      for (const instance of collectRegistryInvocationInstances(registry)) {
+        if (!registryByInstance.has(instance)) {
+          registryByInstance.set(instance, registry);
+        }
+      }
+    }
+  }
+  const registry = registries.find((entry) => entry !== undefined);
+  const scope = registry
+    ? new PluginInvocationScope(registry, registryByInstance.keys(), {
+        retained: true,
+        parent: pluginInvocationContext.getStore(),
+        registryByInstance,
+      })
+    : undefined;
+  let releaseGeneration: () => Promise<void>;
+  try {
+    releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
+  } catch (error) {
+    scope?.release();
+    throw error;
+  }
+  let closed = false;
+  let disposal: Promise<void> | undefined;
+  return {
+    snapshot,
+    pluginGeneration,
+    run<T>(run: () => T): T {
+      if (closed) {
+        throw new Error("Prepared model runtime lease is closed");
+      }
+      return scope ? scope.run(run) : run();
+    },
+    [Symbol.asyncDispose]() {
+      if (!closed) {
+        closed = true;
+        // Generation cleanup can await these consumers; revoke them before joining cleanup.
+        scope?.release();
+        disposal = (async () => {
+          try {
+            onRelease?.();
+          } finally {
+            await releaseGeneration();
+          }
+        })();
+      }
+      return disposal!;
+    },
   };
 }
 

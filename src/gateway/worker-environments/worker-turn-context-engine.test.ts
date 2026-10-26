@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { AsyncResource } from "node:async_hooks";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -14,10 +17,14 @@ import { resolveSessionTranscriptReadFence } from "../../config/sessions/session
 import { registerContextEngineInRegistry } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 
@@ -245,5 +252,90 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     await lease?.dispose();
     registry.contextEngines.delete(engineId);
     input.preparedRunAdmission.close();
+  }
+});
+
+it("retains plugin tool authority when a worker RPC enters from a separate async context", async () => {
+  await worker.seedActivePlacement();
+  const input = worker.turn("retained-plugin-tool");
+  await using runtime = await acquireAgentRunPreparedModelRuntime({
+    config: input.config,
+    agentId: input.agentId,
+    agentDir: resolveAgentDir(input.config, input.agentId),
+    workspaceDir: input.workspaceDir,
+  });
+  const registry = runtime.snapshot.pluginRegistry;
+  assert(registry);
+  const record = createPluginRecord({ id: "retained-worker-tool", status: "loaded" });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry });
+  const result = { content: [{ type: "text" as const, text: "old generation completed" }] };
+  const execute = vi.fn(async () => result);
+  const tool = {
+    name: "retained_plugin_tool",
+    label: "Retained plugin tool",
+    description: "Read the synthetic predecessor generation",
+    parameters: Type.Object({}),
+    execute: instance.wrap(execute),
+  };
+  bindAgentToolExecutionLocation(tool, { kind: "gateway" });
+  const transport = new AsyncResource("worker-plugin-rpc");
+  const completed = new Error("synthetic worker proof complete");
+  const tunnel = worker.createWorkerTurnTunnel({
+    launchTurn: async (request) => {
+      const identity = createWorkerConnectionIdentity(request.turnClaim);
+      const surfaceOwner = getWorkerTurnToolSurface(identity);
+      assert(surfaceOwner);
+      const surface = await surfaceOwner.getSurface(identity);
+      const issued = surface.tools.find((entry) => entry.definition.name === tool.name);
+      assert(issued);
+      instance.quiesce();
+      await transport.runInAsyncScope(async () => {
+        expect(() => tool.execute()).toThrow("reloaded or disabled");
+        await expect(
+          surfaceOwner.invoke(
+            identity,
+            {
+              generation: surface.generation,
+              toolId: issued.id,
+              toolCallId: "retained-call",
+              arguments: {},
+            },
+            { send: () => {} },
+          ),
+        ).resolves.toEqual(result);
+      });
+      throw completed;
+    },
+    runWorkspaceCommand: vi.fn(),
+    quiesceWorkspace: vi.fn(),
+    syncWorkspace: vi.fn(),
+    reconcileWorkspace: vi.fn(),
+    stop: vi.fn(),
+  });
+  const provider = worker.createWorkerSessionTurnPlacementProvider({
+    placements: worker.placements,
+    environments: {
+      ...worker.unusedEnvironments(),
+      get: worker.attachedEnvironment,
+      acquireTurnCredential: async () => worker.credential(),
+      startTunnel: async () => tunnel,
+      createGatewayTools: async () => [tool],
+    },
+  });
+  try {
+    await expect(
+      provider.executeTurn(
+        { ...worker.sessionTarget, runId: input.runId },
+        { ...input, pluginGeneration: runtime.pluginGeneration },
+        vi.fn(),
+      ),
+    ).rejects.toBe(completed);
+    expect(execute).toHaveBeenCalledOnce();
+  } finally {
+    transport.emitDestroy();
+    input.preparedRunAdmission.close();
+    await runtime[Symbol.asyncDispose]();
+    await instance.dispose();
   }
 });

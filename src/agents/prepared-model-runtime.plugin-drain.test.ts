@@ -7,7 +7,10 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { scopePreparedModelRuntimeLease as scopeLease } from "./prepared-model-runtime-generation-scope.js";
+import {
+  runOutsidePreparedModelRuntimePluginGenerationScope,
+  scopePreparedModelRuntimeLease as scopeLease,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquire,
   beginPreparedModelRuntimePluginDrain as beginDrain,
@@ -17,6 +20,7 @@ import {
   refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeInput as RuntimeInput,
 } from "./prepared-model-runtime.js";
+import { acquirePreparedModelRuntimeSnapshotInvocation } from "./prepared-model-runtime.resources.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-runtime-plugin-drain" });
 
@@ -42,40 +46,61 @@ it.each(["draining", "replacing"] as const)(
       workspaceDir: published.workspaceDir,
     };
     await using parent = scopeLease(await acquire(input));
+    const tool = instance.wrap(() => "reply completed");
     const start = createDeferred();
-    const pending = instance.run(() =>
-      parent.run(async () => {
-        await start.promise;
-        await using nested = await acquire(input, {
+    const pending = parent.run(async () => {
+      await start.promise;
+      await using nested = scopeLease(
+        await acquire(input, {
           pluginGeneration: parent.pluginGeneration,
           deriveRuntimePluginSelections: () => [],
+        }),
+      );
+      expect(nested.snapshot).toBe(parent.snapshot);
+      expect(nested.pluginGeneration).toBe(parent.pluginGeneration);
+      expect(nested.run(tool)).toBe("reply completed");
+      if (phase === "replacing") {
+        expect(() => runOutsidePreparedModelRuntimePluginGenerationScope(tool)).toThrow(
+          "reloaded or disabled",
+        );
+        instance.run(() => {
+          expect(() => runOutsidePreparedModelRuntimePluginGenerationScope(tool)).toThrow(
+            "reloaded or disabled",
+          );
         });
-        expect(nested.snapshot).toBe(parent.snapshot);
-        expect(nested.pluginGeneration).toBe(parent.pluginGeneration);
-        expect(instance.run(() => "reply completed")).toBe("reply completed");
-        await expect(
+      }
+      await instance.run(() =>
+        expect(
           acquire(
             { ...input, config: { agents: { defaults: { model: "other/model" } } } },
             { pluginGeneration: parent.pluginGeneration },
           ),
-        ).rejects.toMatchObject({ admissionBlocked: true });
+        ).rejects.toMatchObject({ admissionBlocked: true }),
+      );
+      const supplied = acquirePreparedModelRuntimeSnapshotInvocation(parent.snapshot);
+      try {
         await parent[Symbol.asyncDispose]();
-        await expect(
-          acquire(input, { pluginGeneration: parent.pluginGeneration }),
-        ).rejects.toMatchObject({ admissionBlocked: true });
-      }),
-    );
+        expect(() => parent.run(tool)).toThrow("Captured reply runtime lease is closed");
+        expect(nested.run(tool)).toBe("reply completed");
+        expect(supplied.run(tool)).toBe("reply completed");
+      } finally {
+        await supplied.release();
+      }
+      expect(() => supplied.run(tool)).toThrow("Prepared snapshot invocation has been released");
+    });
     const release = instance.reserveReplacement();
     const drain = beginDrain();
     try {
       if (phase === "replacing") {
         invalidate(undefined, { waitForReplacement: true });
+        instance.quiesce();
       }
       start.resolve();
       await pending;
     } finally {
       drain.release();
       release();
+      await parent[Symbol.asyncDispose]();
       await instance.dispose();
     }
   },
