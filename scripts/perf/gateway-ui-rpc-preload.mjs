@@ -173,14 +173,24 @@ function installObserver() {
         } else if (message.action === "profile-start") {
           inspector = new Session();
           inspector.connect();
-          await inspector.post("Profiler.enable");
-          await inspector.post("Profiler.setSamplingInterval", { interval: 1000 });
-          await inspector.post("Profiler.start");
+          if (message.allocations) {
+            await inspector.post("HeapProfiler.startSampling", {
+              samplingInterval: 32768,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            });
+          } else {
+            await inspector.post("Profiler.enable");
+            await inspector.post("Profiler.setSamplingInterval", { interval: 1000 });
+            await inspector.post("Profiler.start");
+          }
         } else if (message.action === "profile-stop") {
           if (!inspector) {
-            throw new Error("no CPU profile active");
+            throw new Error("no profile active");
           }
-          const { profile } = await inspector.post("Profiler.stop");
+          const { profile } = await inspector.post(
+            message.allocations ? "HeapProfiler.stopSampling" : "Profiler.stop",
+          );
           writeFileSync(message.path, stringify(profile), { mode: 0o600 });
           inspector.disconnect();
           inspector = undefined;
