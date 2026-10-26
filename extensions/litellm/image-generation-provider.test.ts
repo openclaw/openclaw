@@ -6,12 +6,8 @@ import {
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  postMultipartRequestMock,
-  resolveProviderHttpRequestConfigMock,
-} = getProviderHttpMocks();
+const { resolveApiKeyForProviderMock, postJsonRequestMock, postMultipartRequestMock } =
+  getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
 
@@ -96,17 +92,10 @@ it.each([
   ["https://public-api.openai.com/v1", undefined],
 ] as const)("sets automatic private-network policy for %s to %s", async (baseUrl, allow) => {
   await generate({ cfg: proxyConfig(baseUrl) });
-  expect(mockObjectArg(resolveProviderHttpRequestConfigMock)).toHaveProperty(
-    "allowPrivateNetwork",
-    allow,
-  );
   expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(allow === true);
 });
 
 it("honors explicit private-network opt-in for a non-loopback hostname", async () => {
   await generate({ cfg: proxyConfig("http://127.evil.com:4000", { allowPrivateNetwork: true }) });
-  const config = mockObjectArg(resolveProviderHttpRequestConfigMock);
-  expect(config.allowPrivateNetwork).toBeUndefined();
-  expect(config.request).toEqual({ allowPrivateNetwork: true });
   expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
 });

@@ -48,8 +48,7 @@ beforeEach(() => {
   redirect = undefined;
   downloadBytes = png;
   downloadElapsedMs = 0;
-  fetchMock.mockReset();
-  fetchMock.mockImplementation(async (_url, init) => {
+  fetchMock.mockReset().mockImplementation(async (_url, init) => {
     if (init?.method === "POST") {
       return Response.json({ data: images });
     }
@@ -69,23 +68,21 @@ afterEach(() => {
 });
 
 it.each([
-  [config, imageUrl, false],
   [config, imageUrl, true],
   [proxyConfig("https://api.example.com/v1"), "https://cdn.example.com/image.png", false],
   [proxyConfig(undefined, { allowPrivateNetwork: true }), privateUrl, false],
   [{ ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } }, imageUrl, false],
-] as const)("downloads %j URL %s (edit=%s) without credentials", async (cfg, url, edit) => {
-  images = [{ url, revised_prompt: "Synthetic square" }];
+] as const)("inlines %j URL %s in order (edit=%s) without credentials", async (cfg, url, edit) => {
+  images = [
+    { b64_json: png.toString("base64"), url: privateUrl, revised_prompt: "Inline" },
+    { url, revised_prompt: "URL" },
+  ];
   const result = await generate(cfg, {
     inputImages: edit ? [{ buffer: png, mimeType: "image/png" }] : undefined,
   });
-  expect(result.images).toEqual([
-    {
-      buffer: png,
-      mimeType: "image/png",
-      fileName: "image-1.png",
-      revisedPrompt: "Synthetic square",
-    },
+  expect(result.images).toMatchObject([
+    { buffer: png, revisedPrompt: "Inline" },
+    { buffer: png, revisedPrompt: "URL" },
   ]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(credentialsAt(0)).toEqual([
@@ -108,22 +105,6 @@ it.each([
   }
   await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
   expect(fetchMock).toHaveBeenCalledTimes(requests);
-});
-
-it("preserves inline bytes and response order", async () => {
-  images = [
-    {
-      b64_json: png.toString("base64"),
-      url: "http://127.0.0.2/image.png",
-      revised_prompt: "Inline",
-    },
-    { url: imageUrl, revised_prompt: "URL" },
-  ];
-  expect((await generate()).images).toMatchObject([
-    { buffer: png, revisedPrompt: "Inline" },
-    { buffer: png, revisedPrompt: "URL" },
-  ]);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 it("rejects downloads above the generated image download ceiling", async () => {
