@@ -71,6 +71,9 @@ function contains(text: string | undefined, ...parts: string[]) {
 function readContext(conversations: Record<string, unknown>) {
   return { ...context, sutReadClient: { conversations } } as never;
 }
+function scenarioConfig(id: string, base: Parameters<typeof configFixture>[0] = {}) {
+  return configFixture(base, { overrides: findScenario([`slack-${id}`])[0]?.configOverrides });
+}
 
 const observationContext = {
   channelId: "C123456789",
@@ -125,6 +128,7 @@ describe("Slack live QA runtime helpers", () => {
         finalMessage: { text, ts: "final" },
         messages: [...messages, slackMessage(final, "final")],
       });
+    const check = (...args: Parameters<typeof verify>) => expect(() => verify(...args));
     return {
       run,
       commentary,
@@ -133,18 +137,14 @@ describe("Slack live QA runtime helpers", () => {
       final,
       verifyObserved,
       verify,
-      check: (...args: Parameters<typeof verify>) => expect(() => verify(...args)),
+      check,
       tools: (...messages: Array<string | [string, string]>) =>
-        expect(() =>
-          verify([
-            slackMessage(`💬 ${commentary}`, "commentary"),
-            ...messages.map((message) =>
-              typeof message === "string"
-                ? slackMessage(message, "tool")
-                : slackMessage(...message),
-            ),
-          ]),
-        ),
+        check([
+          slackMessage(`💬 ${commentary}`, "commentary"),
+          ...messages.map((message) =>
+            typeof message === "string" ? slackMessage(message, "tool") : slackMessage(...message),
+          ),
+        ]),
     };
   }
 
@@ -313,20 +313,17 @@ describe("Slack live QA runtime helpers", () => {
 
   it("configures independent commentary, tool progress, and durable verbosity", () => {
     const config = (suffix: string) => {
-      const cfg = configFixture(
-        {
-          agents: {
-            defaults: { verboseDefault: "off" },
-            entries: { qa: { identity: { name: "C-3PO QA" } } },
-          },
+      const cfg = scenarioConfig(`progress-commentary-${suffix}`, {
+        agents: {
+          defaults: { verboseDefault: "off" },
+          entries: { qa: { identity: { name: "C-3PO QA" } } },
         },
-        { overrides: findScenario([`slack-${suffix}`])[0]?.configOverrides },
-      );
+      });
       return { account: cfg.channels?.slack?.accounts?.sut, agents: cfg.agents };
     };
-    const enabled = config("progress-commentary-true");
-    const disabled = config("progress-commentary-false");
-    const omitted = config("progress-commentary-omitted").account?.streaming?.progress;
+    const enabled = config("true");
+    const disabled = config("false");
+    const omitted = config("omitted").account?.streaming?.progress;
     expect(enabled.account?.streaming).toMatchObject({
       nativeTransport: false,
       progress: { commentary: true, commandText: "raw", toolProgress: false },
@@ -339,14 +336,10 @@ describe("Slack live QA runtime helpers", () => {
     expect(disabled.agents?.defaults?.verboseDefault).toBe("off");
     expect(omitted).toMatchObject({ style: "compact", toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
-    expect(config("progress-commentary-verbose-dedupe").agents?.defaults?.verboseDefault).toBe(
-      "on",
-    );
-    expect(config("progress-commentary-verbose-full").agents?.defaults?.verboseDefault).toBe(
-      "full",
-    );
+    expect(config("verbose-dedupe").agents?.defaults?.verboseDefault).toBe("on");
+    expect(config("verbose-full").agents?.defaults?.verboseDefault).toBe("full");
     expect(enabled.agents?.entries?.qa?.identity).toBeUndefined();
-    expect(config("mpim-app-mention-dedupe").account).toMatchObject({
+    expect(scenarioConfig("mpim-app-mention-dedupe").channels?.slack?.accounts?.sut).toMatchObject({
       dm: { enabled: true, groupEnabled: true },
       replyToMode: "all",
       streaming: { mode: "off" },
@@ -606,12 +599,7 @@ describe("Slack live QA runtime helpers", () => {
   ])(
     "enables the message tool without changing allowlist semantics ($allow)",
     ({ allow, expected, alsoAllow }) => {
-      const cfg = configFixture(
-        { tools: { allow } },
-        {
-          overrides: findScenario(["slack-reaction-glyph-native"])[0]?.configOverrides,
-        },
-      );
+      const cfg = scenarioConfig("reaction-glyph-native", { tools: { allow } });
       expect(cfg.tools?.allow).toEqual(expected);
       expect(cfg.tools?.alsoAllow).toEqual(alsoAllow);
     },
@@ -696,12 +684,7 @@ function nativeDataRun(kind: "chart" | "table") {
       ? "QA latency trend (line chart) X axis: Percentile Y axis: Milliseconds - Latency: P50: 120; P95: 240"
       : "QA pipeline report (table) Account Stage ARR Acme Won 125000 Globex Review 82000"
   }`;
-  return {
-    ...run,
-    captureBeforeReply: run.captureBeforeReply,
-    summary,
-    accessibleText,
-  };
+  return { ...run, captureBeforeReply: run.captureBeforeReply, summary, accessibleText };
 }
 const context = { channelId: "C123456789", sentTs: "1.000000", sutIdentity: { userId: "U_SUT" } };
 
