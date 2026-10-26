@@ -3,11 +3,8 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationResult,
-} from "openclaw/plugin-sdk/video-generation";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { VideoGenerationResult } from "openclaw/plugin-sdk/video-generation";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const videoUrl = "https://example.com/generated.mp4";
 const videoBytes = Buffer.from("generated-video");
@@ -27,14 +24,6 @@ export function testVideoGenerationDeadlines({
 }) {
   describe(`${providerId} video generation deadlines`, () => {
     const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
-    let provider: VideoGenerationProvider;
-    beforeAll(async () => {
-      provider = requireRegisteredProvider(
-        capturePluginRegistration(await loadPlugin()).videoGenerationProviders,
-        providerId,
-        "video provider",
-      );
-    });
     afterEach(() => {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -49,10 +38,16 @@ export function testVideoGenerationDeadlines({
         defaultPollingTimeoutMs,
       ],
     ])("%s", async (_, timeoutMs, readyAfterMs, pendingAtMs) => {
+      const provider = requireRegisteredProvider(
+        capturePluginRegistration(await loadPlugin()).videoGenerationProviders,
+        providerId,
+        "video provider",
+      );
       const settleByMs = Math.min(readyAfterMs, timeoutMs ?? Infinity) + 1_000;
       vi.useFakeTimers();
       const startedAt = Date.now();
       const release = vi.fn(async () => {});
+      const pending = { id: "task-1", status: pendingStatus };
       const completed =
         providerId === "runway"
           ? { status: "SUCCEEDED", output: [videoUrl] }
@@ -61,14 +56,14 @@ export function testVideoGenerationDeadlines({
         await new Promise((resolve) => {
           setTimeout(resolve, 10_000);
         });
-        return { response: Response.json({ id: "task-1", status: pendingStatus }), release };
+        return { response: Response.json(pending), release };
       });
       fetchWithTimeoutMock.mockImplementation(async (url) => {
         if (url === videoUrl) {
           return new Response(videoBytes, { headers: { "content-type": "video/mp4" } });
         }
         const ready = Date.now() - startedAt >= readyAfterMs;
-        return Response.json({ id: "task-1", ...(ready ? completed : { status: pendingStatus }) });
+        return Response.json({ ...pending, ...(ready ? completed : {}) });
       });
       let outcome: { result: VideoGenerationResult } | { error: unknown } | undefined;
       void provider
@@ -89,10 +84,8 @@ export function testVideoGenerationDeadlines({
         });
       } else {
         expect(outcome).toHaveProperty("error", expect.any(Error));
-        expect(outcome).toHaveProperty(
-          "error.message",
-          expect.stringContaining(`timed out after ${timeoutMs}ms`),
-        );
+        const message = expect.stringContaining(`timed out after ${timeoutMs}ms`);
+        expect(outcome).toHaveProperty("error.message", message);
         expect(fetchWithTimeoutMock.mock.calls.some(([url]) => url === videoUrl)).toBe(false);
       }
       expect(postJsonRequestMock).toHaveBeenCalledOnce();
