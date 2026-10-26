@@ -193,6 +193,7 @@ async function startFixture(
     command: { ...fixtureState.params.command, usePackagedPlugins: packaged },
   });
   const gateway = await owner.start();
+  fixtureState.pids();
   return { ...fixtureState, owner, gateway };
 }
 
@@ -333,21 +334,6 @@ http.createServer((request, response) => {`,
     expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
   });
 
-  it("cleans retained fixture roots after stopped work", async () => {
-    const { params, owner, gateway } = await startFixture(false, false);
-    const stagedRoot = resolveQaStagedBundledPluginsRoot({
-      repoRoot: params.repoRoot,
-      tempRoot: gateway.tempRoot,
-    });
-    await expectStopped(owner.stop({ keepTemp: true }));
-    await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
-    await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
-
-    await expectStopped(owner.stop({ keepTemp: false }));
-    await expectGone(gateway.tempRoot);
-    await expectGone(stagedRoot);
-  });
-
   it("owns an unaccepted launcher and separates boundary diagnostics from termination", async () => {
     const { params } = await fixture();
     const rejected = new Error("verified acceptance failed");
@@ -424,7 +410,6 @@ http.createServer((request, response) => {`,
     async ({ failurePhase, destination }) => {
       const failsStaging = failurePhase === "staging removal";
       const { params, pids, owner, gateway } = await startFixture(false, !failsStaging);
-      pids();
       const preserveToDir = await makeArtifactDir();
       const failure = new Error("gateway RPC close failed");
       const stagedRoot = resolveQaStagedBundledPluginsRoot({
@@ -468,8 +453,11 @@ http.createServer((request, response) => {`,
   it.each([true, false])(
     "only exports on retry if the first stop retained temporary logs (keepTemp=%s)",
     async (keepTemp) => {
-      const { pids, owner, gateway } = await startFixture();
-      pids();
+      const { params, owner, gateway } = await startFixture(false, false);
+      const stagedRoot = resolveQaStagedBundledPluginsRoot({
+        repoRoot: params.repoRoot,
+        tempRoot: gateway.tempRoot,
+      });
       const preserveToDir = await makeArtifactDir();
       const failure = new Error("gateway RPC close failed");
       rpcStop.mockRejectedValueOnce(failure);
@@ -480,6 +468,7 @@ http.createServer((request, response) => {`,
       expect(await fs.readdir(preserveToDir)).toEqual([]);
       if (keepTemp) {
         await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+        await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
       } else {
         await expectGone(gateway.tempRoot);
       }
@@ -492,6 +481,7 @@ http.createServer((request, response) => {`,
         expect(await fs.readdir(preserveToDir)).toEqual([]);
       }
       await expectGone(gateway.tempRoot);
+      await expectGone(stagedRoot);
     },
   );
 
@@ -587,7 +577,6 @@ http.createServer((request, response) => {`,
 
   it("does not spawn a replacement after stop closes an awaited mutation", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const restarting = gateway.restartAfterStateMutation(async () => {
@@ -605,7 +594,6 @@ http.createServer((request, response) => {`,
 
   it("reports failed runtime removal without undoing confirmed shutdown and retries cleanup", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
     const fault = denyRemoval(gateway.tempRoot, "EACCES: runtime removal denied");
     try {
       const result = await owner.stop();
@@ -687,7 +675,6 @@ http.createServer((request, response) => {`,
 
   it("retries failed preservation after confirming process shutdown", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
     const invalidOptions = {
       preserveToDir: path.resolve(process.cwd(), "../qa-artifacts-outside-repo"),
     };

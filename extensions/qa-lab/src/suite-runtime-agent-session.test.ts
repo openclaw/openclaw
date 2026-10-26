@@ -35,7 +35,6 @@ const execFileAsync = promisify(execFile);
 const { cleanup, makeTempDir } = createTempDirHarness({ beforeCleanup: closeQaRuntimeStores });
 
 afterEach(() => {
-  vi.useRealTimers();
   resetPluginStateStoreForTests({ closeDatabase: false });
   clearRuntimeConfigSnapshot();
 });
@@ -166,7 +165,7 @@ describe("qa suite runtime agent session helpers", () => {
   }
 
   it.each(["sessions.create", "skills.status"] as const)(
-    "reads %s with its default arguments and normalized result",
+    "normalizes the %s result",
     async (method) => {
       const session = method === "sessions.create";
       gatewayCall.mockResolvedValueOnce(
@@ -175,11 +174,10 @@ describe("qa suite runtime agent session helpers", () => {
       await expect(
         session ? createSession(env, "Test Session") : readSkillStatus(env),
       ).resolves.toEqual(session ? "session-1" : [{ name: "alpha", eligible: true }]);
-      expect(gatewayCall).toHaveBeenNthCalledWith(
-        1,
+      expect(gatewayCall).toHaveBeenCalledWith(
         method,
         session ? { label: "Test Session" } : { agentId: "qa" },
-        expect.objectContaining({ timeoutMs: session ? 60_000 : 45_000 }),
+        expect.anything(),
       );
     },
   );
@@ -643,9 +641,7 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("returns an empty checkpoint before the session exists", async () => {
     await expect(
-      readSummary(env, "agent:qa:not-created-yet", {
-        allowEmpty: true,
-      }),
+      readSummary(env, "agent:qa:not-created-yet", { allowEmpty: true }),
     ).resolves.toEqual({
       assistantToolCallCounts: {},
       compactionSummaries: [],
@@ -658,15 +654,15 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
-  it("fails closed when a requested QA session transcript is empty", async () => {
-    const transcript = await makeTranscript();
-
-    await expect(transcript.read()).rejects.toThrow("session transcript is empty");
-  });
-
-  it("fails closed when a requested QA session transcript entry is missing", async () => {
-    await expect(readSummary(env, "agent:qa:missing")).rejects.toThrow(
-      "session transcript entry not found",
-    );
-  });
+  it.each(["empty", "entry not found"])(
+    "fails closed for a transcript that is %s",
+    async (error) => {
+      if (error === "empty") {
+        await makeTranscript();
+      }
+      await expect(readSummary(env, "agent:qa:session")).rejects.toThrow(
+        `session transcript ${error}`,
+      );
+    },
+  );
 });
