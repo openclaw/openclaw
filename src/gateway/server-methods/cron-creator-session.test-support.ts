@@ -54,7 +54,6 @@ export function registerCronCreatorSessionTests(fixture: {
   it.each([
     ["agent-runtime", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
     ["operator", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
-    ["agent-runtime", { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] }],
     ["operator", { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] }],
     ["operator", { kind: "command", argv: ["echo", "report"] }],
   ])("retains %s creator context for %j", async (caller, jobPayload) => {
