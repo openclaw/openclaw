@@ -1,16 +1,69 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
+import { hasOperatorPairingAccess } from "../../app/operator-access.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  channelSnapshot,
-  createChannelsViewProps,
-  mountChannelSource,
-} from "./view.test-support.ts";
+import { pairingRequest, pairingSnapshot } from "./pairing.test-support.ts";
+import { channelSnapshot, createChannelsViewProps } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
+
+function mountChannels(reads: { promise: Promise<unknown> }[], pairing = false) {
+  const request = vi.fn();
+  for (const read of reads) {
+    request.mockReturnValueOnce(read.promise);
+  }
+  const fixture = createApplicationGateway();
+  fixture.publish({
+    ...fixture.gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    hello: gatewayHelloForMethods(
+      [pairing ? "channels.pairing.list" : "channels.status"],
+      [pairing ? "operator.pairing" : "operator.read"],
+    ),
+  });
+  const channels = createChannelCapability(fixture.gateway);
+  const approve = vi.fn();
+  const mounted = mountSolid(() => {
+    const source = projectChannels(channels);
+    const connection = projectGateway(fixture.gateway);
+    const [selected, setSelected] = createSignal<string | null>(null);
+    return (
+      <ChannelsView
+        {...createChannelsViewProps(null, null)}
+        channels={source.read()}
+        canManagePairing={hasOperatorPairingAccess(connection.read().snapshot.hello?.auth ?? null)}
+        selectedChannel={selected()}
+        onShowDetail={setSelected}
+        onCloseDetail={() => setSelected(null)}
+        onRefresh={(probe) => void channels.refresh(probe)}
+        onPairingApprove={approve}
+      />
+    );
+  });
+  onTestFinished(() => {
+    mounted.unmount();
+    channels.dispose();
+    document.body.replaceChildren();
+  });
+  const container = pairing
+    ? mounted.container.querySelector<HTMLElement>("#channels-pairing-requests")!
+    : mounted.container;
+  const query = <T extends Element = HTMLElement>(selector: string) =>
+    container.querySelector<T>(selector);
+  const queryAll = <T extends Element = HTMLElement>(selector: string) =>
+    container.querySelectorAll<T>(selector);
+  return { ...fixture, channels, approve, container, query, queryAll };
+}
 
 function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
   return channelSnapshot(
@@ -23,31 +76,13 @@ function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
   );
 }
 
-function mountHub(reads: ReturnType<typeof createDeferred<ChannelsStatusSnapshot>>[]) {
-  return mountChannelSource(reads, "channels.status", "operator.read", (channels) => {
-    const source = projectChannels(channels);
-    const [selected, setSelected] = createSignal<string | null>(null);
-    const props = createChannelsViewProps(null, null);
-    return (
-      <ChannelsView
-        {...props}
-        channels={source.read()}
-        selectedChannel={selected()}
-        onShowDetail={(channel) => setSelected(channel)}
-        onCloseDetail={() => setSelected(null)}
-        onRefresh={(probe) => void channels.refresh(probe)}
-      />
-    );
-  });
-}
-
 it.each([false, true])(
   "retains channels through failure and retry (cached: %s)",
   async (cached) => {
     const seed = createDeferred<ChannelsStatusSnapshot>();
     const failure = createDeferred<ChannelsStatusSnapshot>();
     const recovery = createDeferred<ChannelsStatusSnapshot>();
-    const f = mountHub(cached ? [seed, failure, recovery] : [failure, recovery]);
+    const f = mountChannels(cached ? [seed, failure, recovery] : [failure, recovery]);
     let card: HTMLButtonElement | undefined;
     let dialog: HTMLElement | null = null;
     if (cached) {
@@ -118,3 +153,90 @@ it.each([false, true])(
     }
   },
 );
+
+it("loads pairing feedback without replacing cached sender controls on failure or recovery", async () => {
+  const first = createDeferred<ChannelsPairingListResult>();
+  const failedRefresh = createDeferred<ChannelsPairingListResult>();
+  const recovery = createDeferred<ChannelsPairingListResult>();
+  const f = mountChannels([first, failedRefresh, recovery], true);
+  const initial = f.channels.refreshPairing();
+  await waitForSolid(() => expect(f.query(".settings-loading-skeleton")).not.toBeNull());
+  expect(f.container.textContent).not.toContain("Alice");
+  first.resolve(pairingSnapshot());
+  await initial;
+  await waitForSolid(() => expect(f.container.textContent).toContain("Alice"));
+  const details = f.query<HTMLDetailsElement>("details")!;
+  const approve = f.query<HTMLButtonElement>('button[aria-label^="Approve "]')!;
+  details.open = true;
+  approve.focus();
+
+  const refresh = f.channels.refreshPairing();
+  await waitForSolid(() => {
+    expect(f.query<HTMLButtonElement>('button[aria-label="Refresh"]')?.disabled).toBe(true);
+    expect(f.query(".settings-loading-skeleton")).toBeNull();
+    expect(f.query("details")).toBe(details);
+  });
+  failedRefresh.reject(new Error("Pairing refresh unavailable"));
+  await refresh;
+  await waitForSolid(() =>
+    expect(f.query('[role="alert"]')?.textContent).toContain("Pairing refresh unavailable"),
+  );
+  const expectRetained = () => {
+    expect(f.query("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(approve);
+  };
+  expectRetained();
+
+  const recovered = f.channels.refreshPairing();
+  const updated = { ...pairingRequest, metadata: { name: "Alice Updated" } };
+  recovery.resolve(pairingSnapshot({ requests: [updated] }));
+  await recovered;
+  await waitForSolid(() => {
+    expect(details.textContent).toContain("Alice Updated");
+    expect(f.query('[role="alert"]')).toBeNull();
+  });
+  expectRetained();
+  approve.click();
+  expect(f.approve).toHaveBeenLastCalledWith(updated);
+});
+
+it("recovers an initial read failure and hides a retired retry after pairing access changes", async () => {
+  const failure = createDeferred<ChannelsPairingListResult>();
+  const retired = createDeferred<ChannelsPairingListResult>();
+  const recovery = createDeferred<ChannelsPairingListResult>();
+  const f = mountChannels([failure, retired, recovery], true);
+  const initial = f.channels.refreshPairing();
+  failure.reject(new Error("First read failed"));
+  await initial;
+  await waitForSolid(() =>
+    expect(f.query('[role="alert"]')?.textContent).toContain("First read failed"),
+  );
+  const retry = f.channels.refreshPairing();
+  await waitForSolid(() => {
+    expect(f.query(".settings-loading-skeleton")).not.toBeNull();
+    expect(f.query('[role="alert"]')).toBeNull();
+  });
+  f.publish({
+    ...f.gateway.snapshot,
+    hello: gatewayHelloForMethods(["channels.pairing.list"], []),
+  });
+  await waitForSolid(() => {
+    expect(f.container.textContent).toContain("operator.pairing access");
+    expect(f.query(".settings-loading-skeleton")).toBeNull();
+  });
+  retired.resolve(pairingSnapshot());
+  await retry;
+  expect(f.container.textContent).not.toContain("Alice");
+  f.publish({
+    ...f.gateway.snapshot,
+    hello: gatewayHelloForMethods(["channels.pairing.list"], ["operator.pairing"]),
+  });
+  const refresh = f.channels.refreshPairing();
+  recovery.resolve(pairingSnapshot());
+  await refresh;
+  await waitForSolid(() => {
+    expect(f.container.textContent).toContain("Alice");
+    expect(f.query('[role="alert"]')).toBeNull();
+  });
+});

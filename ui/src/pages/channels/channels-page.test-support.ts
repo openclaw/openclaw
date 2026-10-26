@@ -171,8 +171,6 @@ export function profileButton(page: HTMLElement, label: string): HTMLButtonEleme
   const button = Array.from(page.querySelectorAll("button")).find(
     (entry) => entry.textContent?.trim() === label,
   );
-  if (!button) {
-    throw new Error(`Missing action: ${label}`);
-  }
-  return button;
+  expect(button, `Missing action: ${label}`).toBeDefined();
+  return button!;
 }
