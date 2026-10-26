@@ -42,6 +42,7 @@ import {
   createHookCtx,
   describe1BeforeEach0,
   describe2BeforeEach0,
+  createMessageToolOnlyDispatchArgs,
 } from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -1002,15 +1003,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       SessionKey: "agent:main:telegram:direct:user1",
     });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
@@ -2131,15 +2126,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Body: "observed message",
     });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(result).toEqual({
       queuedFinal: false,
@@ -2212,15 +2201,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       WasMentioned: false,
     });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     const claimCall = firstMockCall(
       hookMocks.runner.runInboundClaimForPluginOutcome,
@@ -2518,15 +2501,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -2796,15 +2773,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
