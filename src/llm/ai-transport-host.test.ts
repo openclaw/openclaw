@@ -31,11 +31,17 @@ const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
   baseUrl: "https://api.anthropic.com",
 });
 
+const textBlock = (text: string) => ({ type: "text" as const, text });
 const imageBlock = (data: string, mimeType: string) => ({ type: "image" as const, data, mimeType });
 const wireImage = (data: string, media_type: string) => ({
   type: "image",
   source: { type: "base64", media_type, data },
 });
+const toolImageContent = <T>(image: T) => [
+  textBlock("before tool image"),
+  image,
+  textBlock("after tool image"),
+];
 
 function toolExchange(content: ToolResultMessage["content"]): Context["messages"] {
   const id = "call-1";
@@ -80,17 +86,36 @@ it("keeps complete canonical user and tool-result images through the installed h
     {
       messages: [
         makeAgentUserMessage({
-          content: [imageBlock(` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `, "image/png")],
+          content: [
+            textBlock("user image"),
+            imageBlock(` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `, "image/png"),
+          ],
         }),
-        ...toolExchange([imageBlock(pngData.replace(/=+$/, ""), "image/jpeg")]),
+        ...toolExchange(toolImageContent(imageBlock(pngData.replace(/=+$/, ""), "image/jpeg"))),
       ],
     },
     { ...anthropicModel, input: ["text", "image"] },
   );
   expect(network).not.toHaveBeenCalled();
-  const serialized = JSON.stringify(payload);
-  expect(serialized).toContain(JSON.stringify(wireImage(jpegData, "image/jpeg")));
-  expect(serialized).toContain(JSON.stringify(wireImage(pngData, "image/png")));
+  expect(payload).toMatchObject({
+    messages: [
+      {
+        role: "user",
+        content: [textBlock("user image"), wireImage(jpegData, "image/jpeg")],
+      },
+      { role: "assistant", content: [{ type: "tool_use", id: "call-1" }] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: toolImageContent(wireImage(pngData, "image/png")),
+          },
+        ],
+      },
+    ],
+  });
 });
 
 it.each([false, true])("redacts nested codes only when registered (%s)", (registered) => {
