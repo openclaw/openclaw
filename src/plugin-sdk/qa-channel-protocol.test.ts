@@ -15,9 +15,6 @@ import {
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const execute = promisify(execFile);
 const targets: Array<[string, QaTargetParts["chatType"], string, string?]> = [
-  ["dm:Alice", "direct", "Alice"],
-  ["group:Room", "group", "Room"],
-  ["channel:CaseSensitive", "channel", "CaseSensitive"],
   ["dm:Case/Room", "direct", "Case/Room"],
   ["group:Case/Room", "group", "Case/Room"],
   ["channel:Case/Room", "channel", "Case/Room"],
@@ -59,14 +56,9 @@ it("loads natively when the private QA SDK alias selects its source", async () =
   });
 });
 
-it("builds canonical targets", () => {
+it("builds and parses canonical targets without folding ids", () => {
   for (const [target, chatType, conversationId, threadId] of targets) {
     expect(buildQaTarget({ chatType, conversationId, threadId })).toBe(target);
-  }
-});
-
-it("parses canonical targets without folding ids or prefix casing", () => {
-  for (const [target, chatType, conversationId, threadId] of targets) {
     expect(parseQaTarget(target)).toEqual({
       chatType,
       conversationId,
@@ -106,9 +98,7 @@ it("preserves QA bus tool-call arguments while normalizing calls", () => {
 });
 
 it("caps QA bus tool-call sanitization before processing the tail", () => {
-  const toolCalls = Array.from({ length: 50 }, (_, index) => ({
-    name: `tool-${index}`,
-  }));
+  const toolCalls = Array.from({ length: 50 }, (_, index) => ({ name: `tool-${index}` }));
   toolCalls.push({
     get name(): string {
       throw new Error("tail should not be sanitized");

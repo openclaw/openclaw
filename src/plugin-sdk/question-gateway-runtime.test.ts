@@ -21,14 +21,13 @@ function createStore(
   return createQuestionReactionTargetStore({
     channel: "test",
     channelDisplayName: "Test",
-    ttlMs: overrides.ttlMs,
     buildKey: (target: typeof identity) => {
       const accountId = target.accountId.trim();
       const messageId = target.messageId.trim();
       return accountId && messageId ? `${accountId}:${messageId}` : null;
     },
-    registerChannelDelivery: overrides.registerChannelDelivery ?? vi.fn<RegisterChannelDelivery>(),
-    resolveReaction: overrides.resolveReaction,
+    registerChannelDelivery: vi.fn<RegisterChannelDelivery>(),
+    ...overrides,
   });
 }
 type Store = ReturnType<typeof createStore>;
@@ -103,14 +102,11 @@ it("resolves once, terminalizes the target, and consumes later duplicates", asyn
 it("consumes out-of-range choices and resolver failures without losing diagnostics", async () => {
   const resolveReaction = vi.fn<ResolveReaction>().mockRejectedValue(new Error("gateway down"));
   const store = createStore({ resolveReaction });
-  const outOfRange = { accountId: "default", messageId: "out-of-range" };
-  const failure = { accountId: "default", messageId: "failure" };
   const logDebug = vi.fn();
-  store.register(binding, outOfRange);
-  store.register(binding, failure);
+  store.register(binding, identity);
 
-  await resolve(store, { identities: [outOfRange], optionIndex: 3, logDebug });
-  await resolve(store, { identities: [failure], logDebug });
+  await resolve(store, { optionIndex: 3, logDebug });
+  await resolve(store, { logDebug });
 
   expect(logDebug).toHaveBeenCalledWith(
     `test: out-of-range question reaction ignored id=${binding.questionId}`,

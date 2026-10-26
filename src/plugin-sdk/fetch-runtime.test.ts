@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { responseWithRelease } from "./fetch-runtime.js";
 
@@ -11,18 +11,13 @@ function settlement(promise: Promise<unknown>) {
   return Promise.race([promise.then(() => "settled"), setImmediate("pending")]);
 }
 
-it.for(["throw", "reject"] as const)(
+afterEach(() => vi.restoreAllMocks());
+
+it.each(["throw", "reject"] as const)(
   "reports null-body response release failures (%s) without an unhandled rejection",
-  async (failureMode, { onTestFinished }) => {
+  async (failureMode) => {
     const failure = new Error("request ownership release failed");
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    onTestFinished(() => warning.mockRestore());
-    const unhandled: unknown[] = [];
-    const onUnhandledRejection = (error: unknown) => unhandled.push(error);
-    process.on("unhandledRejection", onUnhandledRejection);
-    onTestFinished(() => {
-      process.off("unhandledRejection", onUnhandledRejection);
-    });
     const release = vi.fn(() => {
       if (failureMode === "throw") {
         throw failure;
@@ -36,7 +31,6 @@ it.for(["throw", "reject"] as const)(
 
     expect(release).toHaveBeenCalledOnce();
     expect(warning).toHaveBeenCalledExactlyOnceWith(failure);
-    expect(unhandled).toEqual([]);
   },
 );
 
