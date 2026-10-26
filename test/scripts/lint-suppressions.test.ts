@@ -277,6 +277,8 @@ describe("production lint suppressions", () => {
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
+        // Preserve the measured indexed fanout loop while reusing envelope tuples.
+        "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",

@@ -16,6 +16,33 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("reuses interleaved audience keys without expanding scopes on cache hits", () => {
+  const cfg = rolePolicyConfig();
+  const revision = {};
+  const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
+  const key = (client: (typeof clients)[number]) =>
+    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
+  const initial = clients.map(key);
+  const scopes = clients[0]!.connect.scopes!;
+  const iterate = vi.spyOn(scopes, Symbol.iterator);
+  for (let i = 0; i < 3; i++) {
+    expect(clients.map(key)).toEqual(initial);
+  }
+  expect(iterate).not.toHaveBeenCalled();
+  iterate.mockRestore();
+
+  // Scope values, not the array identity, remain live authorization inputs.
+  scopes[0] = "operator.admin";
+  expect(key(clients[0]!)).not.toBe(initial[0]);
+  expect(key(clients[1]!)).toBe(initial[1]);
+  scopes[0] = "operator.read";
+  expect(key(clients[0]!)).toBe(initial[0]);
+  clients[0]!.connect.scopes = [];
+  const empty = key(clients[0]!);
+  clients[0]!.connect.scopes = undefined;
+  expect(key(clients[0]!)).not.toBe(empty);
+});
+
 it("refreshes retained sharing facts on profile changes and clears them when identity detaches", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@example.test");

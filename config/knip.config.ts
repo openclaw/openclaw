@@ -248,6 +248,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
+  "scripts/perf/session-actor-receipt-measure.ts!",
   "scripts/perf/session-actor-retention-measure.ts!",
   // The row-churn instrumenter injects this probe from its compiled source path.
   "scripts/perf/session-row-churn-probe.ts!",

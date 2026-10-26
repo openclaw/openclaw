@@ -10,8 +10,10 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import type { SessionsListResult } from "../../src/gateway/session-utils.types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
@@ -27,6 +29,8 @@ const { values } = parseArgs({
     reconciliation: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     golden: { type: "string" },
+    "sort-rows": { type: "string" },
+    "sort-workload": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -93,6 +97,25 @@ let clock = anchor;
 Date.now = () => clock;
 
 const cases: SessionsListParams[] = [];
+const profileId = "team-shape-profile-0";
+const viewer: GatewayClient | undefined = values["sort-workload"]
+  ? {
+      connect: {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "webchat" },
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      authenticatedUserProfile: {
+        profileId,
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: anchor,
+      },
+      preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
+    }
+  : undefined;
 for (const archived of [false, true, "all"] as const) {
   for (const agentId of ["main", undefined]) {
     for (const offset of [0, 50]) {
@@ -121,6 +144,18 @@ cases.push(
   { source: "sessions-page", rowMode: "compact", archived: "all", includePeople: true, limit: 50 },
   { source: "sessions-page", agentId: "reviewer", limit: 50 },
 );
+if (values["sort-workload"]) {
+  cases.push(
+    { source: "sidebar", rowMode: "sidebar", ownerFirst: true },
+    { source: "sidebar", rowMode: "sidebar", involvingMe: true },
+    { source: "sidebar", rowMode: "sidebar", activeMinutes: 7 * 24 * 60 },
+    { source: "sidebar", rowMode: "sidebar", sortBy: "activity" },
+    { source: "sidebar", rowMode: "sidebar", sortBy: "lastInteractionAt" },
+  );
+  for (const query of cases) {
+    query.limit = 200;
+  }
+}
 
 if (values.mode === "verify") {
   let seed = 224;
@@ -167,25 +202,34 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
   let prepared = 0;
   let roster = 0;
   let list = 0;
+  let sort = 0;
+  let comparator = 0;
   const visit = (
     node: HeapProfiler.SamplingHeapProfileNode,
     inPrepared = false,
     inRoster = false,
     inList = false,
+    inSort = false,
+    inComparator = false,
   ) => {
     const preparedFrame = inPrepared || node.callFrame.functionName === "withPreparedExactRows";
     const rosterFrame = inRoster || node.callFrame.functionName === "withAgentRosterFactsBatch";
     const listFrame = inList || node.callFrame.functionName === "listProjectedSessions";
+    const sortFrame = inSort || node.callFrame.functionName === "sortAndLimitSessionEntries";
+    const comparatorFrame =
+      inComparator || node.callFrame.functionName === "compareSessionEntryPairs";
     total += node.selfSize;
     prepared += preparedFrame ? node.selfSize : 0;
     roster += rosterFrame ? node.selfSize : 0;
     list += listFrame ? node.selfSize : 0;
+    sort += sortFrame ? node.selfSize : 0;
+    comparator += comparatorFrame ? node.selfSize : 0;
     for (const child of node.children) {
-      visit(child, preparedFrame, rosterFrame, listFrame);
+      visit(child, preparedFrame, rosterFrame, listFrame, sortFrame, comparatorFrame);
     }
   };
   visit(profile.head);
-  return { total, prepared, roster, list };
+  return { total, prepared, roster, list, sort, comparator };
 }
 
 function sampledCpu(profile: Profiler.Profile) {
@@ -205,6 +249,12 @@ try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
   const rows = projection.selectEntries({ agentId: "main" });
+  if (values["sort-rows"]) {
+    writeFileSync(
+      path.resolve(values["sort-rows"]),
+      JSON.stringify(rows.filter((row) => row.entry).map((row) => [row.key, row.entry])),
+    );
+  }
   const children = rows.filter((row) => row.key.startsWith("agent:main:subagent:")).slice(0, 8);
   const parent = rows.find((row) => row.key.startsWith("agent:main:dashboard:") && row.entry);
   assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
@@ -276,6 +326,7 @@ try {
     lists.listProjectedSessions({
       projection: projection!,
       opts: cases[index % cases.length]!,
+      client: viewer,
       acceptsSerializedJson: true,
     });
   const capture = async () => {
@@ -374,6 +425,7 @@ try {
     mode: values.mode,
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
+    sortWorkload: values["sort-workload"],
     sessions,
     iterations,
     warmup,
@@ -392,7 +444,7 @@ try {
     cases,
     host: { node: process.version, load: loadavg() },
     scope:
-      "Owner-level unfiltered lists with registry churn; no transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and are estimates.",
+      "Owner-level lists with registry churn; sort-workload uses an identified synthetic operator, limit 200, owner-first, involvement, and recency queries. No transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and exclude native backing stores.",
   };
   writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));

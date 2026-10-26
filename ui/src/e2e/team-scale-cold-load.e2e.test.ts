@@ -276,7 +276,7 @@ suite.define(() => {
         const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
         expect(warm).toMatchObject({
           databaseVersion: 8,
-          projectionVersion: 4,
+          projectionVersion: 5,
           sidebarView: "online",
           sidebarPeople: 120,
         });

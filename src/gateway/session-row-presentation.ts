@@ -344,7 +344,8 @@ export function prepareProjectedSessionPresentation(
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
   const viewerFacts: Partial<GatewaySessionRow> = {};
-  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => {
+  const viewer = (value: SessionSharingTarget, rowMode: PresentationOptions["rowMode"]) => {
+    const sharingRole = sharing.roleForTarget(value);
     viewerFacts.visibility = resolveSessionVisibility(value.entry);
     viewerFacts.hiddenFromInvolvingMe =
       profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
@@ -354,15 +355,18 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
-      authorizeSessionAgentRun(
-        { cfg: policyConfig, client: client ?? null, target: value },
-        { policy: sharing.policy },
-      )?.message ??
-      sharing.authorizeTarget(value, sharingRole)?.message ??
-      (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
-        ? "send blocked by session policy"
-        : null);
+      rowMode === "sidebar" || rowMode === "dashboard"
+        ? undefined
+        : (authorizeSessionAgentRun(
+            { cfg: policyConfig, client: client ?? null, target: value },
+            { policy: sharing.policy },
+          )?.message ??
+          sharing.authorizeTarget(value, sharingRole)?.message ??
+          (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
+            ? "send blocked by session policy"
+            : null));
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -500,7 +504,7 @@ export function prepareProjectedSessionPresentation(
     }
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
-    const recipientView = client === undefined ? undefined : viewer(value);
+    const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
     const canEnsure =
       client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
