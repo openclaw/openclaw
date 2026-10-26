@@ -38,6 +38,7 @@ import {
 } from "./chat-pane-sidebar-layout.ts";
 import {
   chatSubmitState,
+  createChatPaneReplyProps,
   createChatPaneSendActions,
   createChatPaneRunRecoveryActions,
   dismissChatError,
@@ -221,10 +222,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
     });
-    const setReply = (target: ChatProps["replyTarget"]) => {
-      state.chatReplyTarget = target;
-      state.handleChatDraftChange(state.chatMessage);
-    };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
     const composerControls = catalogKey
       ? undefined
@@ -629,9 +626,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.connectionGeneration === selectionConnectionGeneration &&
         resolveChatAgentId(state) === currentAgentId &&
         this.stageSessionCompanionAttachment(attachment, sessionKey),
-      replyTarget: state.chatReplyTarget ?? null,
-      onClearReply: () => setReply(null),
-      onSetReply: sessionDisabledBanner ? undefined : setReply,
+      ...createChatPaneReplyProps(state, Boolean(sessionDisabledBanner)),
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,

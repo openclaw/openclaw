@@ -87,6 +87,21 @@ export function createChatPaneSendActions(
   };
 }
 
+export function createChatPaneReplyProps(
+  state: Pick<ChatPageHost, "chatReplyTarget" | "chatMessage" | "handleChatDraftChange">,
+  replyDisabled: boolean,
+): Pick<ChatProps, "replyTarget" | "onClearReply" | "onSetReply"> {
+  const setReply = (target: ChatProps["replyTarget"]) => {
+    state.chatReplyTarget = target;
+    state.handleChatDraftChange(state.chatMessage);
+  };
+  return {
+    replyTarget: state.chatReplyTarget ?? null,
+    onClearReply: () => setReply(null),
+    onSetReply: replyDisabled ? undefined : setReply,
+  };
+}
+
 export function applySelectedSessionProjection(
   state: {
     chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
