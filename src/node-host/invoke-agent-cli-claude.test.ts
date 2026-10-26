@@ -137,9 +137,10 @@ async function nativeCliFixture(source: string) {
 
 function runCommand(
   executable: string,
-  request: Parameters<typeof runClaudeCliNodeCommand>[0]["request"],
+  input: Partial<Parameters<typeof runClaudeCliNodeCommand>[0]["request"]> = {},
   overrides: Partial<Parameters<typeof runClaudeCliNodeCommand>[0]> = {},
 ) {
+  const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000, ...input };
   return runClaudeCliNodeCommand({
     client: client([]),
     frame: frame(request),
@@ -237,31 +238,7 @@ describe("Claude CLI node command", () => {
   it("accepts bounded Claude resume/fork args and a separate system prompt", async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-cwd-"));
     tempDirs.push(cwd);
-    await expect(
-      decode({
-        argv: [
-          "-p",
-          "--output-format=stream-json",
-          "--permission-mode=plan",
-          "--resume",
-          "session-1",
-          "--fork-session",
-        ],
-        stdin: "hello",
-        systemPrompt: "private prompt",
-        cwd,
-        env: {
-          NO_COLOR: "1",
-          CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
-          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-        },
-        clearEnv: [
-          "ANTHROPIC_API_KEY",
-          "CLAUDE_CODE_DISABLE_1M_CONTEXT",
-          "CLAUDE_CODE_OAUTH_TOKEN",
-        ],
-      }),
-    ).resolves.toMatchObject({
+    const expected = {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
@@ -271,43 +248,41 @@ describe("Claude CLI node command", () => {
         CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
       },
       clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_DISABLE_1M_CONTEXT", "CLAUDE_CODE_OAUTH_TOKEN"],
-    });
+    };
+    await expect(
+      decode({
+        ...expected,
+        argv: [
+          "-p",
+          "--output-format=stream-json",
+          "--permission-mode=plan",
+          "--resume",
+          "session-1",
+          "--fork-session",
+        ],
+      }),
+    ).resolves.toMatchObject(expected);
   });
 
   it("rejects missing cwd and non-allowlisted environment", async () => {
-    await expect(
-      decode({
-        argv: ["-p"],
-        cwd: "/definitely/missing/openclaw-node-cwd",
-      }),
-    ).rejects.toThrow("cwd must be an existing directory");
-    await expect(
-      decode({
-        argv: ["-p"],
-        env: { [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")]: "" },
-      }),
-    ).rejects.toThrow("environment key is not allowed");
-    await expect(
-      decode({
-        argv: ["-p"],
-        clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
-      }),
-    ).rejects.toThrow("clearEnv key is not allowed");
-    await expect(
-      decode({
-        argv: ["-p"],
-        env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
-      }),
-    ).rejects.toThrow("environment key is not allowed");
-    await expect(
-      decode({
-        argv: ["-p"],
-        env: {
-          ANTHROPIC_API_KEY: "selected-api-key",
-          CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+    const forbiddenKey = ["OPENCLAW", "GATEWAY", "TOKEN"].join("_");
+    for (const [params, error] of [
+      [{ cwd: "/definitely/missing/openclaw-node-cwd" }, "cwd must be an existing directory"],
+      [{ env: { [forbiddenKey]: "" } }, "environment key is not allowed"],
+      [{ clearEnv: [forbiddenKey] }, "clearEnv key is not allowed"],
+      [{ env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" } }, "environment key is not allowed"],
+      [
+        {
+          env: {
+            ANTHROPIC_API_KEY: "selected-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+          },
         },
-      }),
-    ).rejects.toThrow("exactly one Claude credential");
+        "exactly one Claude credential",
+      ],
+    ] as const) {
+      await expect(decode({ argv: ["-p"], ...params })).rejects.toThrow(error);
+    }
   });
 
   it("requires binary availability before consulting exec approval policy", async () => {
@@ -461,7 +436,8 @@ process.stdout.write(JSON.stringify({
       expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
         params: { ok: true },
       });
-      expect(JSON.parse(progressText(calls))).toMatchObject({
+      expect(JSON.parse(progressText(calls))).toEqual({
+        type: "result",
         ...(nativeAuthOnly
           ? {}
           : {
@@ -472,11 +448,6 @@ process.stdout.write(JSON.stringify({
         scrub: "1",
         contextWindow: "100000",
       });
-      if (nativeAuthOnly) {
-        expect(JSON.parse(progressText(calls))).not.toHaveProperty("apiKey");
-        expect(JSON.parse(progressText(calls))).not.toHaveProperty("oauth");
-        expect(JSON.parse(progressText(calls))).not.toHaveProperty("otherProvider");
-      }
     },
   );
 
@@ -493,15 +464,12 @@ process.stdin.on("end", () => {
   process.stdout.write(JSON.stringify({ type: "result", session_id: "node-session", result: input }) + "\\n");
   process.stderr.write("node stderr\\nprompt=" + promptPath + "\\ncontent=" + systemPrompt);
 });`);
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const request = {
-      argv: ["-p"],
-      stdin: "hello from gateway",
-      systemPrompt: "node system prompt",
-      idleTimeoutMs: 1_000,
-      timeoutMs: 5_000,
-    };
-    const result = await runCommand(executable, request, { client: client(calls) });
+    const calls: Calls = [];
+    const result = await runCommand(
+      executable,
+      { stdin: "hello from gateway", systemPrompt: "node system prompt" },
+      { client: client(calls) },
+    );
     expectSuccessfulRun(result);
     const progress = progressText(calls);
     expect(progress).toContain('"session_id":"node-session"');
@@ -559,12 +527,7 @@ process.stdin.on("end", () => {
           withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, () =>
             runCommand(
               executable,
-              {
-                argv: ["-p"],
-                systemPrompt: "descendant-owned prompt",
-                idleTimeoutMs: 5_000,
-                timeoutMs: 5_000,
-              },
+              { systemPrompt: "descendant-owned prompt", idleTimeoutMs: 5_000 },
               { signal },
             ),
           ),
@@ -627,12 +590,7 @@ process.stdin.on("end", () => {
       await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
         const run = runCommand(
           executable,
-          {
-            argv: ["-p"],
-            systemPrompt: "synthetic prompt",
-            idleTimeoutMs: 5_000,
-            timeoutMs: 5_000,
-          },
+          { systemPrompt: "synthetic prompt", idleTimeoutMs: 5_000 },
           { client: gatedClient, signal },
         );
         const settled = vi.fn();
@@ -683,12 +641,6 @@ child.unref();
 process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n");`);
         await withEnvAsync({ OPENCLAW_SERVICE_MARKER: "openclaw" }, async () => {
           const calls: Calls = [];
-          const request = {
-            argv: ["-p"],
-            systemPrompt: "descendant-owned prompt",
-            idleTimeoutMs: 2_000,
-            timeoutMs: 5_000,
-          };
           const removed = createDeferred();
           let promptDir: string | undefined;
           const remove = fs.rm.bind(fs);
@@ -712,7 +664,11 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           try {
             const result = await withinTest(
-              runCommand(executable, request, { client: client(calls), signal }),
+              runCommand(
+                executable,
+                { systemPrompt: "descendant-owned prompt", idleTimeoutMs: 2_000 },
+                { client: client(calls), signal },
+              ),
               signal,
             );
             vi.useRealTimers();
@@ -763,8 +719,7 @@ process.stdout.write(Buffer.concat([
 ]), writeChunk);`,
     );
     const calls: Calls = [];
-    const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
-    const result = await runCommand(executable, request, { client: client(calls) });
+    const result = await runCommand(executable, {}, { client: client(calls) });
     const progressBytes = calls
       .filter((call) => call.method === "node.invoke.progress")
       .reduce((sum, call) => sum + Buffer.byteLength((call.params as { chunk: string }).chunk), 0);
@@ -801,7 +756,7 @@ process.stdout.write(Buffer.concat([
     const executable = await executableScript("setInterval(() => {}, 1000);");
     const spawned = vi.spyOn(getProcessSupervisor(), "spawn");
     try {
-      const result = await runCommand(executable, { argv: ["-p"], ...request });
+      const result = await runCommand(executable, request);
       expect(spawned).toHaveBeenCalledOnce();
       const recorded = spawned.mock.results[0];
       if (recorded?.type !== "return") {
@@ -866,7 +821,7 @@ process.stdout.write(Buffer.concat([
       `process.stdout.write("ready"); setInterval(() => {}, 1000);`,
     );
     const controller = new AbortController();
-    const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
+    const request = { idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     const calls: Calls = [];
     const { promise: progressObserved, resolve: resolveProgress } = createDeferred();
     const run = runCommand(executable, request, {
@@ -894,8 +849,7 @@ process.stdout.write(Buffer.concat([
     );
     const controller = new AbortController();
     controller.abort();
-    const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
-
+    const request = { idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     await expect(
       runCommand(executable, request, { signal: controller.signal }),
     ).resolves.toMatchObject({ exitCode: 130, success: false });
