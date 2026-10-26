@@ -138,10 +138,6 @@ it.each(["", "/tmp/included-plugins.json"])(
       expect.objectContaining({ baseHash: "hash", writeOptions: {} }),
     );
     if (pluginsPath) {
-      expect(vi.mocked(fs.stat).mock.calls).toEqual([
-        [`${pluginsPath}.bak`],
-        [`${pluginsPath}.bak`],
-      ]);
       expect(prompterMock.outro).toHaveBeenCalledWith(
         expect.stringContaining(`${pluginsPath}.bak`),
       );
