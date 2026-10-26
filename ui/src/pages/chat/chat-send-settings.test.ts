@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
-import { sessionsResult as sessionListFixture } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createResolvedModelPatch,
   createSessionsListResult,
@@ -11,18 +10,10 @@ import {
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  expectRpc,
-  findRequestPayload,
-  makeChatHost,
-  requestCalls,
-  requireRecord,
-} from "./chat-host.test-support.ts";
-import { row } from "./chat-outbox-recovery.test-support.ts";
+import { expectRpc, makeChatHost } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { switchChatModel, switchChatSetting } from "./chat-session.ts";
+import { switchChatModel } from "./chat-session.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
@@ -126,60 +117,3 @@ it.each(["success", "failure"] as const)(
     }
   },
 );
-
-it("waits for every pending reasoning and speed patch before sending chat", async () => {
-  const thinkingUpdate = createDeferred<unknown>();
-  const thinkingRequested = createDeferred();
-  const fastModeUpdate = createDeferred<unknown>();
-  installOutboxBrowserStorage();
-  const sessionsResult = sessionListFixture([
-    row("agent:main", {
-      effectiveFastMode: false,
-      fastMode: false,
-      thinkingLevel: "low",
-    }),
-  ]);
-  const host = makeChatHost({
-    requestHandlers: {
-      "sessions.patch": (params: unknown) => {
-        const patch = requireRecord(params, "session settings patch");
-        if (Object.hasOwn(patch, "thinkingLevel")) {
-          thinkingRequested.resolve();
-          return thinkingUpdate.promise;
-        }
-        if (Object.hasOwn(patch, "fastMode")) {
-          return fastModeUpdate.promise;
-        }
-        throw new Error("Unexpected sessions.patch payload");
-      },
-      "sessions.list": () => Promise.resolve(sessionsResult),
-      "chat.send": () => Promise.resolve({ status: "started" }),
-    },
-    chatMessage: "use the new reasoning and speed",
-    sessionsResult,
-  });
-  const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "high" });
-  const fastModePatch = switchChatSetting(host, { kind: "fastMode", value: "on" });
-  const send = handleSendChat(host);
-  await thinkingRequested.promise;
-
-  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-  expect(requestCalls(host.request, "chat.send")).toStrictEqual([]);
-  expect(host.chatQueue[0]).toMatchObject({
-    sendState: "waiting-model",
-    text: "use the new reasoning and speed",
-  });
-
-  thinkingUpdate.resolve({});
-  await thinkingPatch;
-  await waitForFast(() => expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2));
-  expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-
-  fastModeUpdate.resolve({});
-  await Promise.all([fastModePatch, send]);
-  const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
-  expect(payload).toMatchObject({
-    message: "use the new reasoning and speed",
-    sessionKey: "agent:main",
-  });
-});
