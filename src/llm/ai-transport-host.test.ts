@@ -120,31 +120,24 @@ it("keeps complete canonical user and tool-result images through the installed h
   }
 });
 
-it.each(
-  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
-    [false, true].map((registered) => ({ code, registered })),
-  ),
-)("redacts nested $code only when registered ($registered)", ({ code, registered }) => {
+it.each([false, true])("redacts nested codes only when registered (%s)", (registered) => {
   if (registered) {
-    registerSecretValueForRedaction(code);
+    registerSecretValueForRedaction("EAI_AGAIN");
   }
-  const cause = new TypeError("fetch failed", {
-    cause: Object.assign(new Error("fixture transport failure"), {
-      code,
-      authorization: "Bearer fixture-sensitive-authorization",
-    }),
+  const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
+    code: "EAI_AGAIN",
+    authorization: "Bearer fixture-sensitive-authorization",
   });
   const projected = projectProviderError(new Error("Connection error.", { cause }));
   expect(projected).toEqual(
     registered
-      ? expect.not.objectContaining({ errorCode: code })
+      ? expect.not.objectContaining({ errorCode: "EAI_AGAIN" })
       : {
           stopReason: "error",
           errorMessage: "Connection error.",
-          errorCode: code,
+          errorCode: "EAI_AGAIN",
         },
   );
-  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
 });
 
 it("redacts registered opaque secrets from ordinary provider error messages", () => {
@@ -223,4 +216,31 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
       expect(serialized).toContain(text);
     }
   }
+});
+
+it.each(
+  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
+    [false, true].map((registered) => ({ code, registered })),
+  ),
+)("redacts nested fetch $code only when registered ($registered)", ({ code, registered }) => {
+  if (registered) {
+    registerSecretValueForRedaction(code);
+  }
+  const cause = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("fixture transport failure"), {
+      code,
+      authorization: "Bearer fixture-sensitive-authorization",
+    }),
+  });
+  const projected = projectProviderError(new Error("Connection error.", { cause }));
+  expect(projected).toEqual(
+    registered
+      ? expect.not.objectContaining({ errorCode: code })
+      : {
+          stopReason: "error",
+          errorMessage: "Connection error.",
+          errorCode: code,
+        },
+  );
+  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
 });
