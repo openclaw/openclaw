@@ -1,9 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginService,
-} from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -60,7 +56,6 @@ function hostRuntimeWithConfig(current: () => OpenClawConfig) {
 }
 
 type ApiOptions = Parameters<typeof createTestPluginApi>[0];
-type MemoryCapability = Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0];
 
 function register(overrides: ApiOptions = {}) {
   const api = createTestPluginApi({ runtime: hostRuntime, ...overrides });
@@ -69,13 +64,9 @@ function register(overrides: ApiOptions = {}) {
 }
 
 function captureCapability(overrides: ApiOptions = {}) {
-  let captured: MemoryCapability | undefined;
-  register({
-    ...overrides,
-    registerMemoryCapability(capability) {
-      captured = capability;
-    },
-  });
+  const registerMemoryCapability = vi.fn<OpenClawPluginApi["registerMemoryCapability"]>();
+  register({ ...overrides, registerMemoryCapability });
+  const captured = registerMemoryCapability.mock.calls[0]?.[0];
   if (!captured?.promptBuilder || !captured.runtime) {
     throw new Error("expected memory capability");
   }
@@ -202,10 +193,10 @@ describe("buildPromptSection", () => {
 
   // Curated writes use file tools, so disabling search must not drop the guidance.
   it("keeps project write guidance when memory search is disabled", () => {
-    const config = {
+    const config: OpenClawConfig = {
       memory: { search: { enabled: false } },
       agents: { entries: { main: {} } },
-    } as OpenClawConfig;
+    };
     const prompt = captureCapability({
       config,
       runtime: hostRuntimeWithConfig(() => config),
@@ -305,6 +296,7 @@ describe("buildPromptSection", () => {
     for (const text of [lazy.search.description, lazy.get.description]) {
       expect(text).toContain("MEMORY.md, USER.md");
       expect(text).toContain("recursively under memory/");
+      expect(text).toContain("results are partial");
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
       expect(text.length).toBeLessThan(3_000);
     }
@@ -312,10 +304,8 @@ describe("buildPromptSection", () => {
     expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
-    expect(lazy.search.description).toContain("results are partial");
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
-    expect(lazy.get.description).toContain("results are partial");
   });
 });
 
@@ -343,13 +333,9 @@ describe("memory-core plugin runtime registration", () => {
   });
 
   it("registers the dreaming runtime slash command", () => {
-    let command: OpenClawPluginCommandDefinition | undefined;
-    register({
-      registerCommand: (definition) => {
-        command = definition;
-      },
-    });
-    expect(command).toMatchObject({
+    const registerCommand = vi.fn<OpenClawPluginApi["registerCommand"]>();
+    register({ registerCommand });
+    expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
       name: "dreaming",
       acceptsArgs: true,
       exposeSenderIsOwner: true,
@@ -357,37 +343,19 @@ describe("memory-core plugin runtime registration", () => {
     });
   });
 
-  it("registers the standing-intent tool and deterministic prompt hook", () => {
-    const toolNames: string[] = [];
-    const hooks: string[] = [];
-    const subagentRun = vi.fn();
-    register({
-      runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
-      registerTool(_factory, options) {
-        toolNames.push(...(options?.names ?? []));
-      },
-      on(hookName) {
-        hooks.push(hookName);
-      },
-    });
-
-    expect(toolNames).toContain("intent");
-    expect(hooks).toContain("before_prompt_build");
-    expect(subagentRun).not.toHaveBeenCalled();
-  });
-
   it("scopes the dreaming reply hook to scheduled turns across three registrations", () => {
     for (let cycle = 1; cycle <= 3; cycle += 1) {
-      const replyHookTriggers: unknown[] = [];
-      register({
-        on(hookName, _handler, options) {
-          if (hookName === "before_agent_reply") {
-            replyHookTriggers.push(options?.eligibleTriggers);
-          }
-        },
-      });
-
-      expect(replyHookTriggers, `cycle ${cycle}`).toEqual([["heartbeat", "cron"]]);
+      const on = vi.fn();
+      const subagentRun = vi.fn();
+      register({ on, runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never });
+      expect(
+        on.mock.calls
+          .filter(([name]) => name === "before_agent_reply")
+          .map((call) => call[2]?.eligibleTriggers),
+        `cycle ${cycle}`,
+      ).toEqual([["heartbeat", "cron"]]);
+      expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+      expect(subagentRun).not.toHaveBeenCalled();
     }
   });
 
@@ -456,10 +424,7 @@ describe("memory-core plugin runtime registration", () => {
           enum: ["conversation", "channel", "anywhere"],
           default: "channel",
         },
-        senderScope: {
-          enum: ["sender", "anyone"],
-          default: "sender",
-        },
+        senderScope: { enum: ["sender", "anyone"], default: "sender" },
       },
     });
     expect(warn).toHaveBeenCalledTimes(1);

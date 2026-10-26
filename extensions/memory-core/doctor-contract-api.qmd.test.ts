@@ -25,10 +25,7 @@ const lockPayload = (pid: number) =>
   `${JSON.stringify({ pid, createdAt: new Date().toISOString() })}\n`;
 async function expectNoop(subject: ReturnType<typeof migration>) {
   await expect(subject.detect()).resolves.toBeNull();
-  await expect(subject.run()).resolves.toEqual({
-    changes: [],
-    warnings: [],
-  });
+  await expect(subject.run()).resolves.toEqual({ changes: [], warnings: [] });
 }
 const lockPreview = (paths: string[]) => ({
   preview: paths.map(
@@ -49,19 +46,12 @@ it("preserves nonempty QMD homes and does not schedule them for migration", asyn
     path.join(externalModels, "model.bin"),
     path.join(symlinkHomeTarget, "index.sqlite"),
   ];
-  const derivedPaths = [
+  const derivedFiles = [
     "xdg-cache/qmd/index.sqlite",
     "xdg-config/qmd/index.yml",
     "sessions/session.md",
-  ];
-  await writeFiles(
-    [
-      ...derivedPaths.map((relative) => path.join(qmdHome, relative)),
-      ...protectedFiles,
-      transcript,
-    ],
-    "derived",
-  );
+  ].map((relative) => path.join(qmdHome, relative));
+  await writeFiles([...derivedFiles, ...protectedFiles, transcript], "derived");
   const message = { role: "user", content: "Retained recall fact" };
   await fs.writeFile(transcript, JSON.stringify({ type: "message", message }), "utf8");
   await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
@@ -69,8 +59,8 @@ it("preserves nonempty QMD homes and does not schedule them for migration", asyn
   await fs.symlink(symlinkHomeTarget, symlinkHome);
 
   await expectNoop(workspace);
-  for (const relativePath of derivedPaths) {
-    await expect(read(path.join(qmdHome, relativePath))).resolves.toBe("derived");
+  for (const file of derivedFiles) {
+    await expect(read(file)).resolves.toBe("derived");
   }
   await expect(read(transcript)).resolves.toContain(message.content);
   expect((await buildSessionEntry(transcript))?.content).toBe("User: Retained recall fact");
