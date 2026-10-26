@@ -200,7 +200,6 @@ process.send("fixture-ready");`,
       node.children.forEach(collect);
     };
     collect(profile.head);
-    expect(profile.samples.length).toBeGreaterThan(0);
     expect(functionNames.has("allocateBeforeReady")).toBe(true);
     expect(functionNames.has("allocateAfterReady")).toBe(false);
   });

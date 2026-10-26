@@ -19,7 +19,7 @@ if (isMainThread && process.send) {
     ) {
       return;
     }
-    process.off("message", capture);
+    process.off("message", onMessage);
     try {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       writeFileSync(message.outputPath, JSON.stringify(profile));
@@ -34,11 +34,14 @@ if (isMainThread && process.send) {
       inspector.disconnect();
     }
   };
+  const onMessage = (message) => {
+    void capture(message);
+  };
   const disconnected = () => {
-    process.off("message", capture);
+    process.off("message", onMessage);
     inspector.disconnect();
   };
-  process.on("message", capture);
+  process.on("message", onMessage);
   process.once("disconnect", disconnected);
   process.channel?.unref();
 }
