@@ -197,6 +197,7 @@ describe("effort bar colour and flow", () => {
       speedState("ultrafast", ["priority", "ultrafast"], true, true),
     );
     expect(summary().textContent?.trim()).toBe("High");
+    expect(host!.querySelector(".chat-controls__effort-zap")!.checkVisibility()).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
     expect(summary().title).toBe("High · Ultrafast");
     expect(
