@@ -57,8 +57,7 @@ beforeEach(() => {
 afterEach(() => externalAuthTesting.resetResolveExternalAuthProfilesForTest());
 
 function channelTurn() {
-  const followupRun = createFollowupRun();
-  Object.assign(followupRun.run, {
+  const followupRun = createFollowupRun({
     sessionKey,
     provider,
     model,

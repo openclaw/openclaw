@@ -15,10 +15,17 @@ function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecove
     sourceReplyDeliveryMode: "message_tool_only",
     sendPolicyDenied: false,
     successfulSourceReplyDelivery: false,
-
     isRoomEvent: false,
     ...overrides,
   });
+}
+
+function retry(base: Parameters<typeof resolveStrandedReplyRecovery>[0]["base"]) {
+  const recovery = recover({ base });
+  if (recovery.kind !== "retry") {
+    throw new Error(`expected retry recovery, received ${recovery.kind}`);
+  }
+  return recovery.run;
 }
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
@@ -38,14 +45,9 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       replyOperationRunStates: receipts,
     });
 
-    const recovery = recover({ base: parent });
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind !== "retry") {
-      throw new Error("expected retry recovery");
-    }
-    const retry = recovery.run;
+    const run = retry(parent);
 
-    expect(retry).toMatchObject({
+    expect(run).toMatchObject({
       turnAdoptionLifecycle: undefined,
       replyOperationRunStates: undefined,
       strandedReplyRetry: true,
@@ -56,9 +58,9 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     expect(parent.replyOperationRunStates).toBe(receipts);
 
     // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).
-    expect(markFollowupRunEnqueued(retry)).toBe(true);
+    expect(markFollowupRunEnqueued(run)).toBe(true);
     expect(onEnqueued).not.toHaveBeenCalled();
-    completeFollowupRunLifecycle(retry);
+    completeFollowupRunLifecycle(run);
     expect(onComplete).not.toHaveBeenCalled();
 
     // Parent still owns the one-shot lifecycle; retry completion must not steal it.
@@ -83,11 +85,7 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       invoke: vi.fn(),
     };
 
-    const recovery = recover({ base: parent });
-    if (recovery.kind !== "retry") {
-      throw new Error("expected retry recovery");
-    }
-    const authoring = recovery.run.run.skillLibraryAuthoring;
+    const authoring = retry(parent).run.skillLibraryAuthoring;
     expect(authoring?.defaultTarget).toBe("personal");
     expect(() => authoring?.bind({} as never)).not.toThrow();
     await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
@@ -128,18 +126,13 @@ describe("resolveStrandedReplyRecovery", () => {
   ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
     const base = createMockFollowupRun({ prompt: "question", toolsAllow });
 
-    const recovery = recover({ base });
-
-    expect(recovery.kind).toBe("retry");
-    if (recovery.kind === "retry") {
-      expect(recovery.run).toMatchObject({
-        strandedReplyRetry: true,
-        disableCollectBatching: true,
-        toolsAllow: expected,
-        run: { suppressNextUserMessagePersistence: true },
-        transcriptPrompt: undefined,
-      });
-    }
+    expect(retry(base)).toMatchObject({
+      strandedReplyRetry: true,
+      disableCollectBatching: true,
+      toolsAllow: expected,
+      run: { suppressNextUserMessagePersistence: true },
+      transcriptPrompt: undefined,
+    });
   });
 
   it("returns a diagnostic rather than a second retry", () => {
@@ -163,7 +156,6 @@ describe("resolveStrandedReplyRecovery", () => {
 
   it.each([
     { label: "room events", isRoomEvent: true },
-
     { label: "send-policy denial", sendPolicyDenied: true },
     { label: "completed delivery", successfulSourceReplyDelivery: true },
   ])("does not recover $label", (override) => {
