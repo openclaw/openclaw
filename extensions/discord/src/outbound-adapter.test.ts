@@ -284,7 +284,10 @@ it("forwards the caller cancellation signal to voice sends", async () => {
     signal: controller.signal,
   });
 
-  expect(mockCall(sendVoice, 0).slice(0, 2)).toEqual(["channel:123456", "https://example.com/voice.ogg"]);
+  expect(mockCall(sendVoice, 0).slice(0, 2)).toEqual([
+    "channel:123456",
+    "https://example.com/voice.ogg",
+  ]);
   expect(mockObjectArg(sendVoice, 0, 2).signal).toBe(controller.signal);
 });
 

@@ -84,10 +84,11 @@ describe("Discord webhook transport", () => {
     fetchMock.mockImplementation(
       (_url, init) =>
         new Promise<Response>((resolve, reject) => {
-          requestSignal = init?.signal;
-          init?.signal?.addEventListener(
+          const signal = init?.signal ?? undefined;
+          requestSignal = signal;
+          signal?.addEventListener(
             "abort",
-            () => reject((init.signal as AbortSignal).reason),
+            () => reject(signal.reason as Error),
             { once: true },
           );
           void resolve;
