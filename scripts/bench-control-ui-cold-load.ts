@@ -510,8 +510,24 @@ if (
 ) {
   throw new Error("Non-chat boot routes exclude chat interaction phases");
 }
+const {
+  latencyProfile,
+  downloadKbps: profileDownloadKbps,
+  latencyMs,
+  frameGapMs,
+  connectNotBeforeMs,
+  methodLatencyMs,
+  sidebarQueryLatencyMs,
+} = resolveColdLoadLatency({
+  profile: values["latency-profile"],
+  latencyMs: values["latency-ms"],
+  frameGapMs: values["frame-gap-ms"],
+  connectNotBeforeMs: values["connect-not-before-ms"],
+  methodLatencyMs: values["method-latency-ms"],
+  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
+});
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
-const downloadKbps = Number(values["download-kbps"] ?? 0);
+const downloadKbps = Number(values["download-kbps"] ?? profileDownloadKbps);
 const cpuThrottle = Number(values["cpu-throttle"] ?? 1);
 if (
   (gatewayUrl &&
@@ -539,21 +555,7 @@ if (
     "gateway-url requires an HTTP origin, bundle-dir and one first-load run without comparison; gateway-http requires bundle-dir without gateway-url; first-load requires sidebar-view=sessions without warm-reload; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
-const {
-  latencyProfile,
-  latencyMs,
-  frameGapMs,
-  connectNotBeforeMs,
-  methodLatencyMs,
-  sidebarQueryLatencyMs,
-} = resolveColdLoadLatency({
-  profile: values["latency-profile"],
-  latencyMs: values["latency-ms"],
-  frameGapMs: values["frame-gap-ms"],
-  connectNotBeforeMs: values["connect-not-before-ms"],
-  methodLatencyMs: values["method-latency-ms"],
-  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
-});
+
 const historyValidatorDelayMs = Number(values["history-validator-delay-ms"]);
 if (
   !Number.isFinite(historyValidatorDelayMs) ||
@@ -1254,7 +1256,7 @@ try {
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] || latencyProfile === "live-capped" ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -1735,7 +1737,11 @@ try {
     if (values["cold-http-cache"]) {
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
-    if (values["network-latency-ms"] !== undefined || values["download-kbps"] !== undefined) {
+    if (
+      values["network-latency-ms"] !== undefined ||
+      values["download-kbps"] !== undefined ||
+      profileDownloadKbps > 0
+    ) {
       await cdp.send("Network.emulateNetworkConditions", {
         offline: false,
         latency: networkLatencyMs,

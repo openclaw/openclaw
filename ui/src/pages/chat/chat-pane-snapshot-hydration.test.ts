@@ -126,6 +126,7 @@ describe("stored chat snapshot hydration", () => {
   }
 
   it("holds ready cached rows until connect dispatch and adopts them once", async () => {
+    vi.useFakeTimers();
     const connect = createDeferred<boolean>();
     const client = createGatewayBrowserClientFixture();
     Object.defineProperty(client, "connectSent", { get: () => connect.promise });
@@ -148,14 +149,20 @@ describe("stored chat snapshot hydration", () => {
       expect(state.chatMessages).toEqual([]);
       expect(hydration.adoptReadySnapshot).toBeTypeOf("function");
       connect.resolve(true);
-      // The subscription reads its cursor synchronously after this adoption.
-      hydration.adoptReadySnapshot?.();
+      const adopting = hydration.adoptReadySnapshot?.();
+      expect(hydration.adoptReadySnapshot?.()).toBe(adopting);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersToNextFrame();
+      expect(state.chatMessages).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await adopting;
       expect(state.chatMessages).toEqual(snapshot.messages);
       expect(hydration.adoptReadySnapshot).toBeUndefined();
       await hydration.promise;
       expect(state.chatMessages).toEqual(snapshot.messages);
     } finally {
       pane.disconnectedCallback();
+      vi.useRealTimers();
     }
   });
 
@@ -386,6 +393,7 @@ describe("stored chat snapshot hydration", () => {
   );
 
   it("merges stored history with an admitted prompt when hydration resolves late", async () => {
+    vi.useFakeTimers();
     const targetSessionKey = "agent:main:first-turn-retry";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
@@ -427,8 +435,9 @@ describe("stored chat snapshot hydration", () => {
         pagination: storedPagination,
         sessionId: "stored-session",
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersToNextFrame();
+      await vi.advanceTimersByTimeAsync(1);
       expect(deliverStoredSnapshot).toBeDefined();
       expect(attachedState?.chatMessages).toEqual([
         storedMessage,
@@ -455,6 +464,7 @@ describe("stored chat snapshot hydration", () => {
       });
     } finally {
       pane.disconnectedCallback();
+      vi.useRealTimers();
     }
   });
 });

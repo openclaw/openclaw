@@ -104,7 +104,7 @@ export type InitialChatSnapshotHydration = {
   sessionKey: string;
   connected: boolean;
   readReadyHistory?: () => Pick<ChatSessionSnapshot, "deltaCursor" | "historyState"> | undefined;
-  adoptReadySnapshot?: () => void;
+  adoptReadySnapshot?: () => Promise<void>;
   promise: Promise<void>;
 };
 

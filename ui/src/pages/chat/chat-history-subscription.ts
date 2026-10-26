@@ -286,7 +286,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         );
         if (ready) {
           // Admit the retained base before exposing its delta to the history consumer.
-          hydration?.adoptReadySnapshot?.();
+          await hydration?.adoptReadySnapshot?.();
         }
         if (params && observation && subscribed.initialHistory) {
           initialHistoryReceipt = {
