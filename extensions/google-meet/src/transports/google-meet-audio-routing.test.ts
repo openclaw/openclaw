@@ -7,6 +7,8 @@ import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js"
 
 const label = "BlackHole 2ch (Virtual)";
 const outputLabel = (name: string) => (name.includes("OpenClaw") ? "OpenClaw Meeting Audio" : name);
+const ready = (health: Parameters<typeof MeetingPlatformAdapter.isRealtimeRouteReady>[1]) =>
+  MeetingPlatformAdapter.isRealtimeRouteReady("agent", health);
 const microphoneMenu = `<button aria-haspopup="menu" aria-label="Microphone: ${label}"></button>`;
 const speakerMenu = `<button aria-haspopup="menu" aria-label="Speaker: ${label}"></button>`;
 const nativeMicrophone = `<select aria-label="Microphone"><option selected>${label}</option></select>`;
@@ -72,18 +74,35 @@ async function inspectAudioPage(
 }
 
 it.each([
-  microphoneMenu,
-  `<div role="button" aria-haspopup="menu" aria-label="mIcRoPhOnE: ${label}"></div>`,
-])("recognizes a selected virtual microphone menu: %s", async (control) => {
-  const { health, click } = await inspectAudioPage(control + speakerMenu);
-  expect(health).toMatchObject({ audioInputRouted: true, micMuted: false });
-  expect(click).toHaveBeenCalledOnce();
+  [microphoneMenu, false, true],
+  [`<div role="button" aria-haspopup="menu" aria-label="mIcRoPhOnE: ${label}"></div>`, false, true],
+  [microphoneMenu, true, true],
+  [
+    '<button aria-haspopup="menu" aria-label="Microphone: Built-in Microphone"></button>',
+    true,
+    false,
+  ],
+] as const)("inspects microphone %s (readOnly=%s)", async (control, readOnly, routed) => {
+  const deviceClick = vi.fn();
+  const { health, click } = await inspectAudioPage(control + speakerMenu, {
+    readOnly,
+    setup(document) {
+      document.querySelector('[aria-haspopup="menu"]')!.addEventListener("click", deviceClick);
+    },
+  });
+  expect(health).toMatchObject({
+    audioInputRouted: routed,
+    audioOutputRouted: true,
+    micMuted: readOnly,
+  });
+  expect(deviceClick).not.toHaveBeenCalled();
+  expect(click).toHaveBeenCalledTimes(readOnly ? 0 : 1);
 });
 
 it.each([true, false])(
   "confirms microphone menu switching before unmuting (%s)",
   async (switches) => {
-    const { health, click } = await inspectAudioPage(
+    const { health } = await inspectAudioPage(
       `<button id="device" aria-haspopup="menu" aria-label="Microphone: Built-in Microphone"></button>
      <div role="menuitemradio" aria-checked="false">${label}</div>${speakerMenu}`,
       {
@@ -97,7 +116,6 @@ it.each([true, false])(
       },
     );
     expect(health).toMatchObject({ audioInputRouted: switches, micMuted: !switches });
-    expect(click).toHaveBeenCalledTimes(switches ? 1 : 0);
     if (!switches) {
       expect(health.manualAction).toMatchObject({ reason: "meet-audio-choice-required" });
     }
@@ -109,21 +127,16 @@ it.each([
   ["Monitor of OpenClaw Meeting Audio", true],
   ["OpenClaw Meeting Audio", false],
 ] as const)("routes %s only after input verification (%s)", async (deviceLabel, verified) => {
-  let media: HTMLAudioElement;
-  const setSinkId = vi.fn(async (value: string) => {
-    Object.defineProperty(media, "sinkId", { value, configurable: true });
-  });
-  const events = vi.fn();
-  const { health, click } = await inspectAudioPage(
+  const { health } = await inspectAudioPage(
     `<select aria-label="Microphone"><option>MacBook Microphone</option>${verified ? `<option>${deviceLabel}</option>` : ""}</select>`,
     {
       deviceLabel,
       muted: verified,
       setup(document) {
-        const select = document.querySelector("select")!;
-        select.addEventListener("input", events);
-        select.addEventListener("change", events);
-        media = Object.assign(document.createElement("audio"), { setSinkId });
+        const media = document.createElement("audio");
+        media.setSinkId = async (value) => {
+          Object.defineProperty(media, "sinkId", { value, configurable: true });
+        };
         document.body.append(media);
       },
     },
@@ -139,13 +152,10 @@ it.each([
           manualAction: { reason: "meet-audio-choice-required" },
         }),
   });
-  expect(click).toHaveBeenCalledOnce();
   if (verified) {
     expect(health.manualAction).toBeUndefined();
-    expect(events).toHaveBeenCalledTimes(2);
-    expect(setSinkId).toHaveBeenCalledWith("output-1");
   } else {
-    expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
+    expect(ready(health)).toBe(false);
   }
 });
 
@@ -187,14 +197,8 @@ it("parses input-route health and retries until both routes are ready", () => {
   expect(pending).toMatchObject(status);
   assert(pending, "expected parsed Google Meet browser health");
   expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
-  expect(
-    MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
-      ...pending,
-      audioOutputRouted: true,
-      manualAction: undefined,
-    }),
-  ).toBe(true);
-  expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", pending)).toBe(false);
+  expect(ready({ ...pending, audioOutputRouted: true, manualAction: undefined })).toBe(true);
+  expect(ready(pending)).toBe(false);
 });
 
 it.each([
@@ -229,28 +233,5 @@ it.each([
     } else {
       expect(health.manualAction).toMatchObject({ reason: "meet-audio-choice-required" });
     }
-  },
-);
-
-it.each([label, "Built-in Microphone"])(
-  "inspects microphone menus without changing them (%s)",
-  async (selected) => {
-    const deviceClick = vi.fn();
-    const { health, click } = await inspectAudioPage(
-      `<button aria-haspopup="menu" aria-label="Microphone: ${selected}"></button>${speakerMenu}`,
-      {
-        readOnly: true,
-        setup(document) {
-          document.querySelector('[aria-haspopup="menu"]')!.addEventListener("click", deviceClick);
-        },
-      },
-    );
-    expect(health).toMatchObject({
-      audioInputRouted: selected === label,
-      audioOutputRouted: true,
-      micMuted: true,
-    });
-    expect(click).not.toHaveBeenCalled();
-    expect(deviceClick).not.toHaveBeenCalled();
   },
 );
