@@ -108,12 +108,14 @@ const { createPluginCache, withPluginCache } = (await importOwner(
 const { withPluginSourceCaptureStorage } = (await importOwner(
   "plugin-source-capture-context",
 )) as typeof import("../../src/plugins/plugin-source-capture-context.js");
-assert(
-  loadOpenClawPluginsAsync &&
-    createPluginCache &&
-    withPluginCache &&
-    withPluginSourceCaptureStorage,
-);
+for (const owner of [
+  loadOpenClawPluginsAsync,
+  createPluginCache,
+  withPluginCache,
+  withPluginSourceCaptureStorage,
+]) {
+  assert.equal(typeof owner, "function");
+}
 const inspector = new Session();
 const gcMs: number[] = [];
 const observer = new PerformanceObserver((list) => {

@@ -200,6 +200,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/pg-footprint-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The fault injector supplies the native pg.Client receiver through Reflect.apply.
         "scripts/perf/pg-pool-hang.worker.mjs|typescript/unbound-method|1",
+        // The require tracer forwards the original method with each requesting module as receiver.
+        "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // Node worker ports have no browser target origin.
