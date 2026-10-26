@@ -436,7 +436,9 @@ describe("requester continuation persisted automation management", () => {
             delivery: { mode: "none" },
           },
         }),
-      ).rejects.toThrow("This turn can only list, get, update, run, remove, or bind automations");
+      ).rejects.toThrow(
+        "This turn can only list, inspect, update, run, remove, or bind existing automations",
+      );
       expect(await fixture.read()).toEqual([]);
     });
   });

@@ -109,7 +109,7 @@ it("does not expose stream creation through a management grant", async () => {
           payload: { kind: "agentTurn", message: "handle events" },
         },
       }),
-    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
+    ).rejects.toThrow("can only list, inspect, update, run, remove, or bind existing automations");
     expect(calls).toEqual([]);
   });
 });
@@ -172,9 +172,10 @@ it.each([false, true])(
       undefined,
       async (tool, calls) => {
         const actions = readOnly
-          ? ["list", "get"]
-          : ["list", "get", "update", "run", "remove", "bind"];
+          ? ["list", "get", "runs"]
+          : ["list", "get", "runs", "update", "run", "remove", "bind"];
         expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+        expect(tool.parameters).toHaveProperty("properties.runId");
         for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
           expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
         }
@@ -198,15 +199,11 @@ it.each([false, true])(
         expect((await tool.execute("manager-get", { action: "get", jobId })).details).toMatchObject(
           { id: jobId },
         );
+        await tool.execute("manager-runs", { action: "runs", jobId, runId: "recorded-run" });
         if (readOnly) {
-          // Read-only availability must not grant reads absent from the management entitlement.
-          for (const action of ["status", "runs"]) {
-            await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
-              action === "status"
-                ? "read-only during recovery"
-                : "can only list, get, update, run, remove, or bind automations",
-            );
-          }
+          await expect(tool.execute("manager-status", { action: "status", jobId })).rejects.toThrow(
+            "read-only during recovery",
+          );
           await expect(tool.execute("manager-remove", { action: "remove", jobId })).rejects.toThrow(
             /read-only/i,
           );
@@ -215,6 +212,7 @@ it.each([false, true])(
           ["cron.list", { includeDisabled: false, compact: true }],
           ["cron.list", { includeDisabled: true, compact: true }],
           ["cron.get", { id: jobId }],
+          ["cron.runs", { id: jobId, runId: "recorded-run" }],
         ]);
       },
       undefined,
