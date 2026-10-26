@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -22,8 +25,13 @@ function bindingMatchKey(match: AgentRouteBinding["match"]) {
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles) ? normalizeSortedUniqueStringEntries(match.roles) : [];
+  // Routing indexes the channel trimmed and lowercased (resolve-route), so the
+  // bind/unbind identity key must match that or a configured "Telegram" route
+  // is invisible to CLI bookkeeping (gh-184636). Deliberately NOT
+  // normalizeRouteBindingChannelId: it expands chat aliases, which runtime
+  // routing does not.
   return JSON.stringify([
-    match.channel,
+    normalizeLowercaseStringOrEmpty(match.channel),
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
@@ -33,6 +41,12 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
 }
 
 export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
+  console.log(
+    "DEBUG applyAgentBindings called with:",
+    JSON.stringify(bindings),
+    "existing:",
+    JSON.stringify(listRouteBindings(cfg)),
+  );
   const existingRoutes = [...listRouteBindings(cfg)];
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const existingMatchMap = new Map<string, string>();
