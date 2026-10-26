@@ -52,17 +52,30 @@ type TargetState = {
   removeListeners: () => void;
 };
 
+export type NavigationDocumentRoute = {
+  continue: () => Promise<void>;
+  fallback: () => Promise<void>;
+  abort: () => Promise<void>;
+  preserve: () => Promise<void>;
+};
+export type NavigationDocumentRequest = {
+  url: () => string;
+  isTopLevel: () => boolean;
+};
+
 /** Fence every Chromium redirect hop, including separately hosted iframe targets. */
 export async function installNavigationAuthorityFence(
   page: Page,
   policy: BrowserNavigationPolicyOptions,
   onError: (error: unknown) => void,
+  handleDocument?: (
+    route: NavigationDocumentRoute,
+    request: NavigationDocumentRequest,
+  ) => Promise<void>,
 ): Promise<() => Promise<unknown>> {
-  const assertCurrent = policy.assertNavigationCurrent;
-  if (!assertCurrent) {
-    return async () => undefined;
-  }
+  const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
   const session = await page.context().newCDPSession(page);
+  let mainFrameId: string | undefined;
   const states = new Map<NavigationTargetSession, TargetState>();
   const inFlight = new Set<Promise<void>>();
   let stateChanged = createDeferred<void>();
@@ -106,6 +119,63 @@ export async function installNavigationAuthorityFence(
     const handle = async (event: PausedRequest) => {
       try {
         if (!closing && !failed) {
+          if (handleDocument) {
+            const isTopLevel = !target.parent && (!event.frameId || event.frameId === mainFrameId);
+            const finishInterceptedDocument = () => {
+              const interceptedFrameId =
+                event.frameId ?? (target.parent ? target.frameId : mainFrameId);
+              const requestIds = new Set(
+                [event.networkId, event.requestId].filter((requestId): requestId is string =>
+                  Boolean(requestId),
+                ),
+              );
+              for (const [requestId, frameId] of documents) {
+                if (
+                  requestIds.has(requestId) ||
+                  (interceptedFrameId && frameId === interceptedFrameId)
+                ) {
+                  documents.delete(requestId);
+                  finishedDocuments.add(requestId);
+                }
+              }
+              for (const requestId of requestIds) {
+                finishedDocuments.add(requestId);
+              }
+              notify();
+            };
+            const resume = async () => {
+              assertTargetCurrent();
+              await target.send("Fetch.continueRequest", { requestId: event.requestId });
+            };
+            await handleDocument(
+              {
+                continue: resume,
+                fallback: resume,
+                abort: async () => {
+                  await target.send("Fetch.failRequest", {
+                    requestId: event.requestId,
+                    errorReason: "Failed",
+                  });
+                  finishInterceptedDocument();
+                },
+                preserve: async () => {
+                  // Raw CDP cancellation leaves the current document intact.
+                  // A synthetic 204 keeps the URL but replaces Chromium's title
+                  // with a provisional "Loading ..." state.
+                  await target.send("Fetch.failRequest", {
+                    requestId: event.requestId,
+                    errorReason: "Aborted",
+                  });
+                  finishInterceptedDocument();
+                },
+              },
+              {
+                url: () => event.request.url,
+                isTopLevel: () => isTopLevel,
+              },
+            );
+            return;
+          }
           if (event.resourceType === "Document") {
             await assertBrowserNavigationAllowed({ url: event.request.url, ...policy });
           }
@@ -184,7 +254,7 @@ export async function installNavigationAuthorityFence(
     await target.send("Network.enable");
     assertTargetCurrent();
     await target.send("Fetch.enable", {
-      patterns: [{ urlPattern: "*", requestStage: "Request" }],
+      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
     });
     assertTargetCurrent();
   };
@@ -383,6 +453,8 @@ export async function installNavigationAuthorityFence(
     }
   };
   const ready = (async () => {
+    const tree = await session.send("Page.getFrameTree");
+    mainFrameId = tree.frameTree.frame.id;
     await prepare(rootTarget);
     while (initialization.size > 0) {
       await Promise.all(initialization);
@@ -443,7 +515,15 @@ export async function installNavigationAuthorityFence(
     let fetchListenersRemoved = false;
     try {
       checkCurrent();
+      // Actions such as `location.href = ...` can resolve in Playwright before
+      // this independently attached session receives the queued document event.
+      // A same-target round trip establishes an event-delivery barrier before
+      // the first idle-state decision tears down interception.
+      await bounded(session.send("Runtime.evaluate", { expression: "void 0" }));
       for (;;) {
+        // Capture before reading state so a terminal event cannot notify
+        // between the predicate and the wait and leave cleanup asleep.
+        const changed = stateChanged.promise;
         const activeDocuments = [...states.values()].some((state) => state.documents.size > 0);
         if (
           failed ||
@@ -452,7 +532,7 @@ export async function installNavigationAuthorityFence(
         ) {
           break;
         }
-        await bounded(stateChanged.promise);
+        await bounded(changed);
       }
       closing = true;
       checkCurrent();
@@ -471,25 +551,28 @@ export async function installNavigationAuthorityFence(
         state.removeFetchListener();
       }
       fetchListenersRemoved = true;
+      await bounded(
+        Promise.allSettled([...states.keys()].map((target) => target.send("Fetch.disable"))),
+      );
       await bounded(session.detach());
       removeListeners();
       return undefined;
     } catch (error) {
       closing = true;
-      fail(error);
       if (page.isClosed()) {
         removeListeners();
         void session.detach().catch(() => {});
-      } else {
-        if (fetchListenersRemoved) {
-          for (const state of states.values()) {
-            state.restoreFetchListener();
-          }
-        }
-        // Unconfirmed cancellation must not release pending requests. Only this
-        // genuinely failed cleanup requires closing the selected tab to recover.
-        retainUntilClose();
+        return undefined;
       }
+      fail(error);
+      if (fetchListenersRemoved) {
+        for (const state of states.values()) {
+          state.restoreFetchListener();
+        }
+      }
+      // Unconfirmed cancellation must not release pending requests. Only this
+      // genuinely failed cleanup requires closing the selected tab to recover.
+      retainUntilClose();
       return error;
     } finally {
       clearTimeout(timer);
