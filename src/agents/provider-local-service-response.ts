@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 
 const ERROR_BODY_MAX_BYTES = 64 * 1024;
 
@@ -10,6 +11,7 @@ export async function withLocalServiceResponseDiagnostics(
   response: Response,
   tail: string,
   signal?: AbortSignal | null,
+  requestHeaders?: HeadersInit,
 ): Promise<Response> {
   if (response.ok || !response.body || !tail || signal?.aborted) {
     return response;
@@ -28,9 +30,10 @@ export async function withLocalServiceResponseDiagnostics(
       return response;
     }
     // The SDK exposes a 4K message prefix. Keep the latest stderr inside that window.
+    const message = redactProviderResponseErrorText(error.message, requestHeaders ?? {});
     const recentTail =
       tail.length > 2048 ? `; recent stderr: ${truncateUtf8Suffix(tail, 2000)}` : tail;
-    error.message = `${truncateUtf16Safe(error.message, 2048)}${recentTail}`;
+    error.message = `${truncateUtf16Safe(message, 2048)}${recentTail}`;
     const body = JSON.stringify(payload);
     if (Buffer.byteLength(body) > ERROR_BODY_MAX_BYTES) {
       return response;

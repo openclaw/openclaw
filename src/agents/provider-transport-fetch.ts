@@ -396,6 +396,7 @@ export function buildGuardedModelFetch(
         response,
         getLocalServiceDiagnosticTail(localServiceLease),
         localServiceSignal,
+        swappedEgress.headers ?? rawHeaders,
       );
     }
     const elapsedMs = Date.now() - fetchStartedAt;

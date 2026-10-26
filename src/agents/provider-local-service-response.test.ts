@@ -81,6 +81,24 @@ describe("local service HTTP failure diagnostics", () => {
     expect(body).toContain("missing model file");
   });
 
+  it("redacts reflected credentials before clipping a provider message", async () => {
+    const credential = "synthetic-reflected-provider-credential";
+    const response = new Response(
+      JSON.stringify({ error: { message: `${"x".repeat(2038)}${credential} model load failed` } }),
+      { status: 500 },
+    );
+    const enhanced = await withLocalServiceResponseDiagnostics(
+      response,
+      "; stderr: missing model file",
+      undefined,
+      { Authorization: `Bearer ${credential}` },
+    );
+    const body = await enhanced.text();
+    expect(body).not.toContain("synthetic-");
+    expect(body).toContain("***");
+    expect(body).toContain("missing model file");
+  });
+
   it("leaves the original body failure authoritative", async () => {
     const failure = new Error("fixture connection closed");
     const response = new Response(
