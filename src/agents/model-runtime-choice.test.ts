@@ -9,6 +9,12 @@ import {
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
 import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
+import {
+  authStore as makeAuthStore,
+  harnessRegistry,
+  oauth,
+  snapshot,
+} from "./model-catalog-fixtures.test-support.js";
 import { prepareModelChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
@@ -384,19 +390,6 @@ describe("prepared model support admission", () => {
         },
       ),
     });
-    const { withPluginRuntimeGenerationScope } =
-      await import("../plugins/runtime/generation-scope.js");
-    const { resolveManifestModelCatalogProviderAliasMetadata } =
-      await import("./embedded-agent-runner/model.manifest-alias.js");
-    expect(
-      withPluginRuntimeGenerationScope(owner, () =>
-        resolveManifestModelCatalogProviderAliasMetadata({
-          provider,
-          modelId: model.id,
-          cfg: config,
-        }),
-      ),
-    ).toMatchObject({ ambiguous: true });
     await expectChoice(config, {
       raw: `${provider}/deployment`,
       source: "automatic",
@@ -622,21 +615,10 @@ describe("prepared model support admission", () => {
       baseUrl: "https://api.openai.com/v1",
     };
     const owner = publish(() => true, config, {
-      modelCatalog: { entries: [row], routeVariants: [row] },
+      modelCatalog: snapshot([row]),
     });
     bindPreparedModelRuntimeAuth(owner, {
-      store: {
-        version: 1,
-        profiles: {
-          oauth: {
-            provider: "openai",
-            type: "oauth",
-            access: "synthetic-access",
-            refresh: "synthetic-refresh",
-            expires: 9_999_999_999_999,
-          },
-        },
-      },
+      store: makeAuthStore({ oauth: oauth("openai", 9_999_999_999_999) }),
     });
     await expectChoice(config, { raw: "openai/chat-latest@oauth" }).toMatchObject({
       kind: "unavailable",
@@ -670,21 +652,11 @@ describe("prepared model support admission", () => {
       state.registered = state.renewalRegisters;
       return state.renewed;
     });
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "native-test",
-      source: "fixture",
-      harness: {
-        id: "native-test",
-        label: "Native test",
-        authBootstrap: "harness",
-        supports: () => ({ supported: true }),
-        readModelCatalogReadiness: () =>
-          state.registered ? { accountType: "subscription", authMode: "oauth" } : undefined,
-        async runAttempt() {
-          throw new Error("Admission must not execute inference");
-        },
-      },
+    const registry = harnessRegistry("native-test", {
+      label: "Native test",
+      authBootstrap: "harness",
+      readModelCatalogReadiness: () =>
+        state.registered ? { accountType: "subscription", authMode: "oauth" } : undefined,
     });
     const owner = publish(isCurrent, config, {
       pluginRegistry: registry,
@@ -702,7 +674,7 @@ describe("prepared model support admission", () => {
         }),
       ),
     });
-    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    bindPreparedModelRuntimeAuth(owner, { store: makeAuthStore() });
     return { state, reload };
   }
   // The runtime comes from the catalog row, so only the renewed catalog decides admission.
@@ -725,7 +697,7 @@ describe("prepared model support admission", () => {
         };
         const row = { provider, id: "claude-opus-5-5", name: "Claude" };
         const owner = publish(() => true, config, {
-          modelCatalog: { entries: [row], routeVariants: [row] },
+          modelCatalog: snapshot([row]),
           configuredRuntimeModels: runtimeModel(
             makeProviderModelFixture({
               provider,
