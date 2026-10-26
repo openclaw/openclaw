@@ -11,27 +11,23 @@ import {
   parseArgs,
   parseHostedMediaOptions,
   runCli,
+  type MediaSuiteId,
   type SuiteRunPlan,
 } from "./hosted-media-provider-live.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/media/hosted-media-provider-live.ts";
 const cli = (args: string) => parseArgs(args.split(" "));
-const loadShellEnvFallbackMock = vi.fn();
-const collectProviderApiKeysMock = vi.fn((provider: string) =>
-  process.env[`TEST_AUTH_${provider.toUpperCase()}`] ? ["test-key"] : [],
-);
 const planDependencies = {
-  collectProviderApiKeysImpl: collectProviderApiKeysMock,
+  collectProviderApiKeysImpl: (provider: string) =>
+    process.env[`TEST_AUTH_${provider.toUpperCase()}`] ? ["test-key"] : [],
   getProviderEnvVarsImpl: (provider: string) => [`TEST_AUTH_${provider.toUpperCase()}`],
-  loadShellEnvFallbackImpl: loadShellEnvFallbackMock,
+  loadShellEnvFallbackImpl: () => {},
 };
-const emptyPlan = (): SuiteRunPlan[] => [
-  {
-    providers: [],
-    skippedReason: "no providers with usable auth",
-    suite: MEDIA_SUITES.image,
-  },
-];
+const planEntry = (suite: MediaSuiteId, providers: string[] = []): SuiteRunPlan => ({
+  suite: MEDIA_SUITES[suite],
+  providers,
+});
+const emptyPlan = () => [{ ...planEntry("image"), skippedReason: "no providers with usable auth" }];
 const hostedOptions = (suite: string, ...args: string[]) =>
   parseHostedMediaOptions([
     "--suite",
@@ -41,11 +37,7 @@ const hostedOptions = (suite: string, ...args: string[]) =>
     ...args,
   ]);
 
-afterEach(() => {
-  collectProviderApiKeysMock.mockClear();
-  loadShellEnvFallbackMock.mockReset();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("hosted media provider live QA producer", () => {
   it("builds the image live media command with provider filters from env", () => {
@@ -92,15 +84,11 @@ describe("hosted media provider live QA producer", () => {
 
 describe("hosted media provider live CLI", () => {
   it.each([
-    [
-      "--providers",
-      "definitely-not-a-provider",
-      "Unknown provider(s) for selected media suite(s): definitely-not-a-provider",
-    ],
-    ["--image-providers", "runway", "Unknown image provider(s): runway"],
-    ["--music-providers", "fal", "Provider filter(s) target unselected media suite(s): music"],
-  ])("rejects invalid image selection %s=%s", (flag, provider, error) => {
-    expect(() => cli(`image ${flag} ${provider} --all-providers`)).toThrow(error);
+    ["--providers unknown", "Unknown provider(s) for selected media suite(s): unknown"],
+    ["--image-providers runway", "Unknown image provider(s): runway"],
+    ["--music-providers fal", "Provider filter(s) target unselected media suite(s): music"],
+  ])("rejects invalid image selection %s", (selection, error) => {
+    expect(() => cli(`image ${selection} --all-providers`)).toThrow(error);
   });
 
   it.each([
@@ -113,23 +101,24 @@ describe("hosted media provider live CLI", () => {
     ).toEqual(new Set(providers.split(",")));
   });
 
-  it("passes single-dash Vitest args after the option separator", () => {
-    expect(cli("image --all-providers --project tooling -- -t media-smoke")).toMatchObject({
-      suites: ["image"],
-      requireAuth: false,
-      passthroughArgs: ["--project", "tooling", "-t", "media-smoke"],
-    });
+  it.each([
+    [
+      "--all-providers --project tooling -- -t media-smoke",
+      {
+        requireAuth: false,
+        passthroughArgs: ["--project", "tooling", "-t", "media-smoke"],
+      },
+    ],
+    ["--quiet --reporter dot", { quietArgs: ["--quiet"], passthroughArgs: ["--reporter", "dot"] }],
+  ] as const)("separates CLI flags and Vitest arguments: %s", (args, expected) => {
+    expect(cli(`image ${args}`)).toMatchObject({ suites: ["image"], ...expected });
   });
 
   it("fails explicit suite selections that auth filtering would skip", () => {
     const options = cli("image music --image-providers openai --music-providers minimax");
     const skipped = findSkippedExplicitProviderSelections(options, [
-      { suite: MEDIA_SUITES.image, providers: ["openai"] },
-      {
-        suite: MEDIA_SUITES.music,
-        providers: [],
-        skippedReason: "no providers with usable auth",
-      },
+      planEntry("image", ["openai"]),
+      planEntry("music"),
     ]);
 
     expect(skipped.map((entry) => entry.suite.id)).toEqual(["music"]);
@@ -138,13 +127,9 @@ describe("hosted media provider live CLI", () => {
   it("does not fail global provider filters for suites without provider overlap", () => {
     const options = cli("image music video --providers openai");
     const skipped = findSkippedExplicitProviderSelections(options, [
-      { suite: MEDIA_SUITES.image, providers: ["openai"] },
-      {
-        suite: MEDIA_SUITES.music,
-        providers: [],
-        skippedReason: "no providers selected",
-      },
-      { suite: MEDIA_SUITES.video, providers: [], skippedReason: "no providers selected" },
+      planEntry("image", ["openai"]),
+      planEntry("music"),
+      planEntry("video"),
     ]);
 
     expect(skipped).toEqual([]);
@@ -179,13 +164,5 @@ describe("hosted media provider live CLI", () => {
     expect(plan).toMatchObject([
       { suite: { id: "video" }, providers: "fal,google,kie,novita,pixverse,runway,zai".split(",") },
     ]);
-  });
-
-  it("forwards quiet flags separately from passthrough args", () => {
-    expect(cli("image --quiet --reporter dot")).toMatchObject({
-      suites: ["image"],
-      quietArgs: ["--quiet"],
-      passthroughArgs: ["--reporter", "dot"],
-    });
   });
 });

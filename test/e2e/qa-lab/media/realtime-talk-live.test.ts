@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   buildRealtimeTalkLiveCommand,
-  createRealtimeTalkResultParser,
   parseRealtimeTalkLiveOptions,
   runRealtimeTalkLiveProducer,
 } from "./realtime-talk-live.js";
@@ -39,22 +38,6 @@ describe("realtime Talk live QA producer", () => {
     expect(command.env.OPENAI_API_KEY).toBe("test-key");
   });
 
-  it("parses result prefixes across stream chunks without retaining details", () => {
-    const parser = createRealtimeTalkResultParser();
-    parser.append("openai-backend-bridge: o");
-    parser.append("k { model: 'gpt-realtime-2.1' }\n");
-    parser.append(
-      "openai-backend-audio-roundtrip: ok {\n  transcripts: ['private transcript']\n}\n",
-    );
-    parser.append("openai-webrtc-browser: failed { error: 'private provider error' }");
-
-    expect(Object.fromEntries(parser.finish())).toEqual({
-      "openai-backend-bridge": ["ok"],
-      "openai-backend-audio-roundtrip": ["ok"],
-      "openai-webrtc-browser": ["failed"],
-    });
-  });
-
   it("writes blocked evidence without exposing unrelated or missing credentials", async () => {
     const runChild = vi.fn();
     const { result, artifacts, log } = await runSmoke(runChild, { OTHER_SECRET: "do-not-record" });
@@ -71,9 +54,10 @@ describe("realtime Talk live QA producer", () => {
     const transcript = "private transcript must never persist";
     const { result, artifacts, log } = await runSmoke(
       async ({ onStderr, onStdout }) => {
-        onStdout(`openai-backend-bridge: ok { token: '${apiKey}' }\n`);
-        onStdout(`openai-backend-audio-roundtrip: ok { transcripts: ['${transcript}'] }\n`);
-        onStdout("openai-webrtc-browser: ok { state: 'connected' }\n");
+        onStdout("openai-backend-bridge: o");
+        onStdout(`k { token: '${apiKey}' }\n`);
+        onStdout(`openai-backend-audio-roundtrip: ok {\n transcripts: ['${transcript}']\n}\n`);
+        onStdout("openai-webrtc-browser: ok { state: 'connected' }");
         onStderr("provider debug output should not persist");
         return { exitCode: 0, signal: null };
       },
@@ -85,11 +69,11 @@ describe("realtime Talk live QA producer", () => {
     expect(log).toContain("audioSampleRateHz: 24000");
     expect(log).toContain("openai-webrtc-browser=ok");
     expect(log).toMatch(/statusSha256: [a-f0-9]{64}/u);
-    expect(log).not.toContain(apiKey);
-    expect(log).not.toContain(transcript);
+    for (const output of [log, artifacts]) {
+      expect(output).not.toContain(apiKey);
+      expect(output).not.toContain(transcript);
+    }
     expect(log).not.toContain("provider debug output");
-    expect(artifacts).not.toContain(apiKey);
-    expect(artifacts).not.toContain(transcript);
   });
 
   it("fails clean exits that omit an expected smoke leg", async () => {
@@ -113,14 +97,15 @@ describe("realtime Talk live QA producer", () => {
   });
 
   it("keeps an observed smoke failure terminal when the harness is also blocked", async () => {
-    const { result } = await runSmoke(async ({ onStderr, onStdout }) => {
-      onStdout("openai-backend-bridge: failed { error: 'provider rejected session' }\n");
+    const { result, log } = await runSmoke(async ({ onStderr, onStdout }) => {
+      onStdout("openai-backend-bridge: failed { error: 'private provider error' }");
       onStderr("Executable doesn't exist. Run npx playwright install chromium.");
       return { exitCode: 1, signal: null };
     });
 
     expect(result?.status).toBe("fail");
     expect(result?.failure?.reason).toContain("openai-backend-bridge=failed");
+    expect(log).not.toContain("private provider error");
   });
 });
 
