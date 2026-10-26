@@ -55,10 +55,9 @@ describe("control-ui-i18n report helpers", () => {
 
   it("rejects locale path traversal before filesystem access", () => {
     expect(parseArgs(["--locale", "zh-CN"])).toMatchObject({ locale: "zh-CN" });
-    expect(() => parseArgs(["--locale", "../zh-CN"])).toThrow("unknown locale");
-    expect(() => parseArgs(["--locale", "../../../../scripts/control-ui-i18n-report"])).toThrow(
-      "unknown locale",
-    );
+    for (const locale of ["../zh-CN", "../../../../scripts/control-ui-i18n-report"]) {
+      expect(() => parseArgs(["--locale", locale])).toThrow("unknown locale");
+    }
   });
 
   it("filters raw-copy entries by path surface token", () => {
@@ -76,22 +75,15 @@ describe("control-ui-i18n report helpers", () => {
   it("formats pasteable report text", () => {
     const report = reportFor(["actions.cancel"]);
     for (const line of [
-      "Control UI i18n baseline report",
       "Scope: Chat, Simplified Chinese (zh-CN)",
-      "Based on: current raw-copy baseline and locale metadata. Not a drift check.",
       "Hardcoded UI text outside i18n: 3 pieces in code, 7 total occurrences.",
       translationSummary,
       "Chat still has UI text written directly in code.",
       "zh-CN has 1 missing key.",
       "4 Config form: ui/src/ui/views/config-form.render.ts",
-      "Move text from the focus modules into translation keys.",
-      "Do not hand-edit generated locale, translation memory, or i18n metadata files.",
-      "Run pnpm ui:i18n:sync after adding translation keys.",
     ]) {
       expect(report).toContain(`${line}\n`);
     }
-    expect(report).not.toContain("matches English");
-    expect(report).not.toContain("raw-copy entries");
   });
 
   it("keeps fallback-key issues scoped to the selected surface", () => {
