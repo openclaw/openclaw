@@ -322,6 +322,8 @@ export type SessionActorOperations = {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
+        /** Command-local immutable preimage retained by the host; never grants authority. */
+        entryReference?: string;
       };
     /** Native settlement owns committed data; the reply only acknowledges it. */
     output:
