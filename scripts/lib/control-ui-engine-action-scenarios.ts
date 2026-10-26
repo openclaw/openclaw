@@ -4,25 +4,49 @@ import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 
 /** Fixed work extends short actions beyond WebKit's coarse CPU sampling interval. */
 export function createEngineActionScenarios(): readonly EngineScenario[] {
-  const picker = interactionScenarios.find(({ id }) => id === "provider-model-picker-open-search");
   const cron = interactionScenarios.find(({ id }) => id === "cron-search-typing-pending");
-  if (!picker || !cron) {
-    throw new Error("Missing shared picker or held Cron scenario");
+  if (!cron) {
+    throw new Error("Missing shared held Cron scenario");
   }
   const cycles = 8;
-  return [
-    {
-      ...picker,
-      id: "provider-model-picker-cycles",
+  const repeated = (
+    [
+      [
+        "provider-model-picker-open-search",
+        "provider-model-picker-cycles",
+        "Eight complete picker search/dismiss cycles retain selection and return focus.",
+      ],
+      [
+        "session-switch",
+        "session-switch-cycles",
+        "Eight round trips reveal both retained 400-message transcripts each time.",
+      ],
+      [
+        "sidebar-toggle",
+        "sidebar-toggle-cycles",
+        "Eight sidebar close/open cycles retain the selected session and drawer focus.",
+      ],
+    ] as const
+  ).map(([sourceId, id, expected]) => {
+    const scenario = interactionScenarios.find((entry) => entry.id === sourceId);
+    if (!scenario) {
+      throw new Error(`Missing shared scenario: ${sourceId}`);
+    }
+    const run: EngineScenario["run"] = async (page, gateway) => {
+      for (let cycle = 0; cycle < cycles; cycle++) {
+        await scenario.run(page, gateway);
+      }
+      return { cycles };
+    };
+    return Object.assign({}, scenario, {
+      id,
+      expected,
       explicitOnly: true,
-      expected: "Eight complete picker search/dismiss cycles retain selection and return focus.",
-      run: async (page, gateway) => {
-        for (let cycle = 0; cycle < cycles; cycle++) {
-          await picker.run(page, gateway);
-        }
-        return { cycles };
-      },
-    },
+      run,
+    });
+  });
+  return [
+    ...repeated,
     {
       ...cron,
       id: "cron-held-typing-cycles",
