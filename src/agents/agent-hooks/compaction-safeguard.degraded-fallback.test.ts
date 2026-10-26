@@ -7,15 +7,15 @@ import type { summarizeCompactionHistory } from "../compaction.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
-import { consumeCompactionSafeguardCancellation } from "./compaction-safeguard-runtime.js";
+import { consumeCompactionSafeguardCancellation as consumeCancellation } from "./compaction-safeguard-runtime.js";
 import {
   testing,
   stubSessionManager,
   structuredSummary,
   userMessage,
-  createQualityGuardSessionManager,
-  createCompactionEvent,
-  runCompactionScenario,
+  createQualityGuardSessionManager as qualitySession,
+  createCompactionEvent as compactionEvent,
+  runCompactionScenario as runCompaction,
   expectCompactionResult,
 } from "./compaction-safeguard.test-support.js";
 import { readWorkspaceContextForSummary } from "./compaction-workspace-context.js";
@@ -42,13 +42,14 @@ beforeEach(() => {
 afterEach(() => testing.setSummarizeCompactionHistoryForTest());
 
 async function degradedSummary(
-  event: Parameters<typeof createCompactionEvent>[0],
-  runtime: Parameters<typeof createQualityGuardSessionManager>[0] = {},
+  event: Parameters<typeof compactionEvent>[0],
+  runtime: Parameters<typeof qualitySession>[0] = {},
 ) {
-  const session = createQualityGuardSessionManager({ qualityGuardMaxRetries: 0, ...runtime });
-  const { result } = await runCompactionScenario(session, createCompactionEvent(event));
+  const session = qualitySession({ qualityGuardMaxRetries: 0, ...runtime });
+  const { result } = await runCompaction(session, compactionEvent(event));
   expect(result).toMatchObject({ compaction: { details: { qualityDegraded: true } } });
-  expect(consumeCompactionSafeguardCancellation(session)).toBeNull();
+  expect(consumeCancellation(session)).toBeNull();
+  expectWarning("reasonCode=quality_guard_degraded_fallback");
   const { summary } = expectCompactionResult(result);
   expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
   return summary;
@@ -67,34 +68,25 @@ it.each(["branch read", "context projection"] as const)(
       if (stage === "branch read") {
         throw failure;
       }
-      const kept = createMessageEntry(userMessage("Kept user request", 1), 1);
-      if (kept.type !== "message") {
-        throw new Error("Expected a message fixture");
-      }
-      return [
-        {
-          ...kept,
-          id: "entry-0",
-          parentId: null,
-          timestamp: "1970-01-01T00:00:00.000Z",
-          get message(): never {
-            throw failure;
-          },
+      const unreadable = createMessageEntry(userMessage("Unreadable", 0), 0);
+      Object.defineProperty(unreadable, "message", {
+        get(): never {
+          throw failure;
         },
-        kept,
-      ];
+      });
+      return [unreadable, createMessageEntry(userMessage("Kept user request", 1), 1)];
     };
-    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario(
+    const { result, getApiKeyAndHeadersMock } = await runCompaction(
       sessionManager,
-      createCompactionEvent({ preparation: { messagesToSummarize: [] } }),
+      compactionEvent({ preparation: { messagesToSummarize: [] } }),
     );
 
     expect(result).toEqual({ cancel: true });
-    expect(consumeCompactionSafeguardCancellation(sessionManager)).toEqual({
+    expect(consumeCancellation(sessionManager)).toEqual({
       reason: "session history inspection failed",
       error: failure,
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("session history inspection failed"));
+    expectWarning("session history inspection failed");
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(summarize).not.toHaveBeenCalled();
   },
@@ -122,23 +114,15 @@ it("degrades oversized identifiers while preserving the run-owned request", asyn
   expect(summarize).toHaveBeenCalledTimes(1);
 });
 
-it("retains the pending ask and identifiers and logs the degraded reasonCode", async () => {
-  const latestAsk = "confirm the staging rollback finished";
-  const identifier = "/tmp/degraded-retention.log";
-  summarize.mockResolvedValue("Core summary without headings");
-  const summary = await degradedSummary({ messageText: `${latestAsk} ${identifier}` });
-
-  expectSummaryContains(summary, "Core summary without headings", latestAsk, identifier);
-  expect(warn).toHaveBeenCalledWith(
-    expect.stringContaining("reasonCode=quality_guard_degraded_fallback"),
-  );
-});
-
 it("keeps the stronger summary when a corrective retry loses context", async () => {
   const better = structuredSummary({ decisions: "Keep blue." }).replace("## Exact", "Exact");
   summarize.mockResolvedValueOnce(better).mockResolvedValueOnce("Unrelated retry.");
-  const summary = await degradedSummary({ messageText: "status" }, { qualityGuardMaxRetries: 1 });
-  expectSummaryContains(summary, "Keep blue.", "status");
+  const identifier = "/tmp/degraded-retention.log";
+  const summary = await degradedSummary(
+    { messageText: `status ${identifier}` },
+    { qualityGuardMaxRetries: 1 },
+  );
+  expectSummaryContains(summary, "Keep blue.", "status", identifier);
   expect(summary).not.toContain("Unrelated retry");
   expect(summary.match(/^## Pending user asks$/gm)).toHaveLength(1);
   expect(summarize).toHaveBeenCalledTimes(2);
@@ -159,7 +143,7 @@ it("keeps generated split-turn context when a terminal audit trims the suffix", 
       : `${activeTurn} ${"z".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`,
   );
 
-  const event = createCompactionEvent({
+  const event = compactionEvent({
     preparation: {
       messagesToSummarize: history,
       turnPrefixMessages: [userMessage(latestAsk, 100)],
@@ -190,7 +174,7 @@ function expectWarning(text: string) {
   expect(warn).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
-const limitPrefix = "## Session Startup\n\n" + "x".repeat(1_999 - "## Session Startup\n\n".length);
+const limitPrefix = "## Session Startup\n\n".padEnd(1_999, "x");
 const boundedContent = `${limitPrefix}🚀tail\n`;
 const startup = ["Session Startup"];
 const read = (root: string | undefined) => readWorkspaceContextForSummary(startup, root);
@@ -232,11 +216,8 @@ it.each<[string, string, string[], string?, string[]?]>([
   }
   if (expected.length === 0) {
     expect(result).toBe("");
-  } else {
-    for (const text of expected) {
-      expect(result).toContain(text);
-    }
   }
+  expectSummaryContains(result, ...expected);
 });
 
 it("reads workspace context from the configured workspace instead of process cwd", async () => {
