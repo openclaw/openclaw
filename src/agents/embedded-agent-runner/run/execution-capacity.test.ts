@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -12,9 +12,7 @@ import { outsideExecutionCapacity, withReleasableExecutionCapacity } from "./exe
 
 const lane = "projection-recovery-capacity";
 
-afterEach(() => {
-  resetCommandQueueStateForTest();
-});
+afterEach(resetCommandQueueStateForTest);
 
 it("lets another session run during recovery and reacquires in queue order", async () => {
   setCommandLaneConcurrency(lane, 1);
@@ -74,60 +72,39 @@ it("lets another session run during recovery and reacquires in queue order", asy
   }
 });
 
-it("reacquires capacity before propagating a recovery failure through cleanup", async () => {
-  const failure = new Error("projection recovery failed");
-  const cleanupCapacity: number[] = [];
-  const work = withReleasableExecutionCapacity(
-    (task, options) => enqueueCommandInLane(lane, task, options),
-    async () => {
-      try {
-        await outsideExecutionCapacity(async () => {
-          expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
-          throw failure;
-        });
-      } finally {
-        cleanupCapacity.push(getCommandLaneSnapshot(lane).activeCount);
-      }
-    },
-  );
-  await expect(work).rejects.toBe(failure);
-  expect(cleanupCapacity).toEqual([1]);
-  expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
-});
-
-it("joins the suspended task's cleanup when capacity readmission is refused", async () => {
-  const failure = new Error("readmission refused");
+it.each([false, true])("joins failed recovery (readmission refused=%s)", async (refused) => {
+  const failure = new Error(refused ? "readmission refused" : "projection recovery failed");
   const cleanupStarted = createDeferredCore();
   const finishCleanup = createDeferredCore();
+  const cleanupCapacity: number[] = [];
   let tickets = 0;
   let cleanupDone = false;
-  let settled = false;
+  const settled = vi.fn();
   const enqueue: CommandQueueEnqueueFn = (task, options) =>
-    ++tickets === 1 ? enqueueCommandInLane(lane, task, options) : Promise.reject(failure);
+    ++tickets > 1 && refused ? Promise.reject(failure) : enqueueCommandInLane(lane, task, options);
   const work = withReleasableExecutionCapacity(enqueue, async () => {
     try {
-      await outsideExecutionCapacity(async () => "recovered");
+      await outsideExecutionCapacity(async () => {
+        expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
+        if (!refused) {
+          throw failure;
+        }
+        return "recovered";
+      });
     } finally {
+      cleanupCapacity.push(getCommandLaneSnapshot(lane).activeCount);
       cleanupStarted.resolve();
       await finishCleanup.promise;
       cleanupDone = true;
     }
   });
-  const outcome = work.then(
-    () => {
-      settled = true;
-      return undefined;
-    },
-    (error: unknown) => {
-      settled = true;
-      return error;
-    },
-  );
+  const outcome = work.catch((error: unknown) => error).finally(settled);
   try {
     await cleanupStarted.promise;
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     finishCleanup.resolve();
     expect(await outcome).toBe(failure);
+    expect(cleanupCapacity).toEqual([refused ? 0 : 1]);
     expect(cleanupDone).toBe(true);
     expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
   } finally {

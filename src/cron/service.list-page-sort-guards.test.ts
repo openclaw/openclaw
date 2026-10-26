@@ -87,11 +87,16 @@ it("shares immutable requested rows until a list revision changes", async () => 
   const state = listState(...["alpha", "beta", "gamma"].map((name) => ({ name })));
   const jobs = state.store!.jobs;
   const clone = vi.spyOn(globalThis, "structuredClone");
+  const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor");
   const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
   state.schedulerStarted = true;
 
   const options = { limit: 1, offset: 1, sortBy: "name" as const };
   const page = await listPage(state, options);
+  const rowInspections = descriptor.mock.calls.filter(
+    ([value]) => value === page.jobs[0] || value === page.jobs[0]?.state,
+  ).length;
+  expect(rowInspections).toBe(0);
   const firstStatus = await status(state);
   expect(Object.isFrozen(firstStatus)).toBe(true);
   expect(() => {

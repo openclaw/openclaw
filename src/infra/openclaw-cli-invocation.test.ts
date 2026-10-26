@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { standaloneManifestFixture } from "../daemon/standalone-manifest.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 
@@ -47,14 +48,7 @@ it("uses the standalone sidecar from outside its installation", async () => {
   const execPath = path.join(root, "openclaw");
   await writeFile(
     path.join(root, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      mode: "aot",
-      executable: { path: "openclaw" },
-      runtime: { path: "runtime" },
-      openclaw: { version: "2026.10.15" },
-      bun: { version: "1.3.0" },
-    }),
+    JSON.stringify(standaloneManifestFixture("aot", "openclaw", "2026.10.15", "1.3.0")),
   );
   expectInvocation(
     {

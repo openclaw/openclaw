@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { createConfiguredModelCatalogOverridesResolver } from "../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getModelRefStatus, resolveModelRefFromString } from "../agents/model-selection.js";
@@ -283,28 +284,24 @@ describe("installed Arcee catalog identity", () => {
   });
 
   installedTest("resolves installed authored metadata and endpoint auth", (metadataSnapshot) => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          arcee: {
-            api: "openai-completions",
-            baseUrl: "https://api.arcee.ai/api/v1",
-            models: [
-              {
-                id: wire.model,
-                name: "Authored route",
-                baseUrl: "https://openrouter.ai/api/v1",
-                reasoning: true,
-                input: ["text"],
-                contextWindow: 32768,
-                maxTokens: 2048,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
+    const cfg: OpenClawConfig = configForProviders({
+      arcee: {
+        api: "openai-completions",
+        baseUrl: "https://api.arcee.ai/api/v1",
+        models: [
+          {
+            id: wire.model,
+            name: "Authored route",
+            baseUrl: "https://openrouter.ai/api/v1",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 32768,
+            maxTokens: 2048,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
-        },
+        ],
       },
-    };
+    });
     expect(
       createConfiguredModelCatalogOverridesResolver({ cfg })({
         provider: "arcee",

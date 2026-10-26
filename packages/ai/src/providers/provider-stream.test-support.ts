@@ -1,3 +1,33 @@
+import type { Api, AssistantMessageEventStreamContract, StreamFn } from "@openclaw/llm-core";
+import type { ApiRegistry } from "../api-registry.js";
+
+function isSynchronousStream(
+  stream: ReturnType<StreamFn>,
+): stream is AssistantMessageEventStreamContract {
+  return (
+    !(stream instanceof Promise) &&
+    "push" in stream &&
+    typeof stream.push === "function" &&
+    "end" in stream &&
+    typeof stream.end === "function"
+  );
+}
+
+export function registerSynchronousTestApi(registry: ApiRegistry, api: Api, streamFn: StreamFn) {
+  if (registry.getApiProvider(api)) {
+    return false;
+  }
+  const stream = (...args: Parameters<StreamFn>) => {
+    const result = streamFn(...args);
+    if (!isSynchronousStream(result)) {
+      throw new Error("Expected synchronous assistant event stream");
+    }
+    return result;
+  };
+  registry.registerApiProvider({ api, stream, streamSimple: stream });
+  return true;
+}
+
 export function frame(type: string, fields: Record<string, unknown> = {}) {
   return { type, ...fields };
 }

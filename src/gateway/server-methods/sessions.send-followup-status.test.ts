@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { completedSubagentFollowupRun } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -90,22 +91,7 @@ function loadSession(
 }
 
 function completedRun(childSessionKey: string) {
-  const run = {
-    runId: "run-old",
-    childSessionKey,
-    controllerSessionKey: "agent:main:main",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "initial task",
-    cleanup: "keep" as const,
-    createdAt: 1,
-    execution: {
-      status: "terminal" as const,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
-    },
-  };
+  const run = completedSubagentFollowupRun(childSessionKey);
   mocks.latest.mockResolvedValue(run);
   mocks.live.mockReturnValue(run);
 }

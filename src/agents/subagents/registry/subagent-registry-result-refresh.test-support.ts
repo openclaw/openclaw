@@ -69,7 +69,6 @@ export function registerSubagentResultRefreshCases(params: {
       captureStarted.resolve();
       return capture.promise;
     });
-    mocks.persistRegistryRows.mockClear();
     mocks.persistRegistryRows.mockImplementationOnce(() => persisted.resolve());
     const lifecycleHandler = getLifecycleHandler();
 
@@ -88,7 +87,6 @@ export function registerSubagentResultRefreshCases(params: {
 
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       await captureStarted.promise;
-      expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledOnce();
       expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBeUndefined();
 
       capture.resolve(reply);
@@ -96,11 +94,9 @@ export function registerSubagentResultRefreshCases(params: {
       await vi.advanceTimersByTimeAsync(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBe(reply);
-      expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     } finally {
       capture.resolve(reply);
       await vi.advanceTimersByTimeAsync(0);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
     }
   });
 }

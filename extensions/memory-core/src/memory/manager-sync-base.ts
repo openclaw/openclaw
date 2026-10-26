@@ -542,6 +542,7 @@ export abstract class MemoryManagerSyncBase {
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
           aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
         })
       : [];
     const providerIdentities =

@@ -217,7 +217,10 @@ export function projectChatTranscript(
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
-    activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
+    props.transcriptMetadata?.contextTokens ??
+    activeSession?.contextTokens ??
+    props.sessions?.defaults?.contextTokens ??
+    null;
   const resolvedRecap = resolveTurnRecap(state, {
     sessionKey: props.sessionKey,
     agentId: props.currentAgentId,

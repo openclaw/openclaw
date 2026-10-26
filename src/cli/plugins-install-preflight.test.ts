@@ -1,50 +1,37 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installHooksFromNpmSpecMock,
-  installHooksFromPathMock,
-  installPluginFromClawHubMock,
-  installPluginFromGitSpecMock,
-  installPluginFromMarketplaceMock,
-  installPluginFromNpmPackArchiveMock,
-  installPluginFromNpmSpecMock,
-  installPluginFromPathMock,
-  promptYesNoMock,
-  readConfigFileSnapshotForWriteMock,
-  resetPluginsCliTestState,
-  resolveMarketplaceInstallShortcutMock,
-  runPluginsCommand,
-  runtimeErrors,
-  configWriteMock,
-} from "./plugins-cli-test-helpers.js";
+import * as fixture from "./plugins-cli-test-helpers.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
   withPluginLifecycleLeaseMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   withPluginLifecycleLease: withPluginLifecycleLeaseMock,
+  withPluginLifecycleLeaseAsync: withPluginLifecycleLeaseMock,
   hasPluginLifecycleLease: () => false,
 }));
 
+const install = (...args: string[]) =>
+  fixture.runPluginsCommand(["plugins", "install", ...args, "--force"]);
+
 async function expectRejected(args: string[], error: string) {
-  await expect(runPluginsCommand(["plugins", "install", ...args, "--force"])).rejects.toThrow(
-    "__exit__:1",
-  );
-  expect(runtimeErrors.at(-1)).toContain(error);
+  await expect(install(...args)).rejects.toThrow("__exit__:1");
+  expect(fixture.runtimeErrors.at(-1)).toContain(error);
   for (const effect of [
     withPluginLifecycleLeaseMock,
-    readConfigFileSnapshotForWriteMock,
-    promptYesNoMock,
-    installPluginFromClawHubMock,
-    installPluginFromGitSpecMock,
-    installPluginFromMarketplaceMock,
-    installPluginFromNpmPackArchiveMock,
-    installPluginFromNpmSpecMock,
-    installPluginFromPathMock,
-    installHooksFromNpmSpecMock,
-    installHooksFromPathMock,
-    configWriteMock,
+    fixture.readConfigFileSnapshotForWriteMock,
+    fixture.promptYesNoMock,
+    fixture.installPluginFromClawHubMock,
+    fixture.installPluginFromGitSpecMock,
+    fixture.installPluginFromMarketplaceMock,
+    fixture.installPluginFromNpmPackArchiveMock,
+    fixture.installPluginFromNpmSpecMock,
+    fixture.installPluginFromPathMock,
+    fixture.installHooksFromNpmSpecMock,
+    fixture.installHooksFromPathMock,
+    fixture.configWriteMock,
   ]) {
     expect(effect).not.toHaveBeenCalled();
   }
@@ -52,56 +39,41 @@ async function expectRejected(args: string[], error: string) {
 
 describe("plugin install mutation-free preflight", () => {
   beforeEach(() => {
-    resetPluginsCliTestState();
-    withPluginLifecycleLeaseMock.mockReset();
-    withPluginLifecycleLeaseMock.mockImplementation(
-      async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
-        await run({ assertOwned: vi.fn() }),
-    );
+    fixture.resetPluginsCliTestState();
+    withPluginLifecycleLeaseMock
+      .mockReset()
+      .mockImplementation(
+        async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
+          await run({ assertOwned: vi.fn(), assertCurrent: vi.fn() }),
+      );
   });
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
-    resolveMarketplaceInstallShortcutMock.mockResolvedValue({
+    fixture.resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
       plugin: "superpowers",
       marketplaceSource: "claude-plugins-official",
     });
 
-    await expect(
-      runPluginsCommand(["plugins", "install", "superpowers@claude-plugins-official", "--force"]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(install("superpowers@claude-plugins-official")).rejects.toThrow("__exit__:1");
+    expect(fixture.runtimeErrors.at(-1)).toContain("marketplace install failed");
 
-    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
+    expect(fixture.installPluginFromMarketplaceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         marketplace: "claude-plugins-official",
         plugin: "superpowers",
       }),
     );
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(fixture.installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
-
-  it.each([" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"])(
-    "rejects malformed ClawHub source %s before the lifecycle lease",
-    async (raw) => {
-      await expectRejected([raw], `Unsupported ClawHub plugin spec: ${raw}`);
-    },
-  );
-
-  it("rejects a whitespace-only install source before the lifecycle lease", async () => {
-    await expectRejected(["\t"], "Plugin install source must not be empty.");
-  });
-
-  it.each(["", "\t"])(
-    "rejects an explicitly empty marketplace %j before the lifecycle lease",
-    async (marketplace) => {
-      await expectRejected(
-        ["demo", "--marketplace", marketplace],
-        "--marketplace requires a non-empty source.",
-      );
-    },
-  );
 
   it.each([
+    ...[" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"].map(
+      (raw): [string[], string] => [[raw], `Unsupported ClawHub plugin spec: ${raw}`],
+    ),
+    [["\t"], "Plugin install source must not be empty."],
+    [["demo", "--marketplace", ""], "--marketplace requires a non-empty source."],
+    [["demo", "--marketplace", "\t"], "--marketplace requires a non-empty source."],
     [
       ["demo", "--marketplace", "local/repo", "--link"],
       "--link is not supported with --marketplace.",
@@ -124,10 +96,5 @@ describe("plugin install mutation-free preflight", () => {
     [["git:"], "unsupported git: plugin spec: git:"],
     [["file:openclaw-missing-plugin-preflight-test.js"], "Plugin path not found:"],
     [["./openclaw-missing-plugin-preflight-test.tgz"], "Plugin path not found:"],
-  ] satisfies [string[], string][])(
-    "rejects %j before the lifecycle lease",
-    async (args, error) => {
-      await expectRejected(args, error);
-    },
-  );
+  ] satisfies [string[], string][])("rejects %j before the lifecycle lease", expectRejected);
 });

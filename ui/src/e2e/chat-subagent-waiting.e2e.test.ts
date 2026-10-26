@@ -11,6 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -216,12 +217,9 @@ suite.define(() => {
             role: "toolResult",
             toolCallId: "launch",
             toolName: "sessions_spawn",
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ status: "accepted", childSessionKey: child.key }, null, 2),
-              },
-            ],
+            content: textContent(
+              JSON.stringify({ status: "accepted", childSessionKey: child.key }, null, 2),
+            ),
             timestamp: now - 8_400,
             __openclaw: { id: "launch-result", seq: 4, runId },
           },

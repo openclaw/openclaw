@@ -9,7 +9,7 @@ import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionListOptions } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
@@ -123,6 +123,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it.each(["pending", "completed"] as const)(
+    "adopts the entering route's %s list without another request",
+    async (completion) => {
+      const response = createDeferred<SessionsListResult>();
+      const linked = completion === "completed";
+      const key = linked ? "agent:research:linked" : "agent:main:current";
+      const row = sessionRow("current", { key });
+      const result = sessionsResult([{ ...row, rowMode: "compact" }], 1);
+      const { request, sessions, context } = liveSessions<SessionListOptions>({
+        "sessions.subscribe": () => ({ subscribed: true }),
+        "sessions.list": (params) =>
+          params?.source === "sessions-page" ? response.promise : sessionsResult([], 1),
+        "sessions.describe": () => ({ session: row }),
+      });
+      const refresh = vi.spyOn(sessions, "refreshList");
+      const pageRequests = () =>
+        request.mock.calls.filter(
+          ([method, params]) => method === "sessions.list" && params?.source === "sessions-page",
+        );
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
+      try {
+        // SAFETY: The Sessions route loader returns these options, without a redirect or not-found.
+        const routeData = (await sessionsRoute.loader!(
+          context,
+          createRouteLoaderOptions({
+            pathname: "/sessions",
+            search: linked ? `?session=${encodeURIComponent(key)}` : "",
+            hash: "",
+          }),
+        )) as SessionsRouteData;
+        expect(pageRequests()).toHaveLength(1);
+        expect(pageRequests()[0]?.[1]).toMatchObject({
+          agentId: linked ? "research" : "main",
+          includeUnknown: linked,
+          ...(linked ? { search: key } : {}),
+        });
+        if (completion === "completed") {
+          response.resolve(result);
+          await refresh.mock.results[0]!.value;
+        }
+        mountedPage = await createPage(context, routeData);
+        expect(pageRequests()).toHaveLength(1);
+        response.resolve(result);
+        await waitForFast(() => expect(mountedPage?.result?.sessions[0]?.key).toBe(key));
+        expect(pageRequests()).toHaveLength(1);
+      } finally {
+        response.resolve(result);
+        mountedPage?.remove();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("retries a retained agent identity on roster publication after reconnect backoff", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);

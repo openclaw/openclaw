@@ -686,7 +686,11 @@ sample suppression, never per scrape. Names come from V8's finite space set,
 including spaces added by future V8 versions; each space contributes four gauges
 under the exporter's existing series cap.
 
-Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
+Heap and CPU profiles preserve safe function names for OpenClaw code under the
+installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, and
+`openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
+workspace packages. Paths outside the installation root are not OpenClaw code.
+Profiles label dependency frames as `[dep:<pkg>]` with URL
 `node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
 versions, filenames, and absolute paths stay hidden. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,

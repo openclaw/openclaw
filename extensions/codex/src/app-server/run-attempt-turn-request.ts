@@ -198,17 +198,17 @@ export async function prepareCodexAttemptTurnRequest(
       ),
     });
     if (turnStartParams.cyberAccessProgram !== undefined) {
-      // This integration supports explicit programs only with ChatGPT auth.
-      // Upstream API-key forwarding uses a separate mode we do not support.
+      // The managed Codex runtime supports explicit programs for both native
+      // OpenAI account types; entitlement still comes from this client's catalog.
       const account = await turnClient.request<CodexGetAccountResponse>(
         "account/read",
         { refreshToken: false },
         { assertCurrent: assertTurnCurrent },
       );
       assertTurnCurrent();
-      if (account.account?.type !== "chatgpt") {
+      if (account.account?.type !== "chatgpt" && account.account?.type !== "apiKey") {
         throw new CodexAccessProgramUnavailableError(
-          "Explicit Daybreak access in the Codex runtime requires ChatGPT subscription authentication. Use the OpenClaw runtime for Platform API-key access, or reset Access to the model default.",
+          "Explicit Daybreak access in the Codex runtime requires an authenticated OpenAI account. Sign in or reset Access to the model default.",
         );
       }
       if (turnStartParams.cyberAccessProgram !== "standard") {

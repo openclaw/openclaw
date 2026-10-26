@@ -146,6 +146,7 @@ if (
   };
   const memory = () => ({
     ...process.memoryUsage(),
+    allocatedBytes: Reflect.get(getHeapStatistics(), "total_allocated_bytes"),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
     heapSpaces: getHeapSpaceStatistics(),
     code: getHeapCodeStatistics(),
@@ -178,6 +179,7 @@ if (
         complete: boolean;
         peakHeapUsedBytes: number;
         heapSamples: number;
+        reclaimedBytes: number;
       }
     | undefined;
   const drainGc = (restart: boolean) => {
@@ -189,6 +191,10 @@ if (
       profiler.start();
     }
     for (const entry of profile?.statistics ?? []) {
+      measured.reclaimedBytes += Math.max(
+        0,
+        entry.beforeGC.heapStatistics.usedHeapSize - entry.afterGC.heapStatistics.usedHeapSize,
+      );
       measured.peakHeapUsedBytes = Math.max(
         measured.peakHeapUsedBytes,
         entry.beforeGC.heapStatistics.usedHeapSize,
@@ -279,6 +285,7 @@ if (
         complete: true,
         peakHeapUsedBytes: process.memoryUsage().heapUsed,
         heapSamples: 0,
+        reclaimedBytes: 0,
       };
       loop.reset();
       loop.enable();
@@ -317,6 +324,7 @@ if (
         operation: command.operation,
         complete: result.complete,
         peakHeapUsedBytes: result.peakHeapUsedBytes,
+        reclaimedBytes: result.reclaimedBytes,
         heapSamples: result.heapSamples,
         startedAtEpochMs: result.startedAtEpochMs,
         endedAtEpochMs,

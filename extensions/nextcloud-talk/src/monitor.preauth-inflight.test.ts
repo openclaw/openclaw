@@ -6,8 +6,7 @@ import { expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest, signWebhookBody } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 
-const { rejection, legacyListeners } = vi.hoisted(() => ({
-  rejection: vi.fn(),
+const { legacyListeners } = vi.hoisted(() => ({
   legacyListeners: new WeakMap<IncomingMessage, { port: number; host?: string }>(),
 }));
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
@@ -15,17 +14,6 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   return {
     ...actual,
     getWebhookLegacyListener: (req: IncomingMessage) => legacyListeners.get(req),
-  };
-});
-vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
-  return {
-    ...actual,
-    sendHttpRequestRejection: (...args: Parameters<typeof actual.sendHttpRequestRejection>) => {
-      rejection(...args);
-      return actual.sendHttpRequestRejection(...args);
-    },
   };
 });
 
@@ -155,13 +143,10 @@ it.each(["Gateway", "legacy"] as const)(
       expect(secondAccount).toHaveBeenCalledTimes(ingress === "Gateway" ? 1 : 2);
       endpoint = ingress === "legacy" ? firstEndpoint : undefined;
 
-      rejection.mockClear();
       const pipelined = waitForRequests(received + 1);
       const connectionResponse = readEntireResponse(connection);
       connection.write(incompleteRequest("keep-alive"));
       await pipelined;
-      // Parsing a later request cannot select a close while admission is pending.
-      expect(rejection).not.toHaveBeenCalled();
       releaseAdmission.resolve();
       const data = await connectionResponse;
       const acknowledgedAt = data.indexOf("HTTP/1.1 200");

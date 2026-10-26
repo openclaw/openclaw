@@ -4,18 +4,18 @@ import type {
   DecisionOutcomeV2,
 } from "../../../decisions/types-v2.js";
 
-export const DECISION_TOOL_PREFILTER_RUBRIC_VERSION = "9";
+export const DECISION_TOOL_PREFILTER_RUBRIC_VERSION = "10";
 export const DECISION_TOOL_PREFILTER_THRESHOLD = 0.35;
 
 export const decisionToolPrefilterQuestions: DecisionBatchV2["questions"] = {
   missing_request_context: {
     type: "boolean",
     instructions:
-      "Does understanding the request in `latestRequest` require a referent absent from `latestRequest`, `recentConversation`, and the structurally labeled `beforePromptBuild` fields when present?",
+      "Is a referent needed to fulfill `latestRequest` missing from `latestRequest`, `recentConversation`, and the structurally labeled `beforePromptBuild` fields when present?",
     criteria: {
       true: "A reference to an earlier subject, proposal, or action cannot be resolved from the supplied text. A request for exact prior-conversation content is missing context when that content is not present in the supplied exchanges; do not assume access to an unprovided full transcript.",
       false:
-        "The request is self-contained or its references are resolved by the supplied exchanges, ordered oldest first. The omissions recorded in `omittedContext` alone do not imply a missing referent. Information that the request explicitly asks to fetch is not a missing referent.",
+        "The request is self-contained or its references are resolved by the supplied exchanges, ordered oldest first. A conversational acknowledgment of completed work that requests nothing further does not need an additional referent. The omissions recorded in `omittedContext` alone do not imply a missing referent. Information that the request explicitly asks to fetch is not a missing referent.",
     },
   },
   next_response_needs_tools: {

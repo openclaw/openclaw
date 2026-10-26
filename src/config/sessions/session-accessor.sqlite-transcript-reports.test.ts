@@ -35,6 +35,7 @@ import {
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createRetainedSkillsSnapshotFixture } from "./session-skills-snapshot.test-support.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import {
   createTranscriptEventInserter,
@@ -261,18 +262,7 @@ describe("SQLite report payload selection", () => {
       await seedEvents([]);
       await upsertSessionEntryCore(scope, {
         lifecycleRevision: "current-lifecycle",
-        skillsSnapshot: {
-          prompt: "",
-          skills: [],
-          librarySelections: [
-            {
-              skillId: "11111111-1111-4111-8111-111111111111",
-              revision: "a".repeat(64),
-              name: "notes",
-              ownerProfileId: "snapshot-owner",
-            },
-          ],
-        },
+        skillsSnapshot: createRetainedSkillsSnapshotFixture(),
       });
       const retained = retainPreparedSessionEntryPredicate({
         databaseIdentity: readDatabasePathIdentitySync(agentDatabase().path).key,

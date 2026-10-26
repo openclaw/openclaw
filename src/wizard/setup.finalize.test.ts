@@ -20,6 +20,7 @@ import {
   sessionGatewayTuiTarget,
   type FinalizeArgs,
   type FinalizeArgsOverrides,
+  createGatewayPasswordRefConfig,
 } from "./setup.finalize.fixtures.test-support.js";
 import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
@@ -291,18 +292,7 @@ describe("finalizeSetupWizard", () => {
       await finalizeSetupWizard(
         createFinalizeArgs("quickstart", {
           settings: { authMode: "password" },
-          nextConfig: {
-            gateway: {
-              auth: {
-                mode: "password",
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_GATEWAY_PASSWORD",
-                },
-              },
-            },
-          },
+          nextConfig: createGatewayPasswordRefConfig(),
           prompter,
           runtime,
         }),
@@ -1578,18 +1568,7 @@ describe("finalizeSetupWizard", () => {
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
       settings: { authMode: "password" },
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
-            },
-          },
-        },
-      },
+      nextConfig: createGatewayPasswordRefConfig(),
       prompter,
     });
 

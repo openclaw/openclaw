@@ -156,6 +156,40 @@ const withPage = pageRunner(suite, () => ({
 }));
 
 suite.define(() => {
+  it("keeps routine autosaves silent while persisting settings", async () => {
+    await withPage(
+      async ({ page }) => {
+        const gateway = await installConfig(page, laboratoryConfig("initial-api"), "quiet-initial");
+        const endpoint = await openLaboratory(page, "initial-api");
+        await gateway.deferNext("config.set");
+        await endpoint.fill("saved-api");
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("quiet-initial");
+        expect(JSON.parse(String(save.raw))).toEqual(laboratoryConfig("saved-api"));
+
+        const indicator = page.locator("openclaw-settings-save-indicator");
+        for (const viewport of [
+          { width: 1440, height: 900 },
+          { width: 1366, height: 768 },
+          { width: 768, height: 1024 },
+          { width: 390, height: 844 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await capture(page, `quiet-autosave-${viewport.width}.png`, endpoint);
+          expect.soft(await indicator.textContent()).toBe("");
+          expect.soft(await indicator.getByRole("status").count()).toBe(0);
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await gateway.resolveDeferred("config.set");
+        await expectSaveStatus(page, "Apply changes");
+        expect(await indicator.textContent()).not.toMatch(/Saving|Saved/u);
+        await page.reload();
+        await expect.poll(() => endpoint.inputValue()).toBe("saved-api");
+      },
+      { recordVideo: undefined },
+    );
+  });
+
   it.each([
     {
       name: "authored activation and limits",
@@ -327,7 +361,7 @@ suite.define(() => {
         laboratory: { endpoint: "external-api", retryBudget: 3 },
       });
       await gateway.resolveDeferred("config.set");
-      await expectSaveStatus(page, "Saved");
+      await expectSaveStatus(page, "Apply changes");
       await page.reload();
       await endpoint.waitFor();
       await capture(page, "13-reconnect-save-reload.png", endpoint);
@@ -369,7 +403,7 @@ suite.define(() => {
         laboratory: { endpoint: "saved-api", retryBudget: 3 },
       });
       await gateway.resolveDeferred("config.set");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
     });
   });
 
@@ -463,7 +497,7 @@ suite.define(() => {
       expect(JSON.parse(String(retriedSetParams.raw))).toMatchObject({
         laboratory: { endpoint: "form-api", retryBudget: 4 },
       });
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
 
       await button(page, "Raw").click();
       const rawEditor = page.locator(".config-raw-field textarea");
@@ -579,7 +613,7 @@ suite.define(() => {
         config: JSON.parse(String(save.raw)),
         hash: "snapshot-saved",
       });
-      await expectSaveStatus(page, "Saved");
+      await expectSaveStatus(page, "Apply changes");
       await capture(page, "06-replacement-save.png", endpoint);
     });
   });
@@ -674,7 +708,7 @@ suite.define(() => {
       }
       await gateway.resolveDeferred("config.set");
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
 
       await page.reload();
       await expect.poll(() => endpoint.inputValue()).toBe("after-save");

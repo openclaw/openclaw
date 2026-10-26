@@ -3,7 +3,7 @@
 //   --bundle-dir BASE --compare-bundle-dir HEAD --mode all --pairs 10 --profiles local,remote
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -43,15 +43,36 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { summarizeScriptCoverage } from "./lib/control-ui-cold-load-trace.ts";
 import { createInteractionFixture } from "./lib/control-ui-interaction-scenarios.ts";
 import {
+  captureDockScenario,
+  DOCK_SCENARIO_IDS,
+  dockAsset,
+  dockContextOptions,
+  dockFixture,
+  dockTarget,
+  installDockInputTrace,
+  isDockScenario,
+  type DockAssetRequest,
+  type DockScenarioId,
+} from "./lib/control-ui-route-dock-scenarios.ts";
+import { qualifyRouteNetworkClock, routeNetworkPhase } from "./lib/control-ui-route-network.ts";
+import {
+  type ActivityMediaMode,
+  activityMediaFixture,
+  activityMediaMethods,
+  activityMediaTrigger,
+  activityLightboxImage,
+  waitForActivityMedia,
+  waitForActivityLightbox,
+  closeActivityLightbox,
+} from "./route-leaks-activity-pilot.ts";
+import {
   appsGatewayInitScript,
-  appsNetworkPhase,
   appsPilotFixture,
   appsPilotTarget,
   appsProbeSnapshot,
   clickFirstAppAndWait,
   isAppsOpenId,
   isAppsPilotId,
-  qualifyAppsClock,
   startAppsPilotSandbox,
   verifyFirstAppAndClose,
   waitForAppsCatalog,
@@ -64,7 +85,9 @@ type ProbeRoute =
   | AppsPilotId
   | "desktop-document"
   | "portal-embedded"
-  | "roster";
+  | "roster"
+  | "settings-native-root"
+  | DockScenarioId;
 let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
 const { values } = parseArgs({
@@ -73,6 +96,7 @@ const { values } = parseArgs({
     "compare-bundle-dir": { type: "string" },
     routes: { type: "string" },
     interactions: { type: "string" },
+    "activity-media": { type: "string" },
     mode: { type: "string", default: "coverage" },
     profiles: { type: "string", default: "local,remote" },
     pairs: { type: "string", default: "10" },
@@ -84,6 +108,9 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(
     "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,claws-search,roster-create-claw,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
+    `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
+    "Activity media: --routes activity --activity-media empty|gallery; --interactions activity-lightbox opens the viewer after the fixed warmup, activity-lightbox-immediate opens it before artifact analysis, and activity-idle records the warmup without a click.",
   );
   process.exit(0);
 }
@@ -124,10 +151,12 @@ const defaults = [
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   if (
     id !== "sharing" &&
+    id !== "settings-native-root" &&
     id !== "desktop-document" &&
     id !== "portal-embedded" &&
     id !== "roster" &&
     !isAppsPilotId(id) &&
+    !isDockScenario(id) &&
     !APP_ROUTE_IDS.some((route) => route === id)
   ) {
     throw new Error(`Unknown route: ${id}`);
@@ -135,7 +164,22 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   return id as ProbeRoute;
 });
 const appsProbesEnabled = routes.some(isAppsPilotId);
+const activityMediaOption = values["activity-media"];
+if (
+  activityMediaOption !== undefined &&
+  activityMediaOption !== "empty" &&
+  activityMediaOption !== "gallery"
+) {
+  throw new Error("activity-media must be empty or gallery");
+}
+const activityMedia: ActivityMediaMode | undefined = activityMediaOption;
 const interactionIds = values.interactions?.split(",") ?? [];
+if (routes.includes("settings-native-root") && interactionIds.length) {
+  throw new Error("Native Settings root is a cold-only cell; do not combine with --interactions");
+}
+if (routes.some(isDockScenario) && interactionIds.length) {
+  throw new Error(`Dock cells (${DOCK_SCENARIO_IDS.join(",")}) own their native first-open phases`);
+}
 const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
 const creationInteractions: Record<string, ProbeRoute[]> = {
   "claws-search": ["claws"],
@@ -149,6 +193,9 @@ const knownInteractions = [
   "cron-transcript",
   "new-session-typing-immediate",
   "preload-idle",
+  "activity-lightbox",
+  "activity-idle",
+  "activity-lightbox-immediate",
   ...securityInteractions,
   ...Object.keys(creationInteractions),
 ];
@@ -178,6 +225,29 @@ if (
     "Security navigation requires only --routes advanced and one Security interaction",
   );
 }
+const activityImmediate = interactionIds.includes("activity-lightbox-immediate");
+if (
+  interactionIds.includes("activity-idle") &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "activity" || !activityMedia)
+) {
+  throw new Error(
+    "Activity idle requires only --routes activity and --activity-media empty|gallery",
+  );
+}
+if (
+  interactionIds.some((id) => id.startsWith("activity-lightbox")) &&
+  activityMedia !== "gallery"
+) {
+  throw new Error("Activity lightbox interactions require --activity-media gallery");
+}
+if (
+  activityImmediate &&
+  (interactionIds.length !== 1 || routes.length !== 1 || routes[0] !== "activity")
+) {
+  throw new Error(
+    "Immediate Activity lightbox requires only --routes activity and one interaction",
+  );
+}
 const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 const fields =
@@ -186,12 +256,23 @@ function routeTarget(
   id: ProbeRoute,
   sessionKey: string,
 ): {
-  route: RouteId | "desktop-document";
+  route: RouteId | "desktop-document" | "browser-document";
   pathname: string;
   search: string;
   selector: string | undefined;
   requiredMethods?: string[];
 } {
+  if (id === "settings-native-root") {
+    return {
+      route: "settings",
+      pathname: "/settings",
+      search: "",
+      selector: '.settings-embed-list a[href="/settings/appearance"]',
+    };
+  }
+  if (isDockScenario(id)) {
+    return dockTarget(id);
+  }
   if (isAppsPilotId(id)) {
     return appsPilotTarget();
   }
@@ -244,6 +325,7 @@ function routeTarget(
     // can remain disabled in an otherwise usable read-only fixture.
     agents: "openclaw-agents-page .agents-refresh-btn:not(:disabled)",
     usage: "openclaw-usage-page .usage-date-input",
+    activity: activityMedia === "gallery" ? activityMediaTrigger : ".activity-feed__session",
     workboard: ".workboard button:not(:disabled)",
     plugins:
       "openclaw-plugins-page .plugin-catalog-card:not(.plugin-catalog-card--skeleton), openclaw-plugins-page .plugin-catalog-results__body openclaw-panel-empty-state",
@@ -268,7 +350,12 @@ function routeTarget(
             : id === "agents"
               ? pathForAgentPanel("main")
               : pathForRoute(id),
-    search: id === "model-setup" ? "?firstRun=explicit" : "",
+    search:
+      id === "model-setup"
+        ? "?firstRun=explicit"
+        : id === "activity" && activityMedia
+          ? "?time=all"
+          : "",
     ...(id === "claws" ? { requiredMethods: ["claws.catalog.search"] } : {}),
     ...(id === "worktrees" ? { requiredMethods: ["worktrees.list"] } : {}),
     ...(id === "desktop-document"
@@ -298,13 +385,20 @@ function fixtureFor(
   id: ProbeRoute,
   baseUrl: string,
 ): ControlUiMockGatewayScenario {
+  if (isDockScenario(id)) {
+    return dockFixture(build, id);
+  }
   if (isAppsPilotId(id)) {
     if (!appsSandbox) {
       throw new Error("Apps sandbox was not prepared");
     }
     return appsPilotFixture(fixtureFor(build, "apps", baseUrl), appsSandbox.descriptor);
   }
-  const fixture = createInteractionFixture(build.buildId, build.version);
+  const baseFixture = createInteractionFixture(build.buildId, build.version);
+  const fixture =
+    id === "activity" && activityMedia
+      ? activityMediaFixture(baseFixture, activityMedia)
+      : baseFixture;
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
   const creationFixture = id === "claws" || id === "roster";
   const clawsConfig = {
@@ -327,6 +421,9 @@ function fixtureFor(
   return {
     ...fixture,
     ...workboard,
+    ...(id === "settings-native-root"
+      ? { automaticallyFetchFavicons: false, operatorScopes: ["operator.admin", "operator.read"] }
+      : {}),
     serverBuildId: build.buildId,
     serverVersion: build.version,
     ...((id === "chat" || id === "new-session") &&
@@ -385,6 +482,7 @@ function fixtureFor(
         ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
         ...(creationFixture ? ["claws.catalog.search", "claws.drafts.create", "chat.send"] : []),
         ...(id === "worktrees" ? ["worktrees.list", "worktrees.branches", "worktrees.create"] : []),
+        ...(id === "activity" && activityMedia ? activityMediaMethods : []),
       ]),
     ],
     methodResponses: {
@@ -633,9 +731,14 @@ async function readBuild(directory: string) {
     build,
     indexSha256: createHash("sha256").update(html).digest("hex"),
     nextPreloads: Object.fromEntries(
-      ["agents-next", "cron-next", "model-picker", "new-session-model-picker", "roster-next"].map(
-        (key) => [key, navigationPreloads[key] ?? []],
-      ),
+      [
+        "agents-next",
+        "cron-next",
+        "activity-next",
+        "model-picker",
+        "new-session-model-picker",
+        "roster-next",
+      ].map((key) => [key, navigationPreloads[key] ?? []]),
     ),
   };
 }
@@ -652,17 +755,7 @@ const variants = [
       ]
     : []),
 ];
-type AssetRequest = {
-  requestId: string;
-  url: string;
-  type: string;
-  initiator: unknown;
-  wireBytes?: number;
-  timestampSeconds?: number;
-  finishedTimestampSeconds?: number;
-  status?: number;
-  failed?: string;
-};
+type AssetRequest = DockAssetRequest;
 type CoverageEntry = Awaited<ReturnType<Page["coverage"]["stopJSCoverage"]>>[number];
 const evaluatedUrls = (entries: CoverageEntry[]) =>
   entries
@@ -734,14 +827,15 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron/Creation interactions use a minimum2,000ms think time, immediate New Session typing uses native key events before artifact work without hover/think time, preload-idle observes native warming without intent, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron/Creation interactions use a minimum2,000ms think time, immediate New Session typing uses native key events before artifact work without hover/think time, preload-idle observes native warming without intent, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading; Activity warmed/idle cells use the fixed minimum2000ms wait, and Activity immediate has no intentional delay",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron/Creation interactions give every variant the same minimum 2,000 ms idle interval before expected-preload verification. interactionWarmup CPU/wall stop before verification polling; preloadVerification records additional wall/CPU through confirmed completion. Total warm cost includes both intervals. Completion verification can extend readiness-to-action time. Immediate New Session typing focuses the textarea and uses native pressSequentially before any cold artifact/screenshot work; its cutoff is the next animation frame and it records pending action requests without waiting for speculative imports. preload-idle has no synthetic intent and observes a minimum2000ms native idle window. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron/Creation/warmed Activity interactions give every variant the same minimum 2,000 ms idle interval before expected-preload verification. interactionWarmup CPU/wall and Activity network stop before verification polling; preloadVerification records additional wall/CPU and Activity network through confirmed completion. Total warm cost includes both intervals. Completion verification can extend readiness-to-action time. Immediate New Session typing focuses the textarea and uses native pressSequentially before any cold artifact/screenshot work; its cutoff is the next animation frame and it records pending action requests without waiting for speculative imports. preload-idle has no synthetic intent and observes a minimum2000ms native idle window. Cold-only and sharing runs have no think-time delay. Activity media cold cells retain raw request/finish/failure timestamps, reconstruct network state at actual NavigationStart plus same-document readiness, and require matched Resource Timing start/end residuals within5ms before totals. Activity RPC counts are snapshots after readiness, not a cutoff-filtered timeline. Immediate Activity opens before artifact analysis/screenshots and records readiness-to-action overhead; warmed Activity verifies preload completion and non-evaluation before the native click.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
         routes,
         interactions: interactionIds,
+        activityMedia: activityMedia ?? null,
         profiles,
         pairs,
         summaries,
@@ -759,18 +853,22 @@ async function metrics(cdp: CDPSession) {
 
 function cpuDelta(before: Record<string, number>, after: Record<string, number>) {
   return Object.fromEntries(
-    [
-      ["taskMs", "TaskDuration"],
-      ["scriptMs", "ScriptDuration"],
-      ["layoutMs", "LayoutDuration"],
-      ["styleMs", "RecalcStyleDuration"],
-    ].map(([name, metric]) => {
-      const first = before[metric!],
-        last = after[metric!];
+    (
+      [
+        ["taskMs", "TaskDuration", 1_000],
+        ["scriptMs", "ScriptDuration", 1_000],
+        ["layoutMs", "LayoutDuration", 1_000],
+        ["styleMs", "RecalcStyleDuration", 1_000],
+        ["layoutCount", "LayoutCount", 1],
+        ["recalcStyleCount", "RecalcStyleCount", 1],
+      ] as const
+    ).map(([name, metric, scale]) => {
+      const first = before[metric],
+        last = after[metric];
       if (!Number.isFinite(first) || !Number.isFinite(last) || last! < first!) {
         throw new Error(`Invalid threadTicks metric: ${metric}`);
       }
-      return [name!, 1000 * (last! - first!)];
+      return [name, scale * (last! - first!)];
     }),
   );
 }
@@ -1104,6 +1202,10 @@ try {
             await server.selectBuild(variant.root);
             const context: BrowserContext = await browser.newContext({
               viewport: { width: 1440, height: 1000 },
+              ...(route === "settings-native-root"
+                ? { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" }
+                : {}),
+              ...(isDockScenario(route) ? dockContextOptions(route) : {}),
               serviceWorkers: "block",
             });
             const page: Page = await context.newPage();
@@ -1139,7 +1241,8 @@ try {
                         body: '<!doctype html><title>Route probe portal</title><h1 data-route-probe-portal>Route probe portal</h1><button type="button">Ready</button>',
                         contentType: "text/html",
                       }
-                    : prepared.assets.get(pathname),
+                    : ((isDockScenario(route) ? dockAsset(route, pathname) : undefined) ??
+                      prepared.assets.get(pathname)),
               );
               const target = routeTarget(route, fixture.sessionKey!);
               result.target = target;
@@ -1167,6 +1270,16 @@ try {
                 );
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (route === "settings-native-root") {
+                await page.addInitScript(() => {
+                  Object.assign(window, {
+                    __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+                  });
+                });
+              }
+              if (isDockScenario(route)) {
+                await page.addInitScript(installDockInputTrace);
+              }
               const gatewayInit = createControlUiMockGatewayInitScript(fixture);
               await page.addInitScript({
                 content:
@@ -1233,6 +1346,7 @@ try {
                 const request = requests.get(event.requestId);
                 if (request) {
                   request.failed = event.errorText;
+                  request.failedTimestampSeconds = event.timestamp;
                 }
               });
               if (mode === "coverage") {
@@ -1246,6 +1360,28 @@ try {
               await page.goto(`${server.baseUrl}${target.pathname}${target.search}`, {
                 waitUntil: "domcontentloaded",
               });
+              if (isDockScenario(route)) {
+                await captureDockScenario({
+                  id: route,
+                  mode: mode as "coverage" | "timing",
+                  page,
+                  cdp,
+                  requests,
+                  before,
+                  output,
+                  prefix,
+                  screenshots: values.screenshots,
+                  result,
+                  metrics,
+                  cpuDelta,
+                  summarize: (coverage, phaseRequests) =>
+                    summarizeCoverage(coverage, phaseRequests, variant.root, prepared.assets),
+                });
+                if (errors.length) {
+                  throw new Error(errors.join("\n"));
+                }
+                continue;
+              }
               if (route === "systems" || route === "desktop-document") {
                 const rfb = await installScriptedRfbServer(page);
                 await page.waitForFunction(
@@ -1382,6 +1518,29 @@ try {
                         frame.contentDocument.querySelector("button:not(:disabled)") !== null
                       );
                     })();
+                  const nativeSettingsSettled =
+                    probeRoute !== "settings-native-root" ||
+                    (() => {
+                      const rows = [...document.querySelectorAll(".settings-embed-list a")];
+                      return (
+                        document.querySelector("html.openclaw-native-embed .shell--embed") !==
+                          null &&
+                        document.querySelector(
+                          ".native-embed-header openclaw-settings-save-indicator",
+                        ) !== null &&
+                        rows.length > 0 &&
+                        rows.every(
+                          (row) =>
+                            row.getClientRects().length > 0 &&
+                            getComputedStyle(row).visibility !== "hidden" &&
+                            row.getBoundingClientRect().height >= 44,
+                        ) &&
+                        document.querySelector(
+                          ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, openclaw-macos-titlebar-controls",
+                        ) === null &&
+                        document.documentElement.scrollWidth <= innerWidth
+                      );
+                    })();
                   const portalRailSettled =
                     probeRoute !== "portal-embedded" ||
                     (() => {
@@ -1401,6 +1560,7 @@ try {
                     desktopSettled &&
                     portalSettled &&
                     portalRailSettled &&
+                    nativeSettingsSettled &&
                     approvalsSettled &&
                     (routeId === "desktop-document" ||
                       (snapshot?.routeReady &&
@@ -1429,6 +1589,9 @@ try {
                 },
                 { timeout: 30_000, polling: "raf" },
               );
+              if (route === "activity" && activityMedia) {
+                await waitForActivityMedia(page, activityMedia);
+              }
               const readyMs = await page.evaluate(
                 () =>
                   new Promise<number>((resolve) => {
@@ -1436,16 +1599,47 @@ try {
                   }),
               );
               // Freeze observed transfer state before stopping coverage or reading artifacts.
-              const requestsAtReady = Array.from(requests.values(), (request) =>
+              const observedRequestsAtReady = Array.from(requests.values(), (request) =>
                 Object.assign({}, request),
               );
               const coverageAtReady =
                 mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
               pendingColdCoverage = coverageAtReady;
+              const after = await metrics(cdp);
+              const observedAfterReady = Array.from(requests.values(), (request) =>
+                Object.assign({}, request),
+              );
+              const activityCutoff = after.NavigationStart! + readyMs / 1_000;
+              const requestsAtReady =
+                route === "activity" && activityMedia
+                  ? observedAfterReady
+                      .filter((request) => request.timestampSeconds! <= activityCutoff)
+                      .map((request) => {
+                        const item = Object.assign({}, request);
+                        if ((item.finishedTimestampSeconds ?? Infinity) > activityCutoff) {
+                          delete item.finishedTimestampSeconds;
+                          delete item.wireBytes;
+                        }
+                        if ((item.failedTimestampSeconds ?? Infinity) > activityCutoff) {
+                          delete item.failedTimestampSeconds;
+                          delete item.failed;
+                        }
+                        return item;
+                      })
+                  : observedRequestsAtReady;
+              if (route === "activity" && activityMedia) {
+                result.observedRequestsAtReady = observedRequestsAtReady;
+                result.observedRequestsAfterReady = observedAfterReady;
+                result.phaseClockEvidence = {
+                  navigationStart: after.NavigationStart,
+                  coldMetricTimestamp: after.Timestamp,
+                  sameDocumentCutoffMs: readyMs,
+                  rawCutoffSeconds: activityCutoff,
+                };
+              }
               result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
                 /\.m?js$/u.test(new URL(request.url).pathname),
               );
-              const after = await metrics(cdp);
               result.readyMs = readyMs;
               result.workerUrls = page.workers().map((worker) => worker.url());
               if (coverageAtReady) {
@@ -1615,7 +1809,7 @@ try {
                 appsFirstAction.preClickProbe = await appsProbeSnapshot(page, started);
                 const readyProbe = await appsProbeSnapshot(page, ended);
                 appsFirstAction.readyProbe = readyProbe;
-                const clock = qualifyAppsClock(
+                const clock = qualifyRouteNetworkClock(
                   atEnd,
                   navigationStart,
                   readyProbe.completedResourcesAtCutoff,
@@ -1628,9 +1822,9 @@ try {
                   );
                 }
                 appsFirstAction.networkPhases = {
-                  cold: appsNetworkPhase(atEnd, navigationStart, 0, readyMs),
-                  postColdBeforeClick: appsNetworkPhase(atEnd, navigationStart, readyMs, started),
-                  firstOpen: appsNetworkPhase(atEnd, navigationStart, started, ended),
+                  cold: routeNetworkPhase(atEnd, navigationStart, 0, readyMs),
+                  postColdBeforeClick: routeNetworkPhase(atEnd, navigationStart, readyMs, started),
+                  firstOpen: routeNetworkPhase(atEnd, navigationStart, started, ended),
                 };
                 appsFirstAction.frameUrlsAtReady = page.frames().map((frame) => frame.url());
                 if (stepCoverage) {
@@ -1659,7 +1853,7 @@ try {
                   navigationStart: after.NavigationStart,
                   coldMetricTimestamp: after.Timestamp,
                 };
-                const clock = qualifyAppsClock(
+                const clock = qualifyRouteNetworkClock(
                   requestsAtReady,
                   after.NavigationStart!,
                   probe.completedResourcesAtCutoff,
@@ -1681,9 +1875,16 @@ try {
               const routeInteractions = interactionIds.filter(
                 (value) =>
                   creationInteractions[value]?.includes(route) ||
-                  value.startsWith(
-                    route === "agents" ? "agents-" : route === "cron" ? "cron-" : "__none__",
-                  ),
+                  (value !== "activity-lightbox-immediate" &&
+                    value.startsWith(
+                      route === "agents"
+                        ? "agents-"
+                        : route === "cron"
+                          ? "cron-"
+                          : route === "activity"
+                            ? "activity-"
+                            : "__none__",
+                    )),
               );
               const creationWarmup = routeInteractions.some((id) => id in creationInteractions);
               const warmKey = preloadIdle
@@ -1727,6 +1928,7 @@ try {
               }
               const data = await page.evaluate(
                 (cutoffMs) => ({
+                  observedAtMs: performance.now(),
                   resources: performance
                     .getEntriesByType("resource")
                     .map((entry) => {
@@ -1737,6 +1939,7 @@ try {
                         rawBytes: resource.decodedBodySize,
                         encodedBytes: resource.encodedBodySize,
                         transferBytes: resource.transferSize,
+                        startTime: resource.startTime,
                         responseEnd: resource.responseEnd,
                       };
                     })
@@ -1767,6 +1970,106 @@ try {
                 }),
                 readyMs,
               );
+              if (route === "activity" && activityMedia) {
+                result.rpcObservedAtMs = data.observedAtMs;
+                const clock = qualifyRouteNetworkClock(
+                  requestsAtReady,
+                  after.NavigationStart!,
+                  data.resources.filter((resource) => resource.responseEnd > 0),
+                );
+                result.clockQualification = clock;
+                if (!clock.passed) {
+                  result.routeClockFailure = true;
+                  result.networkAndCoverageTotalsWithheld = true;
+                  throw new Error("Activity cold clock did not qualify; raw evidence retained");
+                }
+                result.networkAtReady = routeNetworkPhase(
+                  requestsAtReady,
+                  after.NavigationStart!,
+                  0,
+                  readyMs,
+                );
+              }
+              // Keep the first open ahead of artifact analysis and screenshots.
+              let activityImmediateCell: InteractionResult | undefined;
+              if (activityImmediate) {
+                const cell: InteractionResult = { id: "activity-lightbox-immediate" };
+                activityImmediateCell = cell;
+                result.interactions = [cell];
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                let stepCoverage: CoverageEntry[] | undefined;
+                let failure: { error: unknown } | undefined;
+                try {
+                  const cpuBefore = await metrics(cdp);
+                  const started = await page.evaluate(() => performance.now());
+                  await page.locator(activityMediaTrigger).first().click();
+                  await waitForActivityLightbox(page);
+                  const ended = await page.evaluate(
+                    () =>
+                      new Promise<number>((resolve) => {
+                        requestAnimationFrame(() => resolve(performance.now()));
+                      }),
+                  );
+                  const cpuAfter = await metrics(cdp);
+                  const atEnd = Array.from(requests.values(), (request) =>
+                    Object.assign({}, request),
+                  );
+                  cell.coldReadyMs = readyMs;
+                  cell.actionStartedMs = started;
+                  cell.readinessToActionMs = started - readyMs;
+                  cell.wallMs = ended - started;
+                  cell.cpu = cpuDelta(cpuBefore, cpuAfter);
+                  cell.newJsRequests = atEnd.filter(
+                    (request) =>
+                      !prior.has(request.requestId) &&
+                      /\.m?js$/u.test(new URL(request.url).pathname),
+                  );
+                  cell.previousPendingCompleted = atEnd.filter(
+                    (request) =>
+                      prior.has(request.requestId) &&
+                      prior.get(request.requestId)!.wireBytes === undefined &&
+                      request.wireBytes !== undefined,
+                  );
+                  if (mode === "coverage") {
+                    stepCoverage = await page.coverage.stopJSCoverage();
+                  }
+                  if (values.screenshots && pair === 0) {
+                    await page.screenshot({
+                      path: path.join(output, `${prefix}-activity-lightbox-immediate.png`),
+                    });
+                  }
+                  await closeActivityLightbox(page);
+                } catch (error) {
+                  failure = { error };
+                  cell.error = String(error);
+                } finally {
+                  if (mode === "coverage") {
+                    try {
+                      stepCoverage ??= await page.coverage.stopJSCoverage();
+                      cell.evaluatedScriptUrls = evaluatedUrls(stepCoverage);
+                      const suffix = failure ? "-failure" : "";
+                      await writeFile(
+                        path.join(output, `${prefix}-activity-lightbox-immediate${suffix}-v8.json`),
+                        JSON.stringify(stepCoverage),
+                      );
+                    } catch (error) {
+                      cell.coverageCaptureError = String(error);
+                      failure ??= { error };
+                    }
+                  }
+                }
+                if (failure) {
+                  throw failure.error;
+                }
+              }
               // Keep immediate navigation ahead of artifact analysis and screenshots.
               const securityCell = securityInteraction
                 ? await runSecurityNavigation(
@@ -1857,6 +2160,9 @@ try {
                 }, warmup.started);
                 const idleEnded = await page.evaluate(() => performance.now());
                 const idleCpu = await metrics(cdp);
+                const idleRequests = Array.from(requests.values(), (request) =>
+                  Object.assign({}, request),
+                );
                 // Keep descriptor-specific readiness polling outside the idle CPU sample.
                 const urls = warmFiles.map((file) => new URL(file, server.baseUrl).href);
                 preloadExpectation = { key: warmKey ?? "no-intent", urls };
@@ -1902,6 +2208,16 @@ try {
                   preloadVerification: {
                     wallMs: warmEnded - idleEnded,
                     cpu: cpuDelta(idleCpu, verifiedCpu),
+                    ...(route === "activity"
+                      ? {
+                          network: routeNetworkPhase(
+                            Array.from(requests.values()),
+                            after.NavigationStart!,
+                            idleEnded,
+                            warmEnded,
+                          ),
+                        }
+                      : {}),
                   },
                   evaluatedScriptUrls: evaluated,
                   panelEvaluatedBeforeAction: panelEvaluated,
@@ -1914,6 +2230,17 @@ try {
                         observedNativeLinks,
                         alreadyEvaluatedAtCold: urls.filter((url) =>
                           evaluatedUrls(coverageAtReady ?? []).includes(url),
+                        ),
+                      }
+                    : {}),
+                  ...(route === "activity"
+                    ? {
+                        requestsAtEnd: idleRequests,
+                        network: routeNetworkPhase(
+                          idleRequests,
+                          after.NavigationStart!,
+                          readyMs,
+                          idleEnded,
                         ),
                       }
                     : {}),
@@ -1957,12 +2284,17 @@ try {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
               }
-              result.interactions ??= appsFirstAction
-                ? [appsFirstAction]
-                : securityCell
-                  ? [securityCell]
-                  : [];
+              result.interactions ??= activityImmediateCell
+                ? [activityImmediateCell]
+                : appsFirstAction
+                  ? [appsFirstAction]
+                  : securityCell
+                    ? [securityCell]
+                    : [];
               for (const id of routeInteractions) {
+                if (id === "activity-idle") {
+                  continue;
+                }
                 const cell: InteractionResult = { id };
                 try {
                   // Transcript probing starts with the Activity list already available.
@@ -1980,13 +2312,17 @@ try {
                       ? "#agents-tab-files"
                       : id === "cron-history"
                         ? '[data-test-id="cron-list-tab-activity"]'
-                        : ".cron-activity .cron-run-entry button";
+                        : id === "activity-lightbox"
+                          ? activityMediaTrigger
+                          : ".cron-activity .cron-run-entry button";
                   const ready =
                     id === "agents-files"
                       ? "#agent-panel .agent-file-tabs [role=tab]"
                       : id === "cron-history"
                         ? '.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry'
-                        : "[data-cron-run-transcript] .chat-text";
+                        : id === "activity-lightbox"
+                          ? activityLightboxImage
+                          : "[data-cron-run-transcript] .chat-text";
                   const creationBefore =
                     id in creationInteractions
                       ? await page.evaluate(
@@ -2059,6 +2395,9 @@ try {
                       .locator(ready)
                       .filter({ hasText: "Synthetic route transcript ready." })
                       .waitFor();
+                  }
+                  if (id === "activity-lightbox") {
+                    await waitForActivityLightbox(page);
                   }
                   const ended = await page.evaluate(
                     () =>
@@ -2150,6 +2489,9 @@ try {
                   }
                   if (values.screenshots && pair === 0) {
                     await page.screenshot({ path: path.join(output, `${prefix}-${id}.png`) });
+                  }
+                  if (id === "activity-lightbox") {
+                    await closeActivityLightbox(page);
                   }
                 } catch (error) {
                   cell.error = String(error);
@@ -2256,8 +2598,11 @@ try {
               result.failureRequests = Array.from(requests.values(), (request) => ({ ...request }));
             } finally {
               results.push(result);
-              await context.close();
-              await save();
+              try {
+                await appendFile(path.join(output, "samples.jsonl"), `${JSON.stringify(result)}\n`);
+              } finally {
+                await context.close();
+              }
               console.log(
                 JSON.stringify({
                   mode,
@@ -2270,6 +2615,12 @@ try {
                   error: result.error,
                 }),
               );
+            }
+            if (result.routeClockFailure) {
+              throw new Error("Activity clock qualification failed; remaining contexts aborted");
+            }
+            if (result.dockClockFailure) {
+              throw new Error("Dock clock qualification failed; stopped after saving the failure");
             }
             if (abortAfterContext) {
               throw new Error("Route qualification failed; stopped after saving the failure");
@@ -2286,7 +2637,11 @@ try {
     try {
       await appsSandbox?.close();
     } finally {
-      await server.close();
+      try {
+        await server.close();
+      } finally {
+        await save();
+      }
     }
   }
 }

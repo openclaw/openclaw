@@ -5,7 +5,7 @@ import { sessionCreatorProfileId } from "../config/sessions/session-entry-proven
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectSessionOwner,
-  projectSessionParticipants,
+  resolveSessionProfileId,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -140,14 +140,10 @@ export function createSessionRowSelection(
       if (owner?.identity?.type === "profile") {
         (related ??= new Set()).add(owner.identity.id);
       }
-      const participants = (context.identityProjection?.participants ?? projectSessionParticipants)(
-        entry,
-        identities,
-        cfg,
-      );
-      for (const participant of participants.values()) {
-        if (participant.identity.type === "profile") {
-          (related ??= new Set()).add(participant.identity.id);
+      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
+      for (const { identity } of entry.participants ?? []) {
+        if (identity.type === "profile") {
+          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
         }
       }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(

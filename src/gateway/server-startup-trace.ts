@@ -14,6 +14,7 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
@@ -126,10 +127,12 @@ export function createGatewayStartupTrace(
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
+  const pluginWorkers = new Map<string, Map<string, number>>();
   const close = () => {
     eventLoopDelay?.disable();
     eventLoopDelay = undefined;
     closed = true;
+    pluginWorkers.clear();
   };
   const started = startedAt;
   let last = started;
@@ -226,6 +229,21 @@ export function createGatewayStartupTrace(
   };
   return {
     close,
+    run<T>(name: string, run: () => T): T {
+      if (closed) {
+        return run();
+      }
+      let workers = pluginWorkers.get(name);
+      if (!workers) {
+        workers = new Map();
+        pluginWorkers.set(name, workers);
+      }
+      const counts = workers;
+      return runWithWorkerStartObserver(
+        (script) => counts.set(script, (counts.get(script) ?? 0) + 1),
+        run,
+      );
+    },
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -273,6 +291,23 @@ export function createGatewayStartupTrace(
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
+      const pluginLoad = name.startsWith("plugins.gateway-load.plugin.") && !closed;
+      if (pluginLoad) {
+        const workers = pluginWorkers.get(name);
+        pluginWorkers.delete(name);
+        const workersStarted = [...(workers?.values() ?? [])].reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        const duration =
+          metrics.find(([key]) => key === "loadAndRegisterMs")?.[1] ??
+          metrics.find(([key]) => key === "loadMs")?.[1];
+        if (logEnabled || workersStarted || (typeof duration === "number" && duration >= 250)) {
+          log.info(
+            `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")} workersStarted=${workersStarted} workerScripts=${[...(workers ?? [])].map(([script, count]) => `${script}:${count}`).join(",") || "none"}`,
+          );
+        }
+      }
       if (name === "sidecars.subagent-activation") {
         for (const key of RECOVERY_DETAILS) {
           const value = metrics.find(([metricName]) => metricName === key)?.[1];
@@ -283,7 +318,7 @@ export function createGatewayStartupTrace(
       }
       const attributes = Object.fromEntries(metrics);
       recordGatewayRestartTraceDetail(`restart.ready.${name}`, metrics);
-      if (logEnabled) {
+      if (logEnabled && !pluginLoad) {
         log.info(
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
         );

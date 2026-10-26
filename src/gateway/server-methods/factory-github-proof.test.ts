@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { issueFactoryGitHubProof } from "../factory-github-proof.js";
+import { createFactoryGitHubReadClaim } from "../factory-github-proof.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -18,17 +19,7 @@ afterEach(() => {
 });
 beforeEach(() => vi.stubEnv("FACTORY_AUTH_MODE", "github"));
 
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "digest-1",
-  },
-};
+const claim = createFactoryGitHubReadClaim("digest-1");
 
 function issue(assertCurrent = () => {}) {
   const proof = issueFactoryGitHubProof({
