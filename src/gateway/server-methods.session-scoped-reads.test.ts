@@ -41,6 +41,14 @@ const methods = [
   "sessions.branches.list",
 ] as const;
 const key = "agent:main:scoped-read";
+const scope = { agentId: "main", sessionKey: key };
+const seed = (entry: Parameters<typeof sessions.upsertSessionEntryCore>[1]) =>
+  sessions.upsertSessionEntryCore(scope, entry);
+const createdActor = (client: ReturnType<typeof roleClient>) => ({
+  type: "human" as const,
+  source: "profile" as const,
+  id: client.authenticatedUserProfile!.profileId,
+});
 
 function dispatchRead(
   method: (typeof methods)[number],
@@ -131,13 +139,9 @@ describe("narrow session read owners", () => {
         visibility: "shared" as const,
         spawnedCwd: state.workspaceDir,
         permissionMode: "read-only" as const,
-        createdActor: {
-          type: "human" as const,
-          source: "profile" as const,
-          id: owner.authenticatedUserProfile!.profileId,
-        },
+        createdActor: createdActor(owner),
       };
-      await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+      await seed(entry);
       const respond = vi.fn();
       const dispatch = () =>
         handleGatewayRequest({
@@ -155,17 +159,11 @@ describe("narrow session read owners", () => {
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       const download = respond.mock.calls[0]?.[1] as { url: string; filename: string };
       expect(download.filename).toBe("original.bin");
-      await sessions.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        { ...entry, updatedAt: 2, label: "Renamed while downloading" },
-      );
+      await seed({ ...entry, updatedAt: 2, label: "Renamed while downloading" });
       const fetched = await fetchSessionFileDownload(reader, download.url);
       expect(fetched.response.statusCode).toBe(200);
       expect(Buffer.from(fetched.body as Uint8Array)).toEqual(bytes);
-      await sessions.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        { ...entry, visibility: "draft", updatedAt: 3 },
-      );
+      await seed({ ...entry, visibility: "draft", updatedAt: 3 });
       expect((await fetchSessionFileDownload(reader, download.url)).response.statusCode).toBe(404);
       respond.mockClear();
       await dispatch();
@@ -209,11 +207,7 @@ describe("narrow session read owners", () => {
                 updatedAt: 1,
                 visibility: row.visibility,
                 ...(row.name === "incognito" ? { incognito: true } : {}),
-                createdActor: {
-                  type: "human",
-                  source: "profile",
-                  id: (row.own ? reader : owner).authenticatedUserProfile!.profileId,
-                },
+                createdActor: createdActor(row.own ? reader : owner),
               },
             );
           }
@@ -294,7 +288,7 @@ describe("narrow session read owners", () => {
           updatedAt: 1,
           visibility: "shared" as const,
         };
-        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        await seed(entry);
         const subscribers = createSessionMessageSubscriberRegistry();
         const context = createDirectChatContext({
           getRuntimeConfig: () => cfg,
@@ -328,10 +322,7 @@ describe("narrow session read owners", () => {
             current = false;
           }
           if (change === "generation") {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              { ...entry, lifecycleRevision: "replacement", sessionId: "replacement" },
-            );
+            await seed({ ...entry, lifecycleRevision: "replacement", sessionId: "replacement" });
           }
         } finally {
           release.resolve();
@@ -377,22 +368,15 @@ describe("narrow session read owners", () => {
         const entry = {
           sessionId: "metadata-session",
           updatedAt: 1,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: owner.authenticatedUserProfile!.profileId,
-          },
+          createdActor: createdActor(owner),
         };
         for (const grant of ["operator.read", "operator.sessions.read"]) {
           client.connect.scopes = [grant];
           for (const visibility of ["draft", "shared", "changed"] as const) {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              {
-                ...entry,
-                visibility: visibility === "draft" ? "draft" : "shared",
-              },
-            );
+            await seed({
+              ...entry,
+              visibility: visibility === "draft" ? "draft" : "shared",
+            });
             const entered = createDeferredCore();
             const release = createDeferredCore();
             const metadata = { commands: [], models: [], swarmEnabled: false };
@@ -432,10 +416,7 @@ describe("narrow session read owners", () => {
               if (visibility === "changed") {
                 await Promise.race([entered.promise, request]);
                 expect(readMetadata).toHaveBeenCalledOnce();
-                await sessions.upsertSessionEntryCore(
-                  { agentId: "main", sessionKey: key },
-                  { ...entry, visibility: "draft" },
-                );
+                await seed({ ...entry, visibility: "draft" });
               }
             } finally {
               release.resolve();
@@ -482,14 +463,11 @@ describe("narrow session read owners", () => {
       client.internal = {
         operatorRoleActor: { kind: "operator", profileId: GATEWAY_OWNER_PROFILE_ID },
       };
-      await sessions.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId: "solo-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
-        },
-      );
+      await seed({
+        sessionId: "solo-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
+      });
       for (const changed of [false, true]) {
         client.internal.operatorRoleActor = {
           kind: "operator",
@@ -543,19 +521,12 @@ describe("narrow session read owners", () => {
         return respond;
       };
       for (const visibility of ["draft", "shared"] as const) {
-        await sessions.upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          {
-            sessionId: "scoped-read",
-            updatedAt: 1,
-            visibility,
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: owner.authenticatedUserProfile!.profileId,
-            },
-          },
-        );
+        await seed({
+          sessionId: "scoped-read",
+          updatedAt: 1,
+          visibility,
+          createdActor: createdActor(owner),
+        });
         io.mockClear();
         const response = await request();
         const visible = visibility === "shared" && role === "view";
@@ -563,19 +534,12 @@ describe("narrow session read owners", () => {
         expect(io).toHaveBeenCalledTimes(visible ? 1 : 0);
       }
       // Broad nonadmin readers use the same visibility owner; adding narrow write cannot bypass it.
-      await sessions.upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId: "scoped-read",
-          updatedAt: 2,
-          visibility: "draft",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: owner.authenticatedUserProfile!.profileId,
-          },
-        },
-      );
+      await seed({
+        sessionId: "scoped-read",
+        updatedAt: 2,
+        visibility: "draft",
+        createdActor: createdActor(owner),
+      });
       reader.connect.scopes = ["operator.read", "operator.sessions.write"];
       expect((await request()).mock.calls[0]?.[0]).toBe(false);
       reader.connect.scopes = ["operator.admin"];
@@ -614,7 +578,7 @@ describe("narrow session read owners", () => {
           archivedAt: undefined,
           spawnedWorkspaceDir: state.workspaceDir,
         };
-        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        await seed(entry);
         if (changed === "metadata-no-revision") {
           expect(
             sessions.loadSessionEntry({ agentId: "main", sessionKey: key })?.lifecycleRevision,
@@ -642,28 +606,25 @@ describe("narrow session read owners", () => {
           if (changed === "authority") {
             current = false;
           } else {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              {
-                ...entry,
-                ...(metadataOnly
-                  ? {
-                      label: "Renamed during read",
-                      updatedAt: 2,
-                      lastActivityAt: 2,
-                      totalTokens: 10,
-                    }
-                  : changed === "generation"
-                    ? { lifecycleRevision: "replacement" }
-                    : changed === "reset"
-                      ? { sessionId: "replacement" }
-                      : changed === "archive"
-                        ? { archivedAt: 2 }
-                        : changed === "workspace"
-                          ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
-                          : { visibility: "draft" }),
-              },
-            );
+            await seed({
+              ...entry,
+              ...(metadataOnly
+                ? {
+                    label: "Renamed during read",
+                    updatedAt: 2,
+                    lastActivityAt: 2,
+                    totalTokens: 10,
+                  }
+                : changed === "generation"
+                  ? { lifecycleRevision: "replacement" }
+                  : changed === "reset"
+                    ? { sessionId: "replacement" }
+                    : changed === "archive"
+                      ? { archivedAt: 2 }
+                      : changed === "workspace"
+                        ? { spawnedWorkspaceDir: path.join(state.workspaceDir, "replacement") }
+                        : { visibility: "draft" }),
+            });
           }
         } finally {
           release.resolve();
@@ -715,7 +676,7 @@ describe("narrow session read owners", () => {
           visibility: "shared" as const,
           spawnedWorkspaceDir: state.workspaceDir,
         };
-        await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        await seed(entry);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let stats = 0;
@@ -754,10 +715,7 @@ describe("narrow session read owners", () => {
           expect(stats).toBe(2);
           expect(readFile).not.toHaveBeenCalled();
           if (revoke) {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              { ...entry, visibility: "draft", updatedAt: 2 },
-            );
+            await seed({ ...entry, visibility: "draft", updatedAt: 2 });
           }
         } finally {
           release.resolve();
