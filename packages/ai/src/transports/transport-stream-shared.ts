@@ -31,11 +31,21 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
 export async function* iterateSseFrames(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  assertWithinLimit?: (pending: string) => void,
+  limit?: { max: number; unit: "characters" | "bytes"; message: string },
 ): AsyncGenerator<{ frame: string; terminated: boolean }> {
   const decoder = new TextDecoder();
   const parts: string[] = [];
+  let partsLength = 0;
   let tail = "";
+  const lengthOf =
+    limit?.unit === "bytes"
+      ? (text: string) => Buffer.byteLength(text, "utf8")
+      : (text: string) => text.length;
+  const assertWithinLimit = (length: number) => {
+    if (limit && length > limit.max) {
+      throw new Error(limit.message);
+    }
+  };
   // CRLF remains one line ending even when the delimiter expression backtracks.
   const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
   for (;;) {
@@ -50,12 +60,15 @@ export async function* iterateSseFrames(
       }
       const frameEnd = boundary?.index ?? buffer.length;
       let frame = buffer.slice(start, frameEnd);
+      if (limit) {
+        assertWithinLimit(partsLength + lengthOf(frame));
+      }
       if (parts.length) {
         parts.push(frame);
         frame = parts.join("");
         parts.length = 0;
+        partsLength = 0;
       }
-      assertWithinLimit?.(frame);
       start = boundary ? frameEnd + boundary[0].length : buffer.length;
       yield { frame, terminated: boundary !== null };
       if (!boundary) {
@@ -65,13 +78,27 @@ export async function* iterateSseFrames(
     const pending = buffer.slice(start);
     // Scan only new text plus the maximum delimiter overlap. Regex on an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
-    const last = pending.charCodeAt(pending.length - 1);
-    const split = last === 10 || last === 13 ? Math.max(0, pending.length - 3) : pending.length;
+    // Keep only trailing newline characters, so UTF-8 length accounting never
+    // splits a surrogate pair between a retained fragment and the overlap.
+    let split = pending.length;
+    while (split > 0 && pending.length - split < 3) {
+      const last = pending.charCodeAt(split - 1);
+      if (last !== 10 && last !== 13) {
+        break;
+      }
+      split--;
+    }
     if (split > 0) {
-      parts.push(pending.slice(0, split));
+      const part = pending.slice(0, split);
+      parts.push(part);
+      if (limit) {
+        partsLength += lengthOf(part);
+      }
     }
     tail = pending.slice(split);
-    assertWithinLimit?.(parts.join("") + tail);
+    if (limit) {
+      assertWithinLimit(partsLength + lengthOf(tail));
+    }
     if (done) {
       return;
     }

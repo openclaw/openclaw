@@ -1,11 +1,16 @@
 import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
+import { Stream } from "openai/core/streaming";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
+import {
+  createResponsesStreamWithRecovery,
+  isInvalidEncryptedContentError,
+} from "./openai-responses-replay-internal.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
+import { isResponsesServiceTierRejection } from "./openai-responses-service-tier.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { completedResponse } from "./openai-stream-cases.test-support.js";
 
@@ -27,7 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openFixtureStream(chunks: readonly Uint8Array[], failure?: Error) {
+async function openFixtureStream(chunks: readonly Uint8Array[], failure?: Error, sdk = false) {
   let offset = 0;
   const body = new ReadableStream<Uint8Array>(
     {
@@ -47,13 +52,20 @@ async function openFixtureStream(chunks: readonly Uint8Array[], failure?: Error)
   const client = new OpenAI({
     apiKey: "fixture-key",
     logLevel: "off",
-    fetch: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    fetch: async () =>
+      new Response(body, {
+        headers: { "content-type": "text/event-stream", "x-request-id": "fixture-request" },
+      }),
   });
   const request = {
     model: "fixture",
     stream: true,
     input: [{ role: "user", content: "fixture" }],
   } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
+  if (sdk) {
+    const response = await client.responses.create({ ...request, stream: true }).asResponse();
+    return { stream: Stream.fromSSEResponse(response, new AbortController(), client) };
+  }
   return createResponsesStreamWithRecovery({
     client,
     model,
@@ -206,6 +218,66 @@ describe("Responses SSE decoding", () => {
     const result = read();
     await expect(result).rejects.toBeInstanceOf(OpenAI.APIError);
     await expect(result).rejects.toMatchObject({ message, error: payload });
+  });
+
+  it.each([
+    'event: error\ndata: {"type":"error","code":"unsupported_parameter","param":"service_tier","message":"fixture rejection"}\n\n',
+    'data: {"type":"error","code":"unsupported_parameter","param":"service_tier","message":"fixture rejection"}\n\n',
+    'data: {"error":{"code":"invalid_encrypted_content","message":"fixture rejection","param":"input","type":"invalid_request_error"}}\n\n',
+    'event: thread.message.delta\ndata: {"error":{"message":"thread payload"}}\n\n',
+    "data: [DONE] trailing\n\n",
+    "data: {malformed fixture}\n\n",
+  ])("matches the pinned SDK's events and transport error classification (%j)", async (wire) => {
+    const run = async (sdk: boolean) => {
+      const { stream } = await openFixtureStream([new TextEncoder().encode(wire)], undefined, sdk);
+      const events: unknown[] = [];
+      async function* captureEvents() {
+        for await (const event of stream) {
+          events.push(event);
+          yield event;
+        }
+      }
+      try {
+        await processResponsesStream(
+          captureEvents(),
+          createOpenAIResponsesAssistantOutput(model),
+          { push() {} },
+          model,
+        );
+        return { events };
+      } catch (error) {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        return {
+          events,
+          error,
+          serviceTierRejection: isResponsesServiceTierRejection(error),
+          encryptedContentRejection: isInvalidEncryptedContentError(error),
+        };
+      }
+    };
+    const expected = await run(true);
+    const actual = await run(false);
+    expect(actual.events).toEqual(expected.events);
+    expect(actual.serviceTierRejection).toBe(expected.serviceTierRejection);
+    expect(actual.encryptedContentRejection).toBe(expected.encryptedContentRejection);
+    if (!expected.error) {
+      throw new Error("SDK fixture must reach the transport error boundary");
+    }
+    expect(actual.error).toBeInstanceOf(expected.error.constructor);
+    expect(actual.error).toMatchObject({
+      message: expected.error.message,
+      name: expected.error.name,
+    });
+    for (const field of Object.keys(expected.error)) {
+      expect(actual.error).toHaveProperty(field, Reflect.get(expected.error, field));
+    }
+    if (expected.error instanceof OpenAI.APIError && actual.error instanceof OpenAI.APIError) {
+      expect(Array.from(actual.error.headers ?? [])).toEqual(
+        Array.from(expected.error.headers ?? []),
+      );
+    }
   });
 
   it.each([
