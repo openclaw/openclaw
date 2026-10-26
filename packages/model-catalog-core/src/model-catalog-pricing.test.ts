@@ -1,10 +1,10 @@
 import { calculateUsageCost } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   normalizeModelPricingCatalog,
-  normalizeModelPricingProvider,
-  normalizeOpenRouterModelPricing,
-  normalizeUpstreamModelPricing,
+  normalizeModelPricingProvider as normalizePolicy,
+  normalizeOpenRouterModelPricing as openRouterPricing,
+  normalizeUpstreamModelPricing as upstreamPricing,
 } from "./model-catalog-pricing.js";
 
 const BASE_COST = { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 };
@@ -12,7 +12,7 @@ const FREE_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const BASE_RATES = { prompt: "0.000002", completion: "0.00001" };
 
 function nativeCatalog(rows: unknown) {
-  return normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing);
+  return normalizeModelPricingCatalog(rows, upstreamPricing);
 }
 
 describe("model pricing", () => {
@@ -25,7 +25,7 @@ describe("model pricing", () => {
       liteLLM: false,
     };
     expect(
-      normalizeModelPricingProvider({
+      normalizePolicy({
         ...policy,
         openCode: { provider: " OpenCode ", modelIdTransforms: ["version-dots", "unknown", null] },
         venice: { provider: " Venice " },
@@ -37,13 +37,13 @@ describe("model pricing", () => {
     undefined,
     { openCode: {}, openRouter: { provider: " " }, liteLLM: { modelIdTransforms: ["unknown"] } },
   ])("ignores empty or unrecognized policy %j", (value) =>
-    expect(normalizeModelPricingProvider(value)).toBeUndefined(),
+    expect(normalizePolicy(value)).toBeUndefined(),
   );
   const paid = { id: "paid", pricing: { input: 2, output: 10 } };
 
   it("uses the selected identity and validates prices before filtering unsupported schedules", () => {
     const catalog = (rows: unknown) =>
-      normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing, {
+      normalizeModelPricingCatalog(rows, upstreamPricing, {
         readModelId: (row: Record<string, unknown>) => row.model_name,
         readPricing: (row: Record<string, unknown>) => row.cost,
         isSupportedPricing: (value: unknown) => !Object.hasOwn(value as object, "qualified"),
@@ -83,8 +83,8 @@ describe("model pricing", () => {
   const cost = { input: 2, output: 10, cacheRead: 0.25, cacheWrite: 2.5 };
 
   it("returns complete per-million rates with absent cache charges defaulted to zero", () => {
-    expect(normalizeOpenRouterModelPricing(BASE_RATES)).toEqual(BASE_COST);
-    expect(normalizeOpenRouterModelPricing({ prompt: 0, completion: 0 })).toEqual(FREE_COST);
+    expect(openRouterPricing(BASE_RATES)).toEqual(BASE_COST);
+    expect(openRouterPricing({ prompt: 0, completion: 0 })).toEqual(FREE_COST);
   });
 
   it("compiles unordered native overrides per key in source order", () => {
@@ -108,7 +108,7 @@ describe("model pricing", () => {
     };
     const cacheRead = expect.closeTo(0.4, 12);
     const overrideCost = { input: 4, output: 15, cacheRead, cacheWrite: 5 };
-    expect(normalizeOpenRouterModelPricing(pricing)).toEqual({
+    expect(openRouterPricing(pricing)).toEqual({
       ...cost,
       tieredPricing: [
         { ...cost, range: [0, 272_001] },
@@ -122,14 +122,11 @@ describe("model pricing", () => {
     { input: 41, output: 7, cacheRead: 30, cacheWrite: 30, expected: 0.0003865 },
     { input: 0, output: 1_000, cacheRead: 0, cacheWrite: 0, expected: 0.01 },
   ])("bills strict prompt boundaries with inherited cache rates: %j", ({ expected, ...usage }) => {
-    const pricing = normalizeOpenRouterModelPricing({
+    const pricing = openRouterPricing({
       ...base,
       overrides: [{ min_prompt_tokens: 100, prompt: "0.000004", completion: "0.00002" }],
     });
-    expect(pricing).toBeDefined();
-    if (!pricing) {
-      throw new Error("Expected a complete native schedule");
-    }
+    assert(pricing, "Expected a complete native schedule");
     expect(calculateUsageCost(usage, pricing).total).toBeCloseTo(expected, 12);
   });
   it.each([
@@ -141,6 +138,6 @@ describe("model pricing", () => {
       ],
     },
   ])("rejects incomplete or conflicting context tiers: %j", (tiers) => {
-    expect(normalizeUpstreamModelPricing({ input: 2, output: 10, ...tiers })).toBeUndefined();
+    expect(upstreamPricing({ input: 2, output: 10, ...tiers })).toBeUndefined();
   });
 });

@@ -53,41 +53,26 @@ function providerRow(inference: unknown) {
   return normalizeRows({ provider: "fixture", providerCatalog, source: "manifest" })[0];
 }
 
-function decisionRoute(overrides: Record<string, unknown>, chat = false) {
-  return inferenceOf({ ...decision, ...overrides }, chat);
-}
-
 function inferenceOf(descriptor: unknown, chat = false) {
   return { chat, decision: descriptor };
 }
 
-it.each([inferenceOf({ protocol: "decision-v1", input: ["text"] }), inferenceOf(decision)])(
-  "preserves minimal and full decision metadata: %j",
-  (inference) => {
-    const row = providerRow(inference);
-    expect(row?.inference).toEqual(inference);
-    expect(row).toMatchObject({ reasoning: false });
-    for (const field of ["cost", "contextWindow", "maxTokens"]) {
-      expect(row).not.toHaveProperty(field);
-    }
-  },
-);
+function decisionRoute(overrides: Record<string, unknown>, chat = false) {
+  return inferenceOf({ ...decision, ...overrides }, chat);
+}
 
-it("preserves a five-level score subset instead of advertising arbitrary rubric support", () => {
-  const inference = inferenceOf({
+it.each([
+  inferenceOf({ protocol: "decision-v1", input: ["text"] }),
+  inferenceOf(decision),
+  inferenceOf({
     protocol: "fixture-scale",
     input: ["text"],
     questions: {
       score: { probabilities: "none", abstention: false, minOptions: 5, maxOptions: 5 },
     },
     billing: { unit: "requests", source: "provider-docs" },
-  });
-  const row = providerRow(inference);
-  expect(row?.inference).toEqual(inference);
-});
-
-it("retains provider-defined estimates, confidence and Boolean criteria requirements", () => {
-  const inference = inferenceOf({
+  }),
+  inferenceOf({
     protocol: "fixture-legacy",
     input: ["text"],
     confidence: "provider-specific",
@@ -95,20 +80,16 @@ it("retains provider-defined estimates, confidence and Boolean criteria requirem
       boolean: { probabilities: "boolean", abstention: false, requiresCriteria: true },
       choice: { probabilities: "provider-defined", abstention: false },
     },
-  });
-  expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
-});
-
-it("keeps genuine dual capability explicit and preserves published zero token prices", () => {
-  const inference = decisionRoute(
-    { billing: { ...tokenBilling, usdPerMillion: { input: 0.042, output: 0 } } },
-    true,
-  );
-  expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
-  const unknown = catalog(decisionRoute({ billing: tokenBilling }));
-  expect(unknown?.providers?.fixture?.models[0]?.inference?.decision?.billing).toEqual(
-    tokenBilling,
-  );
+  }),
+  decisionRoute({ billing: { ...tokenBilling, usdPerMillion: { input: 0.042, output: 0 } } }, true),
+  decisionRoute({ billing: tokenBilling }),
+])("preserves declared capabilities and billing without inventing metadata: %j", (inference) => {
+  const row = providerRow(inference);
+  expect(row?.inference).toEqual(inference);
+  expect(row).toMatchObject({ reasoning: false });
+  for (const field of ["cost", "contextWindow", "maxTokens"]) {
+    expect(row).not.toHaveProperty(field);
+  }
 });
 
 it("does not infer a task from legacy text or JSON compatibility flags", () => {

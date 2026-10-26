@@ -92,25 +92,22 @@ it("can exclude channel model overrides from configured refs", () => {
   ).toEqual(["p/chat", "discord-tts/model"]);
 });
 
-it.each<[unknown, ConfiguredModelRef[]]>([
-  [
-    nested("tools.media", {
-      image: { preferredModel: "p/image" },
-      audio: { preferredModel: "p/audio" },
-      video: { preferredModel: "p/video" },
-    }),
-    [
-      ref("tools.media.image.preferredModel", "p/image", "literal"),
-      ref("tools.media.audio.preferredModel", "p/audio", "literal"),
-      ref("tools.media.video.preferredModel", "p/video", "literal"),
-    ],
-  ],
-  [
-    nested("agents.list", [{ id: "worker", tools: { exec: { reviewer: { model: "p/review" } } } }]),
-    [ref("agents.list.0.tools.exec.reviewer.model", "p/review")],
-  ],
-])("collects media and reviewer refs from %j", (config, expected) => {
-  expect(collectConfiguredModelRefs(config)).toEqual(expected);
+it("collects media refs in capability order", () => {
+  const media = ["image", "audio", "video"];
+  const config = nested(
+    "tools.media",
+    Object.fromEntries(media.map((kind) => [kind, { preferredModel: `p/${kind}` }])),
+  );
+  expect(collectConfiguredModelRefs(config)).toEqual(
+    media.map((kind) => ref(`tools.media.${kind}.preferredModel`, `p/${kind}`, "literal")),
+  );
+});
+
+it("collects reviewer refs from legacy agent lists", () => {
+  const config = nested("agents.list", [{ tools: { exec: { reviewer: { model: "p/review" } } } }]);
+  expect(collectConfiguredModelRefs(config)).toEqual([
+    ref("agents.list.0.tools.exec.reviewer.model", "p/review"),
+  ]);
 });
 
 it.each([
