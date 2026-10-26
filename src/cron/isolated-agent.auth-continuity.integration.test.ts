@@ -350,8 +350,8 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
 it.each([
   ["configured key", undefined],
   ["unadopted stored account", "Automation has no recorded inference account"],
-  ["replacement", "inference account was replaced"],
-  ["revocation", "was removed or signed out"],
+  ["replacement", "inference account openai:platform on runtime openclaw was replaced"],
+  ["revocation", "account openai:platform on runtime openclaw was removed or signed out"],
 ] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";
