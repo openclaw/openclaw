@@ -360,27 +360,8 @@ export function prepareProjectedSessionPresentation(
         : null);
     return viewerFacts;
   };
-  const projectModels = (row: GatewaySessionRow, view?: SessionRowView) => {
-    const projected = models?.session(row) ?? row;
-    if (projected === row || !view) {
-      return projected;
-    }
-    const variants = (view.modelRows ??= []);
-    for (const existing of variants) {
-      if (
-        existing.modelProvider === projected.modelProvider &&
-        existing.model === projected.model &&
-        existing.activeModelProvider === projected.activeModelProvider &&
-        existing.activeModel === projected.activeModel &&
-        existing.contextBudgetStatus === projected.contextBudgetStatus
-      ) {
-        return existing;
-      }
-    }
-    const snapshot = Object.freeze(projected);
-    variants.push(snapshot);
-    return snapshot;
-  };
+  const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
+    models?.session(row, view && (view.modelRows ??= [])) ?? row;
   const optionKeys = new WeakMap<PresentationOptions, string>();
   const optionKey = (options: PresentationOptions) => {
     let key = optionKeys.get(options);
