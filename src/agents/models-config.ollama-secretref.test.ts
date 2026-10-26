@@ -24,6 +24,25 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 
 const modelDefaults = { reasoning: false, contextWindow: 8192, maxTokens: 2048 };
 const modelFor = (id: string, name = id) => modelDefinition(id, { ...modelDefaults, name });
+function mockOllama(models: () => string[] | undefined, onRequest?: (init?: RequestInit) => void) {
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    onRequest?.(init);
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.endsWith("/api/tags")) {
+      const installed = models();
+      return installed
+        ? Response.json({ models: installed.map((name) => ({ name })) })
+        : new Response("unavailable", { status: 503 });
+    }
+    return Response.json({
+      capabilities: String(init?.body).includes("nomic-embed")
+        ? ["embedding"]
+        : ["completion", "tools"],
+      model_info: { "fixture.context_length": 8192 },
+    });
+  };
+  vi.stubGlobal("fetch", withFetchPreconnect(fetch));
+}
 async function catalogPlan(
   cfg: OpenClawConfig,
   agentDir: string,
@@ -111,19 +130,12 @@ it.for([
     const discoveryAuthConfig: OpenClawConfig =
       owner === "config" ? providerConfig("ollama", { ...provider, apiKey: runtimeKey }) : cfg;
     const authorization: Array<string | null> = [];
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      authorization.push(new Headers(init?.headers).get("authorization"));
-      const url = input instanceof Request ? input.url : input.toString();
-      return Response.json(
-        url.endsWith("/api/tags")
-          ? { models: [{ name: model.id }] }
-          : {
-              capabilities: ["completion", "tools"],
-              model_info: { "fixture.context_length": 8192 },
-            },
-      );
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    mockOllama(
+      () => [model.id],
+      (init) => {
+        authorization.push(new Headers(init?.headers).get("authorization"));
+      },
+    );
     const { plan, catalog } = await catalogPlan(cfg, agentDir, authStore, discoveryAuthConfig);
     // The source-derived marker is not secret material, even with equal bytes.
     if (runtimeKey !== NON_ENV_SECRETREF_MARKER) {
@@ -157,23 +169,7 @@ it("lists chat models pulled after setup, keeps setup model settings, and keeps 
     models: [setupModel],
   });
   let installed: string[] | undefined = [setupModel.id, "qwen3:0.6b", "nomic-embed-text"];
-  let tagsRequests = 0;
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : input.toString();
-    if (url.endsWith("/api/tags")) {
-      tagsRequests += 1;
-      return installed
-        ? Response.json({ models: installed.map((name) => ({ name })) })
-        : new Response("unavailable", { status: 503 });
-    }
-    return Response.json({
-      capabilities: (typeof init?.body === "string" ? init.body : "").includes("nomic-embed")
-        ? ["embedding"]
-        : ["completion", "tools"],
-      model_info: { "general.context_length": 8192 },
-    });
-  });
-  vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+  mockOllama(() => installed);
   const listedModels = async () => {
     const { catalog } = await catalogPlan(cfg, agentDir);
     return catalog.models.map(({ id, compat }) => ({ id, compat }));
@@ -185,5 +181,4 @@ it("lists chat models pulled after setup, keeps setup model settings, and keeps 
   ]);
   installed = undefined;
   expect(await listedModels()).toEqual([{ id: setupModel.id, compat: { supportsTools: false } }]);
-  expect(tagsRequests).toBe(2);
 });

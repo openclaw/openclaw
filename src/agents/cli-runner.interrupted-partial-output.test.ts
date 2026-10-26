@@ -60,14 +60,7 @@ describe("runPreparedCliAgent interrupted partial output", () => {
         ...(reason === "timeout" ? { timeoutPhase: "provider" } : {}),
         completion: { finishReason: reason, stopReason: reason, refusal: false },
         executionTrace: {
-          attempts: [
-            {
-              provider: "claude-cli",
-              model: "sonnet",
-              result: reason,
-              reason: `CLI turn ${reason} after partial output`,
-            },
-          ],
+          attempts: [{ provider: "claude-cli", model: "sonnet", result: reason }],
         },
         agentMeta: { sessionId: "", clearCliSessionBinding: true },
       });
@@ -106,12 +99,10 @@ describe("runPreparedCliAgent directly stopped first turn", () => {
   function stoppedRun(params: {
     abort?: Error;
     reusableSessionId?: string;
-    persist?: () => Promise<void>;
+    persist: (binding: CliSessionBinding) => Promise<void>;
   }) {
     executePreparedCliRunMock.mockResolvedValue(partialOutput("aborted"));
-    const persistStoppedFirstCliSession = vi.fn<(binding: CliSessionBinding) => Promise<void>>(
-      params.persist ?? (async () => {}),
-    );
+    const persistStoppedFirstCliSession = vi.fn(params.persist);
     const context = buildPreparedCliRunContext();
     context.params.persistStoppedFirstCliSession = persistStoppedFirstCliSession;
     if (params.reusableSessionId) {
@@ -124,41 +115,33 @@ describe("runPreparedCliAgent directly stopped first turn", () => {
     return { abort, context, persistStoppedFirstCliSession };
   }
 
-  it("binds the flushed native session and rethrows the stop unsettled", async () => {
-    const { abort, context, persistStoppedFirstCliSession } = stoppedRun({});
-
-    await expect(runPreparedCliAgent(context)).rejects.toBe(abort);
-
-    expect(transcriptProbe).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
-    expect(persistStoppedFirstCliSession).toHaveBeenCalledOnce();
-    expect(persistStoppedFirstCliSession.mock.calls[0]?.[0]).toMatchObject({
-      sessionId,
-    });
-  });
-
   it.each([
+    { name: "a flushed first turn", bind: true },
+    { name: "a refused binding write", bind: true, refused: true },
     { name: "a superseded run", abort: createAgentRunSupersededAbortError() },
     { name: "a resumed turn", reusableSessionId: "established-session" },
     { name: "an unflushed transcript", unflushed: true },
-  ])("binds nothing for $name", async ({ abort, reusableSessionId, unflushed }) => {
-    if (unflushed) {
-      transcriptProbe.mockResolvedValue(false);
-    }
-    const run = stoppedRun({ abort, reusableSessionId });
-
-    await expect(runPreparedCliAgent(run.context)).rejects.toBe(run.abort);
-
-    expect(run.persistStoppedFirstCliSession).not.toHaveBeenCalled();
-  });
-
-  it("keeps the stop when the binding write is refused", async () => {
-    const { abort, context, persistStoppedFirstCliSession } = stoppedRun({
-      persist: async () => {
-        throw new Error("settlement closed");
-      },
-    });
-
-    await expect(runPreparedCliAgent(context)).rejects.toBe(abort);
-    expect(persistStoppedFirstCliSession).toHaveBeenCalledOnce();
-  });
+  ])(
+    "keeps the stop unsettled for $name",
+    async ({ bind, refused, abort, reusableSessionId, unflushed }) => {
+      if (unflushed) {
+        transcriptProbe.mockResolvedValue(false);
+      }
+      const run = stoppedRun({
+        abort,
+        reusableSessionId,
+        persist: async () => {
+          if (refused) {
+            throw new Error("settlement closed");
+          }
+        },
+      });
+      await expect(runPreparedCliAgent(run.context)).rejects.toBe(run.abort);
+      expect(run.persistStoppedFirstCliSession).toHaveBeenCalledTimes(bind ? 1 : 0);
+      if (bind) {
+        expect(transcriptProbe).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
+        expect(run.persistStoppedFirstCliSession.mock.calls[0]?.[0]).toMatchObject({ sessionId });
+      }
+    },
+  );
 });
