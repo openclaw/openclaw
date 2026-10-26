@@ -1,12 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../../utils/delivery-context.shared.js";
@@ -38,14 +35,9 @@ export async function writeSessionStore(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
     const canonical = normalizeLegacySessionEntryDelivery(entry as SessionEntry);
-    if (typeof entry.sessionId === "string" && entry.sessionId.trim()) {
-      await replaceSessionEntry({ storePath, sessionKey }, canonical);
-    } else {
-      await upsertSessionEntryCore({ storePath, sessionKey }, canonical);
-    }
+    await replaceSessionEntry({ storePath, sessionKey }, canonical);
   }
 }
 
@@ -54,18 +46,10 @@ export async function writeTerminalTranscriptSessionStore(
     status?: SessionEntry["status"];
     updatedAt: number;
     endedAt: number;
-    transcriptMutationOrder: "after-registry" | "before-registry";
+    transcriptMutationOrder: "after-registry";
   },
 ): Promise<void> {
-  const { storePath, sessionKey, transcriptMutationOrder, ...entry } = params;
-  const appendTranscript = () =>
-    appendTranscriptEvent(
-      { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
-      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-    );
-  if (transcriptMutationOrder === "before-registry") {
-    await appendTranscript();
-  }
+  const { storePath, sessionKey, transcriptMutationOrder: _order, ...entry } = params;
   await writeSessionStore(storePath, {
     [sessionKey]: {
       ...entry,
@@ -75,9 +59,10 @@ export async function writeTerminalTranscriptSessionStore(
       status: entry.status ?? "done",
     },
   });
-  if (transcriptMutationOrder === "after-registry") {
-    await appendTranscript();
-  }
+  await appendTranscriptEvent(
+    { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
+    { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+  );
 }
 
 export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
@@ -89,9 +74,7 @@ export function readSessionStore(storePath: string): Record<string, ProjectedSes
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
         const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
-        if (entry) {
-          target[prop] = projectSessionEntry(entry);
-        }
+        return entry ? (target[prop] = projectSessionEntry(entry)) : undefined;
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -104,15 +87,14 @@ export async function runExplicitResetCases(
   const { storePath, sessionKey, sessionId, entry } = params;
   const results = [];
   for (const name of ["new", "reset"] as const) {
-    const body = `/${name}`;
     await writeSessionStore(storePath, {
       [sessionKey]: { sessionId, updatedAt: Date.now(), ...entry },
     });
     const result = await initSessionState({
-      ctx: { Body: body, SessionKey: sessionKey, Provider: "telegram" },
+      ctx: { Body: `/${name}`, SessionKey: sessionKey, Provider: "telegram" },
       cfg: { session: { store: storePath } },
     });
-    results.push({ name, body, result, stored: readSessionStore(storePath) });
+    results.push({ name, result, stored: readSessionStore(storePath) });
   }
   return results;
 }
