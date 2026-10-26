@@ -22,6 +22,7 @@ import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
+import { runOutsideAdmittedGenerationScopes } from "./queue/drain-admission-scope.js";
 import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
@@ -445,7 +446,7 @@ function enqueueSessionEventAttempt(
   // Completion outlives the producer's request scope and transcript writer.
   // Keep detached work through settlement; explicit request/Stop signals above
   // still cancel the occurrence and join its native execution owner.
-  void runWithoutOwnedSessionTranscriptWrites(() =>
+  const execute = () =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
       await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
@@ -682,15 +683,15 @@ function enqueueSessionEventAttempt(
         finish();
       }
       await settled;
-    }, "session:event"),
-  )
-    .catch((error: unknown) => {
-      // Preserve the execution failure if terminal cleanup also rejects admission.
-      failure ??= error instanceof Error ? error : String(error);
-      finish();
-      return settled.then(() => undefined);
-    })
-    .finally(() => generationLease?.release());
+    }, "session:event")
+      .catch((error: unknown) => {
+        // Preserve the execution failure if terminal cleanup also rejects admission.
+        failure ??= error instanceof Error ? error : String(error);
+        finish();
+        return settled.then(() => undefined);
+      })
+      .finally(() => generationLease?.release());
+  void runOutsideAdmittedGenerationScopes(() => runWithoutOwnedSessionTranscriptWrites(execute));
   return {
     id: occurrenceId,
     cancel: () => {

@@ -115,6 +115,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
     ),
   }));
+  // mock-isolation: Runner orchestration uses synthetic snapshots without booting plugin catalogs or runtime owners.
   vi.doMock("../prepared-model-runtime.js", () => {
     const acquire = async (input: PreparedModelRuntimeInput) => {
       if (!input.readOnly) {
