@@ -365,16 +365,12 @@ describe("interrupted canonical user replay", () => {
   ])(
     "replays one user after restart (carrier=$appendOnly, abort row=$interruptedTurn, oversized metadata=$oversizedMetadata, partial=$partialText)",
     async ({ appendOnly, interruptedTurn, oversizedMetadata, partialText }) => {
-      let observedWalks = 0;
-      const nativeReadFailures: unknown[] = [];
       const prepare = persistedReplay.preparePersistedCurrentUserTurn;
       const observe = async <T>(operation: (beforeConsume: () => void) => Promise<T>) => {
         const sql = observeMainThreadSql();
         const finish = () => {
           try {
             sql.expectIdle();
-          } catch (error) {
-            nativeReadFailures.push(error);
           } finally {
             sql.restore();
           }
@@ -382,7 +378,6 @@ describe("interrupted canonical user replay", () => {
         try {
           return await operation(finish);
         } finally {
-          observedWalks++;
           finish();
         }
       };
@@ -448,8 +443,7 @@ describe("interrupted canonical user replay", () => {
         },
         { interruptedTurn, toolProgress: true, oversizedMetadata, partialText },
       );
-      expect(observedWalks).toBeGreaterThan(0);
-      expect(nativeReadFailures).toEqual([]);
+      expect(replayRead).toHaveBeenCalled();
     },
   );
 
