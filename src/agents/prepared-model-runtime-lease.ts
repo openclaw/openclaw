@@ -153,6 +153,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   assertAdmission();
   let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
+  // A refresh continuation has already run tools, so it waits through back-to-back reloads: each
+  // gate is one reload that settles within its own drain and stop budget, and the run's abort
+  // signal still cancels the wait.
   const maxWaits = options.waitForReplacementPublication ? Number.POSITIVE_INFINITY : 3;
   for (let waits = 0; replacement && waits < maxWaits; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();

@@ -25,6 +25,7 @@ import {
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
+import { formatPluginReloadDrainReason } from "./plugin-reload-drain-reason.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
@@ -325,18 +326,31 @@ export function createPluginReloadCleanup({
     { includeConsumers = false, includeCalls = false } = {},
   ) => {
     const instances = previousInstances(pluginIds);
-    const count = instances.reduce(
-      (total, instance) =>
-        total + instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
-      0,
-    );
+    const holds = previousRegistry.plugins.flatMap((record) => {
+      const instance = pluginIds.has(record.id) && getPluginInstance(record);
+      return instance
+        ? [
+            {
+              pluginId: record.id,
+              count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
+              turnHandover: record.turnHandover === true,
+            },
+          ]
+        : [];
+    });
+    const count = holds.reduce((total, hold) => total + hold.count, 0);
     if (!instances.length || (!count && !includeConsumers)) {
       return;
     }
     retainedWorkQueued ||= count > 0;
     const deadlineAtMs = admittedWorkDeadline();
     const reason = count
-      ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
+      ? formatPluginReloadDrainReason({
+          holds,
+          includeCalls,
+          drainBudgetSeconds: admittedWorkTimeoutMs / 1_000,
+          cancellable: waitForDrain,
+        })
       : "Waiting for admitted plugin cleanup before replacing it.";
     reportStatus({
       phase: "reloading",

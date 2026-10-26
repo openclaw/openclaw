@@ -323,4 +323,44 @@ describe("prepared model runtime automatic selections", () => {
       }),
     ).rejects.toThrow("lease admission made no publication progress");
   });
+
+  it.each([
+    { waitForReplacementPublication: false, gatesWaited: 3 },
+    { waitForReplacementPublication: true, gatesWaited: 4 },
+  ])(
+    "waits through back-to-back reloads only for a refresh continuation: $waitForReplacementPublication",
+    async ({ waitForReplacementPublication, gatesWaited }) => {
+      const gates = Array.from({ length: 4 }, () => {
+        const replacement = createPreparedModelRuntimeReplacement();
+        replacement.resolve();
+        return replacement;
+      });
+      let reads = 0;
+      const outcome = await acquirePreparedModelRuntimeLeaseFromOwners(
+        fixture.agentInput("worker", {}),
+        "run",
+        {
+          captureLifetime: () => () => undefined,
+          owners: new Map(),
+          agentBuildCompletions: new Map(),
+          retainedDirectRunOwners: new PreparedModelRuntimeOwnerRetention(1),
+          retainedGatewayRunOwners: new PreparedModelRuntimeOwnerRetention(8),
+          getBuildTimeoutMs: () => 120_000,
+          getGatewayLifecycleActive: () => false,
+          getPendingReplacement: () => gates[reads++],
+        },
+        { waitForReplacementPublication },
+      ).then(
+        async (lease) => {
+          await lease[Symbol.asyncDispose]();
+          return undefined;
+        },
+        (error: unknown) => error,
+      );
+
+      expect(reads).toBe(gatesWaited + 1);
+      const gateRefused = String(outcome).includes("made no publication progress");
+      expect(gateRefused).toBe(!waitForReplacementPublication);
+    },
+  );
 });
