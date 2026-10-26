@@ -231,51 +231,14 @@ it.each([
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it("adapts commit hover metadata without opening the full reader", async () => {
-  const target = {
-    kind: "commit",
-    owner: "octocat",
-    repo: "repo",
-    sha: "abcdef0123456789",
-  } as const;
-  const url = "https://github.com/octocat/repo/commit/abcdef0123456789#diff-example";
-  hostSuccess({
-    ...target,
-    title: "Fix commit previews",
-    state: "committed",
-    login: "octocat",
-    createdAt: date,
-    updatedAt: date,
-    additions: 3,
-    deletions: 2,
-  });
-  expectSuccess(await request("github.preview", { url }), {
-    url,
-    title: "Fix commit previews",
-    subtitle: "octocat/repo · abcdef012345",
-    badge: { label: "Commit", tone: "neutral" },
-    author: "octocat",
-    metadata: [
-      { label: "", value: "+3", tone: "positive" },
-      { label: "", value: "−2", tone: "negative" },
-    ],
-  });
-  expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubPreview", target);
-  expect(fetchMock).not.toHaveBeenCalled();
-});
-
 it.each([undefined, "overview", "checks", "files", "discussion"])(
   "adapts %s documents with files expanded",
   async (section) => {
     vi.stubEnv("GH_TOKEN", "unused-ambient-token");
     hostSuccess(document());
     const url = `${pullUrl}/files?view=split#diff-example`;
-    const respond = await request("github.detail", {
-      url,
-      agentId: "selected-agent",
-      refresh: true,
-      ...(section ? { section } : {}),
-    });
+    const options = { agentId: "selected-agent", refresh: true, ...(section ? { section } : {}) };
+    const respond = await request("github.detail", { url, ...options });
     expectSuccess(respond, {
       url,
       title: "Plugin reader",
@@ -284,9 +247,7 @@ it.each([undefined, "overview", "checks", "files", "discussion"])(
     });
     expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubDetail", {
       ...pullTarget,
-      agentId: "selected-agent",
-      refresh: true,
-      ...(section ? { section } : {}),
+      ...options,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   },
@@ -306,52 +267,66 @@ it.each([
 });
 
 it.each([
-  // state, draft, mergedAt, closedAt, label, tone
-  ["open", false, undefined, undefined, "Open", "positive"],
-  ["open", true, undefined, undefined, "Draft", "neutral"],
-  ["closed", true, undefined, closedAt, "Closed", "negative"],
-  ["closed", undefined, closedAt, date, "Merged", "accent"],
-] as const)("maps badges and metadata %#", async (state, draft, merged, closed, label, tone) => {
-  const meta = { source: "host-preview" };
-  hostSuccess(
-    preview({
-      state,
-      draft,
-      mergedAt: merged,
-      closedAt: closed,
-      stale: true,
-      additions: 3,
-      deletions: 1,
-      changedFiles: 2,
-      coAuthors: [{ login: "ada", avatarDataUrl: avatar }],
-      coAuthorCount: 2,
-    }),
-    meta,
-  );
-  const respond = await request("github.preview", { url: pullUrl });
-  expectSuccess(
-    respond,
-    {
-      badge: { label, tone, timestamp: merged ?? closed },
-      stale: true,
-      author: "octocat",
-      authorUrl: "https://github.com/octocat",
-      coAuthors: [{ name: "ada", imageUrl: avatar }],
-      coAuthorCount: 2,
-      metadata: [
-        { label: "", value: "+3", tone: "positive" },
-        { label: "", value: "−1", tone: "negative" },
-      ],
-    },
-    meta,
-  );
-  expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith(
-    "controlUi.githubPreview",
-    pullTarget,
-  );
-  expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
-  expect(fetchMock).not.toHaveBeenCalled();
-});
+  // kind, state, draft, mergedAt, closedAt, label, tone
+  ["pull", "open", false, undefined, undefined, "Open", "positive"],
+  ["pull", "open", true, undefined, undefined, "Draft", "neutral"],
+  ["pull", "closed", true, undefined, closedAt, "Closed", "negative"],
+  ["pull", "closed", undefined, closedAt, date, "Merged", "accent"],
+  ["commit", "committed", undefined, undefined, undefined, "Commit", "neutral"],
+] as const)(
+  "maps %s badges and metadata %#",
+  async (kind, state, draft, mergedAt, closed, label, tone) => {
+    const target =
+      kind === "commit"
+        ? { kind, owner: "octocat", repo: "repo", sha: "abcdef0123456789" }
+        : pullTarget;
+    const url =
+      kind === "commit"
+        ? "https://github.com/octocat/repo/commit/abcdef0123456789#diff-example"
+        : pullUrl;
+    const meta = { source: "host-preview" };
+    hostSuccess(
+      {
+        ...preview({ state, draft, mergedAt, closedAt: closed }),
+        ...target,
+        ...(kind === "commit" ? { number: undefined } : {}),
+        stale: true,
+        additions: 3,
+        deletions: 1,
+        changedFiles: 2,
+        coAuthors: [{ login: "ada", avatarDataUrl: avatar }],
+        coAuthorCount: 2,
+      },
+      meta,
+    );
+    const respond = await request("github.preview", { url });
+    expectSuccess(
+      respond,
+      {
+        url,
+        title: "Plugin reader",
+        ...(kind === "commit" ? { subtitle: "octocat/repo · abcdef012345" } : {}),
+        badge: { label, tone, timestamp: mergedAt ?? closed },
+        stale: true,
+        author: "octocat",
+        authorUrl: "https://github.com/octocat",
+        coAuthors: [{ name: "ada", imageUrl: avatar }],
+        coAuthorCount: 2,
+        metadata: [
+          { label: "", value: "+3", tone: "positive" },
+          { label: "", value: "−1", tone: "negative" },
+        ],
+      },
+      meta,
+    );
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith(
+      "controlUi.githubPreview",
+      target,
+    );
+    expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("kind");
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);
 
 it.each([undefined, 0])("shows closed issues with comment count %s", async (comments) => {
   hostSuccess(
