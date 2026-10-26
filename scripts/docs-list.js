@@ -123,7 +123,16 @@ function extractMetadata(fullPath) {
       const inline = line.slice("read_when:".length).trim();
       if (inline.startsWith("[") && inline.endsWith("]")) {
         try {
-          const parsed = JSON.parse(inline.replace(/'/g, '"'));
+          let parsed = null;
+          try {
+            parsed = JSON.parse(inline);
+          } catch {
+            try {
+              parsed = JSON.parse(inline.replace(/'/g, '"'));
+            } catch {
+              // ignore malformed inline arrays
+            }
+          }
           if (Array.isArray(parsed)) {
             readWhen.push(...compactStrings(parsed));
           }
