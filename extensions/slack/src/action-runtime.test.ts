@@ -176,7 +176,10 @@ it("scopes every message and pin write to the trusted current workspace", async 
 
 it("scopes history, file, reaction, and emoji reads to the trusted workspace", async () => {
   readSlackMessages.mockResolvedValueOnce({
-    messages: [{ ts: "1712345678.123456", text: "hi" }],
+    messages: [
+      { ts: "1712345678.123456", text: "hi" },
+      { ts: "1700000000000.5", text: "fractional milliseconds" },
+    ],
     hasMore: false,
   });
   listSlackReactions.mockResolvedValueOnce([]);
@@ -208,7 +211,15 @@ it("scopes history, file, reaction, and emoji reads to the trusted workspace", a
     channelId: "C123",
     threadId: "1712345678.123456",
     hasMore: false,
-    messages: [{ ts: "1712345678.123456", timestampMs: 1712345678123 }],
+    messages: [
+      { ts: "1712345678.123456", timestampMs: 1712345678123 },
+      {
+        ts: "1700000000000.5",
+        text: "fractional milliseconds",
+        timestampMs: 1700000000001,
+        timestampUtc: "2023-11-14T22:13:20.001Z",
+      },
+    ],
   });
   expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", scopedOptions());
   expect(downloadSlackFile).toHaveBeenCalledWith(
