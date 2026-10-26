@@ -30,6 +30,10 @@ import {
 import { isJsonObject, type v2 } from "./protocol.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
+  parseScheduledCodexAppAuthorityAuth,
+  type ScheduledCodexAppAuthorityAuth,
+} from "./scheduled-app-authority-auth.js";
+import {
   appToolHintsAllowed,
   intersectToolApprovalMode,
   normalizeAppToolApprovalMode,
@@ -37,7 +41,7 @@ import {
   type CodexAppToolApprovalMode,
   type CodexScheduledAppTool,
 } from "./scheduled-app-tool-policy.js";
-import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
+import { readCodexManagedRequirementsIdentity } from "./thread-requests.js";
 import { withAbortableTimeout } from "./timeout.js";
 
 const CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE = "codex.apps";
@@ -112,20 +116,6 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   };
 }
 
-type ScheduledCodexAppPreparedProfileAuth = {
-  kind?: undefined;
-  profileId: string;
-  accountId: string;
-};
-type ScheduledCodexAppConfiguredServerAuth = {
-  kind: "configured-app-server";
-  connectionFingerprint: string;
-  managedRequirementsFingerprint: string;
-};
-type ScheduledCodexAppAuthorityAuth =
-  | ScheduledCodexAppPreparedProfileAuth
-  | ScheduledCodexAppConfiguredServerAuth;
-
 type ScheduledCodexAppAuthorityPayload = {
   version: 1;
   auth: ScheduledCodexAppAuthorityAuth;
@@ -164,25 +154,7 @@ function parseScheduledCodexAppAuthority(
     );
   }
   const payload = asOptionalRecord(authority.payload);
-  const auth = asOptionalRecord(payload?.auth);
-  const profileId = normalizeOptionalString(auth?.profileId);
-  const connectionFingerprint = normalizeOptionalString(auth?.connectionFingerprint);
-  const managedRequirementsFingerprint = normalizeOptionalString(
-    auth?.managedRequirementsFingerprint,
-  );
-  const accountId = normalizeOptionalString(auth?.accountId);
-  const parsedAuth: ScheduledCodexAppAuthorityAuth | undefined =
-    auth?.kind === "configured-app-server" &&
-    connectionFingerprint &&
-    managedRequirementsFingerprint
-      ? {
-          kind: "configured-app-server",
-          connectionFingerprint,
-          managedRequirementsFingerprint,
-        }
-      : auth?.kind === undefined && profileId && accountId
-        ? { profileId, accountId }
-        : undefined;
+  const parsedAuth = parseScheduledCodexAppAuthorityAuth(payload?.auth);
   if (payload?.version !== 1 || !parsedAuth || !Array.isArray(payload.apps)) {
     throw new Error("Stored Codex app authority is invalid; reauthorize this automation.");
   }
@@ -379,13 +351,11 @@ export async function captureScheduledCodexAppAuthority(params: {
         }),
         creatorAuth.kind === "prepared-profile"
           ? Promise.resolve({ profileId: creatorAuth.profileId, accountId: creatorAuth.accountId })
-          : readCodexManagedRequirementsFingerprint(boundedClient, params.signal).then(
-              (managedRequirementsFingerprint) => ({
-                kind: creatorAuth.kind,
-                connectionFingerprint: creatorAuth.connectionFingerprint,
-                managedRequirementsFingerprint,
-              }),
-            ),
+          : readCodexManagedRequirementsIdentity(boundedClient, params.signal).then((identity) => ({
+              kind: creatorAuth.kind,
+              connectionFingerprint: creatorAuth.connectionFingerprint,
+              ...identity,
+            })),
       ]),
       timeoutMs,
       signal: params.signal,
@@ -657,7 +627,9 @@ export function readScheduledCodexAppManagedRequirementsFingerprint(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
 ): string | undefined {
   const auth = parseScheduledCodexAppAuthority(authority)?.auth;
-  return auth?.kind === "configured-app-server" ? auth.managedRequirementsFingerprint : undefined;
+  return auth?.kind === "configured-app-server"
+    ? (auth.managedRequirementsSemanticFingerprint ?? auth.managedRequirementsFingerprint)
+    : undefined;
 }
 
 export function assertScheduledCodexAppAuthorityRuntime(

@@ -17,35 +17,11 @@ import {
 } from "./scheduled-app-authority.js";
 import {
   createScheduledAppAuthority as authority,
+  createScheduledAppPolicyContext as policyContext,
   createScheduledAppThreadConfig as threadConfig,
   scheduledAppApprovalPolicyCases,
   scheduledAppHeadlessPolicyCases,
 } from "./scheduled-app-authority.test-support.js";
-import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
-
-function policyContext() {
-  return buildPluginAppPolicyContext(
-    {
-      calendar: {
-        source: "account",
-        appName: "Calendar",
-        allowDestructiveActions: true,
-        allowOpenWorld: true,
-        destructiveApprovalMode: "allow",
-        mcpServerNames: [],
-      },
-      disabled: {
-        source: "account",
-        appName: "Disabled",
-        allowDestructiveActions: false,
-        allowOpenWorld: false,
-        destructiveApprovalMode: "deny",
-        mcpServerNames: [],
-      },
-    },
-    {},
-  );
-}
 
 describe("scheduled Codex app authority", () => {
   it.each([
@@ -263,67 +239,6 @@ describe("scheduled Codex app authority", () => {
         },
       }),
     ).rejects.toThrow("No automation changes were saved");
-  });
-
-  it("captures configured app-server authority without a prepared ChatGPT account", async () => {
-    const managedRequirements = {
-      hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] },
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/installed") {
-        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
-      }
-      if (method === "mcpServerStatus/list") {
-        return {
-          data: [
-            {
-              name: "codex_apps",
-              tools: { list: { _meta: { connector_id: "calendar" } } },
-            },
-          ],
-          nextCursor: null,
-        };
-      }
-      if (method === "config/read") {
-        return { config: {} };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: managedRequirements };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
-      request,
-    } as never);
-
-    await expect(
-      captureScheduledCodexAppAuthority({
-        client: { request } as never,
-        threadId: "thread-final",
-        policyContext: policyContext(),
-        auth: {
-          kind: "configured-app-server",
-          connectionFingerprint: "configured-connection",
-        },
-      }),
-    ).resolves.toEqual(
-      authority({
-        auth: {
-          kind: "configured-app-server",
-          connectionFingerprint: "configured-connection",
-          managedRequirementsFingerprint,
-        },
-        apps: [
-          {
-            id: "calendar",
-            allowDestructiveActions: true,
-            allowOpenWorld: true,
-            destructiveApprovalMode: "allow",
-            tools: { list: "approve" },
-          },
-        ],
-      }),
-    );
   });
 
   it.each([false, true])("bounds apps for a restricted run (creator defaults=%s)", (native) => {

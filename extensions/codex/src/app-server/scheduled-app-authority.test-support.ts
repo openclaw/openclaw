@@ -3,6 +3,30 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 
+export function createScheduledAppPolicyContext() {
+  return buildPluginAppPolicyContext(
+    {
+      calendar: {
+        source: "account",
+        appName: "Calendar",
+        allowDestructiveActions: true,
+        allowOpenWorld: true,
+        destructiveApprovalMode: "allow",
+        mcpServerNames: [],
+      },
+      disabled: {
+        source: "account",
+        appName: "Disabled",
+        allowDestructiveActions: false,
+        allowOpenWorld: false,
+        destructiveApprovalMode: "deny",
+        mcpServerNames: [],
+      },
+    },
+    {},
+  );
+}
+
 export function createScheduledAppAuthority(overrides?: Record<string, unknown>) {
   return {
     version: 1 as const,

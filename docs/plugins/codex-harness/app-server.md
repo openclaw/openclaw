@@ -249,6 +249,16 @@ accounts even when one account permits the action automatically.
 
 Removing or un-configuring the endpoint, changing its connection fingerprint, or
 changing its captured managed requirements rejects the run before app execution.
+Representation-only changes recognized by the Codex adapter, such as new
+unconstrained fields in the native requirements response, preserve authorization.
+New captures include a versioned semantic fingerprint and the original raw
+fingerprint for older Gateway readers. Existing raw grants are accepted only
+when they match the current response or an explicitly supported equivalent
+protocol representation; validation never rewrites or refreshes a saved grant.
+Unknown fields and non-default requirements remain part of the comparison.
+New protocol defaults need a reviewed compatibility rule and an upgrade test;
+they are not ignored automatically. A native runtime rollback that loses a
+captured non-default requirement still requires reauthorization.
 The job remains inspectable, with an error in automation run history and its
 last-run state; normal failure backoff still applies. Restore the authorized
 connection or recreate the automation from a fresh authenticated owner turn.

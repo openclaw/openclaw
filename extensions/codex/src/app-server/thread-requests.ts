@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -15,6 +14,11 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
+import {
+  buildCodexManagedRequirementsIdentity,
+  matchesCodexManagedRequirementsFingerprint,
+  type CodexManagedRequirementsIdentity,
+} from "./managed-requirements-identity.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
@@ -31,7 +35,6 @@ import {
 } from "./protocol.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
-import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerModelProvider,
@@ -590,10 +593,12 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   signal?: AbortSignal,
 ): Promise<{ enableManagedHooks: boolean }> {
   const requirements = await readCodexManagedRequirements(client, signal);
-  const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(requirements);
   const managedRequirementsMatch =
     options.allowedManagedRequirementsFingerprint !== undefined &&
-    managedRequirementsFingerprint === options.allowedManagedRequirementsFingerprint;
+    matchesCodexManagedRequirementsFingerprint(
+      requirements,
+      options.allowedManagedRequirementsFingerprint,
+    );
   const managedHooksAllowed =
     managedRequirementsMatch || options.allowConfiguredManagedHooks === true;
   if (options.allowedManagedRequirementsFingerprint !== undefined && !managedRequirementsMatch) {
@@ -665,20 +670,12 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   };
 }
 
-/** Hashes the exact managed requirements without retaining their hook commands or policy details. */
-function buildCodexManagedRequirementsFingerprint(requirements: JsonObject | null): string {
-  const fingerprint = fingerprintJsonObject({ version: 1, requirements });
-  return crypto.createHash("sha256").update(fingerprint).digest("hex");
-}
-
-/** Reads and fingerprints the exact managed requirements active on this app-server. */
-export async function readCodexManagedRequirementsFingerprint(
+/** Capture both identities from one policy read, without persisting policy contents. */
+export async function readCodexManagedRequirementsIdentity(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
-): Promise<string> {
-  return buildCodexManagedRequirementsFingerprint(
-    await readCodexManagedRequirements(client, signal),
-  );
+): Promise<CodexManagedRequirementsIdentity> {
+  return buildCodexManagedRequirementsIdentity(await readCodexManagedRequirements(client, signal));
 }
 
 async function readCodexManagedRequirements(
