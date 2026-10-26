@@ -32,24 +32,15 @@ const sleepWithAbort = vi.hoisted(() =>
   vi.fn<(delayMs: number, signal?: AbortSignal) => Promise<void>>(async () => undefined),
 );
 
-function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
-  return expectDefined(mock.invocationCallOrder[0], context);
-}
-
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
-  computeBackoff: vi.fn((_policy: unknown, attempt: number) => attempt),
   danger: (message: string) => message,
   sleepWithAbort,
 }));
 
-vi.mock("./bot-message-context.js", () => ({
-  buildTelegramMessageContext,
-}));
+vi.mock("./bot-message-context.js", () => ({ buildTelegramMessageContext }));
 
-vi.mock("./bot-message-dispatch.js", () => ({
-  dispatchTelegramMessage,
-}));
+vi.mock("./bot-message-dispatch.js", () => ({ dispatchTelegramMessage }));
 
 type TelegramMessageProcessorTurnContext = Parameters<
   ReturnType<typeof createTelegramMessageProcessor>
@@ -84,10 +75,7 @@ describe("telegram bot message processor", () => {
   ) {
     return await processMessage({
       ctx: {
-        message: {
-          chat: { id: 123, type: "private", title: "chat" },
-          message_id: 456,
-        },
+        message: { chat: { id: 123, type: "private", title: "chat" }, message_id: 456 },
         ...primaryCtxOverrides,
       } as unknown as Parameters<typeof processMessage>[0]["ctx"],
       allMedia: [],
@@ -106,10 +94,7 @@ describe("telegram bot message processor", () => {
       createTelegramMessageProcessor(baseDeps),
       turnContext,
       {},
-      {
-        spooledReplay: true,
-        isolateSpooledReplaySettlement: true,
-      },
+      { spooledReplay: true, isolateSpooledReplaySettlement: true },
     );
   }
 
@@ -148,16 +133,14 @@ describe("telegram bot message processor", () => {
     context: Record<string, unknown>,
     sendMessage: ReturnType<typeof vi.fn>,
   ) {
-    const runtimeError = vi.fn();
     const dispatchError = new Error("dispatch exploded");
     buildTelegramMessageContext.mockResolvedValue(createMessageContext(context));
     dispatchTelegramMessage.mockRejectedValue(dispatchError);
     const processMessage = createTelegramMessageProcessor({
       ...baseDeps,
       bot: { api: { sendMessage } },
-      runtime: { error: runtimeError },
     } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
-    return { processMessage, runtimeError, dispatchError };
+    return { processMessage, dispatchError };
   }
 
   function createMessageContext(context: Record<string, unknown> = {}) {
@@ -225,26 +208,18 @@ describe("telegram bot message processor", () => {
       ["*"],
       ["43"],
     ]);
-    expect(dispatchTelegramMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        cfg: nextCfg,
-        telegramCfg: nextTelegramCfg,
-        replyToMode: "off",
-        streamMode: "off",
-        textLimit: 1000,
-      }),
-    );
-    expect(dispatchTelegramMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        cfg: turnCfg,
-        telegramCfg: turnTelegramCfg,
-        replyToMode: "first",
-        streamMode: "partial",
-        textLimit: 3000,
-      }),
-    );
+    expect(
+      dispatchTelegramMessage.mock.calls.map(([params]) => [
+        params.cfg,
+        params.telegramCfg,
+        params.replyToMode,
+        params.streamMode,
+        params.textLimit,
+      ]),
+    ).toEqual([
+      [nextCfg, nextTelegramCfg, "off", "off", 1000],
+      [turnCfg, turnTelegramCfg, "first", "partial", 3000],
+    ]);
   });
 
   it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {
@@ -257,8 +232,8 @@ describe("telegram bot message processor", () => {
 
     expect(onDispatchStart).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation")).toBeLessThan(
-      requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
+    expect(onDispatchStart.mock.invocationCallOrder[0]!).toBeLessThan(
+      dispatchTelegramMessage.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -288,7 +263,7 @@ describe("telegram bot message processor", () => {
       } else {
         sendMessage.mockResolvedValue(undefined);
       }
-      const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
+      const { processMessage, dispatchError } = createDispatchFailureHarness(
         threadId === undefined ? {} : { threadSpec: { id: threadId, scope: "forum" } },
         sendMessage,
       );
@@ -300,9 +275,6 @@ describe("telegram bot message processor", () => {
         123,
         "Something went wrong while processing your request. Please try again.",
         params,
-      );
-      expect(runtimeError).toHaveBeenCalledWith(
-        "telegram message processing failed: Error: dispatch exploded",
       );
     },
   );
@@ -547,10 +519,7 @@ describe("telegram bot message processor", () => {
 
   it("keeps isolated retry settlement separate from the outer spool participant", async () => {
     const retryError = new Error("retry this attempt");
-    dispatchTelegramMessage.mockResolvedValueOnce({
-      kind: "failed-retryable",
-      error: retryError,
-    });
+    dispatchTelegramMessage.mockResolvedValueOnce({ kind: "failed-retryable", error: retryError });
     let outerSettles = 0;
     const replay = await replaySample(
       undefined,

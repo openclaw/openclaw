@@ -659,22 +659,9 @@ describe("Telegram send recovery conformance over HTTP", () => {
 
   it("enforces the configured upload limit before reaching Telegram", async () => {
     await expect(
-      send("", {
-        ...photoOptions(),
-        cfg: configWith({ mediaMaxMb: 1 / (1024 * 1024) }),
-      }),
+      send("", { ...photoOptions(), cfg: configWith({ mediaMaxMb: 1 / (1024 * 1024) }) }),
     ).rejects.toMatchObject({ name: "ImageOptimizationLimitError", maxBytes: 1 });
     expect(requests).toEqual([]);
-  });
-
-  it("sends WAV media requested as voice using sendAudio", async () => {
-    mockAudio("audio/wav", "note.wav");
-    await send("Caption", {
-      mediaUrl: "https://example.com/audio",
-      asVoice: true,
-    });
-    expectMethods("sendAudio");
-    expect(await firstUpload("audio").text()).toBe("audio-bytes");
   });
 
   it.each([
@@ -682,6 +669,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     ["durable", "sendAudio", "audio/mpeg", false, "12.6\n", "13"],
     ["streaming", "sendVoice", "audio/ogg", true, "12.6\n", "13"],
     ["streaming", "sendAudio", "audio/mp4", false, "12.6\n", "13"],
+    ["durable", "sendAudio", "audio/wav", true, "12.6\n", "13"],
     ["durable", "sendVoice", "audio/ogg", true, "N/A", undefined],
     ["durable", "sendVoice", "audio/ogg", true, "0", undefined],
     ["durable", "sendVoice", "audio/ogg", true, new Error("ffprobe unavailable"), undefined],
@@ -704,6 +692,9 @@ describe("Telegram send recovery conformance over HTTP", () => {
         await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
       }
       expectMethods(method);
+      if (contentType === "audio/wav") {
+        expect(await firstUpload("audio").text()).toBe("audio-bytes");
+      }
       const actual = requests[0]!.fields.duration;
       expect(actual === undefined ? undefined : String(actual)).toBe(duration);
     },

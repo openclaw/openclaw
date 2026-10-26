@@ -105,10 +105,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         },
-        {
-          mode,
-          cfg: { messages: { responsePrefix: prefix.trimEnd() } },
-        },
+        { mode, cfg: { messages: { responsePrefix: prefix.trimEnd() } } },
       );
       expect(http.texts()).toEqual([prefix + finalText, prefix + "Separate status."]);
     },

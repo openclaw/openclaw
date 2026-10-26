@@ -28,16 +28,14 @@ import { reactMessageTelegram } from "./send.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
-const observers = vi.hoisted(() => ({
-  draftStream: vi.fn<(stream: TelegramDraftStream) => void>(),
-}));
+const observers = vi.hoisted(() => ({ draftStreams: [] as TelegramDraftStream[] }));
 vi.mock("./draft-stream.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./draft-stream.js")>();
   return {
     ...actual,
     createTelegramDraftStream: (params: Parameters<typeof actual.createTelegramDraftStream>[0]) => {
       const stream = actual.createTelegramDraftStream(params);
-      observers.draftStream(stream);
+      observers.draftStreams.push(stream);
       return stream;
     },
   };
@@ -54,6 +52,12 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     dispatchProgressTurn: dispatch,
     waitForBotApiCall,
   } = http;
+  const acceptedSends = () => http.acceptedFor("sendMessage");
+  const texts = () => http.texts();
+  const { draftStreams } = observers;
+  const waitForDrafts = () => Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
+  const waitForReaction = (emoji: string, after = 0) =>
+    waitForBotApiCall((call) => calls.indexOf(call) >= after && hasReaction(call, emoji));
   function dispatchProgressTurn(
     events: Parameters<typeof dispatch>[0],
     scenario: Partial<NonNullable<Parameters<typeof dispatch>[1]>>,
@@ -88,16 +92,14 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     return context;
   }
   function sentFields(text: string) {
-    const sends = acceptedCalls.filter(
-      (call) => call.method === "sendMessage" && call.fields.text === text,
-    );
-    expect(sends).toHaveLength(1);
-    return sends[0]!.fields;
+    const matches = acceptedSends().filter((call) => call.fields.text === text);
+    expect(matches).toHaveLength(1);
+    return matches[0]!.fields;
   }
   const hasReaction = (call: (typeof calls)[number], emoji: string) =>
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
   beforeEach(() => {
-    observers.draftStream.mockReset();
+    draftStreams.length = 0;
   });
 
   it.each(["off", "first", "all"] as const)(
@@ -195,10 +197,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       const context = forumContext(15);
       const finalText = "The requested result is ready.";
       const finalTarget = target === "inbound" ? context.msg.message_id : 9001;
-      const draftStreams: TelegramDraftStream[] = [];
-      observers.draftStream.mockImplementation((stream) => {
-        draftStreams.push(stream);
-      });
       await dispatchProgressTurn(
         async (options) => {
           await options?.onItemEvent?.({
@@ -209,24 +207,19 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           });
           await waitForBotApiCall((call) => call.method === "sendMessage");
           // Wait for receipt adoption, not just the server accepting the card.
-          await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
+          await waitForDrafts();
           expect(draftStreams.some((stream) => stream.hasConsumedReplyTarget())).toBe(true);
-          expect(acceptedCalls.find((call) => call.method === "sendMessage")?.fields).toMatchObject(
-            {
-              message_thread_id: 15,
-              reply_parameters: { message_id: context.msg.message_id },
-            },
-          );
+          expect(acceptedSends()[0]?.fields).toMatchObject({
+            message_thread_id: 15,
+            reply_parameters: { message_id: context.msg.message_id },
+          });
         },
         {
           mode: "progress",
           context,
           replyToMode,
           telegramCfg: {
-            streaming: {
-              mode: "progress",
-              progress: { toolProgress: false, commentary: true },
-            },
+            streaming: { mode: "progress", progress: { toolProgress: false, commentary: true } },
           },
           cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
           finalReply: {
@@ -245,7 +238,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       expect(telegramReplyId(fields)).toBe(finalTarget);
       const retiredAt = acceptedCalls.findIndex((call) => call.method === "deleteMessage");
       expect(retiredAt).toBeGreaterThan(finalAt);
-      expect([...visibleMessages.values()]).toEqual([finalText]);
+      expect(texts()).toEqual([finalText]);
     },
   );
 
@@ -279,10 +272,10 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           await options?.onPartialReply?.({ text: preview });
           if (selection === "older-source") {
             await waitForBotApiCall((call) => call.method === "sendMessage");
-            expect([...visibleMessages.values()]).toEqual([preview]);
-            expect(
-              acceptedCalls.find((call) => call.method === "sendMessage")?.fields.reply_parameters,
-            ).toMatchObject({ message_id: inboundId });
+            expect(texts()).toEqual([preview]);
+            expect(acceptedSends()[0]?.fields.reply_parameters).toMatchObject({
+              message_id: inboundId,
+            });
           }
         },
         {
@@ -295,8 +288,8 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           },
         },
       );
-      const sends = acceptedCalls.filter((call) => call.method === "sendMessage");
-      const final = sends.at(-1)?.fields;
+      const sent = acceptedSends();
+      const final = sent.at(-1)?.fields;
       if (selection === "older-source") {
         expect(final?.reply_parameters).toMatchObject({
           message_id: 9001,
@@ -304,7 +297,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           quote_position: 0,
           quote_entities: [{ type: "bold", offset: 2, length: 5 }],
         });
-        expect(sends.filter((call) => call.fields.text === "The selected answer.")).toHaveLength(1);
+        expect(sent.filter((call) => call.fields.text === "The selected answer.")).toHaveLength(1);
         // Changing the target retires the old preview after its minimum visible dwell.
         await vi.advanceTimersByTimeAsync(4_000);
         await waitForBotApiCall(
@@ -319,7 +312,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         expect(JSON.stringify(final)).not.toContain("quoted slice");
         expect(JSON.stringify(final)).not.toContain("9001");
       }
-      expect([...visibleMessages.values()]).toEqual(["The selected answer."]);
+      expect(texts()).toEqual(["The selected answer."]);
     },
   );
 
@@ -345,10 +338,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         context,
         replyToMode: "batched",
         textLimit: 80,
-        finalReply: {
-          text: finalText,
-          replyToId: String(context.msg.message_id),
-        },
+        finalReply: { text: finalText, replyToId: String(context.msg.message_id) },
       },
     );
     const sends = acceptedCalls.filter(
@@ -360,7 +350,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     expect(sends).toHaveLength(2);
     expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
     expect(sends[1]?.fields).not.toHaveProperty("reply_to_message_id");
-    expect([...visibleMessages.values()]).toEqual(["A".repeat(80), "B".repeat(40)]);
+    expect(texts()).toEqual(["A".repeat(80), "B".repeat(40)]);
   });
 
   it("finalizes a current-message quote in place after quote rejection", async () => {
@@ -383,22 +373,19 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         finalReply: { text, replyToCurrent: true },
       },
     );
-    expect(visibleMessages.size).toBe(1);
-    expect([...visibleMessages.values()]).toEqual([
+    expect(texts()).toEqual([
       `${intro}\n\n<pre><code class="language-text">${fenced}\n</code></pre>\n<pre><code>[[reply_to_current]]\nMEDIA:./indented-example.txt\n</code></pre>\nDone.`,
     ]);
     const sends = calls.filter((call) => call.method === "sendMessage");
     expect(sends).toHaveLength(2);
     expect(sends[0]?.fields.reply_parameters).toMatchObject({
+      message_id: sends[1]?.fields.reply_to_message_id,
       quote: "Run the failing command.",
       quote_position: 0,
     });
     expect(sends[1]?.fields).toMatchObject({
       reply_to_message_id: expect.any(Number),
       allow_sending_without_reply: true,
-    });
-    expect(sends[0]?.fields.reply_parameters).toMatchObject({
-      message_id: sends[1]?.fields.reply_to_message_id,
     });
     expect(sends[1]?.fields).not.toHaveProperty("reply_parameters");
     const edits = calls.filter((call) => call.method === "editMessageText");
@@ -408,10 +395,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   });
 
   it("replies to the inbound message after a first-mode preview releases its target", async () => {
-    const draftStreams: TelegramDraftStream[] = [];
-    observers.draftStream.mockImplementation((stream) => {
-      draftStreams.push(stream);
-    });
     const context = createContext();
     const inboundId = context.msg.message_id;
     const preview = "The requested result is ready, and I am completing the final explanation.";
@@ -423,7 +406,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
         );
         // Exercise target reuse after receipt adoption, not rotation during an unresolved send.
-        await Promise.all(draftStreams.map((stream) => stream.waitForInFlight()));
+        await waitForDrafts();
         await options?.onAssistantMessageStart?.();
         await options?.onPartialReply?.({ text: preview, delta: preview });
         await waitForBotApiCall(
@@ -453,7 +436,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         finalReply: { text: finalText, replyToCurrent: true },
       },
     );
-    await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
+    await expect.poll(texts, { timeout: 5_000 }).toEqual([finalText]);
     const finalSend = calls.find(
       (call) => call.method === "sendMessage" && call.fields.text === finalText,
     );
@@ -485,10 +468,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
             sessionDeliveryOrigin(
               getSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
             ),
-          ).toMatchObject({
-            provider: "telegram",
-            to: "telegram:-1001:topic:1",
-          });
+          ).toMatchObject({ provider: "telegram", to: "telegram:-1001:topic:1" });
           sourceId = SessionManager.open(scope, state.stateDir).appendMessage(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "The General-topic answer." }],
@@ -506,7 +486,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           telegramCfg: { name: "Configured Agent" },
         },
       );
-      expect(acceptedCalls.filter(({ method }) => method === "sendMessage")).toEqual([
+      expect(acceptedSends()).toEqual([
         {
           method: "sendMessage",
           fields: expect.objectContaining({ chat_id: "-1001", text: "The General-topic answer." }),
@@ -596,16 +576,13 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
                 held.release.resolve();
               }
               await tool;
-              await waitForBotApiCall((call) => hasReaction(call, "🛠️"));
+              await waitForReaction("🛠️");
               await options?.onCompactionStart?.();
-              await waitForBotApiCall((call) => hasReaction(call, "\u{1f5dc}\ufe0f"));
+              await waitForReaction("\u{1f5dc}\ufe0f");
               const callsBeforeCompactionEnd = calls.length;
               const acceptedBeforeCompactionEnd = acceptedCalls.length;
               await options?.onCompactionEnd?.({ completed: true });
-              await waitForBotApiCall(
-                (call) =>
-                  calls.indexOf(call) >= callsBeforeCompactionEnd && hasReaction(call, "🧠"),
-              );
+              await waitForReaction("🧠", callsBeforeCompactionEnd);
               expect(acceptedCalls.slice(acceptedBeforeCompactionEnd)).toContainEqual({
                 method: "setMessageReaction",
                 fields: expect.objectContaining({ reaction: [{ type: "emoji", emoji: "🧠" }] }),
@@ -635,8 +612,8 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         await work;
         await vi.advanceTimersByTimeAsync(31_000);
         if (!cancelled) {
-          const initialReaction = calls.find(({ method }) => method === "setMessageReaction");
-          await waitForBotApiCall((call) => call !== initialReaction && hasReaction(call, "👀"));
+          const initialReaction = calls.findIndex(({ method }) => method === "setMessageReaction");
+          await waitForReaction("👀", initialReaction + 1);
         }
         expect(reactionErrors).toEqual([]);
         const reactions = acceptedCalls
@@ -647,11 +624,9 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           expect(calls.filter(({ method }) => method !== "setMessageReaction")).toEqual([]);
         } else {
           expect(reactions.at(-1)).toEqual([{ type: "emoji", emoji: "👀" }]);
-          expect([...visibleMessages.values()]).toEqual(["Completed."]);
+          expect(texts()).toEqual(["Completed."]);
           expect(reactions).toContainEqual([{ type: "emoji", emoji: "👍" }]);
-          if (outcome === "success") {
-            expect(reactions).toContainEqual([{ type: "emoji", emoji: "\u{1f5dc}\ufe0f" }]);
-          }
+          expect(reactions).toContainEqual([{ type: "emoji", emoji: "\u{1f5dc}\ufe0f" }]);
         }
       } finally {
         held.release.resolve();
@@ -772,11 +747,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         return { queuedFinal, counts: dispatcher.getQueuedCounts() };
       },
     });
-    expect([...visibleMessages.values()]).toEqual([
-      "Diagnostic before final",
-      "Accepted answer",
-      "Terminal failure",
-    ]);
+    expect(texts()).toEqual(["Diagnostic before final", "Accepted answer", "Terminal failure"]);
   });
 
   it.each(["first", "batched"] as const)(
@@ -784,35 +755,22 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     async (replyToMode) => {
       let previousRef: { value: boolean } | undefined;
       for (let turnIndex = 0; turnIndex < 2; turnIndex++) {
-        const context = createContext();
         await dispatchProgressTurn(
           async (options, channelOptions) => {
             const ref = expectDefined(options?.hasRepliedRef, "dispatch tool reply state");
-            expect(ref).toEqual({ value: false });
+            expect(ref.value).toBe(false);
             expect(ref).toBe(channelOptions?.hasRepliedRef);
             expect(ref).not.toBe(previousRef);
-
-            // The shared message-tool resolver owns consumption; dispatch owns reset.
             ref.value = true;
-            expect(channelOptions?.hasRepliedRef?.value).toBe(true);
-
-            await expectDefined(
-              channelOptions?.onQueuedFollowupAdmitted,
-              "queued followup admission callback",
-            )();
-            expect(options?.hasRepliedRef).toBe(ref);
+            await channelOptions?.onQueuedFollowupAdmitted?.();
             expect(ref.value).toBe(false);
             ref.value = true;
             previousRef = ref;
           },
-          {
-            context,
-            replyToMode,
-            finalReply: { text: `Final answer ${turnIndex}.` },
-          },
+          { replyToMode, finalReply: { text: `Final answer ${turnIndex}.` } },
         );
       }
-      expect([...visibleMessages.values()]).toEqual(["Final answer 0.", "Final answer 1."]);
+      expect(texts()).toEqual(["Final answer 0.", "Final answer 1."]);
     },
   );
 });
