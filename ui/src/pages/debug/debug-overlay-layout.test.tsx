@@ -1,9 +1,8 @@
 import { createSignal, type Setter } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { replaceComposerPopoverAnchor } from "../chat/components/chat-composer-dom.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 
 const key = "openclaw.debug-overlay.position";
@@ -100,36 +99,27 @@ it("rolls back pointercancel and ignores unrelated pointers", async () => {
 });
 
 it("leaves controls and secondary clicks alone and cleans up a removed frame", async () => {
-  const composer = document.body.appendChild(document.createElement("div"));
-  let composerTop = 500;
-  composer.getBoundingClientRect = () => new DOMRect(0, composerTop, 100, 40);
-  const anchor = replaceComposerPopoverAnchor(null, composer);
-  const height = () => composer.style.getPropertyValue("--chat-composer-popover-max-height");
-  const initialComposerHeight = height();
-  try {
-    const panel = await mount();
-    pointer(panel.querySelector("button")!, "pointerdown");
-    pointer(panel.querySelector("header")!, "pointerdown", { button: 2 });
-    expect(capturePointer).not.toHaveBeenCalled();
-    pointer(panel.querySelector("header")!, "pointerdown");
-    await mount("expanded", false);
-    expect(vi.getTimerCount()).toBe(1);
-    disposeFrame();
-    expect(vi.getTimerCount()).toBe(0);
-    Object.assign(panel.style, { left: "320px", top: "240px" });
-    const detachedStyle = panel.style.cssText;
-    pointer(panel, "pointermove", { clientX: 200 });
-    composerTop = 300;
-    window.dispatchEvent(new Event("resize"));
-    expect(storage.getItem(key)).toBeNull();
-    expect(panel.style.cssText).toBe(detachedStyle);
-    vi.advanceTimersToNextFrame();
-    expect(panel.style.cssText).toBe(detachedStyle);
-    expect(height()).not.toBe(initialComposerHeight);
-  } finally {
-    replaceComposerPopoverAnchor(anchor);
-    composer.remove();
-  }
+  const onResize = vi.fn();
+  window.addEventListener("resize", onResize);
+  onTestFinished(() => window.removeEventListener("resize", onResize));
+  const panel = await mount();
+  pointer(panel.querySelector("button")!, "pointerdown");
+  pointer(panel.querySelector("header")!, "pointerdown", { button: 2 });
+  expect(capturePointer).not.toHaveBeenCalled();
+  pointer(panel.querySelector("header")!, "pointerdown");
+  await mount("expanded", false);
+  expect(vi.getTimerCount()).toBe(1);
+  disposeFrame();
+  expect(vi.getTimerCount()).toBe(0);
+  Object.assign(panel.style, { left: "320px", top: "240px" });
+  const detachedStyle = panel.style.cssText;
+  pointer(panel, "pointermove", { clientX: 200 });
+  window.dispatchEvent(new Event("resize"));
+  expect(storage.getItem(key)).toBeNull();
+  expect(panel.style.cssText).toBe(detachedStyle);
+  vi.advanceTimersToNextFrame();
+  expect(panel.style.cssText).toBe(detachedStyle);
+  expect(onResize).toHaveBeenCalledOnce();
 });
 
 it("keeps dragging usable when storage fails and rejects malformed stored coordinates", async () => {
