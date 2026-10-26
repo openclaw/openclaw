@@ -530,23 +530,20 @@ it("serves cached RPC lists while renewing only the changed agent's catalog", as
       });
       const context = bindSessionRowProjection(requestContext(multiAgentConfig), () => projection);
       const client = identifiedClient("owner@example.com");
+      const list = () => listSessions({ context, client, request: {} });
+      const expectTokens = (result: Awaited<ReturnType<typeof list>>, contextTokens: number) =>
+        expect(result.sessions).toEqual(
+          expect.arrayContaining([expect.objectContaining({ key: changed.key, contextTokens })]),
+        );
       const response = vi.fn();
-      const pendingList = listSessions({ context, client, request: {} }).then(response);
+      const pendingList = list().then(response);
       await vi.waitFor(() => expect(response).toHaveBeenCalledOnce());
       await pendingList;
-      expect(response.mock.calls[0]![0].sessions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ key: changed.key, contextTokens: 8_192 }),
-        ]),
-      );
+      expectTokens(response.mock.calls[0]![0], 8_192);
       renewal.resolve(catalogs);
       await renewal.promise;
       await projection.ensureMaterialized();
-      expect((await listSessions({ context, client, request: {} })).sessions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ key: changed.key, contextTokens: 16_384 }),
-        ]),
-      );
+      expectTokens(await list(), 16_384);
       expect(projection.snapshot(changed).row?.contextTokens).toBe(16_384);
       expect(projection.snapshot(unchanged).row?.contextTokens).toBe(8_192);
       expect(projection.describe(unchanged)?.materialized).toBe(retained);
@@ -557,44 +554,35 @@ it("serves cached RPC lists while renewing only the changed agent's catalog", as
   });
 });
 
-it("waits for the first catalog before admitting session reads", async () => {
+it("waits for initial catalog admission and ignores renewal after disposal", async () => {
   await withProjectionState(async () => {
-    const catalog = createDeferredCore<[]>();
+    const initial: [] = [];
+    const first = createDeferredCore<[]>();
+    const renewal = createDeferredCore<[]>();
+    const getModelCatalog = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(renewal.promise);
     const admitted = vi.fn();
-    const startup = createTestProjection({ cfg, getModelCatalog: () => catalog.promise });
+    const startup = createTestProjection({ cfg, getModelCatalog });
     void startup.then(admitted);
     try {
       await nextTurn();
       expect(admitted).not.toHaveBeenCalled();
-      catalog.resolve([]);
+      first.resolve(initial);
       const projection = await startup;
       expect(projection.state.modelCatalog).toEqual([]);
-    } finally {
-      catalog.resolve([]);
-      (await startup).dispose();
-    }
-  });
-});
-
-it("does not adopt a background catalog after disposal", async () => {
-  await withProjectionState(async () => {
-    const initial: [] = [];
-    const current = createDeferredCore<[]>();
-    const getModelCatalog = vi
-      .fn()
-      .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(current.promise);
-    using projection = await createTestProjection({ cfg, getModelCatalog });
-    try {
       sessionChanges.emit({ all: true, scope: "catalog" });
       await nextTurn();
       projection.dispose();
-      current.resolve([]);
+      renewal.resolve([]);
       await nextTurn();
       expect(projection.state.modelCatalog).toBe(initial);
       expect(projection.selectEntries()).toEqual([]);
     } finally {
-      current.resolve([]);
+      first.resolve(initial);
+      renewal.resolve([]);
+      (await startup).dispose();
     }
   });
 });

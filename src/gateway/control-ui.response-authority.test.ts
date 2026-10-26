@@ -281,9 +281,12 @@ describe("Control UI response authority", () => {
 
 describe("saved message attachment response authority", () => {
   const email = "attachment-reader@example.test";
-  const adminEmail = "attachment-admin@example.test";
-  const viewerEmail = "attachment-viewer@example.test";
-  const unrelatedEmail = "attachment-unrelated@example.test";
+  const readers = {
+    owner: email,
+    admin: "attachment-admin@example.test",
+    viewer: "attachment-viewer@example.test",
+    unrelated: "attachment-unrelated@example.test",
+  };
   const scope = {
     agentId: "main",
     sessionKey: "agent:main:dashboard:attachments",
@@ -366,14 +369,10 @@ describe("saved message attachment response authority", () => {
       lifecycleRevision: null,
       assertCurrent() {},
       worktree: makeWorktreeRecord(repo, randomUUID(), {
-        name: "screenshots",
-        repoFingerprint: "test",
         path: workspaceDir,
         branch: "screenshot",
         baseRef: "main",
         ownerId: scope.sessionKey,
-        createdAt: 0,
-        lastActiveAt: 0,
       }),
     };
     await insertRegistryWorktree(process.env, owner.worktree);
@@ -397,12 +396,9 @@ describe("saved message attachment response authority", () => {
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config, config);
     const profileId = (await ensureCanonicalUserProfileForEmail(email)).id;
-    await ensureCanonicalUserProfileForEmail(unrelatedEmail);
-    for (const [address, role] of [
-      [viewerEmail, "viewer"],
-      [adminEmail, "admin"],
-    ] as const) {
-      const { id } = await ensureCanonicalUserProfileForEmail(address);
+    await ensureCanonicalUserProfileForEmail(readers.unrelated);
+    for (const role of ["viewer", "admin"] as const) {
+      const { id } = await ensureCanonicalUserProfileForEmail(readers[role]);
       await setCanonicalUserProfileRole(id, role, { onCommitted: invalidateOperatorRolePolicy });
     }
     const catalog = await prepareUserProfileCatalog();
@@ -480,13 +476,8 @@ describe("saved message attachment response authority", () => {
 
   function request(
     query: Record<string, string>,
-    options: {
-      ticketOnly?: boolean;
-      admin?: boolean;
-      viewer?: boolean;
-      unrelated?: boolean;
-      method?: string;
-    } = {},
+    reader: keyof typeof readers | "ticket" = "owner",
+    method = "GET",
   ) {
     const params = new URLSearchParams({
       source,
@@ -496,28 +487,23 @@ describe("saved message attachment response authority", () => {
       ...query,
     });
     return fetch(`${origin}/__openclaw__/assistant-media?${params}`, {
-      method: options.method,
-      headers: options.ticketOnly
-        ? {}
-        : {
-            "x-forwarded-user": options.unrelated
-              ? unrelatedEmail
-              : options.admin
-                ? adminEmail
-                : options.viewer
-                  ? viewerEmail
-                  : email,
-            "x-forwarded-for": "203.0.113.42",
-            "x-openclaw-scopes": options.admin ? "operator.admin" : "operator.sessions.read",
-          },
+      method,
+      headers:
+        reader === "ticket"
+          ? {}
+          : {
+              "x-forwarded-user": readers[reader],
+              "x-forwarded-for": "203.0.113.42",
+              "x-openclaw-scopes": reader === "admin" ? "operator.admin" : "operator.sessions.read",
+            },
     });
   }
 
   async function metadata(
     query: Record<string, string> = {},
-    options: Parameters<typeof request>[1] = {},
+    reader?: Parameters<typeof request>[1],
   ) {
-    const response = await request({ ...query, meta: "1" }, options);
+    const response = await request({ ...query, meta: "1" }, reader);
     expect(response.status).toBe(200);
     const result = await response.json();
     expect(result).toMatchObject({ available: true, mediaTicket: expect.any(String) });
@@ -527,9 +513,10 @@ describe("saved message attachment response authority", () => {
   async function expectStatus(
     query: Parameters<typeof request>[0],
     status: number,
-    options?: Parameters<typeof request>[1],
+    reader?: Parameters<typeof request>[1],
+    method?: string,
   ) {
-    expect((await request(query, options)).status).toBe(status);
+    expect((await request(query, reader, method)).status).toBe(status);
   }
 
   it("reads saved attachments and assistant directives, but not user directives", async () => {
@@ -544,7 +531,7 @@ describe("saved message attachment response authority", () => {
       const direct = await request(query);
       expect([direct.status, await direct.text()]).toEqual([200, expected]);
       const ticketed = { ...query, mediaTicket };
-      const preview = await request(ticketed, { ticketOnly: true });
+      const preview = await request(ticketed, "ticket");
       expect([preview.status, await preview.text()]).toEqual([200, expected]);
       await metadata(ticketed);
     }
@@ -565,13 +552,10 @@ describe("saved message attachment response authority", () => {
     ];
     for (const [query, ticketStatus] of substitutions) {
       await expectStatus({ ...query, meta: "1" }, 404);
-      await expectStatus({ ...query, mediaTicket }, ticketStatus, { ticketOnly: true });
+      await expectStatus({ ...query, mediaTicket }, ticketStatus, "ticket");
     }
     await expectStatus({ messageId: "", meta: "1" }, 403);
-    const standalone = await request(
-      { sessionKey: "", messageId: "", source, meta: "1" },
-      { admin: true },
-    );
+    const standalone = await request({ sessionKey: "", messageId: "", source, meta: "1" }, "admin");
     expect(standalone.status).toBe(200);
     expect(await standalone.json()).toMatchObject({ available: true });
     const outside = path.join(state.root, "outside.txt");
@@ -606,7 +590,7 @@ describe("saved message attachment response authority", () => {
         source: "/workspace/.artifacts/proof/screenshot.png",
       });
       expect(payload).not.toContain(workspaceDir);
-      const preview = await request({ ...query, mediaTicket }, { ticketOnly: true });
+      const preview = await request({ ...query, mediaTicket }, "ticket");
       expect(preview.status).toBe(200);
       expect(preview.headers.get("content-type")).toBe("image/png");
       expect(Buffer.from(await preview.arrayBuffer())).toEqual(REAL_PNG);
@@ -616,7 +600,7 @@ describe("saved message attachment response authority", () => {
       messageId: "sandbox-screenshot",
     };
     for (const selection of [query, { ...query, meta: "1" }]) {
-      const unrelated = await request(selection, { unrelated: true });
+      const unrelated = await request(selection, "unrelated");
       expect(unrelated.status).toBe(404);
       expect(Buffer.from(await unrelated.arrayBuffer())).not.toEqual(REAL_PNG);
     }
@@ -631,7 +615,7 @@ describe("saved message attachment response authority", () => {
       await expectStatus(
         { messageId: "relative-screenshot", source: imageSource, mediaTicket: relativeTicket },
         status,
-        { ticketOnly: true },
+        "ticket",
       );
     }
   });
@@ -652,7 +636,7 @@ describe("saved message attachment response authority", () => {
           code: "outside-allowed-folders",
         });
         await expectStatus(outside, 404);
-        await expectStatus({ ...outside, meta: "1", allow: "1" }, 403, { method: "POST" });
+        await expectStatus({ ...outside, meta: "1", allow: "1" }, 403, "owner", "POST");
         await expectStatus({ ...outside, sessionKey: "", messageId: "" }, 403);
 
         const inside = {
@@ -660,7 +644,7 @@ describe("saved message attachment response authority", () => {
           messageId: "workspace-image",
         };
         const mediaTicket = await metadata(inside);
-        const preview = await request({ ...inside, mediaTicket }, { ticketOnly: true });
+        const preview = await request({ ...inside, mediaTicket }, "ticket");
         expect(preview.status).toBe(200);
         expect(Buffer.from(await preview.arrayBuffer())).toEqual(REAL_PNG);
         await metadata();
@@ -705,7 +689,7 @@ describe("saved message attachment response authority", () => {
         const mediaTicket = await metadata(query);
         const ticketed = { ...query, mediaTicket };
         if (receipt) {
-          const preview = await request(ticketed, { ticketOnly: true });
+          const preview = await request(ticketed, "ticket");
           expect([preview.status, await preview.text()]).toEqual([200, text]);
         }
         const file = state.statePath("media", "inbound", "selection-comment.txt");
@@ -723,13 +707,13 @@ describe("saved message attachment response authority", () => {
           }
           return handle;
         });
-        const response = await request(ticketed, { ticketOnly: true });
+        const response = await request(ticketed, "ticket");
         expect(changed).toBe(true);
         expect(response.status).toBe(404);
         expect(await response.text()).not.toContain(text);
         const followup = receipt
           ? await request({ ...query, meta: "1" })
-          : await request(ticketed, { ticketOnly: true });
+          : await request(ticketed, "ticket");
         expect(followup.status).toBe(404);
       } finally {
         receipt?.finish("cancelled");
@@ -748,11 +732,11 @@ describe("saved message attachment response authority", () => {
   it.each(ticketSources)(
     "rechecks session and role access for issued tickets and metadata refresh (%j)",
     async (query) => {
-      const mediaTicket = await metadata(query, { viewer: true });
+      const mediaTicket = await metadata(query, "viewer");
       await upsertSessionEntryCore(scope, { visibility: "draft" });
       try {
-        await expectStatus({ ...query, mediaTicket }, 404, { ticketOnly: true });
-        await expectStatus({ ...query, mediaTicket, meta: "1" }, 404, { viewer: true });
+        await expectStatus({ ...query, mediaTicket }, 404, "ticket");
+        await expectStatus({ ...query, mediaTicket, meta: "1" }, 404, "viewer");
       } finally {
         await upsertSessionEntryCore(scope, { visibility: "shared" });
       }
@@ -762,7 +746,7 @@ describe("saved message attachment response authority", () => {
       config.gateway!.roles!.definitions.guest = readerRole("none", []);
       setRuntimeConfigSnapshot(config, config);
       try {
-        await expectStatus({ ...query, mediaTicket: ownTicket }, 404, { ticketOnly: true });
+        await expectStatus({ ...query, mediaTicket: ownTicket }, 404, "ticket");
         await expectStatus({ ...query, mediaTicket: ownTicket, meta: "1" }, 403);
       } finally {
         config = before;
