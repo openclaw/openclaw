@@ -12,48 +12,42 @@ function page(): XPage {
     meta: {},
   };
 }
+const verify = (api: Parameters<typeof verifyPublicXThread>[0], posts = [post]) =>
+  verifyPublicXThread(api, posts, new AbortController().signal, "1");
 
 describe("public X context", () => {
   it("denies an unavailable conversation root even when its reply is public", async () => {
     const api = { getPublicPosts: vi.fn(async () => page()) };
-    expect(
-      await verifyPublicXThread(api, [{ ...post, id: "3" }], new AbortController().signal, "1"),
-    ).toBe(false);
+    expect(await verify(api, [{ ...post, id: "3" }])).toBe(false);
     expect(api.getPublicPosts).not.toHaveBeenCalled();
   });
 
-  it.each(["public", "protected", "unknown", "missing", "changed", "withheld", "error"])(
-    "fails closed for %s context",
-    async (kind) => {
-      const data = page();
-      if (kind === "protected") {
-        data.includes.users[0]!.protected = true;
-      }
-      if (kind === "unknown") {
-        delete data.includes.users[0]!.protected;
-      }
-      if (kind === "missing") {
-        data.data = [];
-      }
-      if (kind === "changed") {
-        data.data = [{ ...post, text: "Edited" }];
-      }
-      if (kind === "withheld") {
-        data.data = [{ ...post, withheld: true }];
-      }
-      const api = {
-        getPublicPosts: vi.fn(async () => {
-          if (kind === "error") {
-            throw new Error("unavailable");
-          }
-          return data;
-        }),
-      };
-      expect(await verifyPublicXThread(api, [post], new AbortController().signal, "1")).toBe(
-        kind === "public",
-      );
-    },
-  );
+  it.each([
+    { kind: "public" },
+    { kind: "protected", protected: true },
+    { kind: "unknown", protected: undefined },
+    { kind: "missing", posts: [] },
+    { kind: "changed", posts: [{ ...post, text: "Edited" }] },
+    { kind: "withheld", posts: [{ ...post, withheld: true }] },
+    { kind: "error" },
+  ])("fails closed for $kind context", async (scenario) => {
+    const { kind } = scenario;
+    const data = page();
+    Object.assign(
+      data.includes.users[0]!,
+      "protected" in scenario ? { protected: scenario.protected } : {},
+    );
+    data.data = scenario.posts ?? data.data;
+    const api = {
+      getPublicPosts: vi.fn(async () => {
+        if (kind === "error") {
+          throw new Error("unavailable");
+        }
+        return data;
+      }),
+    };
+    expect(await verify(api)).toBe(kind === "public");
+  });
 
   it("uses only application authority and explicitly requests protected metadata", async () => {
     const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
@@ -67,44 +61,25 @@ describe("public X context", () => {
     });
     const api = createXApiClient({
       spend: createXTestSpend(),
-      clientId: "fixture",
-      clientSecret: "fixture",
-      refreshToken: "fixture",
       bearerToken: "app-only-fixture",
       fetch: fetcher,
-      saveRefreshToken: async () => {},
     });
-    expect(await verifyPublicXThread(api, [post], new AbortController().signal, "1")).toBe(true);
+    expect(await verify(api)).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02, cycleUsd: 0.02 });
   });
 
-  it("does not fall back to user authority without an app-only token", async () => {
+  it.each([
+    { reason: "no app-only token", bearerToken: undefined, dailyUsd: 100 },
+    { reason: "exhausted read budget", bearerToken: "app-only-fixture", dailyUsd: 0.01 },
+  ])("denies publication without dispatch: $reason", async ({ bearerToken, dailyUsd }) => {
     const fetcher = vi.fn();
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "fixture",
-      clientSecret: "fixture",
-      refreshToken: "fixture",
+      spend: createXTestSpend({ dailyUsd }),
+      bearerToken,
       fetch: fetcher,
-      saveRefreshToken: async () => {},
     });
-    expect(await verifyPublicXThread(api, [post], new AbortController().signal, "1")).toBe(false);
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("denies publication without dispatch when the shared read budget is exhausted", async () => {
-    const fetcher = vi.fn();
-    const api = createXApiClient({
-      spend: createXTestSpend({ dailyUsd: 0.01 }),
-      clientId: "fixture",
-      clientSecret: "fixture",
-      refreshToken: "fixture",
-      bearerToken: "app-only-fixture",
-      fetch: fetcher,
-      saveRefreshToken: async () => {},
-    });
-    expect(await verifyPublicXThread(api, [post], new AbortController().signal, "1")).toBe(false);
+    expect(await verify(api)).toBe(false);
     expect(fetcher).not.toHaveBeenCalled();
     expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
   });
@@ -117,14 +92,10 @@ describe("public X context", () => {
     });
     const api = createXApiClient({
       spend: createXTestSpend(),
-      clientId: "fixture",
-      clientSecret: "fixture",
-      refreshToken: "fixture",
       bearerToken: "app-only-fixture",
       fetch: fetcher,
-      saveRefreshToken: async () => {},
     });
-    expect(await verifyPublicXThread(api, [post], new AbortController().signal, "1")).toBe(false);
+    expect(await verify(api)).toBe(false);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
   });
