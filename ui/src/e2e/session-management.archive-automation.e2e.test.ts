@@ -42,6 +42,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": cronListResponseFixture({
               jobs: [job],
+              snapshotRevision: "archive-automation-1",
               total: 1,
               limit: 10,
               offset: 0,
