@@ -1,3 +1,5 @@
+/// <reference lib="es2026.typedarrays" />
+
 import { afterEach, vi } from "vitest";
 import { installPopoverPolyfill } from "./popover.ts";
 import { cleanupSolid } from "./solid-cleanup.ts";
@@ -15,6 +17,22 @@ function defineMissing(target: object | undefined, key: string, descriptor: Prop
 }
 
 if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
+  // Node 24 runs the dual-runtime JSDOM suite; supported browsers encode natively.
+  defineMissing(Uint8Array.prototype, "toBase64", {
+    writable: true,
+    value(this: Uint8Array, options?: Parameters<Uint8Array["toBase64"]>[0]) {
+      const alphabet = options?.alphabet ?? "base64";
+      if (alphabet !== "base64" && alphabet !== "base64url") {
+        throw new TypeError("Invalid base64 alphabet");
+      }
+      let encoded = Buffer.from(this.buffer, this.byteOffset, this.byteLength).toString("base64");
+      if (alphabet === "base64url") {
+        encoded = encoded.replaceAll("+", "-").replaceAll("/", "_");
+      }
+      return options?.omitPadding ? encoded.replace(/=+$/u, "") : encoded;
+    },
+  });
+
   // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
   vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
 
