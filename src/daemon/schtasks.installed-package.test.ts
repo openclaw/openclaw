@@ -526,23 +526,18 @@ describe("published installed update progress", () => {
       const diagnostic = failed
         ? { unavailable: expect.stringContaining("observation failed") }
         : { processes: [expect.objectContaining(processFacts)] };
-      expect(fixture.observations.updateSettlementProcesses).toMatchObject([
-        {
-          runId: active.runId,
-          capturedAtMs: invokedAt + 300_000,
-          phase: "verifying",
-          status: "running",
-          reason: "elapsed-300s",
-          ...diagnostic,
-        },
-        {
-          capturedAtMs: invokedAt + 315_000,
-          phase: "verifying",
-          status: "running",
-          reason: "follow-up",
-          ...diagnostic,
-        },
-      ]);
+      expect(fixture.observations.updateSettlementProcesses).toMatchObject(
+        [
+          { capturedAtMs: invokedAt + 300_000, reason: "elapsed-300s" },
+          { capturedAtMs: invokedAt + 315_000, reason: "follow-up" },
+        ].map((sample) =>
+          Object.assign(
+            sample,
+            { runId: active.runId, phase: "verifying", status: "running" },
+            diagnostic,
+          ),
+        ),
+      );
       const retained = JSON.stringify(fixture.observations.updateSettlementProcesses);
       expect(retained).not.toContain(secret);
       expect(retained.length).toBeLessThan(5000);
