@@ -195,6 +195,24 @@ state. Age-retention archives also remain protected under disk pressure. Only
 sessions explicitly archived by `maxEntries` are eligible for automatic deletion
 after cheaper cleanup tiers are exhausted.
 
+## Restore sessions
+
+Restore archived sessions through the running Gateway without deleting their
+transcripts or changing their session identity:
+
+```bash
+openclaw sessions restore "agent:main:scratch-1"
+openclaw sessions restore "agent:main:scratch-1" "agent:main:scratch-2"
+openclaw sessions restore "agent:work:scratch-1" --agent work --dry-run
+openclaw sessions restore "agent:main:scratch-1" --json
+```
+
+Restore uses `sessions.patch` with `archived: false` and the session identity
+observed during lookup. Already active sessions are successful no-ops.
+Archived sessions without a durable identity are refused, including with
+`--dry-run`. Preview validates the target without changing session state; the
+Gateway remains authoritative for permissions and lifecycle checks.
+
 ## Delete sessions
 
 Delete one or more sessions through the running Gateway:
@@ -208,9 +226,9 @@ openclaw sessions delete "agent:main:scratch-1" --yes --json
 ```
 
 Repeated keys are processed once, in first-occurrence order, after surrounding
-whitespace is removed. This also applies to `sessions archive`.
+whitespace is removed. This also applies to `sessions archive` and `sessions restore`.
 
-Human-readable archive/delete reports escape terminal control characters in
+Human-readable archive, restore, and delete reports escape terminal control characters in
 session keys, paths, and diagnostics. JSON output preserves the original values.
 
 <Warning>
@@ -236,7 +254,7 @@ for preview and deletion details.
 If a managed worktree cannot be removed safely, the command reports the preserved
 branch and path for manual cleanup.
 
-Both lifecycle commands:
+All three lifecycle commands:
 
 - accept multiple keys and report one ordered result per key;
 - use `--agent <id>` to select the owning agent, which is required for a
