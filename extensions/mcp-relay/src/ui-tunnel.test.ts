@@ -110,23 +110,13 @@ describe("Control UI relay tunnel", () => {
         ["Cookie", "__Host-oc_ui=secret; asset=ok"],
         ["Connection", "x-hop"],
         ["x-hop", "drop"],
-        ...[
-          "Host",
-          "Upgrade",
-          "Keep-Alive",
-          "TE",
-          "Trailer",
-          "Transfer-Encoding",
-          "Proxy-Authorization",
-          "Content-Length",
-          "Forwarded",
-          "X-Forwarded-For",
-          "X-Real-IP",
-          "True-Client-IP",
-          "Cdn-Loop",
-          "CF-Connecting-IP",
-          "X-Relay-Secret",
-        ].map((name) => [name, "drop"]),
+        ...(
+          "Host Upgrade Keep-Alive TE Trailer Transfer-Encoding Proxy-Authorization " +
+          "Content-Length Forwarded X-Forwarded-For X-Real-IP True-Client-IP Cdn-Loop " +
+          "CF-Connecting-IP X-Relay-Secret"
+        )
+          .split(" ")
+          .map((name) => [name, "drop"]),
       ],
     });
     await f.receive({
@@ -254,10 +244,7 @@ describe("Control UI relay tunnel", () => {
       concatSpy.mockRestore();
       copySpy.mockRestore();
     }
-    expect(await socket.sent.next()).toEqual({
-      kind: "binary",
-      bytes: Buffer.alloc(64 * 1024, 7),
-    });
+    expect(await socket.sent.next()).toEqual({ kind: "binary", bytes: Buffer.alloc(64 * 1024, 7) });
     expect(copiedBytes).toBeLessThanOrEqual(3 * 64 * 1024);
   });
 

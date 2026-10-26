@@ -101,7 +101,7 @@ function useCaptureClock() {
   });
 }
 
-async function createMeetingReloadFixture(options: { background: boolean }) {
+async function createMeetingReloadFixture() {
   // Final effect: the Gateway's browser.request method, reached only through the
   // real in-process dispatch owners.
   const effects: BrowserEffect[] = [];
@@ -176,7 +176,6 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
             providerId: "meeting",
             providerName: "Meeting",
             stateDir: state.stateDir,
-            runInBackground: options.background ? api.lifecycle.runInBackgroundContext : undefined,
           },
         });
         const plugin: (typeof generations)[number] = { api, bridge };
@@ -283,40 +282,29 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
   };
 }
 
-it.each([
-  { background: true, ticks: ["1:capture 1", "1:capture 2", "1:capture 3"] },
-  { background: false, ticks: ["1:capture 1"] },
-])(
-  "runs timed captures after the join request ends only in the plugin background context (background=$background)",
-  async ({ background, ticks }) => {
-    const meeting = await createMeetingReloadFixture({ background });
-    useCaptureClock();
-    await meeting.join(1);
-    // Step one tick at a time: a tick still dispatching makes the next one skip.
-    for (const tick of [1, 2]) {
-      await vi.advanceTimersByTimeAsync(5_000);
-      await (background
-        ? meeting.finished(1, tick + 1)
-        : meeting.logged("Gateway caller authority is no longer active.", tick));
-    }
+it("keeps capturing under the plugin after the joining operator disconnects", async () => {
+  const meeting = await createMeetingReloadFixture();
+  useCaptureClock();
+  await meeting.join(1);
+  // Step one tick at a time: a tick still dispatching makes the next one skip.
+  for (const tick of [1, 2]) {
+    await vi.advanceTimersByTimeAsync(5_000);
+    await meeting.finished(1, tick + 1);
+  }
 
-    expect(meeting.labels()).toEqual(ticks);
-    expect(meeting.effects.every((effect) => effect.owner === "first")).toBe(true);
-    if (background) {
-      // Only the join capture acts as the joining operator; timed captures carry no
-      // operator, so revoking that operator cannot reach them.
-      expect(meeting.effects.map((effect) => effect.actor)).toEqual([
-        expect.objectContaining({ profileId: expect.any(String) }),
-        { kind: "system" },
-        { kind: "system" },
-      ]);
-    }
-    await meeting.generations[0]!.bridge.stop(session, async () => {});
-  },
-);
+  expect(meeting.labels()).toEqual(["1:capture 1", "1:capture 2", "1:capture 3"]);
+  expect(meeting.effects.every((effect) => effect.owner === "first")).toBe(true);
+  // The immediate capture uses the operator; recurring capture belongs to the plugin.
+  expect(meeting.effects.map((effect) => effect.actor)).toEqual([
+    expect.objectContaining({ profileId: expect.any(String) }),
+    { kind: "system" },
+    { kind: "system" },
+  ]);
+  await meeting.generations[0]!.bridge.stop(session, async () => {});
+});
 
 it("drains an admitted capture through reload, refuses new ticks, and hands the meeting to the replacement", async () => {
-  const meeting = await createMeetingReloadFixture({ background: true });
+  const meeting = await createMeetingReloadFixture();
   useCaptureClock();
   await meeting.join(1);
   const held = meeting.holdCapture("1:capture 2");
@@ -393,7 +381,7 @@ it.each([
 ])(
   "refuses new browser work from an admitted capture once its instance retires ($label)",
   async ({ elapsedMs, forced }) => {
-    const meeting = await createMeetingReloadFixture({ background: true });
+    const meeting = await createMeetingReloadFixture();
     useCaptureClock();
     await meeting.join(1);
     const held = meeting.holdCapture("1:capture 2");

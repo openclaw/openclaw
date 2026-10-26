@@ -14,11 +14,6 @@ export type MeetingDurableTranscriptsOptions = {
   providerId: string;
   providerName: string;
   stateDir?: string;
-  /**
-   * The owning plugin instance's background runner. Capture outlives the join request,
-   * so its timer must not keep that request's authority.
-   */
-  runInBackground?: <T>(run: () => T) => T;
 };
 
 export type MeetingTranscriptBridgeLogger = {

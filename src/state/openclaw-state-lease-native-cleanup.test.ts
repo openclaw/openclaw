@@ -1,8 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
-import { withOpenClawStateLease } from "./openclaw-state-lease.js";
+import { createOpenClawStateLeaseLostError } from "./openclaw-state-lease-error.js";
+import type { acquireLease } from "./openclaw-state-lease-worker-storage.js";
+import { withOpenClawStateLease as withLease } from "./openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+const options = {
+  scope: "core:plugin-lifecycle",
+  key: "global",
+  database: { scope: "shared" as const },
+  leaseMs: 60_000,
+  waitMs: 0,
+};
 const storage = vi.hoisted(() => ({
   held: false,
   unavailable: false,
@@ -19,16 +28,7 @@ vi.mock("../infra/node-sqlite.js", () => ({
 }));
 // mock-isolation: Control storage failures while exercising the real lease and canonical-close owners.
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
-  async acquireLease(
-    _database: unknown,
-    _input: unknown,
-    _assertCurrent: unknown,
-    _signal: unknown,
-    captureSource: (
-      context: OpenClawStateWorkerContext,
-      identity: OpenClawStateWorkerContext["admission"]["identity"],
-    ) => void,
-  ) {
+  async acquireLease(...args: Parameters<typeof acquireLease>) {
     if (storage.held) {
       return {
         kind: "held",
@@ -47,6 +47,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
         assertCurrent() {},
       },
     };
+    const captureSource = args[4] ?? storage.forbidden;
     captureSource(context, context.admission.identity);
     storage.held = true;
     storage.expiresAt = Date.now() + storage.remainingMs;
@@ -63,6 +64,11 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
 }));
 // mock-isolation: Keep cleanup failure deterministic and forbid native database access.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
+  createOpenClawStateLeaseLostErrorFromDatabase: (
+    identity: Parameters<typeof createOpenClawStateLeaseLostError>[0],
+    _database: unknown,
+    cause?: unknown,
+  ) => createOpenClawStateLeaseLostError(identity, cause),
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
   prepareLeaseDatabase: storage.forbidden,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
@@ -82,34 +88,20 @@ afterEach(async () => {
 });
 
 it("releases a native acquisition that expires before callback entry", async () => {
-  const options = {
-    scope: "core:plugin-lifecycle",
-    key: "expired-startup",
-    database: { scope: "shared" as const },
-    leaseMs: 60_000,
-    waitMs: 0,
-  };
   storage.remainingMs = -1;
   const entered = vi.fn();
-  await expect(withOpenClawStateLease(options, entered)).rejects.toMatchObject({
+  await expect(withLease(options, entered)).rejects.toMatchObject({
     code: "OPENCLAW_STATE_LEASE_LOST",
   });
   expect(entered).not.toHaveBeenCalled();
   storage.remainingMs = 60_000;
-  await expect(withOpenClawStateLease(options, async () => "recovered")).resolves.toBe("recovered");
+  await expect(withLease(options, async () => "recovered")).resolves.toBe("recovered");
 });
 
 it("releases a failed native lease cleanup when the shared resource owner closes", async () => {
-  const options = {
-    scope: "core:plugin-lifecycle",
-    key: "global",
-    database: { scope: "shared" as const },
-    leaseMs: 60_000,
-    waitMs: 0,
-    processBound: true,
-  };
+  const processOptions = { ...options, processBound: true };
   await expect(
-    withOpenClawStateLease(options, async () => {
+    withLease(processOptions, async () => {
       await closeOpenClawStateDatabaseAsync();
       storage.unavailable = true;
       throw new Error("Synthetic operation lost maintenance admission");
@@ -117,5 +109,5 @@ it("releases a failed native lease cleanup when the shared resource owner closes
   ).rejects.toThrow("State lease operation and cleanup failed");
   storage.unavailable = false;
   await closeOpenClawStateDatabaseAsync();
-  await expect(withOpenClawStateLease(options, async () => "recovered")).resolves.toBe("recovered");
+  await expect(withLease(processOptions, async () => "recovered")).resolves.toBe("recovered");
 });

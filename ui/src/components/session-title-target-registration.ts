@@ -1,8 +1,6 @@
-type SessionTitleRegistrar = (target: HTMLElement, label: HTMLElement) => () => void;
-
 // Producers can mount before the app's lazy hovercard bootstrap has loaded.
 const { promise: registrar, resolve: installSessionTitleRegistrar } =
-  Promise.withResolvers<SessionTitleRegistrar>();
+  Promise.withResolvers<(target: HTMLElement, label: HTMLElement) => () => void>();
 
 export { installSessionTitleRegistrar };
 

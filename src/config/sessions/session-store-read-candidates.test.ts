@@ -39,28 +39,21 @@ function mockWindowsSymlinks(isSymbolicLink: boolean) {
   vi.spyOn(fs, "lstatSync").mockReturnValue({ isSymbolicLink: () => isSymbolicLink } as fs.Stats);
 }
 
-test("keeps custody when a captured alias later resolves to the same file", () => {
-  mockWindowsSymlinks(false);
-  mockRealpath(capturedAlias, canonicalAlias);
-  const candidate = { path: capturedAlias, physicalPath: capturedAlias };
-  expect(isCurrent(candidate)).toBe(true);
-  expect(assertCandidate(capturedAlias, [candidate])).toBe(canonicalAlias);
+test.each([
+  ["converged alias", capturedAlias, canonicalAlias, false, true],
+  ["symlink redirect", capturedAlias, redirectedAlias, true, false],
+  ["lexical redirect", redirectedAlias, canonicalAlias, undefined, false],
+] as const)("checks exact candidate custody: %s", (_name, selected, resolved, symlink, current) => {
+  if (symlink !== undefined) {
+    mockWindowsSymlinks(symlink);
+  }
+  mockRealpath(capturedAlias, resolved);
+  const candidate = { path: selected, physicalPath: capturedAlias };
+  expect(isCurrent(candidate)).toBe(current);
+  if (current) {
+    expect(assertCandidate(selected, [candidate])).toBe(resolved);
+  }
 });
-
-test.runIf(process.platform !== "win32")(
-  "keeps exact custody across POSIX lexical and physical directory spellings",
-  () => {
-    const root = tempDirs.make("session-store-posix-alias-");
-    const physicalDir = directory(root, "physical");
-    const aliasDir = path.join(root, "alias");
-    fs.symlinkSync(physicalDir, aliasDir, "junction");
-    const physicalPath = path.join(physicalDir, "openclaw-agent.sqlite");
-    const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
-    fs.writeFileSync(physicalPath, "");
-
-    expectCustody(aliasPath, physicalPath, physicalPath);
-  },
-);
 
 test.each([true, false])("limits Windows alias custody to its parent (same=%s)", (sameParent) => {
   const root = tempDirs.make("session-store-windows-alias-");
@@ -80,13 +73,6 @@ test.each([true, false])("limits Windows alias custody to its parent (same=%s)",
   }
 });
 
-test("rejects a Windows short-path candidate redirected through a symlink", () => {
-  mockWindowsSymlinks(true);
-  vi.spyOn(fs.realpathSync, "native").mockReturnValue(redirectedAlias);
-
-  expect(isCurrent({ path: capturedAlias, physicalPath: capturedAlias })).toBe(false);
-});
-
 test.each([
   ["file", "/tmp/custom/openclaw-agent.sqlite", "/tmp/database-target/openclaw-agent.sqlite", true],
   ["directory", "/tmp/custom", "/tmp/replacement", false],
@@ -94,11 +80,6 @@ test.each([
   const family = "/tmp/custom/openclaw-agent.sqlite";
   mockRealpath(from, to);
   expect(isCurrent({ path: family, physicalPath: family, scope: "sibling-family" })).toBe(current);
-});
-
-test("rejects a candidate whose lexical target changed", () => {
-  mockRealpath(capturedAlias, canonicalAlias);
-  expect(isCurrent({ path: redirectedAlias, physicalPath: capturedAlias })).toBe(false);
 });
 
 test.each([false, true])("keeps sibling absence until creation (%s)", async (appeared) => {

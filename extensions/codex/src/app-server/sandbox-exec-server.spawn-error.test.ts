@@ -44,38 +44,32 @@ afterEach(() => {
   spawnFault.close = undefined;
 });
 
-const requests: Array<{ label: string; request: JsonRpcRequest }> = [
+const requests: JsonRpcRequest[] = [
   {
-    label: "process/start",
-    request: {
-      id: 1,
-      method: "process/start",
-      params: {
-        processId: "spawn-failure",
-        argv: ["true"],
-        cwd: "file:///workspace",
-        tty: false,
-        pipeStdin: false,
-      },
+    id: 1,
+    method: "process/start",
+    params: {
+      processId: "spawn-failure",
+      argv: ["true"],
+      cwd: "file:///workspace",
+      tty: false,
+      pipeStdin: false,
     },
   },
   {
-    label: "http/request",
-    request: {
-      id: 1,
-      method: "http/request",
-      params: {
-        requestId: "spawn-failure",
-        method: "GET",
-        url: "https://example.test/response",
-        streamResponse: true,
-      },
+    id: 1,
+    method: "http/request",
+    params: {
+      requestId: "spawn-failure",
+      method: "GET",
+      url: "https://example.test/response",
+      streamResponse: true,
     },
   },
 ];
 
 describe("sandbox spawn without stdio", () => {
-  it.each(requests)("settles $label after the failed child closes", async ({ request }) => {
+  it.each(requests)("settles $method after the failed child closes", async (request) => {
     const finalizeExec = vi.fn(async () => undefined);
     const runShellCommand = vi.fn(async () => ({
       code: 0,
@@ -116,12 +110,11 @@ describe("sandbox spawn without stdio", () => {
         token: "spawn-failure-token",
       });
       expect(execServer.children.size).toBe(0);
-      await session.close();
-      expect(runShellCommand).not.toHaveBeenCalled();
     } finally {
       spawnFault.close?.();
       await pending;
       await session.close();
     }
+    expect(runShellCommand).not.toHaveBeenCalled();
   });
 });

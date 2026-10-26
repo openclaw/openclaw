@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
-import { hasMainSessionRecoveryClaim } from "../config/sessions/restart-recovery-state.js";
+import { resolveRestartRecoveryTerminalDeliveryDisposition } from "../config/sessions/restart-recovery-receipt-state.js";
+import {
+  hasMainSessionRecoveryClaim,
+  hasRestartRecoveryTerminalRun,
+} from "../config/sessions/restart-recovery-state.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
@@ -220,11 +224,37 @@ export function shouldPersistCurrentRunSessionCleanup(
   );
 }
 
+/** A terminal predecessor must not remain the delivery owner of a newly admitted command. */
+export function canReplaceTerminalCommandRecoveryClaim(
+  entry: SessionEntry,
+  runId: string,
+): boolean {
+  const previousRunId = entry.restartRecoveryDeliveryRunId;
+  return Boolean(
+    previousRunId &&
+    previousRunId !== runId &&
+    !entry.pendingFinalDelivery &&
+    !entry.mainRestartRecovery &&
+    !entry.restartRecoveryHarnessCompletion &&
+    !entry.restartRecoveryBeforeAgentReplyState &&
+    !entry.restartRecoveryDeliveryReceiptState &&
+    !entry.restartRecoveryDeliveryToolCallId &&
+    !entry.restartRecoveryRuns?.some(
+      (run) => run.runId !== runId && !hasRestartRecoveryTerminalRun(entry, run.runId),
+    ) &&
+    resolveRestartRecoveryTerminalDeliveryDisposition(entry, {
+      sessionId: entry.sessionId,
+      sourceTurnId: entry.restartRecoveryDeliverySourceRunId ?? previousRunId,
+    }) === "already-delivered",
+  );
+}
+
 export function shouldPersistRestartRecoveryContextClaim(
   current: SessionEntry | undefined,
   sessionId: string,
   runId: string,
   allowCreate: boolean,
+  previousEntry: SessionEntry,
 ): boolean {
   if (!current) {
     return allowCreate;
@@ -237,7 +267,13 @@ export function shouldPersistRestartRecoveryContextClaim(
   }
   return (
     current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
+    current.restartRecoveryDeliveryRunId === runId ||
+    (canReplaceTerminalCommandRecoveryClaim(previousEntry, runId) &&
+      current.lifecycleRevision === previousEntry.lifecycleRevision &&
+      current.restartRecoveryDeliveryRunId === previousEntry.restartRecoveryDeliveryRunId &&
+      current.restartRecoveryDeliverySourceRunId ===
+        previousEntry.restartRecoveryDeliverySourceRunId &&
+      canReplaceTerminalCommandRecoveryClaim(current, runId))
   );
 }
 
@@ -251,6 +287,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
   requesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
+  sourceMessageChannel?: SessionEntry["restartRecoverySourceMessageChannel"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
 }): Pick<
@@ -265,6 +302,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryOperatorSource"
   | "restartRecoveryRequesterSource"
   | "restartRecoverySourceIngress"
+  | "restartRecoverySourceMessageChannel"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
 > {
@@ -290,6 +328,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
       restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+      restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
@@ -314,6 +353,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
     restartRecoveryRequesterSource: createsScopedDeliveryClaim ? params.requesterSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
+    restartRecoverySourceMessageChannel: createsScopedDeliveryClaim
+      ? params.sourceMessageChannel
+      : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode
       : undefined,

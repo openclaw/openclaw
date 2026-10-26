@@ -260,6 +260,8 @@ export function createDiscordMessageDispatcher(
                 settlePending();
               }
             });
+            // Adoption releases the input lane; completion retains dispatch ownership.
+            await pending;
           } catch (error) {
             if (abortSignal?.aborted) {
               await ingress.cancel();
@@ -361,9 +363,9 @@ export function createDiscordMessageDispatcher(
     }
     pendingDebounceEntries.clear();
     await Promise.allSettled(pendingCancellationSettlements);
-    await debouncer.drain();
     runQueue.deactivate();
     await cleanupSkippedQueuedMessages();
+    await debouncer.drain();
     await Promise.allSettled(pendingTasks);
   };
 

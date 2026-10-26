@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import type { SqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session-types.js";
 import type { SqliteSnapshotStagingLaunch } from "./sqlite-snapshot-staging.types.js";
 
@@ -22,6 +23,23 @@ beforeEach(() => {
   transport.isRetired.mockReset().mockReturnValue(false);
   factory.mockReset().mockReturnValue(transport);
   runtime = createSqliteSnapshotStagingRuntime(factory);
+});
+
+it("joins failed allocation cleanup before the next allocation", async () => {
+  const cleanupGate = createEnteredGate();
+  const failure = new Error("allocation failed");
+  transport.run.mockRejectedValueOnce(failure);
+  transport.close.mockImplementationOnce(cleanupGate.wait);
+  const failed = expect(runtime.allocate("/fixture", false, launch, 1)).rejects.toBe(failure);
+  await cleanupGate.entered;
+  const next = runtime.allocate("/fixture", false, launch, 2);
+  expect(transport.run).toHaveBeenCalledOnce();
+  cleanupGate.release();
+  await failed;
+  const directory = await next;
+  expect(transport.run).toHaveBeenCalledTimes(2);
+  await directory.retire();
+  await runtime.close();
 });
 
 it.each([false, true])("preserves allocation failures when cleanup fails=%s", async (fails) => {

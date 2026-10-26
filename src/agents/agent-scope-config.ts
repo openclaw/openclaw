@@ -8,7 +8,6 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
-import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -16,7 +15,6 @@ import type {
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import {
@@ -24,6 +22,7 @@ import {
   listAgentEntriesWithSource,
   listAgentIds,
   readAgentRosterProperty,
+  readAgentRosterFacts,
   tryResolveLegacyDataOwner,
   tryResolveRawLegacyDefaultAgentId,
   tryResolveSoleAgentId,
@@ -38,6 +37,7 @@ export {
   readAgentRosterProperty,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
+  withAgentRosterFactsBatch,
   type ListedAgentEntry,
 } from "./agent-roster.js";
 
@@ -52,7 +52,6 @@ export type AgentSelectionContext = {
 export class AgentSelectionRequiredError extends Error {
   readonly code = "AGENT_SELECTION_REQUIRED";
   readonly agentIds: string[];
-  readonly surface: string;
   readonly hint: string;
 
   constructor(agentIds: string[], context?: AgentSelectionContext) {
@@ -63,7 +62,6 @@ export class AgentSelectionRequiredError extends Error {
     super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
     this.name = "AgentSelectionRequiredError";
     this.agentIds = agentIds;
-    this.surface = surface;
     this.hint = hint;
   }
 }
@@ -142,52 +140,6 @@ export function resolveNativeModelPrimary(
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
-}
-
-type AgentRosterFacts = {
-  compatibilityAgentId?: { value: string | undefined };
-  legacyDataOwnerAgentId?: { value: string | undefined };
-  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
-};
-
-type AgentRosterFactsBatch = {
-  config: OpenClawConfig;
-  facts: AgentRosterFacts;
-};
-
-let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
-const agentRosterFacts = new WeakMap<
-  OpenClawConfig,
-  { publication: object | undefined; facts: AgentRosterFacts }
->();
-
-/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
-export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
-  const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch =
-    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-  try {
-    return callback();
-  } finally {
-    activeAgentRosterFactsBatch = parent;
-  }
-}
-
-function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
-  if (activeAgentRosterFactsBatch?.config === cfg) {
-    return activeAgentRosterFactsBatch.facts;
-  }
-  const current = runtimeConfigPublication.current;
-  const publication = current?.config === cfg ? current.revision : undefined;
-  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
-    return undefined;
-  }
-  let cached = agentRosterFacts.get(cfg);
-  if (!cached || cached.publication !== publication) {
-    cached = { publication, facts: {} };
-    agentRosterFacts.set(cfg, cached);
-  }
-  return cached.facts;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */
@@ -436,6 +388,11 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+/** The agent's verbose default; agents without an entry inherit the global default. */
+export function resolveAgentVerboseDefault(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.verboseDefault ?? cfg.agents?.defaults?.verboseDefault;
 }
 
 export function resolveAgentContextLimits(

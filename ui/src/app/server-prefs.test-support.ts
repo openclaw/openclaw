@@ -1,7 +1,9 @@
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { patchSettings } from "./settings.ts";
@@ -9,6 +11,22 @@ import { patchSettings } from "./settings.ts";
 export type RequestMock = ReturnType<
   typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>
 >;
+
+export function installServerPrefsStorage(scope: string, restoreMocks = false) {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    resetServerUiPrefsSync();
+    patchSettings({ gatewayUrl: scope });
+  });
+  afterEach(() => {
+    resetServerUiPrefsSync();
+    vi.useRealTimers();
+    if (restoreMocks) {
+      vi.restoreAllMocks();
+    }
+    vi.unstubAllGlobals();
+  });
+}
 
 export function configWithPrefs(prefs: Record<string, unknown>) {
   return { ui: { prefs } };

@@ -8,7 +8,6 @@ import {
 
 const OLLAMA_THINKING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type OllamaThinkValue = boolean | (typeof OLLAMA_THINKING_EFFORTS)[number];
-type OllamaThinkingLevelMap = Model["thinkingLevelMap"];
 
 export function readOllamaThinkingMapValue(value: string | null | undefined) {
   return value === "false"
@@ -22,7 +21,7 @@ export function readOllamaThinkingMapValue(value: string | null | undefined) {
 export async function buildOllamaThinkingLevelMap(
   modelId: string,
   thinking: unknown,
-): Promise<OllamaThinkingLevelMap> {
+): Promise<Model["thinkingLevelMap"]> {
   if (
     !thinking ||
     typeof thinking !== "object" ||

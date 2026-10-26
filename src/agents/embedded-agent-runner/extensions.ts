@@ -90,7 +90,9 @@ export function buildEmbeddedExtensionFactories(params: {
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: asOptionalRecord(adjustedInput ?? event.input) ?? {},
+        args:
+          asOptionalRecord(adjustedInput == null ? event.input : structuredClone(adjustedInput)) ??
+          {},
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,

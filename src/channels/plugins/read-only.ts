@@ -16,13 +16,11 @@ import {
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { normalizeManifestChannelCommandDefaults } from "../../plugins/manifest-setup-normalizers.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  resolveNormalizedAccountEntry,
-  type ChannelAccountKeyPolicy,
-} from "../../routing/account-lookup.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -33,7 +31,6 @@ import { getBundledChannelSetupPlugin } from "./bundled.js";
 import type { ManifestChannelPlugin } from "./manifest-channel-plugin.types.js";
 import {
   isSafeManifestChannelId,
-  normalizeChannelCommandDefaults,
   readOwnRecordValue,
   resolveReadOnlyChannelCommandDefaults,
 } from "./read-only-command-defaults.js";
@@ -102,32 +99,6 @@ function rebindChannelConfig(
   };
 }
 
-function restoreReboundChannelConfig(params: {
-  original: OpenClawConfig;
-  updated: OpenClawConfig;
-  sourceChannelId: string;
-  targetChannelId: string;
-}): OpenClawConfig {
-  if (params.sourceChannelId === params.targetChannelId || !params.updated.channels) {
-    return params.updated;
-  }
-  const nextChannels = { ...params.updated.channels };
-  if (Object.hasOwn(nextChannels, params.sourceChannelId)) {
-    nextChannels[params.targetChannelId] = nextChannels[params.sourceChannelId];
-  } else {
-    delete nextChannels[params.targetChannelId];
-  }
-  if (params.original.channels && Object.hasOwn(params.original.channels, params.sourceChannelId)) {
-    nextChannels[params.sourceChannelId] = params.original.channels[params.sourceChannelId];
-  } else {
-    delete nextChannels[params.sourceChannelId];
-  }
-  return {
-    ...params.updated,
-    channels: nextChannels,
-  };
-}
-
 function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<string, unknown> {
   if (!isSafeManifestChannelId(channelId)) {
     return {};
@@ -159,33 +130,6 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
     accountIds: listManifestChannelAccountIds(cfg, channelId),
     configuredDefaultAccountId,
   });
-}
-
-function resolveManifestChannelAccount(params: {
-  cfg: OpenClawConfig;
-  channelId: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  accountId?: string | null;
-}): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
-  const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
-  const accountId = normalizeAccountId(params.accountId);
-  const accounts = asOptionalRecord(channelConfig.accounts);
-  const config =
-    asOptionalRecord(
-      accounts
-        ? resolveNormalizedAccountEntry(
-            accounts,
-            accountId,
-            (candidateId) => normalizeOptionalAccountId(candidateId) ?? "",
-            params.accountKeyPolicy,
-          )
-        : undefined,
-    ) ?? channelConfig;
-  return {
-    accountId,
-    name: normalizeOptionalString(readOwnRecordValue(config, "name")),
-    config,
-  };
 }
 
 function buildManifestChannelPlugin(params: {
@@ -244,7 +188,7 @@ function createManifestChannelPlugin(params: {
   );
   const detailLabel = normalizeManifestText(packageChannel?.detailLabel, "");
   const systemImage = normalizeManifestText(packageChannel?.systemImage, "");
-  const commands = normalizeChannelCommandDefaults(
+  const commands = normalizeManifestChannelCommandDefaults(
     channelConfig?.commands ?? catalogMeta?.commands,
   );
   return {
@@ -277,13 +221,29 @@ function createManifestChannelPlugin(params: {
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
-      resolveAccount: (cfg, accountId) =>
-        resolveManifestChannelAccount({
-          cfg,
-          channelId: params.channelId,
+      resolveAccount: (cfg, rawAccountId) => {
+        const channelId = params.channelId;
+        const accountKeyPolicy = params.record.channelAccountKeyPolicies?.[params.channelId];
+        const accountChannelConfig = getChannelConfigRecord(cfg, channelId);
+        const accountId = normalizeAccountId(rawAccountId);
+        const accounts = asOptionalRecord(accountChannelConfig.accounts);
+        const config =
+          asOptionalRecord(
+            accounts
+              ? resolveNormalizedAccountEntry(
+                  accounts,
+                  accountId,
+                  (candidateId) => normalizeOptionalAccountId(candidateId) ?? "",
+                  accountKeyPolicy,
+                )
+              : undefined,
+          ) ?? accountChannelConfig;
+        return {
           accountId,
-          accountKeyPolicy: params.record.channelAccountKeyPolicies?.[params.channelId],
-        }),
+          name: normalizeOptionalString(readOwnRecordValue(config, "name")),
+          config,
+        };
+      },
       isEnabled: (account, cfg) =>
         getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
         account.config.enabled !== false,
@@ -345,13 +305,28 @@ function rebindChannelPluginConfig(
     method: ((params: Params) => OpenClawConfig) | undefined,
   ) =>
     method
-      ? (params: Params) =>
-          restoreReboundChannelConfig({
-            original: params.cfg,
-            updated: method.call(config, { ...params, cfg: rebind(params.cfg) }),
-            sourceChannelId,
-            targetChannelId,
-          })
+      ? (params: Params) => {
+          const original = params.cfg;
+          const updated = method.call(config, { ...params, cfg: rebind(params.cfg) });
+          if (sourceChannelId === targetChannelId || !updated.channels) {
+            return updated;
+          }
+          const nextChannels = { ...updated.channels };
+          if (Object.hasOwn(nextChannels, sourceChannelId)) {
+            nextChannels[targetChannelId] = nextChannels[sourceChannelId];
+          } else {
+            delete nextChannels[targetChannelId];
+          }
+          if (original.channels && Object.hasOwn(original.channels, sourceChannelId)) {
+            nextChannels[sourceChannelId] = original.channels[sourceChannelId];
+          } else {
+            delete nextChannels[sourceChannelId];
+          }
+          return {
+            ...updated,
+            channels: nextChannels,
+          };
+        }
       : undefined;
   return {
     ...config,
@@ -460,41 +435,6 @@ function addManifestChannelPlugins(
       });
     }
   }
-}
-
-function resolveExternalReadOnlyChannelPluginIds(params: {
-  cfg: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  channelIds: readonly string[];
-  records: readonly PluginManifestRecord[];
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  if (params.channelIds.length === 0) {
-    return [];
-  }
-  const candidatePluginIds = resolveDiscoverableScopedChannelPluginIds({
-    config: params.cfg,
-    activationSourceConfig: params.activationSourceConfig,
-    channelIds: params.channelIds,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    manifestRecords: params.records,
-  });
-  if (candidatePluginIds.length === 0) {
-    return [];
-  }
-
-  const requestedChannelIds = new Set(params.channelIds);
-  const candidatePluginIdSet = new Set(candidatePluginIds);
-  return params.records
-    .filter(
-      (plugin) =>
-        candidatePluginIdSet.has(plugin.id) &&
-        plugin.channels.some((channelId) => requestedChannelIds.has(channelId)),
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function listReadOnlyChannelPluginsForConfig(
@@ -644,14 +584,29 @@ function resolveReadOnlyChannelPluginsFromIds(
   const missingConfiguredChannelIds = configuredChannelIds.filter(
     (channelId) => !byId.has(channelId),
   );
-  const externalPluginIds = resolveExternalReadOnlyChannelPluginIds({
-    cfg,
-    activationSourceConfig,
-    channelIds: missingConfiguredChannelIds,
-    records: externalManifestRecords,
-    workspaceDir,
-    env,
-  });
+  let externalPluginIds: string[] = [];
+  if (missingConfiguredChannelIds.length > 0) {
+    const candidatePluginIds = resolveDiscoverableScopedChannelPluginIds({
+      config: cfg,
+      activationSourceConfig,
+      channelIds: missingConfiguredChannelIds,
+      workspaceDir,
+      env,
+      manifestRecords: externalManifestRecords,
+    });
+    if (candidatePluginIds.length > 0) {
+      const requestedChannelIds = new Set(missingConfiguredChannelIds);
+      const candidatePluginIdSet = new Set(candidatePluginIds);
+      externalPluginIds = externalManifestRecords
+        .filter(
+          (plugin) =>
+            candidatePluginIdSet.has(plugin.id) &&
+            plugin.channels.some((channelId) => requestedChannelIds.has(channelId)),
+        )
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
+    }
+  }
   if (externalPluginIds.length > 0) {
     const externalPluginIdSet = new Set(externalPluginIds);
     if (includeSetupFallbackPlugins) {

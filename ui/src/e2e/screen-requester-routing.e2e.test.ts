@@ -87,7 +87,7 @@ suite.define(() => {
           }),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Synthetic navigation proof.").first().waitFor();
         const client = {
           connId,
@@ -203,7 +203,7 @@ suite.define(() => {
     await Promise.all(deliveries);
     const desktop = requester.page.locator("openclaw-desktop-panel[embedded]");
     await requester.gateway.waitForRequest("environments.status");
-    await desktop.locator("openclaw-panel-loading-skeleton").waitFor();
+    await desktop.locator(".desktop-status-surface[role='status']").waitFor();
     await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-desktop.png");
@@ -227,9 +227,10 @@ suite.define(() => {
       expiresAtMs: 60_000,
       control: true,
     });
-    await desktop.getByRole("button", { name: "Take control", exact: true }).click();
+    const desktopControls = desktop.locator(".desktop-connection-rail");
+    await desktopControls.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
-    await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
+    await desktopControls.getByRole("button", { name: "Back to viewing", exact: true }).waitFor();
     expect(await desktop.locator(".desktop-note").count()).toBe(0);
     const controlledCanvas = await desktop.locator("canvas").elementHandle();
     const requestsBeforeShow = await Promise.all(
@@ -266,7 +267,7 @@ suite.define(() => {
       ).toEqual(requestsBeforeShow);
       expect(await controlledCanvas?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await rfb.connectionCount()).toBe(2);
-      await desktop.getByRole("button", { name: "Switch to view only", exact: true }).waitFor();
+      await desktopControls.getByRole("button", { name: "Back to viewing", exact: true }).waitFor();
       expect(await desktop.locator(".desktop-note").count()).toBe(0);
     }
     await captureUiProof(

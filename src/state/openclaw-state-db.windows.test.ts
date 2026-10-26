@@ -44,6 +44,7 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     const hostPlatform = process.platform;
     const root = tempDirs.make("openclaw-shared-windows-alias-");
     const env = { OPENCLAW_STATE_DIR: root };
+    const options = (pathname: string) => ({ env, path: pathname });
     const physical = openOpenClawStateDatabase({ env }).path;
     await closeOpenClawStateDatabaseAsync();
     const ordinary = path.win32.join(windowsRoot, "state", "openclaw.sqlite");
@@ -80,8 +81,8 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     mockProcessPlatform("win32");
     syncBuiltinESMExports();
 
-    const first = openOpenClawStateDatabase({ env, path: namespaced });
-    const second = openOpenClawStateDatabase({ env, path: ordinary });
+    const first = openOpenClawStateDatabase(options(namespaced));
+    const second = openOpenClawStateDatabase(options(ordinary));
     expect(second.db).toBe(first.db);
     expect(
       resolveLeaseDatabasePath({
@@ -97,21 +98,18 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     const borrow = borrowOpenClawStateDatabaseForAsyncRead(namespaced);
     expect(borrow?.database.db).toBe(first.db);
     borrow?.release();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        runOpenClawStateWriteTransaction(({ db: nested }) => expect(nested).toBe(db), {
-          env,
-          path: ordinary,
-        });
-      },
-      { env, path: namespaced },
-    );
+    runOpenClawStateWriteTransaction(({ db }) => {
+      runOpenClawStateWriteTransaction(
+        ({ db: nested }) => expect(nested).toBe(db),
+        options(ordinary),
+      );
+    }, options(namespaced));
     withExistingOpenClawStateSchema({ path: namespaced }, () => {
-      const context = captureOpenClawStateReadWorkerContext({ env, path: namespaced });
+      const context = captureOpenClawStateReadWorkerContext(options(namespaced));
       withExistingOpenClawStateSchema({ path: ordinary }, () => {
-        expect(
-          captureOpenClawStateReadWorkerContext({ env, path: ordinary }).existingSchemaPath,
-        ).toBe(context.existingSchemaPath);
+        expect(captureOpenClawStateReadWorkerContext(options(ordinary)).existingSchemaPath).toBe(
+          context.existingSchemaPath,
+        );
         expect(context.existingSchemaPath).toBe(first.path);
       });
     });
@@ -120,7 +118,7 @@ it.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     );
     expect(() =>
       closedReadScope(() =>
-        withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env, path: ordinary }),
+        withExistingOpenClawStateDatabaseReadOnly(() => undefined, options(ordinary)),
       ),
     ).toThrow("Shared-state read scope is closing or closed");
     expect(closeOpenClawStateDatabaseByPath(namespaced)).toBe(true);

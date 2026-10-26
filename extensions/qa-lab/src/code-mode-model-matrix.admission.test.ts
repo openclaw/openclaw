@@ -1,49 +1,28 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  parseCodeModeMatrixOptions,
   reserveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
-  type CodeModeMatrixOptions,
   type MatrixCell,
 } from "../../../scripts/code-mode-model-matrix.ts";
+import {
+  matrixDependencies,
+  matrixOptions,
+  matrixResult,
+} from "./code-mode-model-matrix.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function matrixOptions(
-  repoRoot: string,
-  overrides: Partial<CodeModeMatrixOptions>,
-): CodeModeMatrixOptions {
-  return {
-    ...parseCodeModeMatrixOptions(["--model", "fixture/model"], repoRoot),
-    tasks: ["read"],
-    modes: ["direct", "code"],
-    repetitions: 1,
-    ...overrides,
-  };
-}
 
 function scheduledResult(
   cell: MatrixCell,
   failureCategory: CodeModeMatrixCellResult["failureCategory"] = null,
 ): CodeModeMatrixCellResult {
-  return {
-    ...cell,
-    buildSha256: "synthetic-build",
-    gitSha: "synthetic-source",
-    sourceDirty: false,
-    sourcePatchSha256: null,
-    codeModeEngaged: cell.mode === "code",
-    elapsedMs: 1,
-    expected: "ok",
+  return matrixResult(cell, {
     final: failureCategory ? "" : "ok",
     failureCategory,
-    observedModel: cell.model.split("/")[1]!,
-    observedProvider: cell.model.split("/")[0]!,
     passed: failureCategory === null,
     status: failureCategory ? "error" : "ok",
     oracle: {
@@ -53,10 +32,9 @@ function scheduledResult(
       identity: true,
       toolExecution: true,
     },
-    timestamp: "2026-09-21T12:00:00.000Z",
     usage: { input: 8, output: 2, total: 10 },
     costUsd: 0.1,
-  };
+  });
 }
 
 describe("Code Mode matrix paired admission", () => {
@@ -74,20 +52,16 @@ describe("Code Mode matrix paired admission", () => {
       ]),
     );
     const started: string[] = [];
-    let release: (() => void) | undefined;
-    const pairReady = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: pairReady, resolve: release } = Promise.withResolvers<void>();
     const result = await runCodeModeModelMatrix(
-      matrixOptions(root, { schedulePath: schedule, repetitions: 2, concurrency: 2, ...limit }),
-      {
-        readSourceIdentity: async () => ({
-          gitSha: "synthetic-source",
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }),
-        readBuildSha256: async () => "synthetic-build",
-        buildCliArtifacts: async () => {},
+      matrixOptions(root, {
+        modes: ["direct", "code"],
+        schedulePath: schedule,
+        repetitions: 2,
+        concurrency: 2,
+        ...limit,
+      }),
+      matrixDependencies({
         runCell: async ({ cell }) => {
           started.push(cell.mode);
           if (started.length === 2) {
@@ -96,7 +70,7 @@ describe("Code Mode matrix paired admission", () => {
           await pairReady;
           return scheduledResult(cell);
         },
-      },
+      }),
     );
     expect(started).toEqual(["code", "direct"]);
     expect(result.exitCode).toBe(1);
@@ -122,22 +96,16 @@ describe("Code Mode matrix paired admission", () => {
       const requested: string[] = [];
       const result = await runCodeModeModelMatrix(
         matrixOptions(root, {
+          modes: ["direct", "code"],
           models: ["openai/first", "openai/second", "google/third"],
           concurrency,
         }),
-        {
-          readSourceIdentity: async () => ({
-            gitSha: "synthetic-source",
-            sourceDirty: false,
-            sourcePatchSha256: null,
-          }),
-          readBuildSha256: async () => "synthetic-build",
-          buildCliArtifacts: async () => {},
+        matrixDependencies({
           runCell: async ({ cell }) => {
             requested.push(cell.model);
             return scheduledResult(cell, cell.model === "openai/first" ? category : null);
           },
-        },
+        }),
       );
       expect(requested.filter((model) => model === "openai/first")).toHaveLength(2);
       expect(requested.filter((model) => model === "openai/second")).toHaveLength(
@@ -156,29 +124,21 @@ describe("Code Mode model matrix runtime and output admission", () => {
     await fs.writeFile(artifact, "original");
     const dispatched: string[] = [];
     const options = matrixOptions(root, {
-      models: ["openai/fixture"],
-      modes: ["code"],
       repetitions: 2,
       outputDir: "artifacts/build-drift",
     });
     await expect(
-      runCodeModeModelMatrix(options, {
-        readSourceIdentity: async () => ({
-          gitSha: "synthetic-source",
-          sourceDirty: false,
-          sourcePatchSha256: null,
+      runCodeModeModelMatrix(
+        options,
+        matrixDependencies({
+          readBuildSha256: () => fs.readFile(artifact, "utf8"),
+          runCell: async ({ cell, buildSha256 }) => {
+            dispatched.push(cell.id);
+            await fs.writeFile(artifact, "changed");
+            return { ...scheduledResult(cell), buildSha256 };
+          },
         }),
-        readBuildSha256: async () =>
-          createHash("sha256")
-            .update(await fs.readFile(artifact))
-            .digest("hex"),
-        buildCliArtifacts: async () => {},
-        runCell: async ({ cell, buildSha256 }) => {
-          dispatched.push(cell.id);
-          await fs.writeFile(artifact, "changed");
-          return { ...scheduledResult(cell), buildSha256 };
-        },
-      }),
+      ),
     ).rejects.toThrow("Runtime build changed");
     expect(dispatched).toHaveLength(1);
     const output = path.join(root, "artifacts/build-drift");
@@ -193,6 +153,7 @@ describe("Code Mode model matrix runtime and output admission", () => {
   it("rejects a dirty frozen runtime before building or dispatching any model", async () => {
     const root = tempDirs.make("openclaw-code-mode-frozen-runtime-");
     const options = matrixOptions(root, {
+      modes: ["direct", "code"],
       runtimeDir: root,
       outputDir: "artifacts/frozen",
       dryRun: true,
@@ -244,10 +205,9 @@ describe("Code Mode model matrix runtime and output admission", () => {
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
     const rejected = attempts.find((attempt) => attempt.status === "rejected");
     expect(rejected).toMatchObject({
-      status: "rejected",
-      reason: expect.objectContaining({
+      reason: {
         message: expect.stringContaining("must not already exist"),
-      }),
+      },
     });
   });
 });

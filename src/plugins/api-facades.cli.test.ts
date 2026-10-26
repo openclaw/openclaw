@@ -160,17 +160,6 @@ describe("managed CLI callbacks", () => {
     expect(writeErr).toHaveBeenCalledWith("already reported\n");
   });
 
-  it("leaves host-owned action errors unchanged", async () => {
-    const host = new Command();
-    const error = new Error("host failure");
-    host.command("host").action(() => {
-      throw error;
-    });
-    await register(({ program }) => void program.command("plugin").action(() => {}), host);
-
-    await expect(parse(host, "host")).rejects.toBe(error);
-  });
-
   it("keeps native fluent/subclass identity and scopes delayed action, hook and parser callbacks", async () => {
     class NativeCommand extends Command {
       #marker = "native";
@@ -444,38 +433,33 @@ describe("managed CLI callbacks", () => {
   it.each(["add", "remove"] as const)(
     "preserves native in-flight listener snapshots when prepared listeners %s during emission",
     async (mutation) => {
-      const run = async (managed: boolean) => {
-        const command = emitter(new Command("prepared"));
-        const seen: string[] = [];
-        let changed = false;
-        const second = () => seen.push("second");
-        const added = () => seen.push("added");
-        command.on("custom", () => {
-          if (managed) {
-            expect(current()).toBe("alpha");
+      const command = emitter(new Command("prepared"));
+      const seen: string[] = [];
+      let changed = false;
+      const second = () => seen.push("second");
+      const added = () => seen.push("added");
+      command.on("custom", () => {
+        expect(current()).toBe("alpha");
+        seen.push("first");
+        if (!changed) {
+          changed = true;
+          if (mutation === "add") {
+            command.on("custom", added);
+          } else {
+            command.off("custom", second);
           }
-          seen.push("first");
-          if (!changed) {
-            changed = true;
-            if (mutation === "add") {
-              command.on("custom", added);
-            } else {
-              command.off("custom", second);
-            }
-          }
-        });
-        command.on("custom", second);
-        if (managed) {
-          await adopt(command);
         }
-        command.emit("custom");
-        const firstEmission = [...seen];
-        command.emit("custom");
-        return { firstEmission, seen };
-      };
-      const native = await run(false);
-      expect(native.firstEmission).toEqual(["first", "second"]);
-      expect(await run(true)).toEqual(native);
+      });
+      command.on("custom", second);
+      await adopt(command);
+      command.emit("custom");
+      expect(seen).toEqual(["first", "second"]);
+      command.emit("custom");
+      expect(seen).toEqual(
+        mutation === "add"
+          ? ["first", "second", "first", "second", "added"]
+          : ["first", "second", "first"],
+      );
     },
   );
 
@@ -499,9 +483,11 @@ describe("managed CLI callbacks", () => {
   it("does not adopt preexisting host callbacks or change a caller-owned command's identity", async () => {
     const host = new Command();
     const foreign = new Command("host");
+    const error = new Error("host failure");
     const hostAction = vi.fn(function (this: Command, _options, command) {
       identities(foreign, this, command);
       expect(runtime.tryGetRuntime()).toBeNull();
+      throw error;
     });
     foreign.action(hostAction);
     host.addCommand(foreign);
@@ -510,7 +496,7 @@ describe("managed CLI callbacks", () => {
     }, host);
     expect(host.commands[0]).toBe(foreign);
     await instance.dispose();
-    await parse(host, "host");
+    await expect(parse(host, "host")).rejects.toBe(error);
     expect(hostAction).toHaveBeenCalledOnce();
   });
 });

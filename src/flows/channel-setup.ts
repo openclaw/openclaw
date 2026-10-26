@@ -219,8 +219,8 @@ export async function setupChannels(
     return plugin;
   };
   const setupCache = getPluginCache();
-  const enableChannelPluginForSetup = async (channel: ChannelChoice) =>
-    await withPluginLifecycleLease({}, async () => {
+  const enableChannelPluginForSetup = async (channel: ChannelChoice): Promise<boolean> => {
+    const outcome = await withPluginLifecycleLease({}, async () => {
       const result = await enablePluginWithCapabilityConsent(next, channel, {
         workspaceDir: resolveWorkspaceDir(),
         onCapabilityConsent: createPluginCapabilityConsentPrompter(
@@ -235,6 +235,18 @@ export async function setupChannels(
       }
       return result;
     });
+    if (!outcome.enabled) {
+      await prompter.note(
+        t("wizard.channels.pluginEnableFailed", {
+          channel,
+          reason: outcome.reason ?? "plugin disabled",
+          command: formatCliCommand("openclaw plugins list"),
+        }),
+        t("wizard.channels.setupTitle"),
+      );
+    }
+    return outcome.enabled;
+  };
   const getVisibleSetupFlowAdapter = (channel: ChannelChoice) =>
     resolveChannelSetupWizardAdapterForPlugin(getVisibleChannelPlugin(channel));
   const preloadConfiguredExternalPlugins = async () => {
@@ -399,16 +411,7 @@ export async function setupChannels(
       );
       return false;
     }
-    const result = await enableChannelPluginForSetup(channel);
-    if (!result.enabled) {
-      await prompter.note(
-        t("wizard.channels.pluginEnableFailed", {
-          channel,
-          reason: result.reason ?? "plugin disabled",
-          command: formatCliCommand("openclaw plugins list"),
-        }),
-        t("wizard.channels.setupTitle"),
-      );
+    if (!(await enableChannelPluginForSetup(channel))) {
       return false;
     }
     const plugin = getVisibleChannelPlugin(channel);
@@ -716,19 +719,8 @@ export async function setupChannels(
             },
           },
         } as OpenClawConfig;
-      } else {
-        const result = await enableChannelPluginForSetup(channel);
-        if (!result.enabled) {
-          await prompter.note(
-            t("wizard.channels.pluginEnableFailed", {
-              channel,
-              reason: result.reason ?? "plugin disabled",
-              command: formatCliCommand("openclaw plugins list"),
-            }),
-            t("wizard.channels.setupTitle"),
-          );
-          return "done";
-        }
+      } else if (!(await enableChannelPluginForSetup(channel))) {
+        return "done";
       }
       resumingDisabledChannel = true;
       deferredDisabledHint = resolveConfigDisabledHint(channel);

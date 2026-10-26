@@ -51,24 +51,6 @@ interface VeniceModel {
   model_spec?: VeniceModelSpec;
 }
 
-function resolveApiMaxCompletionTokens(params: {
-  apiModel: VeniceModel;
-  knownMaxTokens?: number;
-}): number | undefined {
-  const raw = floorPositiveFiniteNumber(params.apiModel.model_spec?.maxCompletionTokens);
-  if (!raw) {
-    return undefined;
-  }
-  const contextWindow = floorPositiveFiniteNumber(
-    params.apiModel.model_spec?.availableContextTokens,
-  );
-  const knownMaxTokens =
-    params.knownMaxTokens === undefined ? undefined : Math.floor(params.knownMaxTokens);
-  const hardCap = knownMaxTokens ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
-  const fallbackContextWindow = knownMaxTokens ?? VENICE_DEFAULT_CONTEXT_WINDOW;
-  return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
-}
-
 function projectVeniceModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
@@ -85,10 +67,16 @@ function projectVeniceModels(
     }
     const catalogEntry = catalogById.get(apiModel.id);
     const liveCost = parseVeniceModelPricing(apiModel.model_spec?.pricing);
-    const apiMaxTokens = resolveApiMaxCompletionTokens({
-      apiModel,
-      knownMaxTokens: catalogEntry?.maxTokens,
-    });
+    const knownMaxTokens = catalogEntry?.maxTokens;
+    const raw = floorPositiveFiniteNumber(apiModel.model_spec?.maxCompletionTokens);
+    let apiMaxTokens: number | undefined;
+    if (raw) {
+      const contextWindow = floorPositiveFiniteNumber(apiModel.model_spec?.availableContextTokens);
+      const knownCap = knownMaxTokens === undefined ? undefined : Math.floor(knownMaxTokens);
+      const hardCap = knownCap ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
+      const fallbackContextWindow = knownCap ?? VENICE_DEFAULT_CONTEXT_WINDOW;
+      apiMaxTokens = Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
+    }
     const supportsTools = apiModel.model_spec?.capabilities?.supportsFunctionCalling;
     if (catalogEntry) {
       const definition: ModelDefinitionConfig = {

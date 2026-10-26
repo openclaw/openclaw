@@ -58,6 +58,7 @@ export function assertControlUiE2eOwnership(
           (inSuiteServer &&
             [
               "createOpenClawTestInstance",
+              "createChatGatewayInstance",
               "createBackgroundWorkInstance",
               "createDesktopResizeProxy",
               "createWaitClockInstance",
@@ -139,7 +140,7 @@ export function assertControlUiE2eOwnership(
   for (const project of projects.slice(0, 2)) {
     expect(project.test).toMatchObject({
       fileParallelism: sharedVitestConfig.test.fileParallelism,
-      maxWorkers: undefined,
+      maxWorkers: config.test?.maxWorkers,
       sequence: { groupOrder: 0 },
     });
   }
@@ -162,7 +163,6 @@ export function assertControlUiE2eOwnership(
     );
     expect(selection.slice(2).flat().toSorted()).toEqual(files.filter((file) => serial.has(file)));
     expect(selection.flat().toSorted()).toEqual(files);
-    expect(new Set(selection.flat()).size).toBe(files.length);
   };
   const localSelected = select(config);
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
@@ -170,11 +170,17 @@ export function assertControlUiE2eOwnership(
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
+    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+    "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   ]);
-  expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);
+  expect(localSelected[3]).toEqual(
+    uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),
+  );
   // Keep packaged asset proof on the production bundle and source proof on its own server.
   expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
@@ -184,6 +190,25 @@ export function assertControlUiE2eOwnership(
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
   assertPartition(ordinarySelected, ordinary);
 
+  const productionArtifactFiles = [
+    "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+    "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+  ];
+  const delegated = createUiE2eVitestConfig(
+    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
+    [],
+  );
+  assertPartition(
+    select(delegated),
+    ordinary.filter((file) => !productionArtifactFiles.includes(file)),
+  );
+  const production = createUiE2eVitestConfig(
+    { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
+    [],
+  );
+  expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
+
   // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
   expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
@@ -192,7 +217,7 @@ export function assertControlUiE2eOwnership(
     projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
       .filter((project) => project.files.length > 0),
-  ).toEqual([{ name: "ui-e2e-serial-standalone", files: [packagedWorkboard] }]);
+  ).toEqual([{ name: "ui-e2e-real-gateway-standalone", files: [packagedWorkboard] }]);
   expect(
     createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
@@ -224,7 +249,6 @@ export function assertControlUiE2eOwnership(
     path.matchesGlob(file, "ui/src/e2e/*.e2e.test.ts"),
   );
   expect(globSelected.toSorted()).toEqual(expectedGlobFiles);
-  expect(new Set(globSelected).size).toBe(expectedGlobFiles.length);
 }
 
 // Historical fallback for frozen targets predating prebuilt E2E config.

@@ -1,16 +1,15 @@
-// System CLI tests cover system command registration and status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn();
-const addGatewayClientOptions = vi.fn((command: Command) => command);
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
+// mock-isolation: Exercise command registration without opening a live Gateway connection.
 vi.mock("./gateway-rpc.js", () => ({
-  addGatewayClientOptions,
+  addGatewayClientOptions: (command: Command) => command,
   callGatewayFromCli,
 }));
 
@@ -23,29 +22,21 @@ vi.mock("../runtime.js", async () => ({
 
 const { registerSystemCli } = await import("./system-cli.js");
 
-function gatewayCall(callIndex = 0): ReadonlyArray<unknown> {
-  const call = callGatewayFromCli.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected gateway call ${callIndex + 1}`);
-  }
-  return call;
-}
-
-function jsonFailure(message: string) {
-  return { ok: false, error: { type: "cli_error", message } };
+function expectGatewayCall(method: string, params: unknown) {
+  expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith(method, expect.any(Object), params, {
+    expectFinal: false,
+  });
 }
 
 describe("system-cli", () => {
   async function runCli(args: string[]) {
     const program = new Command();
     registerSystemCli(program);
-    try {
-      await program.parseAsync(args, { from: "user" });
-    } catch (err) {
+    await program.parseAsync(args, { from: "user" }).catch((err: unknown) => {
       if (!(err instanceof Error && err.message.startsWith("__exit__:"))) {
         throw err;
       }
-    }
+    });
   }
 
   beforeEach(() => {
@@ -65,85 +56,49 @@ describe("system-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([
-    {
-      name: "invalid wake mode",
-      args: ["system", "event", "--text", "hello", "--mode", "later", "--json"],
-      gatewayResult: undefined,
-      expectedError: "--mode must be now or next-heartbeat",
-      gatewayCalls: 0,
-    },
-  ])(
-    "writes JSON when $name fails",
-    async ({ args, gatewayResult, expectedError, gatewayCalls }) => {
-      if (gatewayResult) {
-        callGatewayFromCli.mockResolvedValueOnce(gatewayResult);
-      }
-
-      await runCli(args);
-
-      expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
-      expect(runtimeErrors).toEqual([]);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-      expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
-    },
-  );
-
-  it.each([{ mode: "human", args: ["system", "event", "--text", "hello"] }])(
-    "hands agent selection refusals to the CLI failure owner in $mode mode",
-    async ({ args }) => {
-      const error = new Error("Multiple agents are configured, but this operation has no owner.");
-      error.name = "AgentSelectionRequiredError";
-      callGatewayFromCli.mockRejectedValueOnce(error);
-
-      // The root failure owner renders expected conditions without crash framing;
-      // the command must rethrow instead of printing its own copy.
-      await expect(runCli(args)).rejects.toBe(error);
-
-      expect(runtimeLogs).toEqual([]);
-      expect(runtimeErrors).toEqual([]);
-      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    },
-  );
-
-  it("forwards --session-key on system event", async () => {
-    await runCli([
-      "system",
-      "event",
-      "--text",
-      "ping",
-      "--session-key",
-      "agent:main:telegram:dm:42",
-    ]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [method, gatewayOptions, params, requestOptions] = gatewayCall();
-    expect(method).toBe("wake");
-    expect(typeof gatewayOptions).toBe("object");
-    expect(params).toEqual({
-      mode: "next-heartbeat",
-      text: "ping",
-      sessionKey: "agent:main:telegram:dm:42",
-    });
-    expect(requestOptions).toEqual({ expectFinal: false });
+  it("writes JSON when invalid wake mode fails", async () => {
+    await runCli(["system", "event", "--text", "hello", "--mode", "later", "--json"]);
+    const failure = {
+      ok: false,
+      error: { type: "cli_error", message: "--mode must be now or next-heartbeat" },
+    };
+    expect(runtimeLogs).toEqual([JSON.stringify(failure, null, 2)]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(failure);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it.each([{ args: ["system", "presence"], method: "system-presence", params: undefined }])(
-    "routes $args to gateway",
-    async ({ args, method, params }) => {
-      callGatewayFromCli.mockResolvedValueOnce({ method });
+  it("hands agent selection refusals to the CLI failure owner in human mode", async () => {
+    const error = new Error("Multiple agents are configured, but this operation has no owner.");
+    error.name = "AgentSelectionRequiredError";
+    callGatewayFromCli.mockRejectedValueOnce(error);
 
-      await runCli(args);
+    await expect(runCli(["system", "event", "--text", "hello"])).rejects.toBe(error);
 
-      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-      const [calledMethod, gatewayOptions, calledParams, requestOptions] = gatewayCall();
-      expect(calledMethod).toBe(method);
-      expect(typeof gatewayOptions).toBe("object");
-      expect(calledParams).toEqual(params);
-      expect(requestOptions).toEqual({ expectFinal: false });
-      expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
-    },
-  );
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("forwards --session-key on system event", async () => {
+    const sessionKey = "agent:main:telegram:dm:42";
+    await runCli(["system", "event", "--text", "ping", "--session-key", sessionKey]);
+
+    expectGatewayCall("wake", {
+      mode: "next-heartbeat",
+      text: "ping",
+      sessionKey,
+    });
+  });
+
+  it("routes system presence to gateway", async () => {
+    const method = "system-presence";
+    callGatewayFromCli.mockResolvedValueOnce({ method });
+
+    await runCli(["system", "presence"]);
+    expectGatewayCall(method, undefined);
+    expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
+  });
 });

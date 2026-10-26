@@ -4,7 +4,7 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   resolveExactLineGroupConfigKey,
@@ -120,14 +120,10 @@ function readLineGroupCoverage(
   });
 }
 
-function readGroupPolicy(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function isLineGroupAllowlistScope(params: ChannelDoctorEmptyAllowlistAccountContext): boolean {
   return (
     params.channelName === "line" &&
-    (readGroupPolicy(params.account.groupPolicy) ?? readGroupPolicy(params.parent?.groupPolicy)) ===
+    (readStringValue(params.account.groupPolicy) ?? readStringValue(params.parent?.groupPolicy)) ===
       "allowlist"
   );
 }

@@ -374,8 +374,9 @@ describe("buildAgentSystemPrompt", () => {
       "keeps update and delegated controls distinct when both tools are present",
       { toolNames: ["openclaw", "gateway"] },
       [
-        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
-        "Update OpenClaw: `gateway` action update.run",
+        "Config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
+        "perform the work with `gateway`: update.run",
+        "update.cleanup retires eligible recovery copies",
       ],
       ["models/providers, updates: ask `openclaw`"],
     ],
@@ -417,11 +418,11 @@ describe("buildAgentSystemPrompt", () => {
       ["## Directory Roles", "User can toggle with /elevated on|off|ask|full."],
     ],
   ])("%s", expectPromptCase);
-  it("offers routine promotion only when the automations tool is available", () => {
+  it("conditions routine promotion on the available automation actions", () => {
     const withAutomations = renderPrompt({ toolNames: ["automations"] });
     const withoutAutomations = renderPrompt({ toolNames: ["read"] });
 
-    expect(withAutomations).toContain("asked a 3rd time");
+    expect(withAutomations).toContain("currently exposes list, add, run, and remove:");
     expect(withoutAutomations).not.toContain("asked a 3rd time");
   });
 

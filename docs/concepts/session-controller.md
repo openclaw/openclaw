@@ -274,8 +274,11 @@ Reset, delete, and manual compaction preempt through Stop with source `mutation`
 | Manual compact (`/compact`, `sessions.compact`)      | Abort only if abortable | Keep           | Keep                 |
 
 Delete retains its later lifecycle cleanup, which stops controlled subagents after
-preemption. Sharing and access mutations can allow live execution, while background
-result commits wait.
+preemption. Sharing, access, and append-only background result mutations allow
+live execution. Background results retain mutation ordering and wait for active
+write preparation, but do not wait for the running turn to settle. The transcript
+writer orders appends and checks generation and idempotency at commit; result
+custody ends after persistence and publication.
 
 A mutation closes competing admission, targets exact current owners, waits for
 real settlement, and then acquires its mutation boundary. In-band commands must

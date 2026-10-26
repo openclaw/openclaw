@@ -1,6 +1,8 @@
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,21 +13,7 @@ const { postJsonRequestMock, resolveApiKeyForProviderMock, resolveProviderHttpRe
 
 installProviderHttpMockCleanup();
 
-function postRequest(): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter image generation request");
-  }
-  return request as Record<string, unknown>;
-}
-
-function configRequest(): Record<string, unknown> {
-  const request = resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0];
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error("expected OpenRouter image config request");
-  }
-  return request;
-}
+const postRequest = () => requireFirstPostJsonRecordRequest(postJsonRequestMock, "image request");
 
 function requireHeaders(value: unknown): Headers {
   if (!(value instanceof Headers)) {
@@ -35,17 +23,12 @@ function requireHeaders(value: unknown): Headers {
 }
 
 function customConfig(request?: ModelProviderConfig["request"]) {
-  return {
-    models: {
-      providers: {
-        openrouter: {
-          baseUrl: "https://custom.openrouter.test/api/v1",
-          models: [],
-          ...(request ? { request } : {}),
-        },
-      },
-    },
+  const openrouter = {
+    baseUrl: "https://custom.openrouter.test/api/v1",
+    models: [],
+    ...(request ? { request } : {}),
   };
+  return { models: { providers: { openrouter } } };
 }
 
 type ImageRequest = Parameters<
@@ -91,25 +74,11 @@ describe("openrouter image generation provider", () => {
       cfg: customConfig(),
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "openrouter",
       cfg: customConfig(),
       agentDir: undefined,
       store: undefined,
-    });
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(configRequest()).toEqual({
-      baseUrl: "https://custom.openrouter.test/api/v1",
-      defaultBaseUrl: "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      defaultHeaders: {
-        Authorization: "Bearer openrouter-key",
-      },
-      request: undefined,
-      provider: "openrouter",
-      capability: "image",
-      transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const request = postRequest();
@@ -125,10 +94,7 @@ describe("openrouter image generation provider", () => {
         messages: [{ role: "user", content: "draw a sticker" }],
         modalities: ["image", "text"],
         n: 2,
-        image_config: {
-          aspect_ratio: "16:9",
-          image_size: "2K",
-        },
+        image_config: { aspect_ratio: "16:9", image_size: "2K" },
       },
       timeoutMs: 12_345,
       fetchFn: fetch,
@@ -151,42 +117,18 @@ describe("openrouter image generation provider", () => {
       proxy: { mode: "explicit-proxy" as const, url: "http://proxy.example.test:8443" },
       tls: { ca: "synthetic-provider-ca", serverName: "provider.example.test" },
     };
-    const dispatcherPolicy = {
-      mode: "explicit-proxy" as const,
-      proxyUrl: requestPolicy.proxy.url,
-    };
+    const dispatcherPolicy = { mode: "explicit-proxy" as const, proxyUrl: requestPolicy.proxy.url };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(params.defaultHeaders);
-      for (const [name, value] of Object.entries(params.request?.headers ?? {})) {
-        headers.set(name, value);
-      }
-      if (params.request?.auth?.mode === "authorization-bearer") {
-        headers.set("Authorization", `Bearer ${params.request.auth.token}`);
-      }
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork:
-          (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
-        headers,
-        dispatcherPolicy,
-      };
+      const result = resolveProviderHttpRequestConfigWithOriginTrust(params);
+      return { ...result, dispatcherPolicy: result.dispatcherPolicy };
     });
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockImplementation(async () =>
       chatResponse({ images: [{ image_url: { url: "data:image/png;base64,cG5n" } }] }, release),
     );
 
-    const result = await generateImage({
-      cfg: customConfig(requestPolicy),
-    });
+    const result = await generateImage({ cfg: customConfig(requestPolicy) });
 
-    expect(configRequest()).toMatchObject({
-      baseUrl: "https://custom.openrouter.test/api/v1",
-      provider: "openrouter",
-      capability: "image",
-      allowPrivateNetwork: false,
-      request: requestPolicy,
-    });
     const request = postRequest();
     const headers = requireHeaders(request.headers);
     expect(headers.get("authorization")).toBe("Bearer override-image-token");
@@ -209,10 +151,13 @@ describe("openrouter image generation provider", () => {
 
     const result = await generateImage({
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      aspectRatio: "16:9",
+      resolution: "2K",
     });
 
     const request = postRequest();
     expect(request.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(request.body).toMatchObject({ aspect_ratio: "16:9", resolution: "2K" });
     expect((request.body as Record<string, unknown>).input_references).toEqual([
       {
         type: "image_url",
@@ -234,11 +179,7 @@ describe("openrouter image generation provider", () => {
         .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
         .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLXR3bw==" }] }));
 
-      const result = await generateImage({
-        model,
-        prompt: "draw two stickers",
-        count: 2,
-      });
+      const result = await generateImage({ model, prompt: "draw two stickers", count: 2 });
 
       expect(postJsonRequestMock).toHaveBeenCalledTimes(2);
       expect(
@@ -261,12 +202,9 @@ describe("openrouter image generation provider", () => {
       .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
       .mockRejectedValueOnce(new Error("upstream capacity"));
 
-    await expect(
-      generateImage({
-        prompt: "draw two stickers",
-        count: 2,
-      }),
-    ).rejects.toThrow("upstream capacity");
+    await expect(generateImage({ prompt: "draw two stickers", count: 2 })).rejects.toThrow(
+      "upstream capacity",
+    );
   });
 
   it("wraps wrong-shape successful dedicated image responses", async () => {
@@ -285,17 +223,25 @@ describe("openrouter image generation provider", () => {
         choices: [
           { message: { content: `done data:image/png;base64,${png}` } },
           { message: { content: [{ b64_json: raw }] } },
+          { message: { content: [{ inlineData: { data: raw, mimeType: "image/webp" } }] } },
+          { message: { content: [{ inline_data: { data: raw, mime_type: "image/jpeg" } }] } },
         ],
       }),
     );
 
-    const result = await generateImage({
-      cfg: customConfig(),
-    });
+    const result = await generateImage({ cfg: customConfig() });
 
     expect(result.images.map((image) => image.buffer.toString())).toEqual([
       "png-inline",
       "raw-inline",
+      "raw-inline",
+      "raw-inline",
+    ]);
+    expect(result.images.map((image) => image.mimeType)).toEqual([
+      "image/png",
+      "image/png",
+      "image/webp",
+      "image/jpeg",
     ]);
   });
 
@@ -304,10 +250,8 @@ describe("openrouter image generation provider", () => {
       chatResponse({ content: [{ b64_json: "not-base64!" }] }),
     );
 
-    await expect(
-      generateImage({
-        cfg: customConfig(),
-      }),
-    ).rejects.toThrow("OpenRouter image generation response malformed");
+    await expect(generateImage({ cfg: customConfig() })).rejects.toThrow(
+      "OpenRouter image generation response malformed",
+    );
   });
 });

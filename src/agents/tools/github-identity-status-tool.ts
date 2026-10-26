@@ -5,6 +5,8 @@ import { jsonResult } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
+const GITHUB_IDENTITY_STATUS_PARAMETERS = Type.Object({}, { additionalProperties: false });
+
 export function createGitHubIdentityStatusTool(
   options: { callGateway?: InProcessGatewayCaller } = {},
 ): AnyAgentTool {
@@ -14,7 +16,7 @@ export function createGitHubIdentityStatusTool(
     name: "github_identity_status",
     description:
       "Inspect the secret-free effective GitHub account, credential health, Git author, expiry, and scopes for this agent. If setup or reconnection is needed, ask the operator to connect GitHub in Agent Settings.",
-    parameters: Type.Object({}, { additionalProperties: false }),
+    parameters: GITHUB_IDENTITY_STATUS_PARAMETERS,
     execute: async () => {
       const caller = getGatewayToolCallerIdentity();
       if (!caller?.agentId) {

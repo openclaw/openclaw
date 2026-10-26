@@ -25,7 +25,6 @@ import {
   DIFF_OUTPUT_FORMATS,
   DIFF_THEMES,
   type DiffInput,
-  type DiffMode,
 } from "./types.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 
@@ -157,7 +156,8 @@ export function createDiffsTool(params: {
         fileScale,
         fileMaxWidth,
       });
-      const renderTarget = resolveRenderTarget(mode);
+      const artifactOnly = mode === "image" || mode === "file";
+      const renderTarget = mode === "view" ? "viewer" : artifactOnly ? "image" : "both";
 
       const rendered = await renderDiffDocument(
         input,
@@ -174,7 +174,7 @@ export function createDiffsTool(params: {
         renderTarget,
       );
 
-      const artifact = isArtifactOnlyMode(mode)
+      const artifact = artifactOnly
         ? undefined
         : await params.store.createArtifact({
             html: requireRenderedHtml(rendered.html, "viewer"),
@@ -278,20 +278,6 @@ export function createDiffsTool(params: {
       }
     },
   };
-}
-
-function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
-  return mode === "image" || mode === "file";
-}
-
-function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
-  if (mode === "view") {
-    return "viewer";
-  }
-  if (isArtifactOnlyMode(mode)) {
-    return "image";
-  }
-  return "both";
 }
 
 function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {

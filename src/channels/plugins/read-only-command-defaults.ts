@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { normalizeManifestChannelCommandDefaults } from "../../plugins/manifest-setup-normalizers.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -31,21 +32,6 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
     return undefined;
   }
   return record[key];
-}
-
-export function normalizeChannelCommandDefaults(
-  value: ChannelCommandDefaults | undefined,
-): ChannelCommandDefaults | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const defaults: ChannelCommandDefaults = {};
-  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
-    if (typeof value[key] === "boolean") {
-      defaults[key] = value[key];
-    }
-  }
-  return Object.keys(defaults).length > 0 ? defaults : undefined;
 }
 
 /**
@@ -98,7 +84,9 @@ export function resolveReadOnlyChannelCommandDefaults(
       record.channelCatalogMeta?.id === normalizedChannelId
         ? record.channelCatalogMeta.commands
         : undefined;
-    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+    const commands = normalizeManifestChannelCommandDefaults(
+      channelConfig?.commands ?? catalogCommands,
+    );
     if (commands) {
       return commands;
     }

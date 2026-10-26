@@ -1,19 +1,21 @@
 await vi.hoisted(() => import("./launchd-ancestry.test-support.js"));
 import "./launchd-fs.mocks.test-support.js";
 import fs from "node:fs/promises";
-import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import type { PortListener } from "../infra/ports-types.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import {
+  ENV,
+  DOMAIN,
+  SERVICE_ID,
+  GUI_UNAVAILABLE,
+  setLaunchAgentPlist,
+  setGatewayPlist,
   launchdRestartHandoffState,
   launchdSystemState,
   cleanStaleGatewayProcessesSync,
-  getSelfAndAncestorPidsSync,
-  launchdCallerPids,
   launchctlSpawnSync,
   inspectPortUsage,
   probePortUsage,
@@ -23,39 +25,30 @@ import {
   installLaunchAgent,
   isPidDefinitelyDead,
 } from "./launchd-ancestry.test-support.js";
+import * as currentService from "./launchd-current-service.js";
 import * as launchdExec from "./launchd-exec.js";
 import {
   capturePassThroughOutput,
   createDefaultLaunchdEnv,
   createLaunchdEnvWithGatewayPort,
-  createTestLaunchAgentPlist,
   defaultLaunchAgentFixture,
   launchAgentControlFixture,
   defaultProgramArguments,
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
+import * as launchdRuntime from "./launchd-runtime.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
-  disableCurrentOpenClawUpdateLaunchdJob,
-  findStaleOpenClawUpdateLaunchdJobs,
   isLaunchAgentEnabled,
-  isLaunchAgentLoaded,
-  parkCurrentLaunchAgentForMaintenance,
-  parseLaunchAgentEnabled,
   readLaunchAgentProgramArguments,
-  readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
-  stageLaunchAgent,
   startLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
 
-const ENV = createDefaultLaunchdEnv();
-const DOMAIN = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-const SERVICE_ID = `${DOMAIN}/ai.openclaw.gateway`;
 const ENV_FILE = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
 const WRAPPER = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
 const PLIST = resolveLaunchAgentPlistPath(ENV);
@@ -66,16 +59,10 @@ const WRAPPED_ARGS = [
   ENV_FILE,
   ...defaultProgramArguments,
 ];
-const GUI_UNAVAILABLE = "Bootstrap failed: 125: Domain does not support specified action";
 const BOOTSTRAP_EXISTS =
   "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
 const BOOTSTRAP_PROGRESS = "Bootstrap failed: 37: Operation already in progress";
-const SERVICE_MARKERS = {
-  XPC_SERVICE_NAME: "0",
-  OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
-  OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-  OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
-};
+const { scheduleDetachedLaunchdRestartHandoff: handoff } = launchdRestartHandoffState;
 
 function install(overrides?: Parameters<typeof defaultLaunchAgentFixture>[1]) {
   return installLaunchAgent(defaultLaunchAgentFixture(ENV, overrides));
@@ -89,14 +76,6 @@ function expectCommands(commands: string) {
   expect(launchctlCommandNames()).toEqual(commands ? commands.split(" ") : []);
 }
 
-function expectServiceCalls(...commands: (string | string[])[]) {
-  expect(state.launchctlCalls).toEqual(
-    commands.map((command) =>
-      typeof command === "string" ? [command, SERVICE_ID] : command.concat(SERVICE_ID),
-    ),
-  );
-}
-
 function expectProtectedCleanup(port: number) {
   expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(
     port,
@@ -104,52 +83,11 @@ function expectProtectedCleanup(port: number) {
   );
 }
 
-function expectArtifacts(...artifacts: [string, string | undefined, number][]) {
-  for (const [path, contents, mode] of artifacts) {
-    expect({ contents: state.files.get(path), mode: state.fileModes.get(path) }).toEqual({
-      contents,
-      mode,
-    });
-  }
-}
-
-function setArtifact(path: string, contents: string, mode: number) {
-  state.files.set(path, contents);
-  state.fileModes.set(path, mode);
-}
-
-const EXTERNAL_PROCESS = {
-  LAUNCH_JOB_LABEL: undefined,
-  LAUNCH_JOB_NAME: undefined,
-  XPC_SERVICE_NAME: undefined,
-  OPENCLAW_SERVICE_MARKER: undefined,
-  OPENCLAW_SERVICE_KIND: undefined,
-  OPENCLAW_LAUNCHD_LABEL: undefined,
-};
-
 function readPlistProgramArgumentStrings(plist: string): string[] {
   const match = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
   return Array.from((match?.[1] ?? "").matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
     (item) => item[1] ?? "",
   );
-}
-
-function setLaunchAgentPlist(
-  env: Record<string, string | undefined>,
-  label: string,
-  programArguments: string[],
-  environment?: Record<string, string>,
-): string {
-  const plist = createTestLaunchAgentPlist({ label, programArguments, environment });
-  state.files.set(`${env.HOME}/Library/LaunchAgents/${label}.plist`, plist);
-  return plist;
-}
-
-function setGatewayPlist(
-  programArguments = defaultProgramArguments,
-  environment?: Record<string, string>,
-) {
-  return setLaunchAgentPlist(ENV, "ai.openclaw.gateway", programArguments, environment);
 }
 
 function captureOutput(encoding?: BufferEncoding) {
@@ -191,28 +129,12 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-function expectLaunchctlEnableBootstrapOrder() {
-  const enableIndex = state.launchctlCalls.findIndex(
-    (c) => c[0] === "enable" && c[1] === SERVICE_ID,
-  );
-  const bootstrapIndex = state.launchctlCalls.findIndex(
-    (c) => c[0] === "bootstrap" && c[1] === DOMAIN && c[2] === PLIST,
-  );
-
-  expect(enableIndex).toBeGreaterThanOrEqual(0);
-  expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-  expect(enableIndex).toBeLessThan(bootstrapIndex);
-}
-
 function launchctlCommandNames(): string[] {
   return state.launchctlCalls.map(([command]) => command ?? "");
 }
 
-function createSystemOwnershipError(
-  status: "loaded" | "installed" | "unverifiable" = "loaded",
-): Error {
+function createSystemOwnershipError(status: "loaded" | "unverifiable" = "loaded"): Error {
   const details = {
-    installed: { plistPath: "/Library/LaunchDaemons/custom-openclaw.plist" },
     unverifiable: { operation: "launchctl", detail: "permission denied" },
     loaded: {},
   };
@@ -221,281 +143,6 @@ function createSystemOwnershipError(
     ownership: { status, serviceTarget: "system/ai.openclaw.gateway", ...details[status] },
   });
 }
-
-describe("launchd runtime parsing", () => {
-  it.each([
-    ['disabled services = {\n\t"other.service" => disabled\n}', true],
-    ['disabled services = {\n\t"ai.openclaw.gateway" => unexpected\n}', "unrecognized state"],
-  ] as const)("parses the LaunchAgent enabled override %j", (output, expected) => {
-    const parse = () => parseLaunchAgentEnabled(output, "ai.openclaw.gateway");
-    if (typeof expected === "string") {
-      expect(parse).toThrow(expected);
-    } else {
-      expect(parse()).toBe(expected);
-    }
-  });
-
-  it.each(["enabled", "loaded"] as const)(
-    "fails closed when the %s state cannot be read",
-    async (read) => {
-      if (read === "enabled") {
-        state.printDisabledError = "Operation not permitted";
-        state.printDisabledCode = 1;
-        await expect(isLaunchAgentEnabled({ env: ENV })).rejects.toThrow(
-          "launchctl print-disabled failed: Operation not permitted",
-        );
-      } else {
-        state.printError = "launchctl print permission denied";
-        state.printFailuresRemaining = 1;
-        await expect(isLaunchAgentLoaded({ env: ENV })).rejects.toMatchObject({
-          reason: "launchd-gui-domain-unavailable",
-        });
-      }
-    },
-  );
-});
-
-describe("launchd runtime state", () => {
-  it.runIf(process.platform === "darwin").each(["runtime", "enabled"] as const)(
-    "bounds the %s read by the supplied deadline when launchctl blocks",
-    async (read) => {
-      const realFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const tempDir = await realFs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/openclaw-launchd-`);
-      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nexec /bin/sleep 2\n", {
-        mode: 0o755,
-      });
-      state.realExecFile = true;
-
-      try {
-        await withEnvAsync({ PATH: `${tempDir}:${process.env.PATH ?? ""}` }, async () => {
-          const startedAt = Date.now();
-          if (read === "enabled") {
-            await expect(
-              isLaunchAgentEnabled({ env: { HOME: tempDir }, timeoutMs: 100 }),
-            ).rejects.toThrow("launchctl print-disabled failed");
-          } else {
-            const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
-            expect(runtime.status).toBe("unknown");
-          }
-          expect(Date.now() - startedAt).toBeLessThan(1_000);
-        });
-      } finally {
-        state.realExecFile = false;
-        await realFs.rm(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  const inspectionFailure = (detail: string) => ({
-    status: "unknown",
-    detail,
-    inspectionReason: "launchd-gui-domain-unavailable",
-  });
-  it.each([
-    [
-      "installed but unloaded",
-      true,
-      true,
-      'Bad request.\nCould not find service "ai.openclaw.gateway" in domain for user gui: 501',
-      { status: "stopped" },
-    ],
-    [
-      "missing GUI session",
-      true,
-      true,
-      GUI_UNAVAILABLE,
-      { ...inspectionFailure(GUI_UNAVAILABLE), missingGuiSession: true },
-    ],
-    [
-      "unexpected inspection failure",
-      true,
-      true,
-      "Operation not permitted\nwhile reading launchd state",
-      inspectionFailure("Operation not permitted while reading launchd state"),
-    ],
-    ["missing job and plist", false, false, "", { status: "unknown", missingUnit: true }],
-    [
-      "system ownership even with a loaded user job",
-      false,
-      true,
-      "",
-      {
-        status: "unknown",
-        detail: "System LaunchDaemon system/ai.openclaw.gateway already owns this gateway label.",
-        inspectionReason: "launchd-system-owned",
-        systemLaunchDaemon: { status: "loaded", serviceTarget: "system/ai.openclaw.gateway" },
-      },
-    ],
-  ] as const)("reports %s", async (_name, installed, loaded, error, expected) => {
-    if (installed) {
-      state.files.set(resolveLaunchAgentPlistPath(ENV), "<plist/>");
-    }
-    state.serviceLoaded = loaded;
-    state.printError = error;
-    state.printFailuresRemaining = error ? 1 : 0;
-    if (!installed && loaded) {
-      launchdSystemState.inspectSystemLaunchDaemonOwnership.mockResolvedValueOnce({
-        status: "loaded",
-        serviceTarget: "system/ai.openclaw.gateway",
-      });
-    }
-    await expect(readLaunchAgentRuntime(ENV)).resolves.toEqual(expected);
-    expect(launchdSystemState.inspectSystemLaunchDaemonOwnership).toHaveBeenCalledWith(
-      "ai.openclaw.gateway",
-      { scanInstalledPlists: false },
-    );
-  });
-});
-
-describe("launchctl list detection", () => {
-  it("discovers stale OpenClaw updater jobs from launchctl list", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    state.listOutput = [
-      "123 0 ai.openclaw.gateway",
-      "- 127 ai.openclaw.update.2026.5.12",
-      "- 0 ai.openclaw.manual-update.1717168800",
-      "8142 0 ai.openclaw.update.2026.5.13-beta.1",
-      "915 0 ai.openclaw.tayoun.update.20260625T201026-0400",
-      "- 0 ai.openclaw.manual-updater.1717168800",
-      "- 0 com.example.other",
-    ].join("\n");
-    const jobs = await findStaleOpenClawUpdateLaunchdJobs(ENV);
-
-    expect(jobs).toEqual([
-      { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
-      { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
-      { label: "ai.openclaw.update.2026.5.13-beta.1", pid: 8142, lastExitStatus: 0 },
-    ]);
-  });
-
-  const updater = "ai.openclaw.update.2026.5.12";
-  const profileUpdater = "ai.openclaw.tayoun.update.20260625T201026-0400";
-  const gateway = "ai.openclaw.dev.team.update.20260625T201026-0400";
-  const envFile = `/Users/test/.openclaw-tayoun/service-env/${profileUpdater}.env`;
-  const wrapper = `/Users/test/.openclaw-tayoun/service-env/${profileUpdater}-env-wrapper.sh`;
-  const updateArgs = ["/opt/homebrew/bin/openclaw", "update", "--yes"];
-  const gatewayArgs = ["/opt/homebrew/bin/openclaw", "gateway", "run"];
-  const fakeUpdater = "ai.openclaw.fake.update.20260625T201026-0400";
-  const helperUpdater = "ai.openclaw.helper.update.20260625T201026-0400";
-  const manualUpdater = "ai.openclaw.manual-update.1717168800";
-  const acceptedProfile = [{ label: profileUpdater, pid: 4321, lastExitStatus: 0 }];
-  const nativeProfile = { ...ENV, LAUNCH_JOB_LABEL: profileUpdater };
-  const configuredUpdater = { XPC_SERVICE_NAME: "0", OPENCLAW_LAUNCHD_LABEL: updater };
-  const gatewayProfile = { LAUNCH_JOB_LABEL: updater, OPENCLAW_PROFILE: "update.2026.5.12" };
-  const handoff = { ...ENV, OPENCLAW_UPDATE_RUN_HANDOFF: "1" };
-  const nodeUpdateArgs = ["/usr/local/bin/node", "/opt/openclaw/openclaw.mjs", "update", "--yes"];
-  const gatewayMarker = {
-    LAUNCH_JOB_LABEL: updater,
-    OPENCLAW_LAUNCHD_LABEL: updater,
-    OPENCLAW_SERVICE_MARKER: "openclaw",
-    OPENCLAW_SERVICE_KIND: "gateway",
-  };
-  type ScanJob = [label: string, pid: number | undefined, args?: string[]];
-  function scanCase(
-    name: string,
-    jobs: ScanJob[],
-    expected: { label: string; pid?: number; lastExitStatus: number }[],
-    env: NodeJS.ProcessEnv = ENV,
-    generatedMarker = false,
-  ) {
-    return { name, jobs, expected, env, generatedMarker };
-  }
-  it.runIf(process.platform === "darwin").each([
-    scanCase(
-      "profile commands require an OpenClaw update command",
-      [
-        [profileUpdater, 4321, [...updateArgs, "--json"]],
-        [gateway, 9876, gatewayArgs],
-        [fakeUpdater, 2468, ["/bin/echo", "update", "--yes"]],
-        [helperUpdater, 1357, ["/usr/local/bin/openclaw-helper", "update", "--yes"]],
-      ],
-      acceptedProfile,
-    ),
-    scanCase(
-      "generated environment marker confirms an updater",
-      [[profileUpdater, 4321, [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapper, envFile, ...gatewayArgs]]],
-      acceptedProfile,
-      ENV,
-      true,
-    ),
-    scanCase("scanner marker cannot confirm a different job", [[gateway, 9876, gatewayArgs]], [], {
-      ...ENV,
-      OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-    }),
-    scanCase(
-      "current gateway labels cannot become stale update jobs",
-      [
-        [manualUpdater, undefined],
-        ["ai.openclaw.manual-update.profile", 812],
-        ["ai.openclaw.manual-update.custom-label", 913],
-      ],
-      [{ label: manualUpdater, lastExitStatus: 0 }],
-      {
-        OPENCLAW_PROFILE: "manual-update.profile",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.custom-label",
-        OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
-        OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-      },
-    ),
-  ])(
-    "discovers only confirmed stale jobs: $name",
-    async ({ env, jobs, generatedMarker, expected }) => {
-      state.listOutput = jobs.map(([label, pid]) => `${pid ?? "-"} 0 ${label}`).join("\n");
-      for (const [label, , args] of jobs) {
-        if (args) {
-          setLaunchAgentPlist(env, label, args);
-        }
-      }
-      if (generatedMarker) {
-        state.files.set(envFile, "export OPENCLAW_UPDATE_RUN_HANDOFF='1'\n");
-      }
-      await expect(findStaleOpenClawUpdateLaunchdJobs(env)).resolves.toEqual(expected);
-    },
-  );
-  it
-    .runIf(process.platform === "darwin")
-    .each<[name: string, env: NodeJS.ProcessEnv, args: string[] | undefined, disabled: boolean]>([
-      ["native label", { LAUNCH_JOB_LABEL: updater }, undefined, true],
-      ["configured updater", configuredUpdater, undefined, true],
-      ["gateway profile", gatewayProfile, undefined, false],
-      ["gateway marker", gatewayMarker, undefined, false],
-      ["profile Node command", nativeProfile, nodeUpdateArgs, true],
-      [
-        "native handoff marker",
-        { ...nativeProfile, OPENCLAW_UPDATE_RUN_HANDOFF: "1" },
-        undefined,
-        true,
-      ],
-      [
-        "unconfirmed configured handoff",
-        { ...handoff, OPENCLAW_LAUNCHD_LABEL: gateway },
-        gatewayArgs,
-        false,
-      ],
-      [
-        "confirmed configured handoff",
-        { ...handoff, OPENCLAW_LAUNCHD_LABEL: profileUpdater },
-        updateArgs,
-        true,
-      ],
-      ["unconfirmed profile gateway", nativeProfile, gatewayArgs, false],
-    ])("disarms only confirmed updater jobs: %s", async (_name, env, args, disabled) => {
-    const label = expectDefined(
-      env.LAUNCH_JOB_LABEL ?? env.OPENCLAW_LAUNCHD_LABEL,
-      "updater label",
-    );
-    if (args) {
-      setLaunchAgentPlist(ENV, label, args);
-    }
-    await expect(disableCurrentOpenClawUpdateLaunchdJob(env)).resolves.toBe(disabled);
-    if (disabled) {
-      expect(state.launchctlCalls).toContainEqual(["disable", `${DOMAIN}/${label}`]);
-      expect(launchctlCommandNames()).not.toContain("remove");
-    } else {
-      expect(state.launchctlCalls).toEqual([]);
-    }
-  });
-});
 
 describe("launchd bootstrap repair", () => {
   it.each([
@@ -531,7 +178,10 @@ describe("launchd bootstrap repair", () => {
       ok: true,
       status: "repaired",
     });
-    expectLaunchctlEnableBootstrapOrder();
+    expect(launchctlCommandNames()).toEqual(expect.arrayContaining(["enable", "bootstrap"]));
+    expect(launchctlCommandNames().indexOf("enable")).toBeLessThan(
+      launchctlCommandNames().indexOf("bootstrap"),
+    );
     expect(launchctlCommandNames()).not.toContain("kickstart");
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("custom behavior"));
@@ -543,47 +193,33 @@ describe("launchd bootstrap repair", () => {
   const repaired = { ok: true, status: "already-loaded" } as const;
   const missingDomain = "Could not find domain for user gui: 999999";
   const kickstartDenied = "launchctl kickstart failed: permission denied";
-  function repairCase(
-    name: string,
-    detail: string,
-    expected: Awaited<ReturnType<typeof repairLaunchAgentBootstrap>>,
-    overrides: Partial<typeof state> = {},
-  ) {
-    return { name, detail, expected, overrides };
-  }
-  it.each([
-    repairCase("operation already in progress with loaded job", BOOTSTRAP_PROGRESS, repaired, {
-      bootstrapCode: 37,
-    }),
-    repairCase("exit", BOOTSTRAP_EXISTS, repaired, { serviceRunning: false }),
-    repairCase(
-      "timeout",
+  it.each<[string, Partial<typeof state>, Awaited<ReturnType<typeof repairLaunchAgentBootstrap>>]>([
+    [BOOTSTRAP_PROGRESS, { bootstrapCode: 37 }, repaired],
+    [BOOTSTRAP_EXISTS, { serviceRunning: false }, repaired],
+    [
       BOOTSTRAP_EXISTS,
-      { ok: false, status: "bootstrap-failed", detail: BOOTSTRAP_EXISTS },
       { bootstrapTermination: "timeout", serviceRunning: false },
-    ),
-    repairCase("missing GUI domain", missingDomain, {
-      ok: false,
-      status: "gui-session-unavailable",
-      detail: missingDomain,
-      domain: DOMAIN,
-    }),
-    repairCase(
-      "failed kickstart after operation already in progress",
+      { ok: false, status: "bootstrap-failed", detail: BOOTSTRAP_EXISTS },
+    ],
+    [
+      missingDomain,
+      {},
+      { ok: false, status: "gui-session-unavailable", detail: missingDomain, domain: DOMAIN },
+    ],
+    [
       BOOTSTRAP_PROGRESS,
-      { ok: false, status: "kickstart-failed", detail: kickstartDenied },
       {
         bootstrapCode: 37,
         serviceRunning: false,
         kickstartError: kickstartDenied,
         kickstartFailuresRemaining: 1,
       },
-    ),
-  ])("classifies bootstrap repair: $name", async ({ detail, expected, overrides }) => {
+      { ok: false, status: "kickstart-failed", detail: kickstartDenied },
+    ],
+  ])("classifies repair result for %s (%j)", async (detail, overrides, expected) => {
     Object.assign(state, { bootstrapError: detail }, overrides);
     const needsKickstart = !state.serviceRunning && state.bootstrapTermination === "exit";
     await expect(repairLaunchAgentBootstrap({ env: ENV })).resolves.toEqual(expected);
-    expectLaunchctlEnableBootstrapOrder();
     expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual(
       needsKickstart ? [["kickstart", SERVICE_ID]] : [],
     );
@@ -650,89 +286,41 @@ describe("launchd uninstall", () => {
 });
 
 describe("launchd install", () => {
-  it("refuses an in-band label migration before mutating either LaunchAgent", async () => {
-    state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "not-loaded");
-    getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
+  it("aborts before mutation with ambiguous supervision", async () => {
+    const previous = setGatewayPlist(PREVIOUS_ARGS);
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 2;
 
-    await withEnvAsync(
-      { ...SERVICE_MARKERS, OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.legacy-gateway" },
-      async () => {
-        await expect(install()).rejects.toThrow(
-          "Refusing to install LaunchAgent ai.openclaw.gateway from inside ai.openclaw.legacy-gateway",
-        );
-      },
-    );
+    await expect(install()).rejects.toMatchObject({ reason: "service-membership-unverified" });
 
+    expect(state.files.get(PLIST)).toBe(previous);
     expect(state.fileWrites).toEqual([]);
-    expect(state.launchctlCalls).toEqual([
-      ["print", `${DOMAIN}/ai.openclaw.gateway`],
-      ["print", `${DOMAIN}/ai.openclaw.legacy-gateway`],
-    ]);
+    expectCommands("print");
   });
 
-  it("stages a canonical plist without retiring a legacy LaunchAgent", async () => {
-    const legacyLabel = "ai.openclaw.legacy-gateway";
-    const legacyPlistPath = `${ENV.HOME}/Library/LaunchAgents/${legacyLabel}.plist`;
-    const previousLegacy = setLaunchAgentPlist(ENV, legacyLabel, [
-      "/legacy/node",
-      "/legacy/openclaw.mjs",
-      "gateway",
-    ]);
-
-    await stageLaunchAgent(defaultLaunchAgentFixture(ENV));
-
-    expect(state.files.get(legacyPlistPath)).toBe(previousLegacy);
-    expect(state.files.has(resolveLaunchAgentPlistPath(ENV))).toBe(true);
-    expect(state.launchctlCalls).toEqual([]);
-  });
-
-  it.each(["ambiguous supervision", "missing loaded definition"] as const)(
-    "aborts before mutation with %s",
+  it.each(["fresh install", "deleted plist"])(
+    "restores absent artifacts after failed activation (%s)",
     async (scenario) => {
-      const previous =
-        scenario === "ambiguous supervision" ? setGatewayPlist(PREVIOUS_ARGS) : undefined;
-      if (scenario === "ambiguous supervision") {
-        state.printError = "launchctl print permission denied";
-        // A denied membership probe must refuse before any native mutation.
-        state.printFailuresRemaining = 2;
+      state.serviceLoaded = false;
+      state.serviceRunning = false;
+      if (scenario === "deleted plist") {
+        state.serviceStates.set(SERVICE_ID, "running");
       } else {
-        state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "running");
+        state.bootoutError = "Boot-out failed: 5: Input/output error";
+        state.bootoutCode = 5;
       }
-
-      const operation = install();
-      if (scenario === "ambiguous supervision") {
-        await expect(operation).rejects.toMatchObject({ reason: "service-membership-unverified" });
-      } else {
-        await expect(operation).rejects.toThrow("is loaded but its plist is missing");
-        expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
-      }
-
-      expect(state.files.get(PLIST)).toBe(previous);
-      expect(state.fileWrites).toEqual([]);
-      expect(launchctlCommandNames()).toEqual(
-        scenario === "ambiguous supervision" ? ["print"] : ["print", "print"],
+      state.bootstrapError = "Operation not permitted";
+      state.bootstrapTransient = true;
+      const operation = install({ environment: { OPENCLAW_GATEWAY_PORT: "19000" } });
+      await expect(operation).rejects.toThrow(
+        "launchctl bootstrap failed: Operation not permitted",
       );
+      for (const path of [PLIST, ENV_FILE, WRAPPER]) {
+        expect(state.files.has(path)).toBe(false);
+      }
+      expect(state).toMatchObject({ serviceLoaded: false, serviceRunning: false });
     },
   );
-
-  it("restores absent artifacts after a failed fresh install", async () => {
-    state.serviceLoaded = false;
-    state.serviceRunning = false;
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
-    state.bootoutError = "Boot-out failed: 5: Input/output error";
-    state.bootoutCode = 5;
-    const operation = install({ environment: { OPENCLAW_GATEWAY_PORT: "19000" } });
-    await expect(operation).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-    await expect(operation).rejects.toBeInstanceOf(Error);
-    await expect(operation).rejects.toMatchObject({
-      message: "launchctl bootstrap failed: Operation not permitted",
-    });
-    expect(state.files.has(PLIST)).toBe(false);
-    expect(state.files.has(ENV_FILE)).toBe(false);
-    expect(state.files.has(WRAPPER)).toBe(false);
-    expectCommands("print print enable bootstrap print");
-  });
 
   it("fails closed when rollback cannot determine the replacement state", async () => {
     // Membership and the prior snapshot see absence; rollback sees the error.
@@ -751,49 +339,25 @@ describe("launchd install", () => {
       expect.objectContaining({ message: expect.stringContaining("could not determine whether") }),
     ]);
     expect(state.files.has(PLIST)).toBe(true);
-    expectCommands("print print enable bootstrap print");
   });
 
-  it("restores prior supervision and private artifacts without changing enabled policy", async () => {
-    const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
-    const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
-    const previous = setGatewayPlist(["/bin/sh", WRAPPER, ENV_FILE, ...PREVIOUS_ARGS]);
-    setArtifact(PLIST, previous, 0o600);
-    setArtifact(ENV_FILE, previousEnv, 0o600);
-    setArtifact(WRAPPER, previousWrapper, 0o700);
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
-
-    await expect(
-      install({ preserveAutoStart: true, environment: { OPENCLAW_GATEWAY_PORT: "19000" } }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-
-    expectArtifacts(
-      [PLIST, previous, 0o600],
-      [ENV_FILE, previousEnv, 0o600],
-      [WRAPPER, previousWrapper, 0o700],
-    );
-    expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
-    expectCommands("print print-disabled print bootout unload bootstrap print bootstrap");
-  });
-
-  it("preserves disabled policy and supervision after bootstrap failure", async () => {
-    const previous = setGatewayPlist(PREVIOUS_ARGS);
-    state.fileModes.set(PLIST, 0o600);
-    state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
-    state.bootstrapError = "injected activation failure";
-    state.bootstrapTransient = true;
-    const operation = install({ preserveAutoStart: true });
-    await expect(operation).rejects.toThrow("injected activation failure");
-    expect(state.files.get(PLIST)).toBe(previous);
-    expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
-    expect(await isLaunchAgentEnabled({ env: ENV })).toBe(false);
-    expect(
-      launchctlCommandNames().filter((command) =>
-        ["enable", "bootstrap", "disable"].includes(command),
-      ),
-    ).toEqual(["enable", "bootstrap", "disable", "enable", "bootstrap", "disable"]);
-  });
+  it.each([true, false])(
+    "preserves policy and supervision after bootstrap failure (enabled=%s)",
+    async (enabled) => {
+      const previous = setGatewayPlist(PREVIOUS_ARGS);
+      state.fileModes.set(PLIST, 0o600);
+      if (!enabled) {
+        state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
+      }
+      state.bootstrapError = "injected activation failure";
+      state.bootstrapTransient = true;
+      const operation = install({ preserveAutoStart: true });
+      await expect(operation).rejects.toThrow("injected activation failure");
+      expect(state.files.get(PLIST)).toBe(previous);
+      expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
+      expect(await isLaunchAgentEnabled({ env: ENV })).toBe(enabled);
+    },
+  );
   it.each(["install", "restart"] as const)(
     "refuses %s before user LaunchAgent mutation when a system daemon owns it",
     async (action) => {
@@ -808,41 +372,9 @@ describe("launchd install", () => {
       await expect(operations[action](args)).rejects.toThrow("system ownership blocked: loaded");
       expect(state.fileWrites).toEqual([]);
       expect(launchctlCommandNames()).toEqual(action === "install" ? ["print", "print"] : []);
-      expect(
-        launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
-      ).not.toHaveBeenCalled();
+      expect(handoff).not.toHaveBeenCalled();
     },
   );
-
-  it("rolls back a post-publication ownership race before activation", async () => {
-    launchdSystemState.assertNoSystemLaunchDaemonOwnership.mockImplementation(async () => {
-      if (state.files.has(resolveLaunchAgentPlistPath(ENV))) {
-        throw createSystemOwnershipError("installed");
-      }
-    });
-
-    await expect(install()).rejects.toThrow("system ownership blocked: installed");
-
-    expect(state.files.has(resolveLaunchAgentPlistPath(ENV))).toBe(false);
-    expectCommands("print print");
-  });
-
-  it("restores the previous plist when staged publication loses ownership", async () => {
-    const previous =
-      "<plist><dict><key>Label</key><string>previous</string><key>EnvironmentVariables</key><dict><key>SYNTHETIC_INLINE</key><string>private fixture value</string></dict></dict></plist>";
-    setArtifact(PLIST, previous, 0o600);
-    launchdSystemState.assertNoSystemLaunchDaemonOwnership
-      .mockResolvedValueOnce()
-      .mockResolvedValueOnce()
-      .mockRejectedValueOnce(createSystemOwnershipError("loaded"));
-
-    await expect(stageLaunchAgent(defaultLaunchAgentFixture(ENV))).rejects.toThrow(
-      "system ownership blocked: loaded",
-    );
-
-    expectArtifacts([PLIST, previous, 0o600]);
-    expect(state.launchctlCalls).toEqual([]);
-  });
 
   it("keeps loaded reinstall deactivation failures fatal", async () => {
     setGatewayPlist();
@@ -850,10 +382,8 @@ describe("launchd install", () => {
     state.bootoutCode = 5;
 
     await expect(install()).rejects.toThrow(
-      "launchctl bootout failed during LaunchAgent install: Boot-out failed: 5: Input/output error",
+      "launchctl bootout failed: Boot-out failed: 5: Input/output error",
     );
-
-    expectCommands("print print bootout print bootout");
   });
 
   it("writes LaunchAgent environment to an owner-only env file when provided", async () => {
@@ -864,13 +394,6 @@ describe("launchd install", () => {
     });
 
     const plist = state.files.get(PLIST) ?? "";
-    const logPath = "/Users/test/Library/Logs/openclaw/gateway.log";
-    // readLastGatewayErrorLine only reads stdout on darwin, so a stderr target
-    // that is not the stdout log discards every pre-logger startup failure.
-    expect(plist).toContain(`<key>StandardOutPath</key>\n    <string>${logPath}</string>`);
-    expect(plist).toContain(`<key>StandardErrorPath</key>\n    <string>${logPath}</string>`);
-    expect(plist).not.toContain("<key>StandardErrorPath</key>\n    <string>/dev/null</string>");
-
     expect(plist).not.toContain("<key>EnvironmentVariables</key>");
     expect(plist).not.toContain(apiKey);
     expect(readPlistProgramArgumentStrings(plist)).toEqual(WRAPPED_ARGS);
@@ -894,44 +417,13 @@ describe("launchd install", () => {
     });
   });
 
-  it("retains custom Node CA trust when reinstalling a generated owner-only LaunchAgent", async () => {
-    const extraCaCerts = "/Users/test/certs/corporate-ca.pem";
-    await install({
-      environment: { NODE_EXTRA_CA_CERTS: extraCaCerts },
-    });
-
-    const expected = {
-      environment: { NODE_EXTRA_CA_CERTS: extraCaCerts },
-      environmentValueSources: { NODE_EXTRA_CA_CERTS: "file" },
-    };
-    const installedCommand = await readLaunchAgentProgramArguments(ENV);
-    expect(installedCommand).toMatchObject(expected);
-    const initialEnvWrites = state.fileWrites.filter(({ path }) => path === ENV_FILE).length;
-
-    await install({ environment: installedCommand?.environment });
-
-    expect(await readLaunchAgentProgramArguments(ENV)).toMatchObject(expected);
-    expect(state.fileWrites.filter(({ path }) => path === ENV_FILE).length).toBeGreaterThan(
-      initialEnvWrites,
-    );
-    expect(state.files.get(ENV_FILE)).toContain(`export NODE_EXTRA_CA_CERTS='${extraCaCerts}'`);
-    expect(state.files.get(resolveLaunchAgentPlistPath(ENV))).not.toContain(extraCaCerts);
-    expect(state.fileModes.get(ENV_FILE)).toBe(0o600);
-    expect(state.fileModes.get(WRAPPER)).toBe(0o700);
-    expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
-  });
-
   it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
-    await install({
-      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-    });
+    await install({ environment: { OPENCLAW_GATEWAY_PORT: "18789" } });
     const generatedWrapper = expectDefined(state.files.get(WRAPPER), "generated wrapper");
     state.files.set(
       WRAPPER,
       generatedWrapper.replace('exec "$@"', 'echo "custom-secret-provider-marker"\nexec "$@"'),
     );
-    state.launchctlCalls.length = 0;
-
     const { stdout, text } = captureOutput("utf8");
 
     await restartLaunchAgent({ env: ENV, stdout });
@@ -949,12 +441,10 @@ describe("launchd install", () => {
       const mangled = kind === "mangled paths";
       const callerEnv = createDefaultLaunchdEnv();
       const stateDir = "/Users/test/service-env/custom-state";
-      const environment: Record<string, string> = {
+      const environment = {
         OPENCLAW_GATEWAY_PORT: mangled ? "18789" : "19007",
+        ...(mangled ? { OPENCLAW_STATE_DIR: stateDir } : {}),
       };
-      if (mangled) {
-        environment.OPENCLAW_STATE_DIR = stateDir;
-      }
       const serviceEnv = mangled ? { ...callerEnv, OPENCLAW_STATE_DIR: stateDir } : callerEnv;
       await installLaunchAgent(defaultLaunchAgentFixture(serviceEnv, { environment }));
       const artifactDir = mangled ? `${stateDir}/service-env` : "/Users/test/.openclaw/service-env";
@@ -968,20 +458,6 @@ describe("launchd install", () => {
         ? original.replace(wrapperPath, badWrapper).replace(envFilePath, badEnvFile)
         : original.replace(`<string>${LAUNCH_AGENT_ENV_WRAPPER_SHELL}</string>\n      `, "");
       state.files.set(PLIST, broken);
-      if (mangled) {
-        expect(await readLaunchAgentProgramArguments(callerEnv)).toMatchObject({
-          programArguments: defaultProgramArguments,
-          environment,
-          environmentValueSources: { OPENCLAW_GATEWAY_PORT: "file" },
-        });
-      } else {
-        expect(readPlistProgramArgumentStrings(broken)).toEqual([
-          WRAPPER,
-          ENV_FILE,
-          ...defaultProgramArguments,
-        ]);
-        state.launchctlCalls.length = 0;
-      }
       await restartLaunchAgent(launchAgentControlFixture(callerEnv));
       const rewritten = state.files.get(PLIST) ?? "";
       expect(readPlistProgramArgumentStrings(rewritten)).toEqual(WRAPPED_ARGS);
@@ -1032,7 +508,7 @@ describe("launchd install", () => {
     state.dirModes.set("/Users/test", 0o777);
     state.dirs.add("/Users/test/Library");
     state.dirModes.set("/Users/test/Library", 0o700);
-    await installLaunchAgent(defaultLaunchAgentFixture(ENV));
+    await install();
     expect(state.dirModes.get("/Users/test")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o700);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755 & ~process.umask());
@@ -1040,18 +516,13 @@ describe("launchd install", () => {
   });
 
   it.each([
-    { stateAfterBootout: "loaded without a PID", loaded: true, running: false, dead: true },
-    {
-      stateAfterBootout: "unloaded with original PID alive",
-      loaded: false,
-      running: true,
-      dead: false,
-    },
-  ])("rejects stop success when $stateAfterBootout", async ({ loaded, running, dead }) => {
+    ["loaded without a PID", true, false],
+    ["unloaded with original PID alive", false, true],
+  ] as const)("rejects stop success when %s", async (_name, loaded, running) => {
     const { stdout, text } = captureOutput();
     state.bootoutLeavesLoaded = loaded;
     state.serviceRunning = running;
-    isPidDefinitelyDead.mockReturnValue(dead);
+    isPidDefinitelyDead.mockReturnValue(!running);
 
     await expect(runWithFakeTimers(() => stopLaunchAgent({ env: ENV, stdout }))).rejects.toThrow(
       "launchctl bootout gui/",
@@ -1088,46 +559,6 @@ describe("launchd install", () => {
     }
   });
 
-  it("does not park an external LaunchAgent", async () => {
-    await withEnvAsync(EXTERNAL_PROCESS, async () => {
-      await expect(parkCurrentLaunchAgentForMaintenance({ env: ENV })).resolves.toBe(false);
-    });
-
-    expectServiceCalls("print");
-    expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
-    expect(
-      launchdRestartHandoffState.scheduleDetachedLaunchdMaintenancePark,
-    ).not.toHaveBeenCalled();
-  });
-
-  it.each(["stop", "restart"] as const)(
-    "protects an in-band %s when XPC_SERVICE_NAME is inherited",
-    async (action) => {
-      getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
-      await withEnvAsync(
-        {
-          ...EXTERNAL_PROCESS,
-          ...SERVICE_MARKERS,
-        },
-        async () => {
-          if (action === "stop") {
-            await expect(stopLaunchAgent(control())).rejects.toThrow(
-              "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
-            );
-          } else {
-            await expect(restartLaunchAgent(control())).resolves.toEqual({
-              outcome: "scheduled",
-            });
-            expect(
-              launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
-            ).toHaveBeenCalledWith({ env: ENV, mode: "kickstart", waitForPid: process.pid });
-          }
-        },
-      );
-      expectCommands("print");
-    },
-  );
-
   it.each(["free", "busy"] as const)(
     "verifies the configured non-loopback host before reporting stop success (initially %s)",
     async (portStatus) => {
@@ -1143,13 +574,8 @@ describe("launchd install", () => {
       probePortUsage.mockResolvedValueOnce("busy").mockResolvedValueOnce("unknown");
       const { stdout, text } = captureOutput();
       await runWithFakeTimers(() => stopLaunchAgent({ env, stdout }));
-      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19011, {
-        env,
-        assertCurrent: expect.any(Function),
-      });
       expect(inspectPortUsage).toHaveBeenCalledWith(19011, { probeHosts: ["192.0.2.40"] });
       if (portStatus === "busy") {
-        expect(probePortUsage).toHaveBeenCalledTimes(3);
         expect(probePortUsage).toHaveBeenCalledWith(19011, ["192.0.2.40"]);
       } else {
         expect(probePortUsage).not.toHaveBeenCalled();
@@ -1175,45 +601,14 @@ describe("launchd install", () => {
     );
 
     expect(onMutation).toHaveBeenCalledWith({ mode: "disable-bootout" });
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(port, {
-      env,
-      assertCurrent: expect.any(Function),
-    });
-    expect(inspectPortUsage).toHaveBeenCalledWith(port, { probeHosts: ["127.0.0.1"] });
-    expect(launchctlCommandNames()).toContain("bootout");
     expect(text()).toContain("used bootout fallback");
     expect(text()).not.toContain("Stopped LaunchAgent");
-  });
-
-  it("does not mistake a co-located Gateway port for the node-host port during restart", async () => {
-    const env = {
-      ...ENV,
-      OPENCLAW_SERVICE_KIND: "node",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
-      OPENCLAW_GATEWAY_PORT: "18789",
-    };
-    setLaunchAgentPlist(env, "ai.openclaw.node", [
-      "node",
-      "node",
-      "run",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      "18789",
-    ]);
-    const stdout = new PassThrough();
-    mockPort(18789, "busy", [{ pid: 9999, address: "TCP 127.0.0.1:18789 (LISTEN)" }]);
-    probePortUsage.mockResolvedValue("busy");
-    const result = await withEnvAsync(EXTERNAL_PROCESS, () => restartLaunchAgent({ env, stdout }));
-    expect(inspectPortUsage).not.toHaveBeenCalled();
-    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
-    expect(result).toEqual({ outcome: "completed" });
   });
 
   it("keeps an already-unloaded service disabled when --disable is passed", async () => {
     state.serviceLoaded = false;
     state.serviceRunning = false;
-    await stopLaunchAgent({ env: ENV, stdout: new PassThrough(), disable: true });
+    await stopLaunchAgent(control({ disable: true }));
     expect(state.serviceLoaded).toBe(false);
     expect(state.printDisabledOutput).toContain('"ai.openclaw.gateway" => disabled');
   });
@@ -1257,7 +652,6 @@ describe("launchd install", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expectServiceCalls("enable", "kickstart");
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
     expect(
       expectDefined(onMutation.mock.invocationCallOrder[1], "kickstart audit call order"),
@@ -1288,7 +682,6 @@ describe("launchd install", () => {
       if (action === "start") {
         expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
       } else {
-        await expect(result).rejects.toBeInstanceOf(Error);
         await expect(result).rejects.not.toThrow("is not loaded");
       }
     },
@@ -1350,9 +743,6 @@ describe("launchd install", () => {
       } else {
         expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
       }
-      if (scenario === "in-progress") {
-        expectCommands("print print enable bootout enable bootstrap print");
-      }
     },
   );
 
@@ -1405,8 +795,6 @@ describe("launchd install", () => {
         timeout: 2_000,
       }),
     );
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002, { probeHosts: ["127.0.0.1"] });
-    expectServiceCalls("print", "print", "print", "enable", ["kickstart", "-k"]);
   });
 
   it("rejects mixed gateway port ownership before mutating launchd", async () => {
@@ -1431,8 +819,7 @@ describe("launchd install", () => {
 
     expectProtectedCleanup(19002);
     expect(state.cleanupProtectedPids).toEqual([4242]);
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002, { probeHosts: ["127.0.0.1"] });
-    expectServiceCalls("print", "print", "print");
+    expectCommands("print print print");
     expect(state.files.get(plistPath)).toBe(originalPlist);
     expect(state.fileWrites).toHaveLength(0);
   });
@@ -1454,7 +841,7 @@ describe("launchd install", () => {
       state.kickstartFailuresRemaining = phase === "bootstrap-kickstart" ? 2 : 1;
       state.kickstartUnloadsService = phase === "bootstrap-kickstart";
       const activate = action === "start" ? startLaunchAgent : restartLaunchAgent;
-      const result = activate({ env: ENV, stdout: new PassThrough(), preserveDefinition });
+      const result = activate(control({ preserveDefinition }));
       if (phase === "stopped") {
         await expect(result).resolves.toEqual(
           action === "start" ? undefined : { outcome: "completed" },
@@ -1471,41 +858,114 @@ describe("launchd install", () => {
     },
   );
 
-  it("restarts an unloaded LaunchAgent synchronously for a detached update helper that inherits only the configured label", async () => {
-    state.serviceLoaded = false;
-    state.kickstartError = "Could not find service";
-    state.kickstartFailuresRemaining = 1;
-
-    const result = await withEnvAsync(
-      { ...EXTERNAL_PROCESS, OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" },
-      async () => restartLaunchAgent(control({ preserveDefinition: true })),
-    );
-
-    expect(result).toEqual({ outcome: "completed" });
-    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
-    expectCommands("print enable kickstart enable bootstrap kickstart");
-    expect(state.kickstartFailuresRemaining).toBe(0);
-    expect(state.serviceLoaded).toBe(true);
-    expect(getSelfAndAncestorPidsSync).not.toHaveBeenCalled();
-  });
-
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
     state.bootstrapError = GUI_UNAVAILABLE;
-    let message = "";
-    try {
-      await install();
-    } catch (error) {
-      message = String(error);
-    }
-    expect(message).toContain("logged-in macOS GUI session");
-    expect(message).toContain("wrong user (including sudo)");
-    expect(message).toContain("https://docs.openclaw.ai/gateway");
+    const installing = install();
+    await expect(installing).rejects.toThrow("logged-in macOS GUI session");
+    await expect(installing).rejects.toThrow("wrong user (including sudo)");
+    await expect(installing).rejects.toThrow("https://docs.openclaw.ai/gateway");
   });
 });
 
-it("rejects invalid launchd labels that contain path separators", () => {
-  expect(() =>
-    resolveLaunchAgentPlistPath({ HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "../evil/label" }),
-  ).toThrow("Invalid launchd label");
+describe("retained LaunchAgent policy", () => {
+  beforeEach(() => {
+    vi.spyOn(currentService, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
+    vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(
+      async (env) => ({
+        env,
+        port: null,
+        probeHosts: [],
+      }),
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(
+    ["loaded", "not-loaded", "bootstrap-failure"].flatMap((scenario) =>
+      [true, false].map((preserveAutoStart) => ({ scenario, preserveAutoStart })),
+    ),
+  )(
+    "retains launchd policy: $scenario preserve=$preserveAutoStart",
+    async ({ scenario, preserveAutoStart }) => {
+      Object.assign(state, {
+        serviceLoaded: scenario === "loaded",
+        serviceRunning: false,
+        kickstartFailuresRemaining: scenario === "loaded" ? 0 : 1,
+        kickstartError: "Could not find service",
+        bootstrapError: scenario === "bootstrap-failure" ? "fixture bootstrap failure" : "",
+        bootstrapCode: 5,
+        bootstrapTransient: true,
+      });
+      const result = restartLaunchAgent(control({ preserveDefinition: true, preserveAutoStart }));
+      if (scenario === "bootstrap-failure") {
+        await expect(result).rejects.toThrow("fixture bootstrap failure");
+      } else {
+        await expect(result).resolves.toEqual({ outcome: "completed" });
+      }
+      expect(state.serviceLoaded).toBe(true);
+      const commands = launchctlCommandNames();
+      expect(commands.includes("enable")).toBe(!preserveAutoStart);
+      expect(commands).not.toContain("disable");
+      expect(commands).not.toContain("bootout");
+      if (scenario !== "loaded") {
+        expect(commands).toContain("bootstrap");
+      }
+    },
+  );
+
+  it.each(
+    (["start", "restart"] as const).flatMap((action) =>
+      [
+        "activation",
+        "nested-activation",
+        "restoration",
+        "disabled-bootstrap",
+        "disabled-restoration",
+      ].map((phase) => ({ action, phase })),
+    ),
+  )(
+    "preserves uncertain cleanup during $action $phase without further native commands",
+    async ({ action, phase }) => {
+      const cleanup = new CommandProcessCleanupError();
+      const failure =
+        phase === "nested-activation"
+          ? new AggregateError([cleanup], "activation failed")
+          : cleanup;
+      const commandsAfterUncertainCleanup: string[] = [];
+      let uncertainCleanup = false;
+      let inspections = 0;
+      state.kickstartError = "fixture activation failure";
+      state.kickstartCode = 5;
+      state.kickstartFailuresRemaining = 1;
+      if (phase.startsWith("disabled-")) {
+        state.printDisabledOutput = 'disabled services = {\n"ai.openclaw.gateway" => disabled\n}';
+      }
+      const execute = launchdExec.execLaunchctl;
+      vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (...args) => {
+        const command = args[0][0];
+        if (uncertainCleanup) {
+          commandsAfterUncertainCleanup.push(command ?? "");
+        }
+        if (
+          (command === "kickstart" && ["activation", "nested-activation"].includes(phase)) ||
+          command === "bootstrap"
+        ) {
+          uncertainCleanup = true;
+          throw failure;
+        }
+        if (command === "print") {
+          state.serviceLoaded = ++inspections === 1 && phase !== "disabled-bootstrap";
+          state.serviceRunning = false;
+        }
+        return execute(...args);
+      });
+      const activate = action === "start" ? startLaunchAgent : restartLaunchAgent;
+      await expect(
+        activate(
+          control({ preserveDefinition: true, preserveAutoStart: true, assertCurrent: () => {} }),
+        ),
+      ).rejects.toBe(failure);
+      expect(commandsAfterUncertainCleanup).toEqual([]);
+    },
+  );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

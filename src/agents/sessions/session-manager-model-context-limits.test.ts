@@ -16,6 +16,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { toolResult } from "./session-message-fixtures.test-support.js";
 
 async function withHistory(
   label: string,
@@ -62,14 +63,7 @@ function appendCalls(source: SessionManager, ...ids: string[]) {
 }
 
 function appendResult(source: SessionManager, id: string, text = `result ${id}`) {
-  return source.appendMessage({
-    role: "toolResult",
-    toolCallId: id,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  });
+  return source.appendMessage(toolResult(text, id, 1));
 }
 
 it("returns empty context within a one-byte budget", async () => {
@@ -620,15 +614,17 @@ it.each(["sync", "async"])(
           "toolResult",
           "toolResult",
         ]);
-        expect(messages.slice(0, 3)).toEqual(full.messages.slice(0, 3));
-        expect(messages[3]).toMatchObject({
-          role: "toolResult",
-          toolCallId: "large",
-          toolName: "read",
-          isError: false,
-          content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
-        });
-        expect(messages[4]).toEqual(full.messages[4]);
+        expect(messages).toEqual([
+          ...full.messages.slice(0, 3),
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "large",
+            toolName: "read",
+            isError: false,
+            content: [{ type: "text", text: expect.stringMatching(/omitted.*\d+ bytes/u) }],
+          }),
+          full.messages[4],
+        ]);
         expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(limits.maxBytes);
         expect(oversizedPayloadReads).toBe(0);
         expect(selected.isPersisted()).toBe(false);

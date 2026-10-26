@@ -15,7 +15,6 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
-import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
 
@@ -80,10 +79,23 @@ async function runImageGeneration(
     },
     prepareCandidate(candidate, provider) {
       const inputImageCount = params.inputImages?.length ?? 0;
-      const maxInputImages = resolveImageGenerationMaxInputImages({
-        provider,
-        model: candidate.model,
-      });
+      const model = candidate.model.trim();
+      let prefixLimit: number | undefined;
+      let prefixLength = -1;
+      if (model) {
+        for (const [prefix, limit] of Object.entries(
+          provider.capabilities.edit.maxInputImagesByModelPrefix ?? {},
+        )) {
+          if (prefix.length > prefixLength && model.startsWith(prefix)) {
+            prefixLimit = limit;
+            prefixLength = prefix.length;
+          }
+        }
+      }
+      const maxInputImages =
+        (model ? provider.capabilities.edit.maxInputImagesByModel?.[model] : undefined) ??
+        prefixLimit ??
+        provider.capabilities.edit.maxInputImages;
       const referenceImageError = resolveReferenceImageCapabilityError({
         candidateRef: `${candidate.provider}/${candidate.model}`,
         inputImageCount,
@@ -155,6 +167,7 @@ async function runImageGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          signal: params.signal,
           count: params.count,
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,

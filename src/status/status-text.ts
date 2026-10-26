@@ -1,3 +1,4 @@
+import os from "node:os";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -12,7 +13,7 @@ import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-sel
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
-import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import { createModelCatalogView } from "../agents/model-catalog-view.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -30,15 +31,20 @@ import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import { resolveFreshSessionTotalTokens } from "../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
+import { loadSessionCostSummariesFromCache } from "../infra/session-cost-usage.js";
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
@@ -48,6 +54,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
+import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -58,8 +65,14 @@ import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
+
+function buildStatusUptimeValue(): string {
+  const format = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
+  const gatewayMs = Math.max(0, Math.round(process.uptime() * 1000));
+  const systemMs = Math.max(0, Math.round(os.uptime() * 1000));
+  return `gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
+}
 
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
@@ -342,20 +355,16 @@ export async function buildStatusReplyParts(
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
       const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
-      const usageSummary = await withTimeout(
-        loadProviderUsageSummary({
-          timeoutMs: usageSummaryTimeoutMs,
-          providers: [currentUsageProvider],
-          agentDir: statusAgentDir,
-          workspaceDir: statusWorkspaceDir,
-          config: cfg,
-          auth: useCodexSyntheticUsage
-            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
-            : undefined,
-        }),
-        usageSummaryTimeoutMs,
-        { message: "usage summary timeout" },
-      );
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: usageSummaryTimeoutMs,
+        providers: [currentUsageProvider],
+        agentDir: statusAgentDir,
+        workspaceDir: statusWorkspaceDir,
+        config: cfg,
+        auth: useCodexSyntheticUsage
+          ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
+          : undefined,
+      });
       const usageEntry = usageSummary.providers[0];
       if (
         usageEntry &&
@@ -373,7 +382,50 @@ export async function buildStatusReplyParts(
       usageLine = null;
     }
   }
-  usageLine = await appendSessionCostLine(usageLine, cfg, statusAgentId, sessionEntry, storePath);
+  const costSessionId = sessionEntry?.sessionId?.trim();
+  if (costSessionId) {
+    try {
+      const sessionFile = formatSqliteSessionFileMarker({
+        sessionId: costSessionId,
+        agentId: statusAgentId,
+        storePath: await preparePhysicalSessionStorePath(
+          { agentId: statusAgentId, ...(storePath ? { storePath } : {}) },
+          cfg,
+        ),
+      });
+      const now = Date.now();
+      const date = new Date(now);
+      const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+      const loaded = await withTimeout(
+        loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: costSessionId, sessionFile }],
+          config: cfg,
+          agentId: statusAgentId,
+          startMs,
+          endMs: now,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: -date.getTimezoneOffset() },
+          requestRefresh: false,
+        }),
+        3_500,
+        { message: "session cost timeout" },
+      );
+      const summary = loaded.cacheStatus.status === "fresh" ? loaded.summaries[0] : null;
+      if (summary) {
+        const cost =
+          summary.missingCostEntries > 0
+            ? `missing cost: ${formatMissingCostEntries(summary)}`
+            : formatUsd(summary.totalCost);
+        const tokens =
+          summary.usageReport?.state === "unavailable"
+            ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
+            : `${formatTokenCount(summary.totalTokens)} tok`;
+        const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
+        usageLine = [usageLine, line].filter(Boolean).join("\n");
+      }
+    } catch {
+      // Optional session cost must not hide the provider usage already collected.
+    }
+  }
   const { getFollowupQueueDepth, resolveQueueSettings } = await loadStatusQueueRuntime();
   const queueSettings = resolveQueueSettings({
     cfg,
@@ -457,23 +509,30 @@ export async function buildStatusReplyParts(
     model: selectedLookupModel,
   });
   const catalog = owner ? (owner.isCurrent() ? owner.modelCatalog : undefined) : undefined;
-  const contextCatalog = catalog
-    ? catalog.entries.map(
-        (entry) =>
-          selectModelCatalogRuntimeEntry({
-            entry,
-            routeVariants: catalog.routeVariants,
-            runtimeId: effectiveHarness ?? "openclaw",
-            allowApiFallback: false,
-          }).entry,
-      )
-    : owner
-      ? []
-      : (thinkingCatalog ?? []).filter((entry) =>
-          entry.nativeRuntime
-            ? entry.nativeRuntime === effectiveHarness
-            : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
-        );
+  const catalogView =
+    catalog &&
+    createModelCatalogView({
+      cfg,
+      catalog: catalog.entries,
+      routeVariants: catalog.routeVariants,
+    });
+  const contextCatalog =
+    catalog && catalogView
+      ? catalog.entries.map(
+          (entry) =>
+            catalogView.selectRuntimeEntry({
+              entry,
+              runtimeId: effectiveHarness ?? "openclaw",
+              allowApiFallback: false,
+            }).entry,
+        )
+      : owner
+        ? []
+        : (thinkingCatalog ?? []).filter((entry) =>
+            entry.nativeRuntime
+              ? entry.nativeRuntime === effectiveHarness
+              : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
+          );
   const selectedCatalogEntry = findModelInCatalog(
     contextCatalog,
     selectedLookupProvider,
@@ -580,7 +639,7 @@ export async function buildStatusReplyParts(
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       thinkingDefault: configuredThinkingDefault,
-      verboseDefault: agentDefaults.verboseDefault,
+      verboseDefault: agentConfig?.verboseDefault ?? agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },

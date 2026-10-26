@@ -73,7 +73,6 @@ function createSessionEventSnapshotBuilder({
     return buildGatewaySessionSnapshot({
       sessionRow: row,
       agentId,
-      includeSession: true,
       lifecycle: lifecycleProjection,
       event: evt,
       lifecycleRunId,

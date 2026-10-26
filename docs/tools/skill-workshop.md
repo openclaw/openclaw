@@ -38,8 +38,9 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Background review:** after 10 accumulated model iterations in a conversation,
   a background run reviews it and saves anything worth keeping.
   See [Self-learning](/tools/self-learning).
-- **`/learn [request]`:** asks the agent to save a skill now, from the current
-  conversation or from sources you name. See [`/learn`](#learn).
+- **`/learn [request]`:** asks the agent to learn now, from the current
+  conversation or from sources you name. Procedures become skills; facts and
+  preferences go to memory when the memory plugin supports it. See [`/learn`](#learn).
 - **Learn from history:** the Control UI button opens a normal chat
   in which the agent reviews earlier conversations and saves what it finds.
 - **Unused-skill cleanup:** learned skills nobody used for 30 days are archived.
@@ -132,9 +133,17 @@ umbrella skill: it patches the survivor and archives the rest with
 `absorbed_into`. Then it tells you which skill changed. If there is nothing
 durable to learn, it changes nothing.
 
+When the selected memory plugin supports learning (see
+[provider-neutral memory runtime](/plugins/sdk-overview/memory-and-context#provider-neutral-memory-runtime)),
+`/learn` covers both media: procedures for a
+repeatable class of task go to learned skills, and facts, preferences,
+decisions, and knowledge about one codebase or person go to memory, following
+the memory plugin's guidance. With `skill_workshop` hidden, `/learn` learns into
+memory alone.
+
 `/learn` works in both learning modes. It replies with an explanation instead
-when `skill_workshop` is unavailable, for example in a sandboxed session or
-when tool policy hides the tool.
+when neither `skill_workshop` nor the memory plugin's learning tools are
+available, for example in a sandboxed session or when tool policy hides them.
 
 `/learn undo <id>` is the one exception: with a review id, it reverts that
 background review without a model turn. See [Undo](#undo). Any other text after

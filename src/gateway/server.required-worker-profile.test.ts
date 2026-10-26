@@ -16,8 +16,9 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { parseSessionEntryJson } from "../config/sessions/session-accessor.sqlite-status.js";
 import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
-import { validateCanonicalSessionRow } from "../config/sessions/session-canonical-row.js";
+import { validateCanonicalSessionRowEntry } from "../config/sessions/session-canonical-row.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -512,7 +513,8 @@ test.each(["unchanged", "caller", "runtime"] as const)(
         expect(preparedWorktreePath).toEqual(expect.any(String));
         // A separate connection cannot publish into either admitted source's host projection.
         if (change !== "unchanged") {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath);
+          // Another thread (e.g. a WAL checkpoint owner) may briefly hold the write lock.
+          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath, { timeout: 5_000 });
           try {
             const sessionKey = change === "caller" ? caller.sessionKey : identity.sessionKey;
             const database = { agentId: "main", db: foreign };
@@ -539,7 +541,7 @@ test.each(["unchanged", "caller", "runtime"] as const)(
                 throw new Error("Foreign entry mutation lost its existing row");
               }
               // Validate the synthetic external writer's stored bytes; publish no host authority.
-              validateCanonicalSessionRow(row, "read");
+              validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
               foreign
                 .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
                 .run(sessionKey);

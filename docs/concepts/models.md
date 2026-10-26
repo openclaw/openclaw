@@ -75,6 +75,11 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
+If repeated utility-model failures stop session-observer assessments, the watching
+Control UI chat shows one warning for that run, naming the model and suggesting a
+capable utility model or `utilityModel.fallbacks`. The explicit route stays selected;
+the next run tries it again. Model-free activity headlines remain available.
+
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
 unless an explicit thinking format, supported off effort, or reasoning-effort mapping
@@ -118,9 +123,11 @@ The same `provider/model` behaves differently depending on where it came from:
 
 Other selection rules:
 
+- When a wildcard model policy excludes the configured default, automatic selection uses the first permitted catalog model and logs a warning naming the requested and selected models. Explicit overrides still fail when the policy disallows them.
 - Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- When a chat already has messages, the Control UI asks before switching models. Local models skip the confirmation. Choose **Don’t ask again** to skip future confirmations for this Gateway in this browser. Accepted changes appear in the chat history.
 - Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 - Chat and New Session keep the Default reset choice pinned in its provider group, then the selected model, then that provider's [recommended models](/concepts/recommended-models). The provider's other models wait behind **All models (N)**; providers without recommendations list every model. The terminal `/models` picker shows the current and recommended models with an **All models (N)** row for the rest. Text `/models <provider>` pages put the current model first, then the recommended models, instead of alphabetizing the catalog. Models settings puts the selected model first. Other rows keep the Gateway's catalog order. Picker search checks the full list, not just the visible rows.
@@ -190,8 +197,9 @@ also refresh the affected catalog. Use **Refresh** in Models or
 released models. **Retry** requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
-once against current plugins. If that retry fails, the recorded failure and Gateway
-warning identify the failed fresh-generation retry.
+once against current plugins. If a newer publication supersedes that refresh,
+waiting requests adopt its result instead of failing on the obsolete publication.
+A failed fresh-generation retry still records the failure and emits a Gateway warning.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
@@ -209,6 +217,7 @@ Removing a `models.providers.<id>` entry while the Gateway is running clears sav
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.
+The Gateway excludes temporary skill overrides from its shared catalog worker environment.
 
 Automations and command-palette model search show a warning when a provider refresh
 fails, while keeping the models returned by the Gateway. Open Models to retry the
@@ -320,6 +329,9 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ```
 
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
+
+On a fresh installation, provider-added aliases and runtime settings remain metadata;
+they do not create a one-model allowlist. Existing explicit model policies remain enforced.
 
 ### Choose the same model with different runtimes
 

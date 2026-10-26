@@ -57,7 +57,6 @@ export function createCatalogAttemptReporter(
   source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
   beforeProviderFailure: () => void,
-  isPublished?: () => boolean,
 ) {
   // Compatible reloads share live status; replacement sources start without the old error.
   const attempt: PreparedModelCatalogAttempt =
@@ -101,12 +100,10 @@ export function createCatalogAttemptReporter(
       }
       pendingProviders[kind] = undefined;
       owner.catalogAttempt = attempt;
-      if (isPublished?.() !== false) {
-        notifyPreparedModelRuntimePublication({
-          phase: "catalog-failed",
-          modelFactsChanged: false,
-        });
-      }
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-failed",
+        modelFactsChanged: false,
+      });
     }
   };
   const hasFailedProviders = () =>
@@ -118,11 +115,7 @@ export function createCatalogAttemptReporter(
     ) => {
       const previous = readPendingProviders();
       pendingProviders[kind] = providers;
-      if (
-        isCurrent() &&
-        isPublished?.() !== false &&
-        !isDeepStrictEqual(previous, readPendingProviders())
-      ) {
+      if (!isDeepStrictEqual(previous, readPendingProviders())) {
         notifyPreparedModelRuntimePublication({
           phase: "catalog-status",
           modelFactsChanged: false,
@@ -177,12 +170,10 @@ export function createCatalogAttemptReporter(
       }
       owner.catalogAttempt = attempt;
       const change = publication?.();
-      if (isPublished?.() !== false) {
-        notifyPreparedModelCatalogPublication(
-          change,
-          previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
-        );
-      }
+      notifyPreparedModelCatalogPublication(
+        change,
+        previouslyPendingCount !== pendingCount() || previouslyFailed !== hasFailedProviders(),
+      );
     },
     failed,
   };

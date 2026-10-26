@@ -24,6 +24,7 @@ export const ClawsCatalogSearchParamsSchema = closedObject({
 export const ClawsCatalogEntrySchema = closedObject({
   packageName: ClawPackageName,
   displayName: NonEmptyString,
+  iconUrl: Type.Optional(NonEmptyString),
   summary: Type.Optional(Type.String()),
   latestVersion: Type.Optional(NonEmptyString),
   channel: Type.Union([Type.Literal("official"), Type.Literal("community")]),
@@ -297,9 +298,12 @@ export const ClawConfiguredAccessSchema = closedObject({
 });
 
 const ClawScheduledDeclarationSchema = closedObject({
-  schedule: closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+  schedule: Type.Union([
+    closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
+    closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
+  ]),
   session: stringLiteralUnion(["main", "isolated"]),
-  delivery: stringLiteralUnion(["none", "last-channel"]),
+  delivery: stringLiteralUnion(["none", "last-channel", "owner"]),
   messageDigest: NonEmptyString,
 });
 

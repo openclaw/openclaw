@@ -46,16 +46,8 @@ it.each([
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
     const pathname = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    const transcript = JSON.stringify({
-      type: "message",
-      id: "reply",
-      parentId: null,
-      timestamp: 1,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "preserved schema-26 reply" }],
-      },
-    });
+    const transcript =
+      '{"type":"message","id":"reply","parentId":null,"timestamp":1,"message":{"role":"assistant","content":[{"type":"text","text":"preserved schema-26 reply"}]}}';
     using seed = new DatabaseSync(pathname);
     seed.exec(
       fs.readFileSync(
@@ -99,35 +91,25 @@ it.each([
     seed.close();
     if (scenario.startsWith("recorded-")) {
       runOpenClawStateWriteTransaction(
-        (database) => {
-          recordAgentDeletionRecoveryHolds(database, [{ agentId, path: pathname }]);
-        },
+        (database) => recordAgentDeletionRecoveryHolds(database, [{ agentId, path: pathname }]),
         { env: state.env },
       );
     }
     const before = fs.readFileSync(pathname);
-    const preflight = await prepareDoctorDatabasePreflight();
     const recovery = await repairDoctorAgentDeletionJournal({
-      preflight,
+      preflight: await prepareDoctorDatabasePreflight(),
       shouldRepair: true,
       env: state.env,
     });
-    const next = await prepareDoctorDatabasePreflight();
     await migrateLegacyMediaPersistence({
       env: state.env,
-      preparedDiscovery: next.agentDatabaseMigrationDiscovery,
+      preparedDiscovery: (await prepareDoctorDatabasePreflight()).agentDatabaseMigrationDiscovery,
     });
     const ready = assertDoctorMaintenanceReady(cfg, state.env, () => {});
-    if (scenario === "recorded-secondary") {
-      await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
-      expect(fs.readFileSync(pathname)).toEqual(before);
-      return;
-    }
-    if (
-      scenario === "lost-with-history" ||
-      scenario === "lost-empty-sequence" ||
-      scenario === "recorded-empty"
-    ) {
+    const refused = ["lost-with-history", "lost-empty-sequence", "recorded-empty"].includes(
+      scenario,
+    );
+    if (refused) {
       if (scenario === "lost-with-history") {
         expect(recovery.warnings.join("\n")).toContain("agents add main");
       }
@@ -141,19 +123,22 @@ it.each([
         kind: "data-at-risk",
         reason: "incomplete-migration",
       });
-      expect(fs.readFileSync(pathname)).toEqual(before);
     } else {
       await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
+    }
+    if (refused || scenario === "recorded-secondary") {
+      expect(fs.readFileSync(pathname)).toEqual(before);
+    } else {
       using migrated = new DatabaseSync(pathname, { readOnly: true });
-      expect(migrated.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      expect({
+        version: migrated.prepare("PRAGMA user_version").get(),
+        transcript: migrated.prepare("SELECT event_json FROM transcript_events").all(),
+        participants: migrated.prepare("SELECT actor_id FROM session_participants").all(),
+      }).toEqual({
+        version: { user_version: OPENCLAW_AGENT_SCHEMA_VERSION },
+        transcript: empty ? [] : [{ event_json: transcript }],
+        participants: empty ? [] : [{ actor_id: "cli" }],
       });
-      expect(migrated.prepare("SELECT event_json FROM transcript_events").all()).toEqual(
-        empty ? [] : [{ event_json: transcript }],
-      );
-      expect(migrated.prepare("SELECT actor_id FROM session_participants").all()).toEqual(
-        empty ? [] : [{ actor_id: "cli" }],
-      );
     }
   });
 });

@@ -25,6 +25,12 @@ agent model: openai/gpt-6-astra (thinking=medium, fast=on)
 
 If a plugin reload supersedes startup plugin loading, the model line, loaded-plugin summary, and channel warnings use the replacement configuration and plugin metadata.
 
+Completed `startup phase:` lines include `rssMb` (resident memory for the whole
+process, including workers) and `heapUsedMb` (used JavaScript heap in the main
+isolate). Both values are in MiB and are sampled when the phase finishes, so
+service journals can attribute startup memory growth before readiness. They are
+point-in-time readings, not peak memory measurements.
+
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.
@@ -78,6 +84,14 @@ Plugin host cleanup failures during session reset or deletion emit one
 error. Check the reported cleanup error before retrying. Successful cleanup
 stays quiet, and failures remain best effort. Console diagnostics use the shared
 secret redactor; plain-text console fields are capped at 2,048 characters.
+
+Plugin replacement logs bounded retained-reference snapshots when work queues
+and warns when its drain deadline expires. Structured file records include the
+acquisition owner fields that were available when each reference was created:
+`agentId`, `sessionKey`, `runId`, and `serviceId`. These raw facts identify the
+work holding the previous generation; a missing owner stays `unknown`. Normal
+log egress applies secret redaction, and support bundles omit the nested owner
+details. Plain-text timeout warnings include the bounded structured fields.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -260,7 +274,7 @@ credential-bearing URLs retain their masking.
 
 JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
+Formatted health failures, Doctor Gateway connection notes, diagnostics exports, and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 

@@ -25,7 +25,12 @@ import {
 } from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import {
+  dockerPersistentTargetFromEngineTarget,
+  dockerPersistentTargetToEngineTarget,
+} from "./docker-persistent-target.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
+import type { DockerPersistentExecTarget } from "./persistent-exec.types.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -44,13 +49,11 @@ import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
+export { allocateSandboxContainer, buildSandboxCreateArgs } from "./container-allocation.js";
 export {
-  allocateSandboxContainer,
-  buildSandboxCreateArgs,
-  ensureContainerImage,
   formatDockerDaemonUnavailableError,
   isDockerDaemonUnavailable,
-} from "./container-allocation.js";
+} from "./container-image.js";
 
 export {
   DOCKER_SANDBOX_ENGINE,
@@ -68,11 +71,9 @@ export {
   resolvePodmanSandboxRuntimeInfo,
   validateSandboxContainerEngineTarget,
 } from "./podman-runtime.js";
-export type { PodmanSandboxRuntimeInfo } from "./podman-runtime.js";
 export {
   containerState,
   dockerContainerState,
-  readContainerLabel,
   readDockerContainerLabel,
   readDockerContainerEnvVar,
   readDockerPort,
@@ -98,6 +99,7 @@ type EnsureSandboxContainerParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   engine: SandboxContainerEngine;
   podmanTarget?: SandboxContainerEngineTarget;
+  dockerTarget?: DockerPersistentExecTarget;
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -146,6 +148,18 @@ async function ensureSandboxContainerLifecycle(
     : configuredEngine;
   params.assertCurrent?.();
   let existingRegistryEntry = await readRegistryEntry(containerName);
+  if (engine.id === "docker" && existingRegistryEntry?.backendTarget) {
+    const recorded = dockerPersistentTargetFromEngineTarget(existingRegistryEntry.backendTarget);
+    if (
+      !params.dockerTarget ||
+      recorded.endpoint !== params.dockerTarget.endpoint ||
+      recorded.daemonId !== params.dockerTarget.daemonId
+    ) {
+      throw new Error(
+        "The Docker sandbox belongs to a different daemon; restore its recorded target or explicitly recreate it.",
+      );
+    }
+  }
   if (
     existingRegistryEntry?.runtimeState === "removing" ||
     existingRegistryEntry?.runtimeState === "removing-pending"
@@ -217,15 +231,18 @@ async function ensureSandboxContainerLifecycle(
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
   let containerId = "";
+  let readOnlyRoot = false;
   if (state.exists) {
     const identity = await execContainer(
       engine,
-      ["inspect", "--format", "{{.Id}}", containerName],
+      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
       {
         signal: AbortSignal.timeout(5_000),
       },
     );
-    containerId = identity.stdout.trim();
+    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
+    containerId = id ?? "";
+    readOnlyRoot = rootReadOnly === "true";
     if (!/^[a-f0-9]{64}$/u.test(containerId)) {
       throw new Error("Container inspect did not return an immutable container ID.");
     }
@@ -248,23 +265,40 @@ async function ensureSandboxContainerLifecycle(
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
-      const isHot =
-        running &&
-        (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
+      const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
+      const persistent = await hasSandboxPersistentExecCustody({ containerName, containerId });
+      params.assertCurrent?.();
+      let isHot =
+        persistent ||
+        (running &&
+          (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS));
       if (isHot) {
-        const mountsMatch =
-          params.requireCurrentConfig ||
-          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
-        handleHotSandboxConfigMismatch({
-          containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          mountsChanged: !mountsMatch,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
-        });
-      } else {
+        const mounts = params.requireCurrentConfig
+          ? "match"
+          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+        if (
+          mounts === "protected-mounts-added" &&
+          !persistent &&
+          readOnlyRoot &&
+          typeof lastUsedAtMs === "number" &&
+          lastUsedAtMs < performance.timeOrigin
+        ) {
+          // A deploy can add protected overlays before the first resumed turn.
+          // The existing replacement path retains host-backed workspace bytes.
+          isHot = false;
+        }
+        params.assertCurrent?.();
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            mountsChanged: mounts !== "match",
+            requireCurrentConfig: params.requireCurrentConfig,
+          });
+        }
+      }
+      if (!isHot) {
         params.assertCurrent?.();
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,
@@ -285,9 +319,13 @@ async function ensureSandboxContainerLifecycle(
     containerName,
     backendId: engine.id,
     ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
+    ...(params.dockerTarget
+      ? { backendTarget: dockerPersistentTargetToEngineTarget(params.dockerTarget) }
+      : {}),
     runtimeLabel: containerName,
     sessionKey: params.scopeKey,
     workspaceDir: registryEntry?.workspaceDir ?? params.workspaceDir,
+    workspaceSource: registryEntry?.workspaceSource ?? params.workspaceSource,
     createdAtMs: registryEntry?.createdAtMs ?? now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
@@ -339,7 +377,13 @@ async function ensureSandboxContainerLifecycle(
         await updateRegistry(readyEntry);
       }
       params.assertCurrent?.();
-      return { containerName, containerId };
+      return {
+        containerName,
+        containerId,
+        configHash: expectedHash,
+        mountPlan,
+        currentConfig: true,
+      };
     } catch (creationError) {
       if (!allocated) {
         throw creationError;
@@ -383,5 +427,11 @@ async function ensureSandboxContainerLifecycle(
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   params.assertCurrent?.();
-  return { containerName, containerId };
+  return {
+    containerName,
+    containerId,
+    configHash: hashMismatch ? currentHash : expectedHash,
+    mountPlan,
+    currentConfig: !hashMismatch,
+  };
 }

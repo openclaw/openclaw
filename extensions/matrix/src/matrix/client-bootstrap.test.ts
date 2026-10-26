@@ -99,7 +99,6 @@ describe("client bootstrap", () => {
       cfg: TEST_CFG,
       timeoutMs: undefined,
       accountId: "default",
-      startClient: false,
       role: "transient",
     });
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });

@@ -20,7 +20,10 @@ import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import {
+  createSessionMcpRuntimeManager,
+  makeManagerRuntime,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
@@ -32,6 +35,8 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
 } from "./agent-bundle-mcp-types.js";
+import * as embeddedMcp from "./embedded-agent-mcp.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
@@ -65,20 +70,7 @@ function bindManager(manager: SessionMcpRuntimeManager) {
 }
 
 function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
-  const runtime = makeRuntime({ sessionId: input.sessionId, requesterSenderId: "unused" });
-  return Object.assign(runtime, {
-    sessionKey: input.sessionKey,
-    workspaceDir: input.workspaceDir,
-    agentDir: input.agentDir,
-    requesterScope: input.requesterScope,
-    configFingerprint: input.configFingerprint ?? "fixture",
-    createdAt: runtime.lastUsedAt,
-    getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
-    peekCatalog: () => null,
-    callTool: async () => ({ content: [] }),
-    joinCleanup: async () => {},
-    dispose: vi.fn(async () => {}),
-  });
+  return makeManagerRuntime(input, undefined, { callTool: async () => ({ content: [] }) });
 }
 
 function createManager(
@@ -125,14 +117,10 @@ function holdFactory() {
 }
 
 function holdDisposal(runtime: SessionMcpRuntime) {
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeldWork.push(() => released.resolve());
-  runtime.dispose = vi.fn(async () => {
-    started.resolve();
-    await released.promise;
-  });
-  return { started: started.promise, release: () => released.resolve() };
+  const gate = createEnteredGate();
+  releaseHeldWork.push(gate.release);
+  runtime.dispose = vi.fn(gate.wait);
+  return { started: gate.entered, release: gate.release };
 }
 
 afterEach(async () => {
@@ -143,6 +131,34 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
+  it("prepares static MCP declarations once per acquisition and observes changed config", async () => {
+    const load = vi.spyOn(embeddedMcp, "loadEmbeddedAgentMcpConfig");
+    const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+    const manager = createManager(factory);
+    const input = {
+      ...params,
+      cfg: { mcp: { servers: { fixture: { command: "true" } } } },
+    };
+    try {
+      const first = await manager.acquire(input);
+      first.releaseLease();
+      expect(load).toHaveBeenCalledTimes(1);
+      const second = await manager.acquire(input);
+      second.releaseLease();
+      expect(second.runtime).toBe(first.runtime);
+      expect(load).toHaveBeenCalledTimes(2);
+
+      input.cfg.mcp.servers.fixture.command = "changed";
+      const changed = await manager.acquire(input);
+      changed.releaseLease();
+      expect(changed.runtime).not.toBe(first.runtime);
+      expect(changed.runtime.configFingerprint).not.toBe(first.runtime.configFingerprint);
+      expect(load).toHaveBeenCalledTimes(3);
+    } finally {
+      load.mockRestore();
+    }
+  });
+
   it("evicts the idle LRU at capacity and reconnects its session on reuse", async () => {
     let now = 1_000;
     const time = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -295,7 +311,7 @@ describe("MCP manager creation ownership", () => {
     }
   });
 
-  it("bounds capacity cleanup waiting across consecutive idle owners", async () => {
+  it("bounds consecutive capacity cleanup waits when the wall clock rewinds", async () => {
     const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
     const manager = createManager(factory);
     const cfg = { mcp: { servers: { fixture: { command: "true" } } } };
@@ -311,12 +327,13 @@ describe("MCP manager creation ownership", () => {
       leases.push(await manager.acquire({ ...params, sessionId: `busy-${index}`, cfg }));
     }
     let fallback: SessionMcpRuntimeLease | undefined;
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const admission = manager.acquire({ ...params, sessionId: "overflow", cfg }).then((lease) => {
       fallback = lease;
     });
     try {
       await firstClosing.started;
+      vi.setSystemTime(Date.now() - 60_000);
       setTimeout(firstClosing.release, 3_000);
       await vi.advanceTimersByTimeAsync(3_000);
       await secondClosing.started;
@@ -353,7 +370,7 @@ describe("MCP manager creation ownership", () => {
     for (let index = 0; index < 254; index++) {
       leases.push(await manager.acquire(input(`busy-${index}`)));
     }
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     let reacquiring: Promise<SessionMcpRuntimeLease> | undefined;
     try {
       const overflow = manager.acquire(input("overflow"));

@@ -11,7 +11,7 @@ export type HeaderMenuSessionAction = {
   description?: string;
   variant?: "danger";
   disabled?: boolean;
-  onActivate: () => void;
+  onActivate: () => void | Promise<void>;
 };
 
 export type HeaderMenuQuickAction =

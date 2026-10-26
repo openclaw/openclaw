@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -10,12 +11,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalInstructions } from "./personal-instructions.tsx";
-import {
-  createConnectedContext,
-  modelAccountProfile,
-  mountProfilePage,
-} from "./profile-page.test-support.tsx";
-import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
+import { createConnectedContext } from "./profile-page.test-support.tsx";
 
 const file = {
   agentId: "main",
@@ -34,46 +30,29 @@ const hello = {
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
-  document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
-function createContext(
-  request: GatewayBrowserClient["request"],
-  signedIn = true,
-  multipleProfiles = true,
-) {
+function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
   const harness = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
   );
-  const base = harness.context;
+  const { context } = harness;
   harness.emitHello({
     ...hello,
     policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
-  const agents = base.agents;
-  agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+  context.agents.state.agentsList = makeBootRoster({
     agents: ["main", "other"].map((id) => ({ id })),
-  };
-  const selection = base.settingsAgentSelection;
+  });
+  const selection = context.settingsAgentSelection;
   selection.set("main");
-  return {
-    context: base,
-    selection,
-    emit: (patch: Parameters<typeof harness.emitSnapshot>[0]) => harness.emitSnapshot(patch),
-  };
-}
-function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
-  const harness = createContext(request, signedIn, multipleProfiles);
-  const provider = createSolidApplicationContextProvider(harness.context);
+  const provider = createSolidApplicationContextProvider(context);
   const { container: element } = mountSolid(() => <PersonalInstructions />, {
     wrapper: provider.wrapper,
   });
-  return { ...harness, element };
+  return { selection, emit: harness.emitSnapshot.bind(harness), element };
 }
 type PersonalFile = Omit<typeof file, "hash"> & { hash: string | null };
 function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Error)[]) {
@@ -103,14 +82,35 @@ async function save(element: HTMLElement, content: string) {
   await idle(element);
 }
 function idle(element: HTMLElement) {
-  return waitForSolid(() => expect(element.querySelector('[aria-busy="true"]')).toBeNull());
+  return waitForSolid(() => expect(busy(element)).toBeNull());
+}
+const busy = (element: HTMLElement) => element.querySelector('[aria-busy="true"]');
+const textarea = (element: HTMLElement) => element.querySelector("textarea");
+const alert = (element: HTMLElement) => element.querySelector('[role="alert"]');
+const value = (element: HTMLElement) => textarea(element)?.value;
+const waitForValue = (element: HTMLElement, content: string) =>
+  waitForSolid(() => expect(value(element)).toBe(content));
+
+function pendingSave(element: HTMLElement, request: ReturnType<typeof replies>) {
+  return waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(busy(element)).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
+  });
+}
+function expectSave(request: ReturnType<typeof replies>, content: string, hash: string | null) {
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
+    agentId: "main",
+    content,
+    expectedHash: hash,
+  });
 }
 function button(element: HTMLElement, text: string) {
   return [...element.querySelectorAll("button")].find((el) => el.textContent?.trim() === text)!;
 }
-async function input(element: HTMLElement, value: string) {
-  const editor = element.querySelector("textarea")!;
-  editor.value = value;
+async function input(element: HTMLElement, content: string) {
+  const editor = textarea(element)!;
+  editor.value = content;
   editor.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
 }
@@ -123,26 +123,16 @@ it("creates the signed-in personal file", async () => {
   expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
   expect(button(element, "Save").disabled).toBe(true);
   expect(button(element, "Reload")).toBeUndefined();
-  const heading = element.querySelector(".settings-section__heading");
-  const editor = element.querySelector("textarea");
-  expect(heading?.textContent?.trim()).toBe("Personal instructions");
-  expect(element.querySelectorAll(".settings-section__heading")).toHaveLength(1);
-  expect(element.querySelector(".personal-instructions label")).toBeNull();
+  const editor = textarea(element);
   expect(editor?.getAttribute("aria-label")).toBe("Personal instructions");
   expect(editor?.getAttribute("aria-describedby")).toBe("personal-instructions-guidance");
-  expect(editor?.rows).toBe(7);
   expect(element.textContent).toContain("created when you save");
   await input(element, "x".repeat(4001));
   expect(button(element, "Save").disabled).toBe(true);
-  expect(element.querySelector('[role="alert"]')?.textContent).toContain("4,000");
+  expect(alert(element)?.textContent).toContain("4,000");
   await save(element, content);
-  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
-    agentId: "main",
-    content,
-    expectedHash: initial.hash,
-  });
+  expectSave(request, content, initial.hash);
   expect(element.textContent).toContain("Saved");
-  expect(button(element, "Reload")).toBeUndefined();
 });
 
 it.each([
@@ -155,7 +145,7 @@ it.each([
     const { element } = mount(request, signedIn, multipleProfiles);
     await idle(element);
     expect(request).not.toHaveBeenCalled();
-    expect(element.querySelector("textarea")).toBeNull();
+    expect(textarea(element)).toBeNull();
     if (!multipleProfiles) {
       expect(element.textContent?.trim()).toBe("");
     }
@@ -171,8 +161,8 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   );
   const { element } = await loaded(request);
   await save(element, "My draft");
-  expect(element.querySelector("textarea")?.value).toBe("My draft");
-  expect(element.querySelector('[role="alert"]')?.textContent).toContain("changed since read");
+  expect(value(element)).toBe("My draft");
+  expect(alert(element)?.textContent).toContain("changed since read");
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   button(element, "Reload").click();
   await idle(element);
@@ -180,10 +170,10 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   confirm.mockReturnValue(true);
   button(element, "Reload").click();
   await idle(element);
-  expect(element.querySelector("textarea")?.value).toBe("My draft");
+  expect(value(element)).toBe("My draft");
   button(element, "Reload").click();
   await idle(element);
-  expect(element.querySelector("textarea")?.value).toBe("External edit");
+  expect(value(element)).toBe("External edit");
   expect(button(element, "Reload")).toBeUndefined();
 });
 
@@ -200,7 +190,7 @@ it("never restores a former person's cached draft after an account change", asyn
   await idle(element);
   selection.set("main");
   await idle(element);
-  expect(element.querySelector("textarea")?.value).not.toBe("Former person's draft");
+  expect(value(element)).not.toBe("Former person's draft");
 });
 
 it.each([
@@ -208,28 +198,25 @@ it.each([
   ["profile", "main", "profile-2", false],
   ["connection hello", "main", "profile-1", false],
   ["connection hello", "main", "profile-1", true],
+  ["access revoked", "main", "profile-1", false],
 ] as const)(
-  "retires the old read after %s targeting %s/%s (replacement pending: %s)",
+  "retires reads after %s (%s/%s, pending: %s)",
   async (change, agentId, profileId, pending) => {
     const old = createDeferred<PersonalFile>();
     const replacement = createDeferred<PersonalFile>();
     const current = { ...file, agentId, profileId, content: "Current instructions" };
-    const request =
-      change === "profile"
-        ? vi.fn().mockReturnValue(old.promise)
-        : vi
-            .fn()
-            .mockReturnValueOnce(old.promise)
-            .mockReturnValueOnce(pending ? replacement.promise : Promise.resolve(current));
+    const request = replies(old.promise, pending ? replacement.promise : current);
     const { element, selection, emit } = mount(request);
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
-      expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(busy(element)).not.toBeNull();
     });
     if (change === "agent") {
       selection.set("other");
     } else if (change === "profile") {
       emit({ client: clientFile(current), selfUser: { id: "profile-2" } });
+    } else if (change === "access revoked") {
+      emit({ hello: { ...hello, auth: { role: "operator", scopes: [] } } });
     } else {
       emit({ hello: { ...hello, server: { connId: "connection-2" } } });
     }
@@ -242,15 +229,19 @@ it.each([
     await old.promise;
     if (pending) {
       flush();
-      expect(element.querySelector("textarea")).toBeNull();
+      expect(textarea(element)).toBeNull();
       expect(button(element, "Save").disabled).toBe(true);
       replacement.resolve(current);
     }
     await idle(element);
-    expect(element.querySelector("textarea")?.value).toBe(current.content);
+    if (change === "access revoked") {
+      expect(textarea(element)).toBeNull();
+      return;
+    }
+    expect(value(element)).toBe(current.content);
     if (pending) {
       await input(element, "New draft");
-      expect(element.querySelector("textarea")).toMatchObject({ value: "New draft" });
+      expect(value(element)).toBe("New draft");
       expect(button(element, "Save").disabled).toBe(false);
     }
   },
@@ -261,18 +252,12 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   const request = replies({}, saving.promise);
   const { element, emit } = await loaded(request);
   await input(element, "Old draft");
-  button(element, "Save").click();
-  await waitForSolid(() => {
-    expect(request).toHaveBeenCalledWith("users.personalFile.set", {
-      agentId: "main",
-      content: "Old draft",
-      expectedHash: file.hash,
-    });
-    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
-  });
-  expect(
-    element.querySelector<HTMLButtonElement>(".personal-instructions__actions button")?.disabled,
-  ).toBe(true);
+  const submit = button(element, "Save");
+  submit.click();
+  submit.click();
+  expect(request).toHaveBeenCalledTimes(2);
+  await pendingSave(element, request);
+  expectSave(request, "Old draft", file.hash);
   emit({
     client: clientFile({ content: "Current connection" }),
   });
@@ -280,75 +265,78 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   saving.resolve({ ...file, content: "Old draft" });
   await saving.promise;
   await idle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Old draft");
+  expect(value(element)).toBe("Old draft");
   expect(element.textContent).toContain("Unsaved changes");
 });
 
-it("preserves newer draft edits after returning to an agent with a pending save", async () => {
-  const saving = createDeferred<typeof file>();
-  const request = replies(
-    {},
-    saving.promise,
-    { agentId: "other", content: "Other instructions" },
-    { hash: "hash-3" },
-  );
-  const { element, selection } = mount(request);
-  await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
-  await input(element, "First edit");
-  button(element, "Save").click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-  selection.set("other");
-  await waitForSolid(() =>
-    expect(element.querySelector("textarea")?.value).toBe("Other instructions"),
-  );
-  selection.set("main");
-  await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe("First edit"));
-  await input(element, "Second edit");
-
-  saving.resolve({ ...file, content: "First edit", hash: "hash-2" });
-  await saving.promise;
-  flush();
-  expect(element.querySelector("textarea")?.value).toBe("Second edit");
-  expect(element.textContent).toContain("Unsaved changes");
-  expect(button(element, "Save").disabled).toBe(false);
-
-  await input(element, file.content);
-  expect(button(element, "Save").disabled).toBe(false);
-  button(element, "Save").click();
-  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
-    agentId: "main",
-    content: file.content,
-    expectedHash: "hash-2",
-  });
-  await waitForSolid(() => expect(element.textContent).toContain("Saved"));
-});
+it.each(["success", "failure"])(
+  "preserves newer edits after returning to a pending save: %s",
+  async (outcome) => {
+    const saving = createDeferred<typeof file>();
+    const request = replies(
+      {},
+      saving.promise,
+      { agentId: "other", content: "Other instructions" },
+      { content: outcome === "success" ? file.content : "Second edit", hash: "hash-3" },
+    );
+    const { element, selection } = await loaded(request);
+    expect(value(element)).toBe(file.content);
+    await input(element, "First edit");
+    button(element, "Save").click();
+    await pendingSave(element, request);
+    selection.set("other");
+    await waitForValue(element, "Other instructions");
+    selection.set("main");
+    await waitForValue(element, "First edit");
+    await input(element, "Second edit");
+    if (outcome === "success") {
+      saving.resolve({ ...file, content: "First edit", hash: "hash-2" });
+      await saving.promise;
+      flush();
+    } else {
+      saving.reject(new Error("Save rejected after returning"));
+      await waitForSolid(() => expect(alert(element)?.textContent).toContain("Save rejected"));
+    }
+    expect(value(element)).toBe("Second edit");
+    expect(element.textContent).toContain("Unsaved changes");
+    expect(button(element, "Save").disabled).toBe(false);
+    if (outcome === "success") {
+      await input(element, file.content);
+      expect(button(element, "Save").disabled).toBe(false);
+    }
+    button(element, "Save").click();
+    expectSave(
+      request,
+      outcome === "success" ? file.content : "Second edit",
+      outcome === "success" ? "hash-2" : file.hash,
+    );
+    await waitForSolid(() => expect(element.textContent).toContain("Saved"));
+  },
+);
 
 it("rejects a response for a different profile rather than enabling a save", async () => {
   const request = vi.fn().mockResolvedValue({ ...file, profileId: "someone-else" });
   const { element } = await loaded(request);
-  expect(element.querySelector("textarea")).toBeNull();
+  expect(textarea(element)).toBeNull();
   expect(button(element, "Save").disabled).toBe(true);
-  expect(element.querySelector('[role="alert"]')?.textContent).toContain("does not match");
+  expect(alert(element)?.textContent).toContain("does not match");
 });
 
-it("retires a pending read after read access is revoked", async () => {
-  const old = createDeferred<typeof file>();
-  const request = vi.fn().mockReturnValue(old.promise);
-  const { element, emit } = mount(request);
-  await waitForSolid(() => {
-    expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
-    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
-  });
+it("clears a prior profile read error while the replacement read is pending", async () => {
+  const { element, emit } = await loaded(replies(new Error("Previous profile read failed")));
+  expect(alert(element)?.textContent).toContain("Previous profile");
+  const replacement = createDeferred<PersonalFile>();
   emit({
-    hello: {
-      ...hello,
-      auth: { role: "operator", scopes: [] },
-    },
+    selfUser: { id: "profile-2" },
+    client: createTestGatewayClient(vi.fn().mockReturnValue(replacement.promise)),
   });
-  old.resolve(file);
-  await old.promise;
+  await waitForSolid(() => {
+    expect(alert(element)).toBeNull();
+    expect(busy(element)).not.toBeNull();
+  });
+  replacement.resolve({ ...file, profileId: "profile-2", content: "Current profile instructions" });
   await idle(element);
-  expect(element.querySelector("textarea")).toBeNull();
+  expect(value(element)).toBe("Current profile instructions");
 });
 
 it("retains drafts privately while offline and restores them only for the same profile", async () => {
@@ -357,52 +345,23 @@ it("retains drafts privately while offline and restores them only for the same p
   await input(element, "Keep my unsaved instructions");
   emit({ phase: "offline", selfUser: null });
   await idle(element);
-  expect(element.querySelector("textarea")).toBeNull();
+  expect(textarea(element)).toBeNull();
   emit({ phase: "connected", selfUser: null });
   await idle(element);
-  expect(element.querySelector("textarea")).toBeNull();
+  expect(textarea(element)).toBeNull();
   expect(request).toHaveBeenCalledTimes(1);
   emit({ phase: "connected", selfUser: { id: "profile-1" } });
   await idle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Keep my unsaved instructions");
+  expect(value(element)).toBe("Keep my unsaved instructions");
   expect(request).toHaveBeenCalledTimes(1);
   emit({ phase: "offline", selfUser: null });
   emit({ phase: "connected", selfUser: null });
   await idle(element);
-  expect(element.querySelector("textarea")).toBeNull();
-  const otherRequest = vi
-    .fn()
-    .mockResolvedValue({ ...file, profileId: "profile-2", content: "Other person" });
-  emit({ client: createTestGatewayClient(otherRequest), selfUser: { id: "profile-2" } });
-  await idle(element);
-  expect(element.querySelector("textarea")?.value).toBe("Other person");
-});
-
-it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const request = mockRpc({
-    "users.self": () => ({ profile: modelAccountProfile }),
-    "users.personalFile.get": () => file,
-    "users.listModelAccounts": () => ({
-      profileId: modelAccountProfile.id,
-      accounts: [],
-      links: [],
-    }),
-    "users.github.status": () => disconnectedGitHub,
+  expect(textarea(element)).toBeNull();
+  emit({
+    client: clientFile({ profileId: "profile-2", content: "Other person" }),
+    selfUser: { id: "profile-2" },
   });
-  const client = createTestGatewayClient(request);
-  const { context, emit } = createContext(client.request.bind(client));
-  const page = mountProfilePage(context);
-  flush();
-  const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;
-  await idle(editor);
-  await input(editor, "Keep this draft across a network interruption");
-  emit({ phase: "reconnecting" });
-  flush();
-  expect(page.querySelector("openclaw-personal-instructions")).toBe(editor);
-  emit({ phase: "connected" });
-  flush();
-  await idle(editor);
-  expect(editor.querySelector("textarea")?.value).toBe(
-    "Keep this draft across a network interruption",
-  );
+  await idle(element);
+  expect(value(element)).toBe("Other person");
 });

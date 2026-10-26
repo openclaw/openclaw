@@ -12,41 +12,7 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
-type OpenAICodexOAuthFailureCode =
-  | "callback_timeout"
-  | "callback_validation_failed"
-  | "unsupported_region";
-
-function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
-  const marker = `${path.sep}Cellar${path.sep}`;
-  const idx = execPath.indexOf(marker);
-  if (idx > 0) {
-    return execPath.slice(0, idx);
-  }
-  return process.env.HOMEBREW_PREFIX?.trim() || null;
-}
-
-function resolveCertBundlePath(): string | null {
-  const prefix = resolveHomebrewPrefixFromExecPath(process.execPath);
-  return prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
-}
-
-function formatOpenAIOAuthTlsPreflightFix(result: { code?: string; message: string }): string {
-  const certBundlePath = resolveCertBundlePath();
-  const lines = [
-    "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
-    `Cause: ${result.code ? `${result.code} (${result.message})` : result.message}`,
-    "",
-    "Fix (Homebrew Node/OpenSSL):",
-    `- ${formatCliCommand("brew postinstall ca-certificates")}`,
-    `- ${formatCliCommand("brew postinstall openssl@3")}`,
-  ];
-  if (certBundlePath) {
-    lines.push(`- Verify cert bundle exists: ${certBundlePath}`);
-  }
-  lines.push("- Retry the OAuth login flow.");
-  return lines.join("\n");
-}
+type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
 
 function createOpenAICodexOAuthError(
   code: OpenAICodexOAuthFailureCode,
@@ -76,47 +42,6 @@ function rewriteOpenAICodexOAuthError(error: unknown): Error {
   return error instanceof Error ? error : new Error(message);
 }
 
-function createManualCodeInputHandler(params: {
-  isRemote: boolean;
-  onPrompt: (prompt: { message: string }) => Promise<string>;
-  runtime: ProviderAuthContext["runtime"];
-  updateProgress: (message: string) => void;
-  stopProgress: (message?: string) => void;
-  waitForLoginToSettle: Promise<void>;
-}): () => Promise<string> {
-  const promptForManualCode = () => params.onPrompt({ message: manualInputPromptMessage });
-  const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
-    params.updateProgress(progressMessage);
-    if (logMessage) {
-      params.runtime.log(logMessage);
-    }
-    params.stopProgress("Manual OAuth entry required");
-    return await promptForManualCode();
-  };
-
-  const runLocalManualFallback = async () => {
-    for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
-      const outcome = await raceWithTimeout(
-        params.waitForLoginToSettle.then(
-          () => "settled" as const,
-          () => "settled" as const,
-        ),
-        delayMs,
-        () => "delay" as const,
-      );
-      if (outcome === "settled") {
-        return await new Promise<string>(() => {});
-      }
-    }
-    return await switchToManualEntry(
-      "Browser callback did not finish. Paste the redirect URL to continue...",
-      `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
-    );
-  };
-
-  return params.isRemote ? promptForManualCode : runLocalManualFallback;
-}
-
 export async function loginOpenAICodexOAuth(params: {
   prompter: ProviderAuthContext["prompter"];
   runtime: ProviderAuthContext["runtime"];
@@ -138,7 +63,24 @@ export async function loginOpenAICodexOAuth(params: {
   });
   params.assertCurrent?.();
   if (!preflight.ok && preflight.kind === "tls-cert") {
-    const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
+    const execPath = process.execPath;
+    const marker = `${path.sep}Cellar${path.sep}`;
+    const idx = execPath.indexOf(marker);
+    const prefix = idx > 0 ? execPath.slice(0, idx) : process.env.HOMEBREW_PREFIX?.trim() || null;
+    const certBundlePath = prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
+    const lines = [
+      "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
+      `Cause: ${preflight.code ? `${preflight.code} (${preflight.message})` : preflight.message}`,
+      "",
+      "Fix (Homebrew Node/OpenSSL):",
+      `- ${formatCliCommand("brew postinstall ca-certificates")}`,
+      `- ${formatCliCommand("brew postinstall openssl@3")}`,
+    ];
+    if (certBundlePath) {
+      lines.push(`- Verify cert bundle exists: ${certBundlePath}`);
+    }
+    lines.push("- Retry the OAuth login flow.");
+    const hint = lines.join("\n");
     await prompter.note(hint, "OAuth prerequisites");
     runtime.error(hint);
     throw new Error(`OpenAI Codex OAuth prerequisites failed: ${preflight.message}`);
@@ -189,20 +131,41 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptMessage: manualInputPromptMessage,
       manualPromptSignal: manualPromptAbort.signal,
     });
+    const promptForManualCode = () => onPrompt({ message: manualInputPromptMessage });
+    const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
+      updateProgress(progressMessage);
+      if (logMessage) {
+        runtime.log(logMessage);
+      }
+      stopProgress("Manual OAuth entry required");
+      return await promptForManualCode();
+    };
+
+    const runLocalManualFallback = async () => {
+      for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
+        const outcome = await raceWithTimeout(
+          waitForLoginToSettle.then(
+            () => "settled" as const,
+            () => "settled" as const,
+          ),
+          delayMs,
+          () => "delay" as const,
+        );
+        if (outcome === "settled") {
+          return await new Promise<string>(() => {});
+        }
+      }
+      return await switchToManualEntry(
+        "Browser callback did not finish. Paste the redirect URL to continue...",
+        `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
+      );
+    };
     const creds = await loginOpenAICodex({
       onAuth,
       onPrompt,
       originator: openAICodexOAuthOriginator,
       onManualCodeInput:
-        params.onManualCodeInput ??
-        createManualCodeInputHandler({
-          isRemote,
-          onPrompt,
-          runtime,
-          updateProgress,
-          stopProgress,
-          waitForLoginToSettle,
-        }),
+        params.onManualCodeInput ?? (isRemote ? promptForManualCode : runLocalManualFallback),
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     });

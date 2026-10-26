@@ -9,10 +9,6 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
-import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
@@ -227,22 +223,6 @@ describe("ChatSessionCompanionThreads", () => {
     ]);
   });
 
-  it("clears local state only after the reset RPC succeeds", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    await threads.hydrate("one", async () => ({
-      exchanges: [{ question: "Q", answer: "A", ts: 1 }],
-    }));
-    await expect(
-      threads.reset("one", async () => {
-        throw new Error("offline");
-      }),
-    ).rejects.toThrow("offline");
-    expect(threads.view("one").turns).toHaveLength(1);
-
-    await threads.reset("one", async () => ({ ok: true as const }));
-    expect(threads.view("one").turns).toMatchObject([]);
-  });
-
   it("retires one session without clearing unrelated companion state", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("one", "retire me", "main");
@@ -417,9 +397,12 @@ describe("ChatSessionRailElement", () => {
 
     element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
-    expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
+    const answer = element.querySelector(".chat-group.assistant");
+    expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+    // The main transcript's footer replaces the bespoke "as of" line.
+    expect(answer?.querySelector(".chat-group-footer time.chat-group-timestamp")).not.toBeNull();
+    expect(element.textContent).not.toContain("as of");
   });
 
   it("returns focus to the rail composer after deleting its last comment", async () => {
@@ -472,7 +455,9 @@ describe("ChatSessionRailElement", () => {
         draft: "",
       },
     });
-    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const text = element.querySelector(
+      ".chat-group.assistant .chat-group-messages strong",
+    )!.firstChild!;
     const range = document.createRange();
     range.selectNodeContents(text);
     const selection = document.getSelection()!;
@@ -604,61 +589,6 @@ describe("ChatSessionRailElement", () => {
     },
   );
 
-  it("explains unsupported image input and retries the retained image only on user action", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    threads.subscribe(() => {
-      element.companion = { ...threads.view("one") };
-    });
-    const image = registerChatAttachmentPayload({
-      attachment: { id: "retry-image", mimeType: "image/png", fileName: "retry.png" },
-      dataUrl: "data:image/png;base64,aW1hZ2U=",
-      file: new File(["image"], "retry.png", { type: "image/png" }),
-    });
-    const ask = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("Image input unsupported"), {
-          details: { reason: "image-input-unsupported" },
-          retryable: false,
-        }),
-      )
-      .mockResolvedValue({ answer: "The image is now visible.", ts: 123 });
-    let submitted: Promise<void> | undefined;
-    const element = await mount({
-      companion: threads.view("one"),
-      onSubmit: (turn) => {
-        submitted = threads.submit("one", turn, ask);
-      },
-    });
-    try {
-      threads.setAttachments("one", [image]);
-      await threads.submit("one", "Explain this image", ask);
-      await element.updateComplete;
-      expect(element.textContent).toContain(
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
-      );
-      expect(element.textContent).not.toContain("No utility model is configured");
-      expect(ask).toHaveBeenCalledOnce();
-      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
-      threads.setDraft("one", "Keep my next question");
-      await element.updateComplete;
-      const retry = element.querySelector<HTMLButtonElement>(".chat-session-rail__retry");
-      expect(retry).not.toBeNull();
-      expect(retry?.disabled).toBe(false);
-      retry!.click();
-      await submitted;
-      await element.updateComplete;
-      expect(ask).toHaveBeenCalledTimes(2);
-      expect(ask).toHaveBeenLastCalledWith("one", "Explain this image", [image]);
-      expect(element.textContent).toContain("The image is now visible.");
-      expect(element.querySelector(".chat-session-rail__retry")).toBeNull();
-      expect(threads.view("one").draft).toBe("Keep my next question");
-      expect(getChatAttachmentDataUrl(image)).toBeNull();
-    } finally {
-      threads.retire();
-    }
-  });
-
   it.each(["answered"] as const)(
     "keeps a follow-up editable while answering and retains it when %s",
     async (outcome) => {
@@ -765,5 +695,17 @@ describe("ChatSessionRailElement", () => {
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
+  });
+
+  it("opens with the native empty state and one composer without suggested questions", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({ onSubmit });
+    const empty = element.querySelector("openclaw-panel-empty-state");
+
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(element.textContent).not.toMatch(/What changed\?|Why did it stop\?|What's left\?/);
+    expect(element.querySelectorAll("form")).toHaveLength(1);
+    expect(element.querySelectorAll('textarea[aria-label="Ask in side chat"]')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

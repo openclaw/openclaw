@@ -17,6 +17,8 @@ import {
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
 } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
+import { withUsageWorkerPreload } from "./session-cost-usage-worker-io.test-support.js";
 
 it("rebuilds retired usage partitions even when the transcript is unchanged", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -108,5 +110,105 @@ it("retires selected months across batches atomically while retaining other part
             : row,
         ),
     );
+  });
+});
+
+it("batches mixed usage replacement and append writes while retaining unrelated months", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const log = path.join(state.root, "usage-write-counts.txt");
+    const preload = path.join(state.root, "usage-write-counts.cjs");
+    await fs.writeFile(log, "");
+    await fs.writeFile(
+      preload,
+      `const fs = require("node:fs");
+const { isMainThread } = require("node:worker_threads");
+if (!isMainThread) {
+  const { DatabaseSync } = require("node:sqlite");
+  const prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function(sql) {
+    const statement = Reflect.apply(prepare, this, [sql]);
+    const kind = /^delete from "cache_entries"/i.test(sql) ? "delete"
+      : /^insert into "cache_entries"/i.test(sql) ? "insert" : null;
+    if (kind) for (const method of ["run", "all", "get"]) {
+      const original = statement[method];
+      statement[method] = function(...args) {
+        fs.appendFileSync(${JSON.stringify(log)}, kind + "\\n");
+        return Reflect.apply(original, this, args);
+      };
+    }
+    return statement;
+  };
+}
+`,
+    );
+    await withUsageWorkerPreload(state.stateDir, preload, async () => {
+      const agentId = "usage-batched-publication";
+      const { db } = openOpenClawAgentDatabase({ agentId });
+      await using owner = await acquireUsageLock(agentId);
+      const ids = Array.from({ length: 50 }, (_, index) => `session-${index}`);
+      await owner.writeRollup(
+        [...ids, "unrelated"].map((id) =>
+          Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
+            partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
+          }),
+        ),
+      );
+      await fs.writeFile(log, "");
+      expect(
+        await owner.writeRollup(
+          ids.map((id, index) => ({
+            ...rollup(id, { totalTokens: 20 + index }, 2, new Uint8Array([17])),
+            partitions: partitions(
+              [index < 25 ? "2026-03-01" : "2026-02-01"],
+              { tokens: 10 + index },
+              34,
+            ),
+            ...(index < 25 ? { replacePartitions: true } : { removedDates: ["2026-01-01"] }),
+          })),
+        ),
+      ).toBe(true);
+      const executions = (await fs.readFile(log, "utf8")).trim().split("\n");
+      expect({
+        deletes: executions.filter((kind) => kind === "delete").length,
+        inserts: executions.filter((kind) => kind === "insert").length,
+      }).toEqual({ deletes: 2, inserts: 1 });
+
+      const rows = db
+        .prepare(
+          `SELECT scope, key, value_json, hex(blob) AS blob, updated_at
+           FROM cache_entries WHERE scope IN (?, ?)`,
+        )
+        .all(USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE);
+      const row = (scope: string, key: string, value: object, blob: string, updated_at = 2) => ({
+        scope,
+        key,
+        value_json: JSON.stringify(value),
+        blob,
+        updated_at,
+      });
+      const expected = ids.flatMap((id, index) => [
+        row(USAGE_COST_ROLLUP_SCOPE, id, { totalTokens: 20 + index }, "11"),
+        row(
+          USAGE_COST_PARTITION_SCOPE,
+          usageCostPartitionKey(id, index < 25 ? "2026-03-01" : "2026-02-01"),
+          { tokens: 10 + index },
+          "22",
+        ),
+      ]);
+      expected.push(
+        row(USAGE_COST_ROLLUP_SCOPE, "unrelated", { totalTokens: 7 }, "01", 1),
+        ...["2026-01-01", "2026-02-01"].map((date) =>
+          row(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey("unrelated", date),
+            { tokens: 3 },
+            "02",
+            1,
+          ),
+        ),
+      );
+      expect(rows).toHaveLength(103);
+      expect(rows).toEqual(expect.arrayContaining(expected));
+    });
   });
 });

@@ -15,13 +15,13 @@ import {
   type GatewayRestartIntent,
 } from "../../infra/restart-intent.js";
 import * as processOwners from "../../infra/state-lease-process-owner.js";
-import * as existingWrites from "../../state/openclaw-state-db-existing-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { beforeIntentWriteAdmission } from "./lifecycle.restart-intent.test-support.js";
 import {
   createGatewayServiceRunArgs,
   lifecycleTestRuntime,
@@ -80,18 +80,6 @@ function acquireServingStateOwner(env: NodeJS.ProcessEnv = process.env) {
       role: "gateway",
     },
   });
-}
-
-function beforeIntentWriteAdmission(operation: () => void) {
-  const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-  vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-    (mutate, options, contract) => {
-      if (contract.operationLabel === "gateway.restart-intent.write") {
-        operation();
-      }
-      return write(mutate, options, contract);
-    },
-  );
 }
 
 function publishServingOwner(

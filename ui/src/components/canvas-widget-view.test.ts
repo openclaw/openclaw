@@ -49,6 +49,7 @@ const gateways = new WeakMap<
     connectionRevision: number;
     notify: () => void;
     emit: GatewayEventListener;
+    eventListeners: Set<GatewayEventListener>;
   }
 >();
 
@@ -100,8 +101,11 @@ function mount(
     connection: { gatewayUrl: "ws://gateway.example:8443" },
     connectionRevision: 0,
     notify: () => {},
+    eventListeners: listeners,
     emit: ((event) => {
-      for (const listener of listeners) {
+      // The Gateway snapshots its event subscribers before delivery.
+      const delivery = [...listeners];
+      for (const listener of delivery) {
         listener(event);
       }
     }) as GatewayEventListener,
@@ -189,8 +193,18 @@ function expectRead(widgetClient: WidgetClient, docId: string) {
 }
 
 function expectRecovering(view: OpenClawCanvasWidgetView) {
-  expect(view.querySelector('[role="alert"]')).toBeNull();
-  expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+  expect(alert(view)).toBeNull();
+  expect(notice(view)).toContain("recover automatically");
+}
+
+const alert = (view: Element) => view.querySelector('[role="alert"]');
+const notice = (view: Element) => view.querySelector('[role="status"]')?.textContent;
+function commitWidget(view: OpenClawCanvasWidgetView, sessionKey = view.sessionKey) {
+  gateways.get(view)!.emit({
+    type: "event",
+    event: "session.message",
+    payload: { sessionKey, message: { role: "toolResult", toolName: "show_widget" } },
+  });
 }
 
 describe("Canvas widget view", () => {
@@ -205,15 +219,19 @@ describe("Canvas widget view", () => {
   });
 
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
+    const add = vi.spyOn(window, "addEventListener");
     const pending = createDeferred<CanvasDocumentViewResult>();
     client.request.mockImplementation(() => pending.promise);
     const first = mount(client);
     const second = mount(client);
     await expect.poll(() => client.request.mock.calls.length).toBe(1);
+    expect(gateways.get(first)!.eventListeners.size).toBe(0);
+    expect(gateways.get(second)!.eventListeners.size).toBe(0);
     expectRead(client, "cv_inline");
     pending.resolve(documentView);
     const frame = await frameFor(first);
-    await frameFor(second);
+    const secondFrame = await frameFor(second);
+    expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     const ready = {
       method: "ui/notifications/sandbox-proxy-ready",
@@ -239,6 +257,7 @@ describe("Canvas widget view", () => {
     message(frame, { type: "openclaw:widget-size", height: 3000 });
     await first.updateComplete;
     expect(frame.style.height).toBe("3000px");
+    expect(secondFrame.style.height).toBe("420px");
     first.title = "Updated title";
     await first.updateComplete;
     expect(first.querySelector("iframe")).toBe(frame);
@@ -363,7 +382,7 @@ describe("Canvas widget view", () => {
     await transition(view, "reconnecting");
     expect(view.querySelector("iframe")).toBe(frame);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
     expect(client.request).toHaveBeenCalledOnce();
     expect(replacement.request).not.toHaveBeenCalled();
     await transition(view, "connected");
@@ -476,8 +495,9 @@ describe("Canvas widget view", () => {
     const pending = createDeferred<CanvasDocumentViewResult>();
     client.request.mockReturnValueOnce(pending.promise);
     const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    const gateway = gateways.get(view)!;
     await settle(view);
+    const events = gateways.get(view)!.eventListeners;
+    expect(events.size).toBe(1);
     expect(client.request).toHaveBeenLastCalledWith(
       "canvas.document.view",
       { docId: view.docId, sessionKey: view.sessionKey },
@@ -492,31 +512,17 @@ describe("Canvas widget view", () => {
       }),
     );
     await settle(view);
-    expect(view.querySelector('[role="status"]')?.textContent).toContain(
-      "Waiting for the widget result",
-    );
-    expect(view.querySelector('[role="alert"]')).toBeNull();
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: "agent:main:another",
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    expect(notice(view)).toContain("Waiting for the widget result");
+    expect(alert(view)).toBeNull();
+    expect(events.size).toBe(1);
+    commitWidget(view, "agent:main:another");
     expect(client.request).toHaveBeenCalledOnce();
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    commitWidget(view);
     await settle(view);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
+    expect(events.size).toBe(0);
   });
 
   it("replaces an in-flight guest lookup when its result commits", async () => {
@@ -524,37 +530,134 @@ describe("Canvas widget view", () => {
     const stale = createDeferred<CanvasDocumentViewResult>();
     client.request.mockReturnValueOnce(stale.promise);
     const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    const gateway = gateways.get(view)!;
     await settle(view);
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    const events = gateways.get(view)!.eventListeners;
+    expect(events.size).toBe(1);
+    commitWidget(view);
     await settle(view);
     stale.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }));
     await settle(view);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
+    expect(events.size).toBe(0);
   });
 
   it("preserves a loaded full-access frame when a result commits", async () => {
     const { view, frame } = await loaded();
-    gateways.get(view)!.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    expect(gateways.get(view)!.eventListeners.size).toBe(0);
+    commitWidget(view);
     await settle(view);
     expect(view.querySelector("iframe")).toBe(frame);
     expect(client.request).toHaveBeenCalledOnce();
+  });
+
+  it("binds guest retry events before each lookup and releases unresolved bindings", async () => {
+    const pending = createDeferred<CanvasDocumentViewResult>();
+    const listenersAtLookup: number[] = [];
+    client.request.mockImplementation(() => {
+      listenersAtLookup.push(gateways.get(view)!.eventListeners.size);
+      return pending.promise;
+    });
+    const view = mount(client, "cv_pending", document.body, ["operator.sessions.read"]);
+    await settle(view);
+    const events = gateways.get(view)!.eventListeners;
+    expect(events.size).toBe(1);
+    view.docId = "cv_replacement";
+    await settle(view);
+    expect(events.size).toBe(1);
+    await transition(view, "reconnecting");
+    expect(events.size).toBe(0);
+    await transition(view, "connected");
+    expect(events.size).toBe(1);
+    expect(listenersAtLookup).toEqual([1, 1, 1]);
+    view.remove();
+    await Promise.resolve();
+    flush();
+    expect(events.size).toBe(0);
+    pending.resolve(documentView);
+    await Promise.resolve();
+    await Promise.resolve();
+    flush();
+    expect(events.size).toBe(0);
+  });
+
+  it("binds retry events before a direct Solid guest lookup", async () => {
+    const pending = createDeferred<CanvasDocumentViewResult>();
+    const events = new Set<GatewayEventListener>();
+    const listenersAtLookup: number[] = [];
+    const gateway = createApplicationGateway();
+    vi.spyOn(gateway.gateway, "subscribeEvents").mockImplementation((listener) => {
+      events.add(listener);
+      return () => events.delete(listener);
+    });
+    gateway.publish({
+      ...gateway.gateway.snapshot,
+      phase: "connected",
+      client: client as unknown as ApplicationGatewaySnapshot["client"],
+      hello: gatewayHelloForMethods(["canvas.document.view"], ["operator.sessions.read"]),
+    });
+    client.request.mockImplementation(() => {
+      listenersAtLookup.push(events.size);
+      return pending.promise;
+    });
+    const provider = createSolidApplicationContextProvider({
+      gateway: gateway.gateway,
+      sessions: {
+        subscribeMessages: async (key: string) => ({ key }),
+        unsubscribeMessages: async () => {},
+      },
+    } as unknown as ApplicationContext);
+    const mounted = mountSolid(
+      () =>
+        createComponent(CanvasWidgetView, {
+          docId: "cv_solid_guest",
+          sessionKey: "agent:main:widget-test",
+        }),
+      { wrapper: provider.wrapper },
+    );
+    const view = mounted.container.querySelector<OpenClawCanvasWidgetView>(elementName)!;
+    await settle(view);
+    expect(listenersAtLookup).toEqual([1]);
+    expect(events.size).toBe(1);
+    mounted.unmount();
+    expect(events.size).toBe(0);
+    pending.resolve(documentView);
+    await Promise.resolve();
+    await Promise.resolve();
+    flush();
+    expect(events.size).toBe(0);
+  });
+
+  it("re-arms guest recovery after retained content and a commit-triggered retry fail", async () => {
+    const view = mount(client, "cv_revalidate", document.body, ["operator.sessions.read"]);
+    const original = await frameFor(view);
+    const events = gateways.get(view)!.eventListeners;
+    expect(events.size).toBe(0);
+    await transition(view, "reconnecting");
+    expect(events.size).toBe(0);
+    client.request.mockRejectedValueOnce(
+      new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }),
+    );
+    await transition(view, "connected");
+    expect(original.isConnected).toBe(false);
+    expect(alert(view)?.textContent).toContain("Access denied");
+    expect(events.size).toBe(1);
+    commitWidget(view, "agent:main:another");
+    expect(client.request).toHaveBeenCalledTimes(2);
+    client.request.mockRejectedValueOnce(
+      new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Result not committed" }),
+    );
+    commitWidget(view);
+    await settle(view);
+    expect(client.request).toHaveBeenCalledTimes(3);
+    expect(alert(view)?.textContent).toContain("Result not committed");
+    expect(events.size).toBe(1);
+    commitWidget(view);
+    await frameFor(view);
+    expect(client.request).toHaveBeenCalledTimes(4);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(events.size).toBe(0);
   });
 
   it.each(["credential", "session", "denied"])(
@@ -581,7 +684,7 @@ describe("Canvas widget view", () => {
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
       expect(view.documentHtml).toBeUndefined();
-      expect(view.querySelector('[role="alert"]')?.textContent).toContain("Access denied");
+      expect(alert(view)?.textContent).toContain("Access denied");
       expect(view.querySelector("button")).toBeNull();
     },
   );
@@ -618,7 +721,7 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+    expect(notice(view)).toContain("recover automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);
@@ -700,9 +803,7 @@ describe("Canvas widget view", () => {
         sessionKey: view.sessionKey,
         text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
       });
-      expect(view.querySelector('[role="status"]')?.textContent).toBe(
-        `Script error: ${expectedMessage}`,
-      );
+      expect(notice(view)).toBe(`Script error: ${expectedMessage}`);
       expect(view.querySelector("iframe")).toBe(frame);
       view.remove();
       const remount = await frameFor(mount(client, docId));
@@ -743,9 +844,7 @@ describe("Canvas widget view", () => {
       const frame = await frameFor(view);
       message(frame, { type: "openclaw:widget-runtime-error", message: "Missing element" });
       await view.updateComplete;
-      expect(view.querySelector('[role="status"]')?.textContent).toBe(
-        "Script error: Missing element",
-      );
+      expect(notice(view)).toBe("Script error: Missing element");
       expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },

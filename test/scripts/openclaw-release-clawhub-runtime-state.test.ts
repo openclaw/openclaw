@@ -1,4 +1,3 @@
-// OpenClaw release ClawHub runtime-state script tests cover its CLI-only parser.
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,7 +7,17 @@ const SCRIPT_PATH = resolve("scripts/openclaw-release-clawhub-runtime-state.ts")
 const TSX_LOADER = import.meta.resolve("tsx");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runRuntimeStateScript(args: string[], cwd = process.cwd()) {
+function runRuntimeStateScript(
+  overrides: Record<string, string | undefined> = {},
+  cwd = process.cwd(),
+) {
+  const args = Object.entries({
+    repository: "openclaw/openclaw",
+    "wait-for-clawhub": "true",
+    "force-skip-clawhub": "false",
+    "bootstrap-completed": "true",
+    ...overrides,
+  }).flatMap(([key, value]) => (value === undefined ? [] : [`--${key}`, value]));
   return spawnSync(process.execPath, ["--import", TSX_LOADER, SCRIPT_PATH, ...args], {
     cwd,
     encoding: "utf8",
@@ -22,24 +31,11 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
       const cwd =
         location === "repository" ? process.cwd() : tempDirs.make("clawhub-runtime-state-");
       const result = runRuntimeStateScript(
-        [
-          "--repository",
-          "openclaw/openclaw",
-          "--wait-for-clawhub",
-          "true",
-          "--force-skip-clawhub",
-          "false",
-          "--normal-run-id",
-          "123",
-          "--bootstrap-run-id",
-          "456",
-          "--bootstrap-completed",
-          "true",
-        ],
+        { "normal-run-id": "123", "bootstrap-run-id": "456" },
         cwd,
       );
 
-      expect(result.status, result.stderr).toBe(0);
+      expect(result).toMatchObject({ status: 0, stderr: "" });
       expect(JSON.parse(result.stdout)).toEqual({
         verifierArgs: ["--plugin-clawhub-run", "123", "--plugin-clawhub-bootstrap-run", "456"],
         proofLines: {
@@ -48,7 +44,6 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
             "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/456",
         },
       });
-      expect(result.stderr).toBe("");
     },
   );
 
@@ -59,22 +54,12 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
   ])(
     "keeps parent publication proof consistent (staged=$staged, failed=$failed)",
     ({ staged, failed }) => {
-      const result = runRuntimeStateScript([
-        "--repository",
-        "openclaw/openclaw",
-        "--wait-for-clawhub",
-        "true",
-        "--force-skip-clawhub",
-        String(failed),
-        "--normal-publication-staged",
-        String(staged),
-        "--normal-run-id",
-        "123",
-        "--bootstrap-run-id",
-        "456",
-        "--bootstrap-completed",
-        "true",
-      ]);
+      const result = runRuntimeStateScript({
+        "force-skip-clawhub": String(failed),
+        "normal-publication-staged": String(staged),
+        "normal-run-id": "123",
+        "bootstrap-run-id": "456",
+      });
       expect(result.status).toBe(0);
       const state = JSON.parse(result.stdout);
       expect(state.verifierArgs).toEqual(
@@ -104,35 +89,11 @@ describe("scripts/openclaw-release-clawhub-runtime-state.ts", () => {
     },
   );
 
-  it("rejects invalid boolean flag values before emitting runtime state", () => {
-    const result = runRuntimeStateScript([
-      "--repository",
-      "openclaw/openclaw",
-      "--wait-for-clawhub",
-      "yes",
-      "--force-skip-clawhub",
-      "false",
-      "--bootstrap-completed",
-      "false",
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--wait-for-clawhub must be true or false.");
-    expect(result.stdout).toBe("");
-  });
-
-  it("requires the workflow repository argument", () => {
-    const result = runRuntimeStateScript([
-      "--wait-for-clawhub",
-      "true",
-      "--force-skip-clawhub",
-      "false",
-      "--bootstrap-completed",
-      "false",
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--repository is required.");
-    expect(result.stdout).toBe("");
+  it.each([
+    [{ "wait-for-clawhub": "yes" }, "--wait-for-clawhub must be true or false."],
+    [{ repository: undefined }, "--repository is required."],
+  ] as const)("rejects invalid arguments %j before emitting runtime state", (flags, error) => {
+    const result = runRuntimeStateScript({ ...flags, "bootstrap-completed": "false" });
+    expect(result).toMatchObject({ status: 1, stderr: expect.stringContaining(error), stdout: "" });
   });
 });

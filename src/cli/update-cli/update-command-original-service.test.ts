@@ -28,20 +28,18 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  finishParams,
-  processResult,
-  updateResult,
-} from "./update-command-maintenance-fixtures.test-support.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -72,8 +70,8 @@ vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => 
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
-vi.mock("../../daemon/schtasks.js", async (original) => ({
-  ...(await original<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: mocks.suspend,
   resumeScheduledTaskAutoStartAfterUpdate: mocks.resume,
 }));
@@ -125,6 +123,27 @@ const updateRun = (env: NodeJS.ProcessEnv) => ({
   runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
   env,
 });
+type Run = NonNullable<UpdateCommandOptions["run"]>;
+function withOriginalRun<T>(
+  run: Run,
+  operation: (opts: UpdateCommandOptions, fence: NonNullable<Run["executorFence"]>) => Promise<T>,
+) {
+  return withUpdateCommandExecutor(run.runId, async (executor) => {
+    const fence = await executor.enter(rootB, { serviceRoot: rootA });
+    run.executorFence = fence;
+    return operation({ json: true, run }, fence);
+  });
+}
+const readConfig = () => fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
+const readPackage = (root = rootB) => fs.readFile(path.join(root, "package.json"));
+function healthObservation(expectedVersion?: string, expectedBuildId?: string, healthy = true) {
+  return {
+    healthy,
+    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? 4242 : undefined },
+    gatewayVersion: expectedVersion,
+    gatewayBuildId: expectedBuildId,
+  };
+}
 
 function writePackage(root: string, version: string) {
   return fs.writeFile(
@@ -226,10 +245,9 @@ beforeEach(async () => {
     await fs.mkdir(path.join(root!, "dist"), { recursive: true });
     await writePackage(root!, version!);
     await fs.writeFile(path.join(root!, "dist", "index.js"), "export {};\n");
-    await fs.writeFile(
-      path.join(root!, "dist", "build-info.json"),
-      JSON.stringify({ buildId: root === rootA ? "build-A" : "build-B" }),
-    );
+    await writeFixtureJson(path.join(root!, "dist", "build-info.json"), {
+      buildId: root === rootA ? "build-A" : "build-B",
+    });
   }
   // The selected runner must execute with its original dynamic-library search paths.
   if (process.platform === "win32") {
@@ -316,18 +334,8 @@ beforeEach(async () => {
     }
     return { ...before, stopped, running: !stopped };
   });
-  const healthyRuntime = async ({
-    expectedVersion,
-    expectedBuildId,
-  }: {
-    expectedVersion?: string;
-    expectedBuildId?: string;
-  }) => ({
-    healthy: true,
-    runtime: { status: "running", pid: 4242 },
-    gatewayVersion: expectedVersion,
-    gatewayBuildId: expectedBuildId,
-  });
+  const healthyRuntime = async (params: { expectedVersion?: string; expectedBuildId?: string }) =>
+    healthObservation(params.expectedVersion, params.expectedBuildId);
   mocks.inspect.mockImplementation(healthyRuntime);
   mocks.health.mockImplementation(healthyRuntime);
   mocks.restart.mockImplementation(() => {
@@ -389,11 +397,8 @@ it.for([
         path.join(rootA, "dist", "build-info.json"),
       );
       const observeOriginal = async () => ({
-        healthy: true,
-        runtime: { status: "running", pid: 4242 },
+        ...healthObservation(originalVersion, originalBuild),
         gatewayBootId: "original-service-boot",
-        gatewayVersion: originalVersion,
-        gatewayBuildId: originalBuild,
         expectedVersion: originalVersion,
         staleGatewayPids: [],
         portUsage: { status: "busy", port: 18789, listeners: [], hints: [] },
@@ -402,22 +407,21 @@ it.for([
       mocks.inspect.mockImplementation(observeOriginal);
     }
     const run = updateRun(state.env);
-    const opts: UpdateCommandOptions = { json: true, run };
     if (scenario === "agent-support-older") {
       const packagePath = path.join(rootA, "package.json");
       const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
       metadata.openclaw.schemaVersions.agent = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
-      await fs.writeFile(packagePath, JSON.stringify(metadata));
+      await writeFixtureJson(packagePath, metadata);
     }
     const configSnapshot = await readConfigFileSnapshot({ observe: false });
     let newerAgentBytes: Buffer | undefined;
     let newerSharedBytes: Buffer | undefined;
     let candidatePackageBytes: Buffer | undefined;
-    const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
+    const configBefore = await readConfig();
     mocks.package.mockImplementation(async (params) => {
       await params.beforeActivate();
       await writePackage(rootB, scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5");
-      candidatePackageBytes = await fs.readFile(path.join(rootB, "package.json"));
+      candidatePackageBytes = await readPackage();
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:after", env: state.env },
         { sessionId: "newer", updatedAt: 2 },
@@ -468,10 +472,7 @@ it.for([
     if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
       mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
         // Keep the admission observation healthy; fail only the post-stop recovery.
-        healthy: !stopped,
-        runtime: { status: stopped ? "stopped" : "running", pid: stopped ? undefined : 4242 },
-        gatewayVersion: expectedVersion,
-        gatewayBuildId: expectedBuildId,
+        ...healthObservation(expectedVersion, expectedBuildId, !stopped),
         staleGatewayPids: [],
         portUsage: { status: "free", port: 18789, listeners: [], hints: [] },
       }));
@@ -483,10 +484,7 @@ it.for([
       }
     });
     let final: unknown;
-    const work = withUpdateCommandExecutor(run.runId, async (executor) => {
-      const fence = await executor.enter(rootB, { serviceRoot: rootA });
-      const admitted = { ...run, executorFence: fence };
-      opts.run = admitted;
+    const work = withOriginalRun(run, async (opts, fence) => {
       // A must not use the separately selected B runner.
       execution = await executePackageUpdate(
         opts,
@@ -608,14 +606,9 @@ it.for([
       expect(mocks.resume).toHaveBeenCalledTimes(1);
     }
     expect(
-      await fs.readFile(
-        path.join(
-          scenario === "package-root-missing" ? `${rootB}-displaced` : rootB,
-          "package.json",
-        ),
-      ),
+      await readPackage(scenario === "package-root-missing" ? `${rootB}-displaced` : rootB),
     ).toEqual(candidatePackageBytes);
-    expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
+    expect(await readConfig()).toEqual(configBefore);
     expect(execution).not.toHaveProperty("updateRecoveryBackup");
     if (scenario === "schema-newer") {
       // Do not reopen the newer schema using this runtime to make an assertion.
@@ -642,14 +635,9 @@ it("refuses B ledger admission independently from compatible service A state", a
     OPENCLAW_STATE_DIR: parentDir,
     OPENCLAW_CONFIG_PATH: path.join(parentDir, "openclaw.json"),
   };
-  await fs.writeFile(
-    parentEnv.OPENCLAW_CONFIG_PATH,
-    JSON.stringify({ plugins: { enabled: false } }),
-  );
+  await writeFixtureJson(parentEnv.OPENCLAW_CONFIG_PATH, { plugins: { enabled: false } });
   const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(parentEnv);
-  await withUpdateCommandExecutor(run.runId, async (executor) => {
-    run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
-    const opts: UpdateCommandOptions = { json: true, run };
+  await withOriginalRun(run, async (opts) => {
     const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
     expect(original?.verified).toBe(true);
     const db = new DatabaseSync(resolveOpenClawStateSqlitePath(parentEnv));
@@ -681,9 +669,8 @@ it.each([
   "no-restart",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
   const run = updateRun(state.env);
-  const opts: UpdateCommandOptions = { json: true, run };
-  const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
-  const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
+  const packageBefore = await readPackage();
+  const configBefore = await readConfig();
   let activated = false;
   if (scenario === "missing-node") {
     before.serviceNodeRunner = undefined;
@@ -703,7 +690,7 @@ it.each([
   if (scenario === "missing-schema") {
     const metadata = JSON.parse(await fs.readFile(path.join(rootA, "package.json"), "utf8"));
     delete metadata.openclaw;
-    await fs.writeFile(path.join(rootA, "package.json"), JSON.stringify(metadata));
+    await writeFixtureJson(path.join(rootA, "package.json"), metadata);
   }
   if (scenario === "unverified-health") {
     mocks.inspect.mockResolvedValue({ healthy: false, runtime: { status: "running" } });
@@ -718,9 +705,7 @@ it.each([
       reason: "doctor-failed",
     });
   });
-  await withUpdateCommandExecutor(run.runId, async (executor) => {
-    const fence = await executor.enter(rootB, { serviceRoot: rootA });
-    opts.run = { ...run, executorFence: fence };
+  await withOriginalRun(run, async (opts) => {
     if (scenario === "missing-env") {
       await expect(
         observeOriginalManagedServiceRuntime({ root: rootB, opts }, before),
@@ -740,8 +725,8 @@ it.each([
       expect(mocks.running).toBe(true);
     }
   });
-  expect(await fs.readFile(path.join(rootB, "package.json"))).toEqual(packageBefore);
-  expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
+  expect(await readPackage()).toEqual(packageBefore);
+  expect(await readConfig()).toEqual(configBefore);
 });
 
 registerCurrentF3Controls(() => ({
@@ -758,9 +743,7 @@ it.each([false, true])(
   "handles restored receipt fingerprints with actual mutation=%s",
   async (mutated) => {
     const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(state.env);
-    await withUpdateCommandExecutor(run.runId, async (executor) => {
-      run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
-      const opts: UpdateCommandOptions = { json: true, run };
+    await withOriginalRun(run, async (opts) => {
       const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
       assert(original, "original service fixture was not observed");
       const { runUpdatedInstallGatewayCommand } = await vi.importActual<

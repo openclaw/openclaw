@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
-import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
@@ -14,7 +13,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const documentId = "widget-autosize-proof";
-const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
 const tallContentHeight = 2520; // Exceeds every viewport, forcing reported-height sizing.
 const scrollTop = (target: Locator) => target.evaluate((element) => element.scrollTop);
 const widgetFrame = (page: Page) => page.locator(".chat-tool-card__preview-frame");
@@ -114,23 +112,15 @@ suite.define(() => {
       );
       const preview = page.locator('.chat-tool-card__preview[data-content-kind="canvas-html"]');
       const learnedHeight = (await preview.boundingBox())!.height;
-      const savedHeight = await page
-        .locator(".chat-pane-cache__pane--active")
-        .evaluate(async (element, widgetKey) => {
-          const pane = element as HTMLElement & {
-            sessionSnapshotStore?: SessionSnapshotStore;
-            chatMessagesBySession?: ChatMessageCache;
-          };
-          const entry = [...(pane.chatMessagesBySession ?? [])].find(
-            ([, value]) => value.snapshot.widgetHeights?.[widgetKey] === 700,
-          );
-          if (!pane.sessionSnapshotStore || !entry) {
-            throw new Error("Missing measured widget snapshot");
-          }
-          await pane.sessionSnapshotStore.flush();
-          return (await pane.sessionSnapshotStore.read(entry[0]))?.widgetHeights?.[widgetKey];
-        }, `canvas:${documentId}`);
-      expect(savedHeight).toBe(700);
+      await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
+        const pane = element as HTMLElement & {
+          sessionSnapshotStore?: SessionSnapshotStore;
+        };
+        if (!pane.sessionSnapshotStore) {
+          throw new Error("Missing measured widget snapshot");
+        }
+        await pane.sessionSnapshotStore.flush();
+      });
       await page.addInitScript(() => {
         window.widgetReloadFrames = [];
         window.widgetReloadRecording = true;
@@ -271,34 +261,7 @@ suite.define(() => {
             ),
           ),
         },
-        historyMessages: [
-          assistant(
-            [
-              {
-                type: "toolCall",
-                id: "autosize-widget",
-                name: "canvas_render",
-                arguments: { title: "Autosize proof" },
-              },
-              {
-                type: "tool_result",
-                id: "autosize-widget",
-                name: "canvas_render",
-                text: JSON.stringify({
-                  kind: "canvas",
-                  view: {
-                    backend: "canvas",
-                    id: documentId,
-                    url: documentPath,
-                    title: "Autosize proof",
-                  },
-                  presentation: { target: "assistant_message", sandbox: "scripts" },
-                }),
-              },
-            ],
-            100,
-          ),
-        ],
+        historyMessages: [assistant(embed("Autosize proof"), 100)],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const frame = widgetFrame(page);

@@ -11,7 +11,7 @@ import { runMatrixQaCanary } from "./scenario-runtime-thread.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("Matrix top-level scenario artifacts", () => {
+describe("Matrix top-level scenario reporting", () => {
   it.each([
     ["canary", "CANARY", true],
     ["observer", "ALLOWBOTS_MENTIONS_MENTIONED", true],
@@ -78,33 +78,32 @@ describe("Matrix top-level scenario artifacts", () => {
           },
         });
       });
-      const result =
-        scenario === "canary"
-          ? await runMatrixQaCanary(context)
-          : (
-              await {
-                observer: runAllowBotsMentionsMentionedRoomScenario,
-                unmentioned: runAllowBotsTrueUnmentionedOpenRoomScenario,
-                dm: runAllowBotsMentionsDmUnmentionedScenario,
-                override: runAllowBotsRoomOverrideEnablesAccountOffScenario,
-              }[scenario](context)
-            ).artifacts;
       const reply = {
-        bodyPreview: marker,
         eventId: "$reply",
         mentions: undefined,
         relatesTo: undefined,
         sender: context.sutUserId,
         tokenMatched: true,
       };
-      expect(result).toEqual({
-        ...(scenario === "canary"
-          ? { body: triggerBody }
-          : { actorUserId: context.observerUserId, roomKey, triggerBody }),
-        driverEventId: "$trigger",
-        reply,
-        token: marker,
-      });
+      if (scenario === "canary") {
+        const result = await runMatrixQaCanary(context);
+        expect(result).toEqual({
+          body: triggerBody,
+          driverEventId: "$trigger",
+          reply,
+          token: marker,
+        });
+      } else {
+        const result = await {
+          observer: runAllowBotsMentionsMentionedRoomScenario,
+          unmentioned: runAllowBotsTrueUnmentionedOpenRoomScenario,
+          dm: runAllowBotsMentionsDmUnmentionedScenario,
+          override: runAllowBotsRoomOverrideEnablesAccountOffScenario,
+        }[scenario](context);
+        expect(result.details).toContain("driver event: $trigger");
+        expect(result.details).toContain("reply event: $reply");
+        expect(result.details).toContain("reply token matched: yes");
+      }
     },
   );
 });

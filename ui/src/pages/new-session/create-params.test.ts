@@ -1,8 +1,13 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { NewSessionCapabilities } from "./capabilities.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("create-as-draft availability", () => {
   const capabilities = new NewSessionCapabilities(
@@ -29,14 +34,49 @@ describe("create-as-draft availability", () => {
   });
 });
 
-type Draft = Parameters<typeof buildDraftSessionCreateParams>[0];
+type Draft = Omit<SessionCreateParams, "visibility"> & {
+  visibility?: NewSessionVisibility;
+  deferInitialTurn?: boolean;
+  workspace?: string;
+  baseRef?: string;
+};
 function expectParams(input: Partial<Draft>, output: object) {
-  expect(
-    buildDraftSessionCreateParams({ agentId: "main", message: "task", worktree: false, ...input }),
-  ).toEqual({ agentId: "main", message: "task", ...output });
+  const { state, browser } = createRepositoryFixture();
+  vi.spyOn(state, "agentId", "get").mockReturnValue(input.agentId ?? "main");
+  vi.spyOn(state, "remotePlacement", "get").mockReturnValue(input.deferInitialTurn ?? false);
+  vi.spyOn(state, "remoteRepository", "get").mockReturnValue(input.repository);
+  vi.spyOn(state, "deviceFolder", "get").mockReturnValue(input.deviceFolder);
+  vi.spyOn(state, "worktree", "get").mockReturnValue(input.worktree ?? false);
+  vi.spyOn(state, "freshWorkspace", "get").mockReturnValue(input.worktreeSource === "empty");
+  vi.spyOn(state, "baseRef", "get").mockReturnValue(input.baseRef ?? "");
+  vi.spyOn(state, "worktreeName", "get").mockReturnValue(input.worktreeName ?? "");
+  vi.spyOn(state, "folder", "get").mockReturnValue(input.cwd ?? "");
+  vi.spyOn(state, "workspacePath").mockReturnValue(input.workspace ?? "");
+  vi.spyOn(browser, "projectId", "get").mockReturnValue(input.projectId ?? "");
+  vi.spyOn(browser, "remoteProject", "get").mockReturnValue(
+    input.projectGitUrl ? { identity: "fixture", cloneUrl: input.projectGitUrl } : null,
+  );
+  vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(input.model ?? "");
+  Object.assign(state.modelControl, {
+    agentRuntime: input.agentRuntime,
+    contextWindow: input.contextWindow ?? "",
+    thinkingLevel: input.thinkingLevel ?? "",
+    fastMode: input.fastMode,
+  });
+  try {
+    expect(
+      buildSelectedSessionCreateParams(state, {
+        ...input,
+        message: input.message ?? "task",
+        visibility: input.visibility ?? "normal",
+      }),
+    ).toEqual({ agentId: "main", message: "task", ...output });
+  } finally {
+    state.modelControl.reset();
+  }
 }
 
-describe("buildDraftSessionCreateParams", () => {
+describe("buildSelectedSessionCreateParams", () => {
   const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "release" };
   const checkout = {
     projectId: "old-clone",

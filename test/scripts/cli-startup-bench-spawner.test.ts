@@ -62,6 +62,10 @@ describe("CLI startup benchmark script spawners", () => {
       tmpDir,
       baselinePath,
       reportPath,
+      writeReports: (baseline: unknown[], current = baseline) => {
+        writeReport(baselinePath, baseline);
+        writeReport(reportPath, current);
+      },
       checkBudget: (args: string[] = [], env = process.env, nodeArgs: string[] = []) =>
         runBudget(["--baseline", baselinePath, "--report", reportPath, ...args], env, nodeArgs),
     };
@@ -288,7 +292,7 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("does not require unrelated fixture cases for a narrowed preset", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture();
+    const { writeReports, checkBudget } = budgetFixture();
 
     const makeCase = (id: string, name: string) => ({
       ...measuredCase(id, name),
@@ -299,11 +303,10 @@ describe("CLI startup benchmark script spawners", () => {
         maxRssMb: null,
       },
     });
-    writeReport(baselinePath, [
-      makeCase("version", "--version"),
-      makeCase("realOnly", "real only"),
-    ]);
-    writeReport(reportPath, [makeCase("version", "--version")]);
+    writeReports(
+      [makeCase("version", "--version"), makeCase("realOnly", "real only")],
+      [makeCase("version", "--version")],
+    );
     expect(checkBudget(["--preset", "startup"]).status).toBe(0);
     expect(
       checkBudget(["--preset", "all"], {
@@ -314,10 +317,8 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("rejects narrowed preset reports with no matching current cases", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture();
-
-    writeReport(baselinePath, [measuredCase("gatewayStatusJson", "gateway status --json")]);
-    writeReport(reportPath, []);
+    const { writeReports, checkBudget } = budgetFixture();
+    writeReports([measuredCase("gatewayStatusJson", "gateway status --json")], []);
     const result = checkBudget(["--preset", "real"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -326,10 +327,11 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("rejects narrowed preset reports with unrelated current cases when baseline checks run", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture();
-
-    writeReport(baselinePath, [measuredCase("fixtureOnly", "fixture only")]);
-    writeReport(reportPath, [measuredCase("targetOnly", "target only")]);
+    const { writeReports, checkBudget } = budgetFixture();
+    writeReports(
+      [measuredCase("fixtureOnly", "fixture only")],
+      [measuredCase("targetOnly", "target only")],
+    );
     const result = checkBudget(["--preset", "real"], {
       ...process.env,
       OPENCLAW_STARTUP_BENCH_ENFORCE_NONCANONICAL_ARCH: "1",
@@ -391,24 +393,16 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("fails reused reports with timed-out samples", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture();
+    const { writeReports, checkBudget } = budgetFixture();
 
     const timedOutCase = {
       ...measuredCase("version", "--version"),
-      contract: {
-        firstOutputBudgetMs: 1000,
-        exitBudgetMs: 2000,
-      },
+      contract: { firstOutputBudgetMs: 1000, exitBudgetMs: 2000 },
       samples: [
-        {
-          ...measuredCase("version", "--version").samples[0],
-          exitCode: null,
-          timedOut: true,
-        },
+        { ...measuredCase("version", "--version").samples[0], exitCode: null, timedOut: true },
       ],
     };
-    writeReport(baselinePath, [timedOutCase]);
-    writeReport(reportPath, [timedOutCase]);
+    writeReports([timedOutCase]);
     const result = checkBudget(["--skip-baseline"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("[test-cli-startup-bench-budget] --version timed out.");
@@ -418,14 +412,8 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("fails reused reports with missing RSS samples", () => {
-    const { baselinePath, reportPath, checkBudget } = budgetFixture();
-
-    const missingRssCase = {
-      contract: null,
-      ...measuredCase("version", "--version", null),
-    };
-    writeReport(baselinePath, [missingRssCase]);
-    writeReport(reportPath, [missingRssCase]);
+    const { writeReports, checkBudget } = budgetFixture();
+    writeReports([{ contract: null, ...measuredCase("version", "--version", null) }]);
     const result = checkBudget(["--skip-baseline"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(

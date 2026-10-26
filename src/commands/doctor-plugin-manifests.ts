@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -25,14 +26,6 @@ type LegacyManifestContractMigration = NonNullable<
 >;
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
-
-function readManifestJson(manifestPath: string): Record<string, unknown> | null {
-  try {
-    return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
 
 function manifestSeenKey(manifestPath: string): string {
   try {
@@ -92,24 +85,31 @@ function buildLegacyManifestContractMigration(params: {
 export function collectLegacyPluginManifestContractMigrations(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  runtime?: Pick<RuntimeEnv, "error">;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
-  const inspectManifest = (manifestPath: string) => {
+  for (const { manifestPath } of loadPluginManifestRegistryCore(params).plugins) {
     const seenKey = manifestSeenKey(manifestPath);
     if (seen.has(seenKey)) {
-      return;
+      continue;
     }
     seen.add(seenKey);
-    const raw = readManifestJson(manifestPath);
+    let raw: Record<string, unknown> | null;
+    try {
+      const bytes = fs.readFileSync(manifestPath);
+      if (!isUtf8(bytes)) {
+        params.runtime?.error("Invalid UTF-8; plugin manifest left unchanged:", manifestPath);
+        continue;
+      }
+      raw = safeParseJsonWithSchema(JsonRecordSchema, bytes.toString("utf-8"));
+    } catch {
+      continue;
+    }
     const migration = raw && buildLegacyManifestContractMigration({ manifestPath, raw });
     if (migration) {
       migrations.push(migration);
     }
-  };
-
-  for (const plugin of loadPluginManifestRegistryCore(params).plugins) {
-    inspectManifest(plugin.manifestPath);
   }
 
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
@@ -121,6 +121,8 @@ export function legacyPluginManifestContractMigrationToHealthFinding(
   return {
     checkId: LEGACY_PLUGIN_MANIFESTS_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
     path: migration.manifestPath,
     target: migration.pluginId,

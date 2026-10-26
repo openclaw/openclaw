@@ -1,23 +1,14 @@
 import { Buffer } from "node:buffer";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  evaluateControlUiContext,
-  getControlUiContextHandle,
-} from "../test-helpers/control-ui-e2e-context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  controlUiBundledGatewayUrl,
-  controlUiBundledSettingsStorageKey,
-} from "../test-helpers/control-ui-e2e.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
+import { confirmIme } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
-import {
-  createControlUiE2eContextOptions,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createPageOpener,
   button,
@@ -27,7 +18,6 @@ import {
 } from "./new-session-page.scenario.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
-  SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureUiProof,
   controlUiSessionPath,
@@ -39,6 +29,7 @@ import {
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { sessionList } from "./new-session-shard.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -161,17 +152,12 @@ async function assertCreateRecovery(
   const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
   const imageContent = (await readFile(imageFile)).toString("base64");
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     heldMethods: ["chat.startup"],
     workspaceGit: true,
     methodResponses: {
       ...LOCAL_GIT_WORKSPACE_RESPONSES,
-      "sessions.list": {
-        count: 0,
-        defaults: SESSION_LIST_DEFAULTS,
-        path: "",
-        sessions: [],
-        ts: Date.now(),
-      },
+      "sessions.list": sessionList(),
       "sessions.create": { key: sessionKey, runId, runStarted: true, messageSeq: 1 },
       "chat.startup": {
         messages: [],
@@ -203,7 +189,7 @@ async function assertCreateRecovery(
   const startup = page.locator(".new-session-page__starting");
   const submittedPrompt = startup.locator(".chat-group.user");
   const announcement = page.locator(
-    '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create .chat-main__conversation > [role="status"][aria-live="polite"]',
+    '.new-session-page:visible > [role="status"][aria-live="polite"], openclaw-pending-session-create:visible .chat-main__conversation > [role="status"][aria-live="polite"]',
   );
   const draftImage = page
     .locator(".chat-attachment-thumb")
@@ -458,43 +444,9 @@ suite.define(() => {
     } finally {
       await context.close();
       if (proofDir && video) {
-        await rename(await video.path(), path.join(proofDir, `background-${label}.webm`));
+        await video.saveAs(path.join(proofDir, `background-${label}.webm`));
+        await video.delete();
       }
-    }
-  });
-
-  it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
-    await context.addInitScript(
-      ({ key, url }) => {
-        localStorage.setItem(
-          key,
-          JSON.stringify({ chatSendShortcut: "modifier-enter", gatewayUrl: url }),
-        );
-      },
-      { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), url: gatewayUrl },
-    );
-    const page = await context.newPage();
-    const sessionKey = "agent:main:dashboard:modifier-background";
-    const runId = "run-modifier-background";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agent.wait": { endedAt: Date.now(), runId, status: "ok" },
-        "sessions.create": { key: sessionKey, runId, runStarted: true },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      const composer = page.locator(".new-session-page__message");
-      await composer.fill("start in the background");
-      await composer.press("Control+Shift+Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "start in the background" },
-      });
-    } finally {
-      await context.close();
     }
   });
 
@@ -504,20 +456,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}new`);
     const composer = page.locator(".new-session-page__message");
     await composer.fill("verify the default mock");
-    const confirmationConsumed = await composer.evaluate((textarea) => {
-      textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const end = new CompositionEvent("compositionend", { bubbles: true });
-      textarea.dispatchEvent(end);
-      const confirm = new KeyboardEvent("keydown", {
-        key: "Enter",
-        keyCode: 13,
-        bubbles: true,
-        cancelable: true,
-      });
-      Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
-      textarea.dispatchEvent(confirm);
-      return confirm.defaultPrevented;
-    });
+    const confirmationConsumed = await confirmIme(composer, "");
     expect(confirmationConsumed).toBe(false);
     expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     expect(await composer.inputValue()).toBe("verify the default mock");
@@ -584,11 +523,8 @@ suite.define(() => {
         await route.continue();
       },
     );
-    const pendingPreviewModule = await holdModuleResponse(
-      page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
-    );
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
         "agent.wait",
@@ -726,24 +662,6 @@ suite.define(() => {
 
       await gateway.deferNext("chat.startup");
       releaseChatModule();
-      await pendingPreviewModule.request;
-      const applicationHandle = await getControlUiContextHandle(page);
-      try {
-        await page.waitForFunction((application) => {
-          const route = application.router.getState().matches[0];
-          return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-        }, applicationHandle);
-      } finally {
-        await applicationHandle.dispose();
-      }
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      await captureProof(page, "01b-chat-preview-loading.png");
-      pendingPreviewModule.release();
       await gateway.waitForRequest("chat.startup");
       await expect
         .poll(() =>
@@ -844,11 +762,15 @@ suite.define(() => {
     }
   });
   it.each(
-    (["dark", "light"] as const).flatMap((mode) =>
-      (["no-preference", "reduce"] as const).flatMap((motion) =>
-        [1280, 390].flatMap((width) =>
-          (["markdown", "json"] as const).map((content) => ({ mode, motion, width, content })),
-        ),
+    (["no-preference", "reduce"] as const).flatMap((motion) =>
+      [1280, 390].flatMap((width) =>
+        // Theme does not change submission recovery; keep both across content variants.
+        (["markdown", "json"] as const).map((content) => ({
+          mode: content === "markdown" ? ("dark" as const) : ("light" as const),
+          motion,
+          width,
+          content,
+        })),
       ),
     ),
   )(

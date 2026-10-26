@@ -717,9 +717,8 @@ export async function findExtraGatewayServices(
 /** Complete managed selectors are discovery facts, not native lifecycle authority. */
 export async function listManagedOpenClawGatewayServices(
   env: Record<string, string | undefined>,
-  options: { requireComplete?: boolean } = {},
 ): Promise<{ services: ManagedGatewayService[]; errors: GatewayServiceInventory["errors"] }> {
-  const inventory = await scanGatewayServices(env, { deep: true }, options.requireComplete);
+  const inventory = await scanGatewayServices(env, { deep: true }, true);
   return {
     services: inventory.services
       .filter((service) => service.managedGateway)

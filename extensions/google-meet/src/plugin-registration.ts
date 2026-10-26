@@ -223,7 +223,6 @@ export function createGoogleMeetRuntimeAccessor(params: {
           fullConfig: params.api.config,
           runtime: params.api.runtime,
           logger: params.api.logger,
-          runInBackground: params.api.lifecycle.runInBackgroundContext,
         });
         await runtime.reconcileTranscriptPolicy(transcriptsEnabled);
         return runtime;

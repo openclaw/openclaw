@@ -88,10 +88,14 @@ export async function resolveRestartRecoveryDispatchTarget(
   }
 }
 
-/** Captures the durable continuation that a completed requester turn yielded to. */
+/**
+ * Captures the durable continuation that a completed requester turn yielded to. A retained
+ * yielded wake stays owed after its children retire; Stop also covers children without a report.
+ */
 export function captureYieldedMainSessionContinuation(params: {
   entry: SessionEntry;
   requester: RestartRecoveryDispatchTarget | undefined;
+  purpose: "recovery" | "stop";
 }): (() => boolean) | undefined {
   // A prepared final may not have reached its queue yet; main recovery still owns that debt.
   if (
@@ -112,7 +116,7 @@ export function captureYieldedMainSessionContinuation(params: {
   const owner = listRuns().find(
     (run) =>
       !run.collect &&
-      run.expectsCompletionMessage === true &&
+      (params.purpose === "stop" || run.expectsCompletionMessage === true) &&
       !run.requesterTurnRunId &&
       run.requesterSettleWake?.requesterYieldBatch === true &&
       run.requesterSettleWake.rearmGeneration !== undefined &&

@@ -3,6 +3,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 
 export {
   chunkMarkdown,
+  createMarkdownChunker,
   remapChunkLines,
   type MemoryChunk,
 } from "../../packages/memory-host-sdk/src/host/markdown-chunks.js";

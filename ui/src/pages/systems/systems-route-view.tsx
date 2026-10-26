@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { SystemsPage } from "./systems-page.tsx";
 import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";

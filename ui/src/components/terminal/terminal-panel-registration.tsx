@@ -5,20 +5,20 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import type { TerminalInputs } from "./terminal-panel-session-types.ts";
-import { TerminalPanelHostedActions, TerminalPanelView } from "./terminal-panel-view.tsx";
+import { TerminalPanelHostedActions } from "./terminal-panel-view-chrome.tsx";
+import { TerminalPanelView } from "./terminal-panel-view.tsx";
 import {
-  CATALOG_TERMINAL_READY_TIMEOUT_MS,
   createTerminalPanel,
   type TerminalPanelOwner,
   type TerminalPanelMethods,
 } from "./terminal-panel.ts";
-import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import terminalStyles from "./terminal-panel.css?inline";
 
 type Host = SolidBridgeElement<TerminalInputs, TerminalPanelMethods>;
 
 // Native calls can arrive before the bridge's first microtask mount.
 const owners = new WeakMap<HTMLElement, TerminalPanelOwner>();
+const connections = new WeakMap<HTMLElement, () => void>();
 function ownerFor(host: Host) {
   const retained = owners.get(host);
   if (retained) {
@@ -57,7 +57,9 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
     );
   },
   {
+    connected: (host) => connections.get(host)?.(),
     properties: {
+      mobile: { default: false, type: Boolean },
       client: { default: null, attribute: false },
       gatewayConnected: { default: true, type: Boolean },
       agentId: { default: null, attribute: false },
@@ -72,8 +74,6 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       tabsInHeader: { default: false, type: Boolean },
       page: { default: false, type: Boolean },
       routeTarget: { default: null, attribute: false },
-      createTerminalController: { default: createIsolatedGhosttyTerminal, attribute: false },
-      catalogReadyTimeoutMs: { default: CATALOG_TERMINAL_READY_TIMEOUT_MS, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
     methods: {
@@ -97,21 +97,19 @@ function terminalPanel(owner: TerminalPanelOwner) {
   owner.bindPresentation();
   const state = projectOwner(owner, (current) => current.viewState);
   onSettled(() => {
-    let disposed = false;
+    let attached = false;
     let detach: (() => void) | undefined;
     const connect = () => {
-      if (!disposed && owner.inputs.isConnected) {
+      if (!attached && owner.inputs.isConnected) {
+        attached = true;
         detach = owner.attach(application);
       }
     };
-    // Direct Solid hosts settle before their parent inserts them.
-    if (owner.inputs.isConnected) {
-      connect();
-    } else {
-      queueMicrotask(connect);
-    }
+    // Lazy portals can insert the host after settlement; native connection owns that edge.
+    connections.set(owner.inputs, connect);
+    connect();
     return () => {
-      disposed = true;
+      connections.delete(owner.inputs);
       detach?.();
     };
   });

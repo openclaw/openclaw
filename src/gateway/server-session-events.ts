@@ -4,6 +4,10 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   readTranscriptDisplayPosition,
   type TranscriptDisplayPosition,
 } from "../chat/transcript-display-position.js";
@@ -15,16 +19,15 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPendingAssistantError } from "./chat-display-projection.core.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  readPluginSteeringId,
-} from "./chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
+import { readPluginSteeringId } from "./chat-display-projection.history.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
@@ -34,7 +37,6 @@ import {
   withPreparedEventRow,
 } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
-import { createSessionMessageBodyOmission } from "./session-message-body-delivery.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
@@ -546,13 +548,18 @@ async function handleTranscriptUpdateBroadcast(
       const sessionSnapshot = buildGatewaySessionSnapshot({
         sessionRow,
         agentId: eventAgentId,
-        includeSession: true,
         activeRunState,
       });
-      const omitMessage = createSessionMessageBodyOmission(
-        broadcastKeys,
-        params.sessionMessageSubscribers,
-      );
+      // Read live connection preferences and every exact observer at delivery time.
+      const omitMessage = (client: GatewayClient) =>
+        hasGatewayClientCap(
+          client.connect.caps,
+          GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+        ) &&
+        !(client.includeSessionMessageBodies ?? client.connect.includeSessionMessageBodies) &&
+        !broadcastKeys.some((key) =>
+          params.sessionMessageSubscribers.get(key).has(client.connId ?? ""),
+        );
       const broadcastOptions = {
         sessionEventSubscriptionKeys: broadcastKeys,
         prepareSessionProjection:

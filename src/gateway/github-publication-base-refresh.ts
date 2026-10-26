@@ -19,18 +19,18 @@ import {
   requireGitHubPublicationCommit,
 } from "./github-publication-git-transport.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
+import {
+  prepareManagedWorkspaceReviewBase,
+  readManagedSandboxGitState,
+} from "./github-publication-workspace-review.js";
 import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
-import { prepareWorkerWorkspaceGitPack } from "./worker-environments/workspace-git-base.js";
-import { manifestNodes, sameEntry } from "./worker-environments/workspace-manifest-comparison.js";
-import { applyWorkspaceSourceOverlay } from "./worker-environments/workspace-manifest-overlay.js";
-import { captureWorkspaceSnapshot } from "./worker-environments/workspace-manifest-worker.js";
 import {
-  MAX_RECONCILIATION_PACK_BYTES,
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./worker-environments/workspace-manifest.js";
+  captureWorkspaceManifestDocument,
+  prepareWorkspaceBaseRefresh,
+  workspaceSnapshotsEqual,
+} from "./worker-environments/workspace-manifest-worker.js";
 import { localWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -38,7 +38,7 @@ import {
 } from "./worker-environments/workspace-result-staging.js";
 
 /** The host owns merge ancestry; the projection owns only admitted source bytes. */
-export async function refreshManagedWorkspaceBase(params: {
+type ManagedWorkspaceIntegrationParams = {
   owner: LocalWorkspaceOwner;
   identity: PreparedGitHubPublicationIdentity;
   sandbox: SandboxContext;
@@ -46,8 +46,33 @@ export async function refreshManagedWorkspaceBase(params: {
   assertCurrent: () => void;
   conflictsResolved?: boolean;
   baseCommit?: string;
-}): Promise<SessionGitHubBaseRefreshResult> {
+};
+
+export function refreshManagedWorkspaceBase(
+  params: ManagedWorkspaceIntegrationParams,
+): Promise<SessionGitHubBaseRefreshResult> {
+  return integrateManagedWorkspaceSource(params);
+}
+
+/** Explicit sources come from current GitHub verification, never editable workspace remotes. */
+export async function integrateManagedWorkspaceSource(
+  params: ManagedWorkspaceIntegrationParams & {
+    source?: {
+      repository: string;
+      branch: string;
+      commit: string;
+      githubHost: string;
+      review: { repository: string; commit: string };
+      initial: boolean;
+      emptySource: boolean;
+      resuming: boolean;
+      accept: () => Promise<void>;
+    };
+  },
+): Promise<SessionGitHubBaseRefreshResult> {
   const { owner, identity, sandbox } = params;
+  const action = params.source ? "prepare_pr" : "refresh_base";
+  const reviewPreparationError = `Source integration is saved, but sandbox review-base preparation failed. Resolve any pending sandbox Git merge or index lock, then retry ${action} before tests and Auto Review.`;
   const attribution = await prepareGitCoauthorAttribution({
     agentId: owner.agentId,
     sessionId: owner.sessionId,
@@ -60,7 +85,7 @@ export async function refreshManagedWorkspaceBase(params: {
     owner.assertCurrent();
     params.assertCurrent();
     if (!attribution.isCurrent()) {
-      throw new Error("Contributor credit changed; retry refresh_base.");
+      throw new Error(`Contributor credit changed; retry ${action}.`);
     }
   };
   const message = (subject: string) =>
@@ -72,11 +97,44 @@ export async function refreshManagedWorkspaceBase(params: {
     ].join("\n");
   const { run } = createGitHubPublicationCommandRunner(assertCurrent);
   await assertSafeGitPublicationWorkspace(owner.worktree.path, run);
-  const target = await prepareGitHubPublicationTarget({
-    worktree: owner.worktree,
-    identity,
-    assertCurrent,
-  });
+  const target = params.source
+    ? {
+        repository: params.source.repository,
+        baseBranch: params.source.branch,
+        githubHost: params.source.githubHost,
+      }
+    : await prepareGitHubPublicationTarget({
+        worktree: owner.worktree,
+        identity,
+        assertCurrent,
+      });
+  const initialImport = params.source?.initial === true;
+  let guestHead: string | undefined;
+  let guestDirty = false;
+  let pendingStaged: { path: string; indexEntry?: string }[] = [];
+  const stagedError =
+    "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
+  if (params.source) {
+    if (params.source.resuming) {
+      // An accepted transfer may retain a paused runtime. Recover it through its
+      // owner before asking that runtime to execute the workspace check.
+      await withLocalWorkspaceProjection({ ...owner, assertCurrent }, (state) => state.settle());
+    }
+    const observed = await readManagedSandboxGitState({
+      sandbox,
+      signal: params.signal,
+      assertCurrent,
+    });
+    guestHead = observed.head;
+    guestDirty = observed.dirty;
+    if (!initialImport && observed.partiallyStaged.length) {
+      if (!params.source.resuming) {
+        throw new Error(stagedError);
+      }
+      // Checked against the pending integration below.
+      pendingStaged = observed.partiallyStaged;
+    }
+  }
   let previousBase: string | undefined;
   const result = await withLocalWorkspaceProjection<SessionGitHubBaseRefreshResult>(
     { ...owner, assertCurrent },
@@ -111,6 +169,12 @@ export async function refreshManagedWorkspaceBase(params: {
           const git = (args: string[], input?: string) =>
             policy.require(cwd, args, { env, input, beforeRun: check });
           const probe = (args: string[]) => policy.run(cwd, args, { env, beforeRun: check });
+          if (
+            params.source &&
+            (await git(["symbolic-ref", "--quiet", "--short", "HEAD"])) !== owner.worktree.branch
+          ) {
+            throw new Error("The managed workspace branch changed; existing work was preserved.");
+          }
           const stagedRef = localWorkspaceBaseRefreshRef(
             createHash("sha256").update(owner.worktree.id).digest("hex"),
           );
@@ -126,6 +190,11 @@ export async function refreshManagedWorkspaceBase(params: {
             throw new Error("Workspace base integration state is unavailable.");
           }
           let baseCommit = pending.code === 0 ? pending.stdout.trim() : undefined;
+          if (baseCommit && params.source && baseCommit !== params.source.commit) {
+            throw new Error(
+              "Another source integration is pending. Finish it before preparing this PR; saved work was preserved.",
+            );
+          }
           if (baseCommit && state.current().base_commit !== baseCommit) {
             // Settlement above finishes reserved transfers. Native-only preparation has
             // applied no source bytes; restart it so later guest edits enter the snapshot.
@@ -134,26 +203,49 @@ export async function refreshManagedWorkspaceBase(params: {
           }
           if (params.conflictsResolved && (!baseCommit || params.baseCommit !== baseCommit)) {
             throw new Error(
-              "The pending base integration changed; call refresh_base again and resolve its returned baseCommit.",
+              `The pending source integration changed; call ${action} again and resolve its returned conflicts.`,
             );
           }
           const continuingIntegration = Boolean(baseCommit);
+          // A refresh rewrites working files before the guest index is restaged, so a refreshed file
+          // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
+          // admitted. Any other staged-only entry is guest work that completion would replace.
+          const stagedSnapshot = pendingStaged.length
+            ? (await probe(["rev-parse", "--verify", "--quiet", "ORIG_HEAD"])).stdout.trim()
+            : "";
+          for (const entry of pendingStaged) {
+            const listed = stagedSnapshot
+              ? await probe(["ls-tree", "-z", "--full-tree", stagedSnapshot, "--", entry.path])
+              : undefined;
+            const recorded = listed?.stdout
+              .split("\0")
+              .find((line) => line.slice(line.indexOf("\t") + 1) === entry.path);
+            if (!entry.indexEntry || recorded?.split("\t")[0] !== entry.indexEntry) {
+              throw new Error(stagedError);
+            }
+          }
           if (!baseCommit) {
             if (params.baseCommit) {
               throw new Error(
-                "baseCommit acknowledges an existing conflict; it cannot select a base.",
+                `The expected commit acknowledges an existing conflict; it cannot select a source.`,
               );
             }
-            await state.synchronize("canonical");
-            await state.synchronize("projection");
-            baseCommit = await readGitHubPublicationBaseSha(
-              run,
-              target.repository,
-              target.baseBranch,
-              target.githubHost,
-              identity.env,
-            );
+            baseCommit =
+              params.source?.commit ??
+              (await readGitHubPublicationBaseSha(
+                run,
+                target.repository,
+                target.baseBranch,
+                target.githubHost,
+                identity.env,
+              ));
           }
+          const initialHead = await git(["rev-parse", "HEAD"]);
+          const recoveredImport =
+            initialImport &&
+            params.source?.resuming === true &&
+            (continuingIntegration ||
+              (initialHead === baseCommit && state.current().base_commit === baseCommit));
           const prepareContents = (commit: string, commitPresent: boolean) =>
             requireGitHubPublicationCommit(
               run,
@@ -166,10 +258,92 @@ export async function refreshManagedWorkspaceBase(params: {
                 GIT_CONFIG_GLOBAL: gitNullConfigPath(),
                 GIT_CONFIG_SYSTEM: gitNullConfigPath(),
               },
-              "The selected repository base contents could not be fetched; retry refresh_base.",
+              `The selected repository base contents could not be fetched; retry ${action}.`,
               { contents: true, commitPresent },
             );
           await prepareContents(baseCommit, continuingIntegration);
+          if (initialImport && !recoveredImport) {
+            const source = params.source!;
+            const pristineError =
+              "This workspace has existing dirty, untracked, or unpublished work. Keep or finish that work separately before preparing this PR; no PR source was applied.";
+            const admittedPaths = await state.canonicalPaths();
+            const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
+              { cwd, assertCurrent: check },
+              policy,
+              admittedPaths,
+            );
+            const headTree = await git(["rev-parse", "HEAD^{tree}"]);
+            if (
+              initialHead !== state.current().base_commit ||
+              guestHead !== initialHead ||
+              guestDirty ||
+              snapshot.sourceIndexTree !== headTree ||
+              snapshot.workspaceTree !== headTree
+            ) {
+              throw new Error(pristineError);
+            }
+            // A projection may first be captured after unrelated commits already exist.
+            // Only verified PR/base history or the immutable empty source is disposable.
+            if (source.emptySource) {
+              if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
+                throw new Error(pristineError);
+              }
+            } else {
+              await requireGitHubPublicationCommit(
+                run,
+                source.review.repository,
+                source.review.commit,
+                target.githubHost,
+                cwd,
+                {
+                  ...identity.env,
+                  GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                  GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+                },
+                `The selected PR base ancestry could not be fetched; retry ${action}.`,
+              );
+              const fromBase = await probe([
+                "merge-base",
+                "--is-ancestor",
+                initialHead,
+                source.review.commit,
+              ]);
+              const fromHead = await probe([
+                "merge-base",
+                "--is-ancestor",
+                initialHead,
+                baseCommit,
+              ]);
+              if (fromBase.code !== 0 && fromHead.code !== 0) {
+                throw new Error(pristineError);
+              }
+            }
+            const buildCacheInputs = new Set(await state.buildCacheInputs());
+            const canonical = await captureWorkspaceManifestDocument({
+              root: cwd,
+              baseCommit: state.current().base_commit,
+              includePaths: admittedPaths,
+              buildCacheInputs,
+              signal: params.signal,
+            });
+            const projection = await captureWorkspaceManifestDocument({
+              root: state.current().projection_path,
+              baseCommit: state.current().base_commit,
+              buildCacheInputs,
+              signal: params.signal,
+            });
+            check();
+            const equal = await workspaceSnapshotsEqual(
+              canonical,
+              projection,
+              [...buildCacheInputs],
+              params.signal,
+            );
+            check();
+            if (!equal) {
+              throw new Error(pristineError);
+            }
+          }
           const mergeBases = async (left: string, right: string) => {
             const bases = await probe(["merge-base", "--all", left, right]);
             if (bases.code === 1) {
@@ -180,8 +354,8 @@ export async function refreshManagedWorkspaceBase(params: {
             }
             return bases.stdout.trim().split(/\s+/u);
           };
-          const inputs = await mergeBases("HEAD", baseCommit);
-          if (!inputs.length) {
+          const inputs = initialImport ? [] : await mergeBases("HEAD", baseCommit);
+          if (!initialImport && !inputs.length) {
             throw new Error("The selected base could not be integrated; saved work was preserved.");
           }
           const discovered = new Set([baseCommit, ...inputs]);
@@ -201,9 +375,14 @@ export async function refreshManagedWorkspaceBase(params: {
               }
             }
           }
+          // Do not reserve a source that cannot be integrated or whose ancestry is unavailable.
+          await params.source?.accept();
+          check();
           if (!continuingIntegration) {
+            await state.synchronize("canonical");
+            await state.synchronize("projection");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
-            if (ancestor.code === 0) {
+            if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               return {
                 status: "current",
                 repository: target.repository,
@@ -213,7 +392,7 @@ export async function refreshManagedWorkspaceBase(params: {
                 conflictPaths: [],
               };
             }
-            if (ancestor.code !== 1) {
+            if (ancestor.code !== 0 && ancestor.code !== 1) {
               throw new Error("The selected base ancestry could not be verified.");
             }
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
@@ -221,7 +400,10 @@ export async function refreshManagedWorkspaceBase(params: {
               policy,
               await state.canonicalPaths(),
             );
-            if (snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))) {
+            if (
+              !initialImport &&
+              snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))
+            ) {
               // Index-only installation preserves every working byte, including accepted ignored data.
               await git(["read-tree", snapshot.workspaceTree]);
               await git([
@@ -235,7 +417,7 @@ export async function refreshManagedWorkspaceBase(params: {
             }
           }
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
-          if (integrated.code === 0) {
+          if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
             // A native commit may have moved HEAD before its merge-state cleanup completed.
             await git(["merge", "--quit"]);
             return {
@@ -247,18 +429,20 @@ export async function refreshManagedWorkspaceBase(params: {
               conflictPaths: [],
             };
           }
-          if (integrated.code !== 1) {
+          if (integrated.code !== 0 && integrated.code !== 1) {
             throw new Error("The pending base ancestry could not be verified.");
           }
           const sourceHead = await git(["rev-parse", "HEAD"]);
-          const merge = await probe([
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            "-z",
-            sourceHead,
-            baseCommit,
-          ]);
+          const merge = initialImport
+            ? { code: 0, stdout: await git(["rev-parse", `${baseCommit}^{tree}`]) }
+            : await probe([
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "-z",
+                sourceHead,
+                baseCommit,
+              ]);
           if (merge.code !== 0 && merge.code !== 1) {
             throw new Error("The selected base could not be integrated; saved work was preserved.");
           }
@@ -288,7 +472,6 @@ export async function refreshManagedWorkspaceBase(params: {
                 ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
                 "Prepare selected base integration\n",
               );
-              const snapshots = [];
               for (const [name, commit] of [
                 ["before", sourceHead],
                 ["after", mergedCommit],
@@ -303,41 +486,29 @@ export async function refreshManagedWorkspaceBase(params: {
                   signal: new AbortController().signal,
                   assertCurrent: check,
                 });
-                snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
               const buildCacheInputs = await state.buildCacheInputs();
-              const accepted = parseWorkerWorkspaceManifest(
-                state.current().baseline_json!,
-                state.current().baseline_ref!,
-                buildCacheInputs,
+              const baseline = await state.baselineDocument();
+              const current = await prepareWorkspaceBaseRefresh(
+                {
+                  beforeRoot: path.join(temporary, "before"),
+                  afterRoot: path.join(temporary, "after"),
+                  baseCommit,
+                  baseRaw: baseline.rawManifest,
+                  baseRef: baseline.manifestRef,
+                  buildCacheInputs,
+                  action,
+                },
+                params.signal,
               );
-              const before = snapshots[0]!.manifest;
-              const current = applyWorkspaceSourceOverlay(before, accepted, snapshots[1]!.manifest);
-              current.buildCacheInputs = [
-                ...new Set([
-                  ...buildCacheInputs,
-                  ...snapshots[1]!.manifest.entries.map((entry) => entry.path),
-                ]),
-              ];
-              const priorNodes = manifestNodes(before);
-              const currentNodes = manifestNodes(current);
-              for (const [file, entry] of manifestNodes(accepted)) {
-                if (!priorNodes.has(file) && !sameEntry(entry, currentNodes.get(file))) {
-                  throw new Error(
-                    `The selected base conflicts with saved workspace data at ${file}; move that saved file before retrying refresh_base.`,
-                  );
-                }
-              }
-              const currentRaw = serializeWorkerWorkspaceManifest(current);
               await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
                 root: cwd,
                 stagingRoot: path.join(temporary, "after"),
                 stagedResultRef: stagedRef,
-                baseManifestRef: state.current().baseline_ref!,
-                baseManifestRaw: state.current().baseline_json!,
-                currentManifestRef:
-                  "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
-                currentManifestRaw: currentRaw,
+                baseManifestRef: baseline.manifestRef,
+                baseManifestRaw: baseline.rawManifest,
+                currentManifestRef: current.manifestRef,
+                currentManifestRaw: current.rawManifest,
                 buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
               });
@@ -350,6 +521,9 @@ export async function refreshManagedWorkspaceBase(params: {
             }
             // MERGE_HEAD is a native pseudoref; Git rejects updating it through update-ref.
             const mergeHead = await resolveGitMetadataPath(cwd, "MERGE_HEAD", { beforeRun: check });
+            if (params.source && !continuingIntegration) {
+              await git(["update-ref", "ORIG_HEAD", sourceHead]);
+            }
             check();
             await writeTextAtomic(mergeHead, baseCommit, {
               mode: 0o600,
@@ -380,18 +554,37 @@ export async function refreshManagedWorkspaceBase(params: {
           const markers = await probe(["diff", "--check", sourceHead, "--", ...conflictPaths]);
           if (conflictPaths.length && markers.stdout.includes("conflict marker")) {
             throw new Error(
-              "Conflict markers remain. Resolve the reported files, then repeat refresh_base with conflictsResolved and the same baseCommit before tests and Auto Review.",
+              `Conflict markers remain. Resolve the reported files, then repeat ${action} with conflictsResolved and the same returned commit before tests and Auto Review.`,
             );
           }
           await git(["read-tree", snapshot.workspaceTree]);
-          await git([
-            "-c",
-            "core.hooksPath=" + os.devNull,
-            "commit",
-            "--no-gpg-sign",
-            "-m",
-            message(`Merge selected base ${target.baseBranch}`),
-          ]);
+          if (initialImport) {
+            const original = await git(["rev-parse", "--verify", "ORIG_HEAD^{commit}"]);
+            const currentHead = await git(["rev-parse", "HEAD"]);
+            if (currentHead !== baseCommit) {
+              if (currentHead !== original) {
+                throw new Error(
+                  "The workspace Git head changed during PR preparation; saved work was preserved.",
+                );
+              }
+              await git([
+                "update-ref",
+                `refs/heads/${owner.worktree.branch}`,
+                baseCommit,
+                original,
+              ]);
+            }
+            await git(["merge", "--quit"]);
+          } else {
+            await git([
+              "-c",
+              "core.hooksPath=" + os.devNull,
+              "commit",
+              "--no-gpg-sign",
+              "-m",
+              message(`Merge selected base ${target.baseBranch}`),
+            ]);
+          }
           await state.synchronize("projection");
           return {
             status: "refreshed",
@@ -408,129 +601,59 @@ export async function refreshManagedWorkspaceBase(params: {
   if (result.status === "conflicts") {
     return result;
   }
-  // The guest can confirm only snapshots selected by the host. An arbitrary
-  // guest donor could expose host-only data through Git's thin-pack deltas.
-  const candidates = [
-    ...new Set([result.baseCommit, previousBase].filter((base) => base !== undefined)),
-  ];
-  assertCurrent();
-  const available = await sandbox.backend!.runShellCommand({
-    script: FIND_REVIEW_BASE,
-    args: [sandbox.containerWorkdir, ...candidates],
-    signal: params.signal,
-  });
-  assertCurrent();
-  if (available.code !== 0) {
-    throw new Error(REVIEW_BASE_PREPARATION_ERROR);
+  let reviewCommit = result.baseCommit;
+  if (params.source) {
+    const source = params.source;
+    await requireGitHubPublicationCommit(
+      run,
+      params.source.review.repository,
+      params.source.review.commit,
+      target.githubHost,
+      owner.worktree.path,
+      {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+      },
+      reviewPreparationError,
+      { contents: true },
+    );
+    // Importing an older PR head does not merge the current base tip into its files.
+    // Review its changes from their common ancestor, not as deletions of newer base work.
+    reviewCommit = await withWorktreeGitConfig(
+      owner.worktree.path,
+      true,
+      { beforeRun: assertCurrent },
+      (git) =>
+        git.require(owner.worktree.path, ["merge-base", source.commit, source.review.commit], {
+          beforeRun: assertCurrent,
+        }),
+    );
+    await requireGitHubPublicationCommit(
+      run,
+      params.source.review.repository,
+      reviewCommit,
+      target.githubHost,
+      owner.worktree.path,
+      {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+      },
+      reviewPreparationError,
+      { contents: true, commitPresent: true },
+    );
   }
-  const advertised = available.stdout.toString().trim();
-  const retainedCommit = candidates.find((candidate) => candidate === advertised);
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-base-"));
-  try {
-    for (const retained of retainedCommit ? [retainedCommit, undefined] : [undefined]) {
-      const temporaryRoot = path.join(temporary, retained ? "retained" : "full");
-      await fs.mkdir(temporaryRoot);
-      const pack = await withWorktreeGitConfig(
-        owner.worktree.path,
-        true,
-        { beforeRun: assertCurrent },
-        (git) =>
-          git.withContentEnvironment((baseEnv) =>
-            prepareWorkerWorkspaceGitPack({
-              root: owner.worktree.path,
-              baseCommit: result.baseCommit,
-              retainedCommit: retained,
-              temporaryRoot,
-              signal: params.signal ?? new AbortController().signal,
-              baseEnv,
-            }),
-          ),
-      );
-      const size = (await fs.stat(pack)).size;
-      if (size > MAX_RECONCILIATION_PACK_BYTES) {
-        throw new Error(
-          "The selected review base exceeds the sandbox transfer limit; saved integration is retained.",
-        );
-      }
-      const input = await fs.readFile(pack);
-      assertCurrent();
-      const imported = await sandbox.backend!.runShellCommand({
-        script: IMPORT_REVIEW_BASE,
-        allowFailure: true,
-        args: [sandbox.containerWorkdir, result.baseCommit, retained ? "retained" : "full"],
-        stdin: input,
-        signal: params.signal,
-      });
-      assertCurrent();
-      if (imported.code === 0) {
-        return { ...result, review: { mode: "local", base: result.baseCommit } };
-      }
-      // Missing donor objects can invalidate a thin pack or leave omitted source
-      // objects unavailable. Retry the authorized full snapshot before staging.
-      if (!retained || imported.code !== 75) {
-        throw new Error(REVIEW_BASE_PREPARATION_ERROR);
-      }
-    }
-    throw new Error(REVIEW_BASE_PREPARATION_ERROR);
-  } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
-  }
+  return {
+    ...result,
+    review: await prepareManagedWorkspaceReviewBase({
+      owner,
+      sandbox,
+      reviewCommit,
+      previousBase,
+      signal: params.signal,
+      assertCurrent,
+      reviewPreparationError,
+    }),
+  };
 }
-
-const REVIEW_BASE_PREPARATION_ERROR =
-  "Source integration is saved, but sandbox review-base preparation failed. Resolve any pending sandbox Git merge or index lock, then retry refresh_base before tests and Auto Review.";
-
-const REVIEW_BASE_GIT = String.raw`set -eu
-export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
-git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
-cd "$1"
-test "$(git rev-parse --show-toplevel)" = "$(pwd -P)"
-if git rev-parse --verify --quiet MERGE_HEAD >/dev/null; then
-  exit 1
-fi
-`;
-
-const FIND_REVIEW_BASE =
-  REVIEW_BASE_GIT +
-  String.raw`
-shift
-for candidate do
-  if git cat-file -e "$candidate^{commit}" 2>/dev/null; then
-    printf '%s\n' "$candidate"
-    break
-  fi
-done
-`;
-
-const IMPORT_REVIEW_BASE =
-  REVIEW_BASE_GIT +
-  String.raw`
-base="$2"
-git index-pack --stdin --fix-thin >/dev/null || exit 75
-if test "$3" = retained; then
-  git rev-list --objects --no-object-names --missing=error "$base^{tree}" >/dev/null || exit 75
-fi
-missing_parent=false
-for parent in $(git cat-file -p "$base" | sed -n '/^$/q; s/^parent //p'); do
-  git cat-file -e "$parent^{commit}" 2>/dev/null || missing_parent=true
-done
-if "$missing_parent"; then
-  shallow=$(git rev-parse --git-path shallow)
-  if ! test -f "$shallow" || ! grep -Fxq "$base" "$shallow"; then
-    (set -C; : > "$shallow.lock")
-    trap 'rm -f "$shallow.lock"' EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    if test -f "$shallow"; then cat "$shallow" > "$shallow.lock"; fi
-    printf '%s\n' "$base" >> "$shallow.lock"
-    mv "$shallow.lock" "$shallow"
-    trap - EXIT HUP INT TERM
-  fi
-fi
-git update-ref refs/openclaw/review-base "$base"
-filters=$(git config --name-only --get-regexp '^filter\..*\.(clean|smudge|process|required)$' || test "$?" = 1)
-set -- -c core.hooksPath=/dev/null -c core.fsmonitor=false
-for key in $filters; do set -- "$@" -c "$key="; done
-git "$@" add -A -- .
-`;

@@ -74,6 +74,7 @@ describe("session deletion generation ownership", () => {
       h.sessions.subscribe((state) => facts.push(...state.deletedSessions.map(({ key }) => key)));
       await h.refresh();
       const operation = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
+      await h.waitForDeleteRequest(h.alpha.key);
       h.setListResponse(older.promise);
       const stale = h.read(source);
       h.setListResponse();
@@ -138,8 +139,8 @@ describe("session deletion generation ownership", () => {
         (error: unknown) => ({ value: null, error }),
       );
       expect(h.sessions.deletionState(current.key)).toBe("pending");
+      const response = await h.waitForDeleteRequest(current.key);
       h.setRows(outcome === "confirmed" ? [h.sibling] : [current, h.sibling]);
-      const response = h.responses.get(current.key)!;
       const settle = () =>
         outcome === "confirmed"
           ? response.resolve({ deleted: true })
@@ -245,6 +246,7 @@ describe("session deletion generation ownership", () => {
       const h = createSessionDeletionHarness();
       await h.refresh();
       const first = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
+      const firstResponse = await h.waitForDeleteRequest(h.alpha.key);
       h.setRows([h.sibling]);
       await h.finish(first, h.alpha.key, true);
       const replacement = { ...h.alpha, sessionId: "replacement-alpha" };
@@ -252,6 +254,7 @@ describe("session deletion generation ownership", () => {
       const facts: string[] = [];
       h.sessions.subscribe((state) => facts.push(...state.deletedSessions.map(({ key }) => key)));
       const next = h.sessions.delete(h.alpha.key, { expectedSessionId: replacement.sessionId });
+      const nextResponse = await h.waitForDeleteRequest(h.alpha.key, firstResponse);
       await h.refresh([h.alpha, h.sibling]);
       expect(h.rows()).not.toContainEqual(h.alpha);
       expect(h.sessions.deletionState(h.alpha.key)).toBe("pending");
@@ -262,9 +265,9 @@ describe("session deletion generation ownership", () => {
           ? expect(next).resolves.toEqual({ deleted: true })
           : expect(next).rejects.toThrow("successor reclaim failed");
       if (outcome === "confirmed") {
-        h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+        nextResponse.resolve({ deleted: true });
       } else {
-        h.responses.get(h.alpha.key)!.reject(new Error("successor reclaim failed"));
+        nextResponse.reject(new Error("successor reclaim failed"));
       }
       await settled;
       expect(facts.includes(h.alpha.key)).toBe(outcome === "confirmed");

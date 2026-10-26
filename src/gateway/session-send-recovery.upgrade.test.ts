@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatPendingInputs } from "./server-methods/chat-pending-inputs.js";
@@ -81,10 +82,11 @@ it("keeps latest-stable pending rows visible without replaying missing operator 
     };
     setRuntimeConfigSnapshot(config);
     const context = createContext([], () => config);
+    context.logGateway = createSubsystemLogger("test/gateway");
     const runtime = createMockGatewayRecoveryRuntime();
     context.recoveryRuntime = runtime;
 
-    await recoverSessionSendDeliveries(context, new AbortController().signal);
+    await recoverSessionSendDeliveries(context, new AbortController().signal).settled;
 
     // Read raw rows before any history access: startup itself must reconcile SIGKILL.
     const stored = database.db

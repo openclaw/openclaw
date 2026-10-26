@@ -21,28 +21,6 @@ import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
 const discordDnsLookup = createDiscordDnsLookup();
 
-function createEnvProxyDiscordRestDispatcher(
-  runtime: RuntimeEnv,
-): ReturnType<typeof createHttp1EnvHttpProxyAgent> | undefined {
-  const envProxyOptions = resolveEnvHttpProxyAgentOptions();
-  if (!envProxyOptions) {
-    return undefined;
-  }
-  try {
-    return createHttp1EnvHttpProxyAgent({
-      ...envProxyOptions,
-      connect: { lookup: discordDnsLookup },
-    });
-  } catch (err) {
-    runtime.error?.(
-      danger(
-        `discord: env proxy unavailable for REST fetch; using direct dispatcher: ${formatErrorMessage(err)}`,
-      ),
-    );
-    return undefined;
-  }
-}
-
 function createDiscordRestFetchWithDispatcher(dispatcher: Dispatcher): typeof fetch {
   return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
     fetchWithRuntimeDispatcher(input, { ...init, dispatcher }).then((response) => {
@@ -76,8 +54,23 @@ export function resolveDiscordRestFetch(
     return fetcher;
   }
 
+  let dispatcher: Dispatcher | undefined;
+  const envProxyOptions = resolveEnvHttpProxyAgentOptions();
+  if (envProxyOptions) {
+    try {
+      dispatcher = createHttp1EnvHttpProxyAgent({
+        ...envProxyOptions,
+        connect: { lookup: discordDnsLookup },
+      });
+    } catch (err) {
+      runtime.error?.(
+        danger(
+          `discord: env proxy unavailable for REST fetch; using direct dispatcher: ${formatErrorMessage(err)}`,
+        ),
+      );
+    }
+  }
   return createDiscordRestFetchWithDispatcher(
-    createEnvProxyDiscordRestDispatcher(runtime) ??
-      createHttp1Agent({ connect: { lookup: discordDnsLookup } }),
+    dispatcher ?? createHttp1Agent({ connect: { lookup: discordDnsLookup } }),
   );
 }

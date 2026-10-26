@@ -1,10 +1,16 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
+import * as containerEngine from "../../agents/sandbox/container-engine.js";
+import { bindSandboxPersistentExecCapability } from "../../agents/sandbox/persistent-exec.types.js";
+import { bindStreamSandboxContext } from "../../agents/sandbox/stream-context.js";
+import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
+import { createContainerWorkspaceSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -29,6 +35,7 @@ import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
+  SESSION,
   cfg,
   stateDir,
   admission,
@@ -40,6 +47,8 @@ import {
 
 type StreamApprovalFixture = {
   tools: CreatorTransportTools;
+  add: (job?: Record<string, unknown>) => Promise<unknown>;
+  updateJob: (jobId: string, job: Record<string, unknown>) => Promise<unknown>;
   read: ReturnType<typeof createCronFixture>["read"];
   manager: ExecApprovalManager;
   takeApproval: (operation: Promise<unknown>) => Promise<ExecApprovalRequest>;
@@ -47,6 +56,8 @@ type StreamApprovalFixture = {
   setPolicy: (security: "full" | "deny", ask: "off" | "always") => Promise<void>;
   revokeRun: () => void;
   deliveries: ExecApprovalRequest[];
+  changeSandboxImage: () => void;
+  runSandboxShell: Mock<SandboxBackendHandle["runShellCommand"]>;
   setConfig: (update: (current: OpenClawConfig) => OpenClawConfig) => void;
 };
 
@@ -71,6 +82,7 @@ export async function withStreamApprovalFixture(
     ask?: "off" | "always";
     listConfiguredChannels?: () => Promise<string[]>;
     deliveryAvailable?: boolean;
+    sandbox?: boolean;
     turnSourceChannel?: string;
     controlUiAdmin?: boolean;
   } = {},
@@ -97,14 +109,16 @@ export async function withStreamApprovalFixture(
       defaults: {
         workspace: stateDir,
         model: "openai/gpt-4.1",
-        sandbox: { mode: "off" },
+        sandbox: { mode: options.sandbox ? "all" : "off" },
       },
     },
     tools: {
       allow: [AUTOMATIONS_TOOL_NAME, "exec"],
       exec: {
-        host: "gateway",
-        security: options.ask === "off" ? "full" : "allowlist",
+        host: options.sandbox ? "sandbox" : "gateway",
+        ...(options.sandbox
+          ? {}
+          : { security: options.ask === "off" ? ("full" as const) : ("allowlist" as const) }),
         ask: options.ask ?? "always",
       },
     },
@@ -138,15 +152,15 @@ export async function withStreamApprovalFixture(
     }
     return true;
   };
-  const registry = createRequestGatewayMethodRegistry({
-    ...createExecApprovalHandlers(manager, {
+  const registry = createRequestGatewayMethodRegistry(
+    createExecApprovalHandlers(manager, {
       forwarder: {
         handleRequested: fixture.context.forwardExecApprovalRequest,
         handleResolved: async () => {},
         stop: async () => {},
       },
     }),
-  });
+  );
   fixture.context.getGatewayMethodRegistry = () => registry;
   const operator = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
   const operatorConnId = "stream-native-operator";
@@ -180,6 +194,19 @@ export async function withStreamApprovalFixture(
       file: { version: 1, defaults: { security, ask, askFallback: "full" } },
     });
   };
+  const approvedImageId = `sha256:${"b".repeat(64)}`;
+  let currentImageId = approvedImageId;
+  const runSandboxShell = vi.fn<SandboxBackendHandle["runShellCommand"]>(async () => {
+    throw new Error("Approval must not execute inside the agent container");
+  });
+  const imageInspection = options.sandbox
+    ? vi.spyOn(containerEngine, "execContainer").mockImplementation(async (_engine, args) => {
+        if (args[0] !== "image" || args[1] !== "inspect") {
+          throw new Error(`Unexpected Docker operation during approval: ${args[0]}`);
+        }
+        return { code: 0, stdout: currentImageId, stderr: "" };
+      })
+    : undefined;
   try {
     await setPolicy("full", "off");
     const runId = "stream-approval-creator";
@@ -187,12 +214,53 @@ export async function withStreamApprovalFixture(
     await inRun(runId, creatorAdmission, async (_identity, admitted, creator) => {
       bindGatewayContextResolver(admitted, () => fixture.context);
       try {
+        const sandbox = options.sandbox
+          ? createSandboxTestContext({
+              overrides: {
+                sessionKey: SESSION,
+                workspaceDir: stateDir,
+                agentWorkspaceDir: stateDir,
+                fsBridge: createContainerWorkspaceSandboxFsBridge(stateDir),
+                backend: {
+                  id: "docker",
+                  runtimeId: "sandbox-fixture",
+                  runtimeLabel: "sandbox-fixture",
+                  workdir: "/workspace",
+                  buildExecSpec: async () => {
+                    throw new Error("Approval must not launch the stream");
+                  },
+                  runShellCommand: runSandboxShell,
+                },
+              },
+            })
+          : undefined;
+        if (sandbox?.backend) {
+          bindSandboxPersistentExecCapability(sandbox.backend, {
+            target: {
+              kind: "docker",
+              endpoint: "unix:///fixture/docker.sock",
+              daemonId: "fixture",
+            },
+            containerId: "a".repeat(64),
+            containerName: "sandbox-fixture",
+            containerStartedAt: "2026-01-01T00:00:00.000Z",
+            workdir: "/workspace",
+            configHash: "fixture-config",
+            imageReference: sandbox.docker.image,
+            resolveImage: async () => approvedImageId,
+            prepare: async () => {
+              throw new Error("Approval must not launch the stream");
+            },
+          });
+          bindStreamSandboxContext(sandbox, { agentId: "main", scopeKey: SESSION });
+        }
         const transport = await createCreatorTransportTools({
           transport: "embedded",
           config,
           admitted,
           creator,
           senderIsOwner: true,
+          sandbox,
           turnSourceChannel: options.turnSourceChannel,
           gatewayUiCommandTarget: { connId: operatorConnId },
         });
@@ -206,9 +274,17 @@ export async function withStreamApprovalFixture(
         };
         await run({
           tools,
+          add: (job = approvedStreamJob()) =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job }),
+          updateJob: (jobId, job) =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "update", jobId, job }),
           read: fixture.read,
           manager,
           deliveries,
+          changeSandboxImage: () => {
+            currentImageId = `sha256:${"c".repeat(64)}`;
+          },
+          runSandboxShell,
           setPolicy,
           setConfig: (update) => {
             config = update(config);
@@ -240,7 +316,11 @@ export async function withStreamApprovalFixture(
       }
     });
   } finally {
-    await manager.drain();
+    try {
+      await manager.drain();
+    } finally {
+      imageInspection?.mockRestore();
+    }
   }
 }
 

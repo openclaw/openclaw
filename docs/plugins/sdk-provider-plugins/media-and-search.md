@@ -57,8 +57,11 @@ merging a nested value such as voice settings.
     });
     ```
 
-    Declare the same id in `contracts.embeddingProviders`. This is the
-    general embedding contract for reusable vector generation, including
+    Declare the same id in `contracts.embeddingProviders`. Optional `aliases`
+    on the adapter provide alternate lookup ids; declare those in the manifest
+    too so cold startup can locate the plugin. Keep the created provider and
+    index identity canonical. Exact provider ids take precedence over aliases.
+    This is the general embedding contract for reusable vector generation, including
     memory search. The retired memory-specific registrar and manifest
     contract are no longer accepted.
 
@@ -108,6 +111,12 @@ merging a nested value such as voice settings.
     response has no valid counts. Callers can sum these reports and treat any
     unavailable response as incomplete usage. The shared remote factory reports
     OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
+    Memory search applies an explicit `memory.search.queryInstruction` before
+    calling `embed` and sets the `queryInstructionApplied` call option. For queries
+    carrying this flag, preserve the supplied text and skip provider-owned query
+    templates. Without the flag, retain existing formatting behavior. Document
+    calls do not carry this flag.
 
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
@@ -249,6 +258,8 @@ merging a nested value such as voice settings.
     `overflowUrl` provides delivery only when the body exceeds that cap; malformed
     media and transport errors still fail. The caller owns response cleanup.
     `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+    Its optional `dispatcherPolicy` preserves configured result transport while
+    keeping strict target checks. Do not pass task headers or private-network trust.
 
   </Tab>
   <Tab title="Web fetch and search">
@@ -298,6 +309,20 @@ merging a nested value such as voice settings.
     `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
+
+    Provider-native OpenAI Responses search uses the model provider
+    `resolveNativeWebSearch` policy hook instead of registering a managed search
+    tool. Its context includes the selected `api`, `baseUrl`, and secret-free
+    `modelParams`; proxy providers must require both model support and admission
+    for that exact key-scoped route. Missing facts do not establish support.
+    OpenClaw applies the agent and sandbox tool policy before this hook.
+
+    In `wrapStreamFn`, reuse `createOpenAIHostedWebSearchWrapper` from
+    `openclaw/plugin-sdk/provider-stream-shared` with the same eligibility
+    predicate. It replaces a managed `web_search` function with the hosted
+    declaration, admits only that hosted type through Code Mode, and raises
+    `minimal` reasoning to the search-compatible `low`. It does not select
+    credentials, change routes, or retry a rejected request.
 
     Search tools limited to ten results can spread
     `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from

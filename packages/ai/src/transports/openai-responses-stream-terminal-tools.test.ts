@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  blockEvent,
   completed,
   outputItem,
   runFixture,
@@ -47,11 +48,11 @@ it.each([
     ];
     const terminalEvent =
       terminal === "completed"
-        ? completed("resp_deferred", terminalOutput)
+        ? completed("resp", terminalOutput)
         : {
             type: `response.${terminal}`,
             response: {
-              id: "resp_deferred",
+              id: "resp",
               status: ending === "conflicting-status" ? "completed" : terminal,
               ...(terminal === "failed"
                 ? { error: { code: "server_error", message: "Synthetic failure" } }
@@ -76,7 +77,7 @@ it.each([
       { asyncToolExecution: true },
     );
     expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-      { type: "toolcall_end", contentIndex: 1 },
+      blockEvent("toolcall_end", 1),
     ]);
     expect(result.error === null).toBe(!sibling && terminal !== "failed");
     if (ending === "content-filter") {
@@ -100,13 +101,13 @@ it.each([
           { type: "response.output_item.done", item: tool(slot, anonymous) },
         ];
       }),
-      completed("resp_ambiguous_done", [tool(0), tool(1)]),
+      completed("resp", [tool(0), tool(1)]),
     ],
     expect.any(String),
   ],
   [
     "duplicate terminal calls",
-    [added(0), completed("resp_unresolved", [tool(0), tool(0)])],
+    [added(0), completed("resp", [tool(0), tool(0)])],
     expect.any(String),
   ],
   [
@@ -115,7 +116,7 @@ it.each([
       added(0),
       {
         type: "response.incomplete",
-        response: { id: "resp_incomplete", status: "incomplete", output: [tool(0)] },
+        response: { id: "resp", status: "incomplete", output: [tool(0)] },
       },
     ],
     "Responses stream completed with unresolved tool calls",
@@ -130,14 +131,11 @@ it("completes an unindexed call exactly once when its item-done event is missing
   const item = tool(0, { arguments: '{"slot":0,"id":9007199254740993}' });
   const result = await runFixture([
     { ...added(0), output_index: undefined },
-    completed("resp_missing_done", [item]),
+    completed("resp", [item]),
   ]);
   expect(result.error).toBeNull();
   expect(result.stopReason).toBe("toolUse");
-  expect(result.events).toEqual([
-    { type: "toolcall_start", contentIndex: 0 },
-    { type: "toolcall_end", contentIndex: 0 },
-  ]);
+  expect(result.events).toEqual([blockEvent("toolcall_start"), blockEvent("toolcall_end")]);
   expect(result.content).toEqual([
     toolCall("call_0|fc_0", "lookup", { slot: 0, id: "9007199254740993" }),
   ]);
@@ -151,7 +149,7 @@ it.each([
   const result = await runFixture([
     added(0),
     added(1),
-    completed("resp_invalid_batch", [tool(0), tool(1, override)]),
+    completed("resp", [tool(0), tool(1, override)]),
   ]);
   expect(result.error).not.toBeNull();
   expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([]);
@@ -161,11 +159,11 @@ it("rejects a changed completed call identity before another active call complet
   const result = await runFixture([
     done(0),
     added(1),
-    completed("resp_completed_conflict", [tool(0, { call_id: "call_conflicting" }), tool(1)]),
+    completed("resp", [tool(0, { call_id: "call_conflicting" }), tool(1)]),
   ]);
   expect(result.error).toBe("Responses stream changed output item identity");
   expect(result.events.filter((event) => event.type === "toolcall_end")).toEqual([
-    { type: "toolcall_end", contentIndex: 0 },
+    blockEvent("toolcall_end"),
   ]);
 });
 
@@ -193,7 +191,7 @@ it.each([false, true])(
           ]
         : [argumentEvent("done", 0, { name: "lookup", arguments: streamedArgs })]),
       done(0, { arguments: doneArgs }),
-      completed(unreliable ? "resp_unreliable" : "resp_schema_valid_disagree", [
+      completed("resp", [
         tool(0, { arguments: unreliable ? doneArgs : streamedArgs }),
         ...(unreliable ? [tool(1)] : []),
       ]),

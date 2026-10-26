@@ -132,7 +132,6 @@ export function createMeetingRuntimeFacade<
         durableTranscripts: {
           config: params.fullConfig.transcripts,
           openclawConfig: params.fullConfig,
-          runInBackground: params.runInBackground,
           ...options.messages.durableTranscripts,
         },
       });

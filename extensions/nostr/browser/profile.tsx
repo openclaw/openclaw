@@ -15,6 +15,7 @@ import type { NostrProfile, NostrStatus } from "./types.ts";
 
 type ChannelAccountSnapshot = ControlUiChannelSettingsSnapshot["accounts"][number];
 type Controller = ReturnType<typeof createProfileController>;
+const PROFILE_FIELDS = ["name", "displayName", "about", "nip05"] as const;
 
 export function createProfileCard(
   context: ControlUiChannelSettingsContext,
@@ -26,32 +27,20 @@ export function createProfileCard(
   const NostrProfileForm = createNostrProfileForm(t);
   const boolStatusKind = (value: boolean | null | undefined) =>
     value === true ? ("ok" as const) : ("muted" as const);
-  const booleanChannelFact = (
-    field: "configured" | "running",
-    value: boolean | null | undefined,
-  ) => ({
-    label: t(`common.${field}`),
-    value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
-    kind: boolStatusKind(value),
-  });
-  function ChannelFacts(props: {
-    rows: readonly { label: string; value: JSX.Element; kind?: "ok" | "muted" }[];
+  function BooleanChannelFact(props: {
+    field: "configured" | "running";
+    value: boolean | null | undefined;
   }) {
     return (
-      <dl class="settings-kv">
-        <For each={props.rows}>
-          {(row) => (
-            <>
-              <dt>{row.label}</dt>
-              <dd>
-                <Show when={row.kind} fallback={row.value}>
-                  {(kind) => <SettingsStatus kind={kind()} label={row.value} />}
-                </Show>
-              </dd>
-            </>
-          )}
-        </For>
-      </dl>
+      <>
+        <dt>{t(`common.${props.field}`)}</dt>
+        <dd>
+          <SettingsStatus
+            kind={boolStatusKind(props.value)}
+            label={t(props.value == null ? "common.na" : props.value ? "common.yes" : "common.no")}
+          />
+        </dd>
+      </>
     );
   }
   function ChannelError(props: { message: unknown }) {
@@ -164,16 +153,16 @@ export function createProfileCard(
         | undefined;
       return accountProfile ?? nostr()?.profile ?? null;
     });
-    const renderProfileSection = () => {
-      const { name, displayName, about, picture, nip05 } = profile() ?? {};
-      const hasAnyProfileData = name || displayName || about || picture || nip05;
+    function ProfileSection() {
+      const hasAnyProfileData = () =>
+        profile()?.picture || PROFILE_FIELDS.some((field) => profile()?.[field]);
 
       return (
         <>
           <SettingsRow
             title={t("channels.nostr.profile")}
             description={
-              hasAnyProfileData ? undefined : (
+              hasAnyProfileData() ? undefined : (
                 <>
                   {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
                 </>
@@ -187,50 +176,47 @@ export function createProfileCard(
               ) : undefined
             }
           />
-          {hasAnyProfileData ? (
+          <Show when={hasAnyProfileData()}>
             <dl class="settings-kv">
-              {picture ? (
-                <>
-                  <dt>{t("channels.nostr.profilePicture")}</dt>
-                  <dd>
-                    <img
-                      style={{
-                        width: "48px",
-                        height: "48px",
-                        "border-radius": "50%",
-                        "object-fit": "cover",
-                      }}
-                      src={picture}
-                      alt={t("channels.nostr.profilePicture")}
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                      }}
-                    />
-                  </dd>
-                </>
-              ) : undefined}
-              <For
-                each={[
-                  [t("channels.nostr.name"), name],
-                  [t("channels.nostr.displayName"), displayName],
-                  [t("channels.nostr.about"), about],
-                  ["NIP-05", nip05],
-                ]}
-              >
-                {([label, value]) =>
-                  value ? (
-                    <>
-                      <dt>{label}</dt>
-                      <dd>{value}</dd>
-                    </>
-                  ) : undefined
-                }
+              <Show when={profile()?.picture} keyed>
+                {(picture) => (
+                  <>
+                    <dt>{t("channels.nostr.profilePicture")}</dt>
+                    <dd>
+                      <img
+                        style={{
+                          width: "48px",
+                          height: "48px",
+                          "border-radius": "50%",
+                          "object-fit": "cover",
+                        }}
+                        src={picture}
+                        alt={t("channels.nostr.profilePicture")}
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                      />
+                    </dd>
+                  </>
+                )}
+              </Show>
+              <For each={PROFILE_FIELDS}>
+                {(field) => (
+                  <Show when={profile()?.[field]}>
+                    {(value) => (
+                      <>
+                        <dt>{field === "nip05" ? "NIP-05" : t(`channels.nostr.${field}`)}</dt>
+                        <dd>{value()}</dd>
+                      </>
+                    )}
+                  </Show>
+                )}
               </For>
             </dl>
-          ) : undefined}
+          </Show>
         </>
       );
-    };
+    }
 
     return (
       <SettingsSection
@@ -243,23 +229,22 @@ export function createProfileCard(
             {(account) => <NostrAccount account={account()} />}
           </For>
         ) : (
-          <ChannelFacts
-            rows={[
-              booleanChannelFact("configured", configured()),
-              booleanChannelFact("running", nostr()?.running ?? primaryAccount()?.running ?? false),
-              {
-                label: t("common.publicKey"),
-                value: <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>,
-              },
-              {
-                label: t("common.lastStart"),
-                value: lastStart() ? formatRelativeTimestamp(lastStart()) : t("common.na"),
-              },
-            ]}
-          />
+          <dl class="settings-kv">
+            <BooleanChannelFact field="configured" value={configured()} />
+            <BooleanChannelFact
+              field="running"
+              value={nostr()?.running ?? primaryAccount()?.running ?? false}
+            />
+            <dt>{t("common.publicKey")}</dt>
+            <dd>
+              <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
+            </dd>
+            <dt>{t("common.lastStart")}</dt>
+            <dd>{lastStart() ? formatRelativeTimestamp(lastStart()) : t("common.na")}</dd>
+          </dl>
         )}
         {lastError() ? <ChannelError message={lastError()} /> : undefined}
-        <Show when={form()} fallback={renderProfileSection()}>
+        <Show when={form()} fallback={<ProfileSection />}>
           {(formState) => (
             <NostrProfileForm
               state={formState()}

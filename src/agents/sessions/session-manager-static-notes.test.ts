@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement as beforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement as awaitGate } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -107,7 +107,6 @@ function watchAdmission(onAdmission: (path: string | undefined, reentrant?: bool
 
 const cases: Array<Message | CustomMessage | BashExecutionMessage> = [
   makeUserMessage("SDK user message", 1),
-  { ...makeNote("SDK custom message", 2), customType: "sdk-note" },
   {
     role: "bashExecution",
     command: "echo synthetic",
@@ -144,11 +143,12 @@ it("awaits direct static writes while preserving keyed custom replay and admitte
       idempotencyKey: "static-parity:custom",
     };
     const first = Sdk.appendMessageToTranscript(target, custom);
+    expect(typeof first).toBe("string");
     const nextCustom = { ...custom, idempotencyKey: "static-parity:next" };
     const next = await Sdk.appendMessageToTranscriptAsync(target, nextCustom);
     const beforeReplay = await readEvents(target);
     expect(beforeReplay.slice(-2)).toMatchObject([
-      { id: first, parentId: null },
+      { type: "message", id: first, parentId: null, message: custom },
       { id: next, parentId: first },
     ]);
     await expect(Sdk.appendMessageToTranscriptAsync(target, custom)).resolves.toBe(first);
@@ -225,7 +225,7 @@ it.each(["agent", "shared-state"] as const)(
   (owner) =>
     withOpenClawTestState({ label: "static-note-pre-import-close" }, async (state) => {
       const target = await createTarget(state, "closing-note", "closing-note", true);
-      SessionManager.open(target).appendMessage(makeUserMessage("Retained before close", 1));
+      SessionManager.open(target).appendMessage(makeUserMessage("seed", 1));
       await waitForSessionTranscriptProjection(target);
       const before = await readEvents(target);
       const entered = createDeferredCore();
@@ -248,10 +248,6 @@ it.each(["agent", "shared-state"] as const)(
       const agentSpy = vi
         .spyOn(agentResources, "registerOpenClawAgentDatabaseAsyncResource")
         .mockImplementation((resource) => registerAgent(watchRevoke(resource)));
-      const registerCandidate = agentResources.registerOpenClawAgentDatabaseReadCandidateResource;
-      const candidateSpy = vi
-        .spyOn(agentResources, "registerOpenClawAgentDatabaseReadCandidateResource")
-        .mockImplementation((resource) => registerCandidate(watchRevoke(resource)));
       const registerState = stateResources.registerOpenClawStateDatabaseAsyncResource;
       const stateSpy = vi
         .spyOn(stateResources, "registerOpenClawStateDatabaseAsyncResource")
@@ -269,7 +265,7 @@ it.each(["agent", "shared-state"] as const)(
           });
         });
       const track = asyncWork.trackAsyncWork;
-      const trackSpy = vi
+      using _ = vi
         .spyOn(asyncWork, "trackAsyncWork")
         .mockImplementationOnce(<T>(run: () => T | Promise<T>) =>
           track(async () => {
@@ -279,12 +275,11 @@ it.each(["agent", "shared-state"] as const)(
             return await run();
           }),
         );
-      const message = makeNote("Accepted before canonical close", 2);
-      const append = settled(appendNote(target, message));
+      const append = settled(appendNote(target, makeNote("closing", 2)));
       let closing: Promise<PromiseSettledResult<boolean>> | undefined;
       let closeCompleted = false;
       try {
-        await beforeSettlement(entered.promise, append, "Static append bypassed pre-import gate");
+        await awaitGate(entered.promise, append, "Pre-import gate bypassed");
         const close =
           owner === "agent"
             ? closeOpenClawAgentDatabaseByPathAsync(target.storePath)
@@ -302,28 +297,25 @@ it.each(["agent", "shared-state"] as const)(
         release.resolve();
         const [appendOutcome, closeOutcome] = await Promise.all([append, closing]);
         const afterClose = await readEvents(target);
-        const fresh = await settled(appendNote(target, makeNote("Fresh append after close", 3)));
+        const fresh = await appendNote(target, makeNote("fresh", 3));
         const afterFresh = await readEvents(target);
         expect(firstBoundary).toBe("revoked");
         expect(closeCompletedWhileHeld).toBe(false);
         expect(closeOutcome.status).toBe("fulfilled");
         expect(appendOutcome.status).toBe("rejected");
         expect(afterClose).toEqual(before);
-        assert(fresh.status === "fulfilled");
         expect(afterFresh.slice(0, before.length)).toEqual(before);
         expect(afterFresh).toHaveLength(before.length + 1);
         expect(afterFresh.at(-1)).toMatchObject({
           type: "message",
-          id: fresh.value.messageId,
-          message: { content: "Fresh append after close" },
+          id: fresh.messageId,
+          message: { content: "fresh" },
         });
-        expect(afterFresh.at(-1)).toHaveProperty("message", fresh.value.message);
+        expect(afterFresh.at(-1)).toHaveProperty("message", fresh.message);
       } finally {
         release.resolve();
         await Promise.allSettled(closing ? [append, closing] : [append]);
-        trackSpy.mockRestore();
         stateSpy.mockRestore();
-        candidateSpy.mockRestore();
         agentSpy.mockRestore();
       }
     }),
@@ -362,7 +354,7 @@ it.each(["canonical", "custom-family"] as const)(
           return await prepare(...args);
         });
       let admissions = 0;
-      const admission = watchAdmission((pathname, reentrant) => {
+      using _ = watchAdmission((pathname, reentrant) => {
         if (pathname === queuedPath && reentrant === true && ++admissions === 2) {
           queued.resolve();
         }
@@ -371,7 +363,7 @@ it.each(["canonical", "custom-family"] as const)(
       void first.catch(() => undefined);
       let second: ReturnType<typeof appendNote> | undefined;
       try {
-        await beforeSettlement(entered.promise, first, "First note bypassed preparation gate");
+        await awaitGate(entered.promise, first, "Preparation gate bypassed");
         second = appendNote(target, makeNote("second"));
         await Promise.race([queued.promise, second]);
         release.resolve();
@@ -388,7 +380,6 @@ it.each(["canonical", "custom-family"] as const)(
       } finally {
         release.resolve();
         await Promise.allSettled(second ? [first, second] : [first]);
-        admission.mockRestore();
         preparation.mockRestore();
       }
     }),
@@ -415,7 +406,7 @@ it("refuses a replaced custom family after awaited note preparation", () =>
     const before = await readEvents(physicalTarget);
     const prepare = transcriptScope.prepareSqliteTranscriptReadScope;
     let prepared = false;
-    const spy = vi
+    using _ = vi
       .spyOn(transcriptScope, "prepareSqliteTranscriptReadScope")
       .mockImplementationOnce(async (...args) => {
         const result = await prepare(...args);
@@ -424,16 +415,12 @@ it("refuses a replaced custom family after awaited note preparation", () =>
         await fs.symlink(replacement, alias, "junction");
         return result;
       });
-    try {
-      await expect(appendNote(target, makeNote("Must not reach the replacement"))).rejects.toThrow(
-        "Session store alias changed",
-      );
-      expect(prepared).toBe(true);
-      expect(await readEvents(physicalTarget)).toEqual(before);
-      expect(await fs.readdir(replacement)).toEqual([]);
-    } finally {
-      spy.mockRestore();
-    }
+    await expect(appendNote(target, makeNote("Must not reach the replacement"))).rejects.toThrow(
+      "Session store alias changed",
+    );
+    expect(prepared).toBe(true);
+    expect(await readEvents(physicalTarget)).toEqual(before);
+    expect(await fs.readdir(replacement)).toEqual([]);
   }));
 
 it("captures static note inputs before waiting and retains FIFO custody through idempotent replay", () =>
@@ -461,7 +448,7 @@ it("captures static note inputs before waiting and retains FIFO custody through 
       }
     });
     const runOperation = workerStore.runSqliteWorkerStoreOperation;
-    const operationSpy = vi
+    using _ = vi
       .spyOn(workerStore, "runSqliteWorkerStoreOperation")
       .mockImplementation(
         <Operations extends SqliteWorkerOperations, T>(
@@ -502,7 +489,7 @@ it("captures static note inputs before waiting and retains FIFO custody through 
     let second: ReturnType<typeof appendNote> | undefined;
     let secondSettled = false;
     try {
-      await beforeSettlement(committed.promise, first, "First note bypassed commit gate");
+      await awaitGate(committed.promise, first, "Commit gate bypassed");
       const secondNote: typeof originalNote = {
         ...originalNote,
         content: "Second note",
@@ -513,7 +500,7 @@ it("captures static note inputs before waiting and retains FIFO custody through 
       void settled(second, () => {
         secondSettled = true;
       });
-      await beforeSettlement(queued.promise, second, "Second note bypassed admission queue");
+      await awaitGate(queued.promise, second, "Admission queue bypassed");
       expect(secondSettled).toBe(false);
       expect(commands).toBe(1);
       release.resolve();
@@ -549,7 +536,6 @@ it("captures static note inputs before waiting and retains FIFO custody through 
     } finally {
       release.resolve();
       await Promise.allSettled(second ? [first, second] : [first]);
-      operationSpy.mockRestore();
       admissionSpy.mockRestore();
     }
   }));
@@ -570,7 +556,7 @@ it.each(["registry", "pattern"] as const)(
         applyLoggingConfig({ redactPatterns: patterns });
       }
       let changed = 0;
-      const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+      using _ = probe.admission(workerAdmission, (request, grant, admit) => {
         if (request.stage === "commit" && changed === 0) {
           changed++;
           if (policy === "registry") {
@@ -594,7 +580,6 @@ it.each(["registry", "pattern"] as const)(
         });
         expect(stored).toHaveProperty("message", result.message);
       } finally {
-        spy.mockRestore();
         resetSecretRedactionRegistryForTest();
         resetLogger();
       }

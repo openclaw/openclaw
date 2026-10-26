@@ -29,7 +29,7 @@ import {
   type AgentMessage,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
-import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
@@ -162,61 +162,11 @@ type CompactionSuffix = {
 
 type SummaryQualityRetention = Parameters<typeof createSummaryQualityRetentionPlan>[2];
 
-function assembleSuffix(
-  parts: {
-    splitTurnSection?: ContextSection;
-    generatedSplitTurnSection?: string;
-    preservedTurnsSection?: ContextSection;
-    toolFailureSection?: string;
-    fileOpsSummary?: string;
-    workspaceContext?: string;
-  },
-  reserveSplitTurn = false,
-): CompactionSuffix {
-  let text = "";
-  let reservedChars = 0;
-  const contextRanges: CompactionSuffix["contextRanges"] = [];
-  for (const [name, part] of Object.entries(parts)) {
-    const section = typeof part === "string" ? part : part?.text;
-    if (!section) {
-      continue;
-    }
-    const leadingTrim = text ? 0 : section.length - section.trimStart().length;
-    const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
-    const start = text.length;
-    text = appendSummarySection(text, section);
-    if (reserveSplitTurn && name === "generatedSplitTurnSection") {
-      reservedChars = text.length;
-    }
-    if (typeof part !== "string") {
-      contextRanges.push({
-        start,
-        end: start + appended.length,
-        segmentStarts: part.segmentStarts
-          .filter((segmentStart) => segmentStart >= leadingTrim)
-          .map((segmentStart) => start + segmentStart - leadingTrim),
-      });
-    }
-  }
-  // Ensure leading separator so suffix does not merge with body (e.g. when body
-  // ends without newline: "...## Exact identifiers## Tool Failures").
-  if (text && !/^\s/.test(text)) {
-    text = `\n\n${text}`;
-    reservedChars += reservedChars > 0 ? 2 : 0;
-    for (const range of contextRanges) {
-      range.start += 2;
-      range.end += 2;
-      range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
-    }
-  }
-  return { text, contextRanges, ...(reservedChars > 0 ? { reservedChars } : {}) };
-}
-
 async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
 ): Promise<
-  { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
+  { ok: true; apiKey?: string; headers?: typeof model.headers } | { ok: false; reason: string }
 > {
   let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
@@ -250,8 +200,8 @@ async function resolveModelAuth(
 function buildCompactionSummaryHeaders(params: {
   model: NonNullable<ExtensionContext["model"]>;
   messages: AgentMessage[];
-  headers?: Record<string, string>;
-}): Record<string, string> | undefined {
+  headers?: NonNullable<ExtensionContext["model"]>["headers"];
+}): typeof params.headers {
   if (params.model.provider !== "github-copilot") {
     return params.headers;
   }
@@ -487,7 +437,7 @@ function splitPreservedRecentTurns(params: {
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
   return {
-    summarizableMessages: repairToolUseResultPairing(summarizableMessages).messages,
+    summarizableMessages: sanitizeToolUseResultPairing(summarizableMessages),
     preservedMessages,
   };
 }
@@ -748,17 +698,58 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         runtime?.postCompactionSections,
         runtime?.workspaceDir,
       );
-      const suffix = assembleSuffix(
-        {
-          splitTurnSection: sections.splitTurnSection,
-          generatedSplitTurnSection: sections.generatedSplitTurnSection,
-          preservedTurnsSection: sections.preservedTurnsSection,
-          toolFailureSection,
-          fileOpsSummary,
-          workspaceContext: await workspaceContextPromise,
-        },
-        degraded,
-      );
+      const parts = {
+        splitTurnSection: sections.splitTurnSection,
+        generatedSplitTurnSection: sections.generatedSplitTurnSection,
+        preservedTurnsSection: sections.preservedTurnsSection,
+        toolFailureSection,
+        fileOpsSummary,
+        workspaceContext: await workspaceContextPromise,
+      };
+      let text = "";
+      let reservedChars = 0;
+      const contextRanges: CompactionSuffix["contextRanges"] = [];
+      for (const [name, part] of Object.entries(parts)) {
+        if (!part) {
+          continue;
+        }
+        const section = typeof part === "string" ? part : part.text;
+        if (!section) {
+          continue;
+        }
+        const leadingTrim = text ? 0 : section.length - section.trimStart().length;
+        const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
+        const start = text.length;
+        text = appendSummarySection(text, section);
+        if (degraded && name === "generatedSplitTurnSection") {
+          reservedChars = text.length;
+        }
+        if (typeof part !== "string") {
+          contextRanges.push({
+            start,
+            end: start + appended.length,
+            segmentStarts: part.segmentStarts
+              .filter((segmentStart) => segmentStart >= leadingTrim)
+              .map((segmentStart) => start + segmentStart - leadingTrim),
+          });
+        }
+      }
+      // Ensure leading separator so suffix does not merge with body (e.g. when body
+      // ends without newline: "...## Exact identifiers## Tool Failures").
+      if (text && !/^\s/.test(text)) {
+        text = `\n\n${text}`;
+        reservedChars += reservedChars > 0 ? 2 : 0;
+        for (const range of contextRanges) {
+          range.start += 2;
+          range.end += 2;
+          range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
+        }
+      }
+      const suffix: CompactionSuffix = {
+        text,
+        contextRanges,
+        ...(reservedChars > 0 ? { reservedChars } : {}),
+      };
       const fit = (retention?: SummaryQualityRetention) =>
         fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
           budgetCompactionSummary(body, suffix, maxChars, retention),

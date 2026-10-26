@@ -3,75 +3,44 @@ import { describe, expect, it } from "vitest";
 import { resolveExtraParams } from "./embedded-agent-runner/extra-params.js";
 
 describe("resolveExtraParams", () => {
-  it("applies default runtime params for OpenAI GPT-5 models", () => {
-    const result = resolveExtraParams({
-      cfg: undefined,
-      provider: "openai",
-      modelId: "gpt-5.4",
-    });
-
-    expect(result).toEqual({
-      parallel_tool_calls: true,
-      text_verbosity: "low",
-    });
-  });
-
-  it("does not apply OpenAI GPT-5 defaults to OpenRouter models", () => {
-    const result = resolveExtraParams({
-      cfg: undefined,
-      provider: "openrouter",
-      modelId: "gpt-5.4",
-    });
-
-    expect(result).toBeUndefined();
-  });
-
-  it("returns params for exact provider/model key", () => {
-    const result = resolveExtraParams({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-4": {
-                params: {
-                  temperature: 0.7,
-                  maxTokens: 2048,
-                },
-              },
-            },
-          },
-        },
+  it.each([
+    [
+      "applies default runtime params for OpenAI GPT-5 models",
+      "openai",
+      {
+        parallel_tool_calls: true,
+        text_verbosity: "low",
       },
-      provider: "openai",
-      modelId: "gpt-4",
-    });
-
-    expect(result).toEqual({
-      temperature: 0.7,
-      maxTokens: 2048,
-    });
+    ],
+    ["does not apply OpenAI GPT-5 defaults to OpenRouter models", "openrouter", undefined],
+  ] as const)("%s", (_name, provider, expected) => {
+    const result = resolveExtraParams({ cfg: undefined, provider, modelId: "gpt-5.4" });
+    if (expected === undefined) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toEqual(expected);
+    }
   });
 
-  it("ignores unrelated model entries", () => {
+  it.each([
+    [
+      "returns params for exact provider/model key",
+      "gpt-4",
+      { temperature: 0.7, maxTokens: 2048 },
+      { temperature: 0.7, maxTokens: 2048 },
+    ],
+    ["ignores unrelated model entries", "gpt-4.1-mini", { temperature: 0.7 }, undefined],
+  ] as const)("%s", (_name, modelId, configuredParams, expected) => {
     const result = resolveExtraParams({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-4": {
-                params: {
-                  temperature: 0.7,
-                },
-              },
-            },
-          },
-        },
-      },
+      cfg: { agents: { defaults: { models: { "openai/gpt-4": { params: configuredParams } } } } },
       provider: "openai",
-      modelId: "gpt-4.1-mini",
+      modelId,
     });
-
-    expect(result).toBeUndefined();
+    if (expected === undefined) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toEqual(expected);
+    }
   });
 
   it("merges per-agent params over global model defaults", () => {

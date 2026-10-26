@@ -13,7 +13,8 @@ import {
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
-import { retainCreatedComposer, type CreationComposer } from "./creation-composer.ts";
+import { retainCreatedComposer } from "./creation-composer-registry.ts";
+import type { CreationComposer } from "./creation-composer.ts";
 import type { InstantThreadHandoff } from "./instant-thread-handoff.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import type { StartedSessionNavigation } from "./started-session-navigation.ts";

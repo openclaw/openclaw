@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   createOpenClawTestState,
@@ -17,6 +18,8 @@ import {
   captureGitHubPublicationWorkspaceSnapshot,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
+  requireGitHubPublicationCommit,
+  runPublicationCommand,
 } from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
@@ -147,6 +150,99 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
+  it("reuses a local partial-clone commit and fetches only an absent publication commit", async () => {
+    await f.git("config", "uploadpack.allowFilter", "true");
+    const clone = await makeDirectory("partial");
+    const url = pathToFileURL(f.cwd).href;
+    await git(clone, ["clone", "--filter=blob:none", "--no-checkout", url, "."]);
+    const tree = await f.git("rev-parse", "HEAD^{tree}");
+    const local = await git(clone, ["commit-tree", tree, "-p", f.previousHead], "local\n", {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Publication Test",
+      GIT_AUTHOR_EMAIL: "publication@example.test",
+      GIT_COMMITTER_NAME: "Publication Test",
+      GIT_COMMITTER_EMAIL: "publication@example.test",
+    });
+    let fetches = 0;
+    let allowFetch = false;
+    const run: typeof runPublicationCommand = async (argv, options) => {
+      if (argv.includes("fetch")) {
+        fetches++;
+      }
+      return await runPublicationCommand(
+        argv.map((arg) => (arg === "https://github.com/example/project.git" ? url : arg)),
+        { ...options, env: { ...options?.env, GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "" } },
+      );
+    };
+    const prepare = (sha: string) =>
+      requireGitHubPublicationCommit(
+        run,
+        "example/project",
+        sha,
+        "github.com",
+        clone,
+        process.env,
+        "Publication commit unavailable",
+      );
+    const missing = await git(clone, ["rev-list", "--objects", "--missing=print", local]);
+    expect(missing).toContain("?");
+    await prepare(local);
+    expect(fetches).toBe(0);
+    expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
+
+    // The source already owns this unadvertised commit, but the clone does not.
+    await f.git("update-ref", "refs/heads/publication", f.headCommit);
+    allowFetch = true;
+    await prepare(f.headCommit);
+    expect(fetches).toBe(1);
+    expect(await git(clone, ["cat-file", "-t", f.headCommit])).toBe("commit");
+    expect(await git(clone, ["rev-parse", "HEAD"])).toBe(f.previousHead);
+    await expect(fs.access(path.join(clone, ".git", "FETCH_HEAD"))).rejects.toThrow();
+  });
+
+  it("inherits the admitted environment while preserving explicit overrides and deletions", async () => {
+    vi.stubEnv("OPENCLAW_PUBLICATION_INHERITED", "before-admission");
+    vi.stubEnv("OPENCLAW_PUBLICATION_OVERRIDE", "inherited");
+    vi.stubEnv("OPENCLAW_PUBLICATION_REMOVED", "inherited");
+    const keys = [
+      "OPENCLAW_PUBLICATION_INHERITED",
+      "OPENCLAW_PUBLICATION_OVERRIDE",
+      "OPENCLAW_PUBLICATION_REMOVED",
+      "GIT_NO_REPLACE_OBJECTS",
+      "OPENCLAW_CLI",
+    ];
+    try {
+      for (const env of [
+        undefined,
+        { OPENCLAW_PUBLICATION_OVERRIDE: "explicit", OPENCLAW_PUBLICATION_REMOVED: undefined },
+      ]) {
+        const result = await runPublicationCommand(
+          [
+            process.execPath,
+            "-e",
+            `console.log(JSON.stringify(${JSON.stringify(keys)}.map(key => process.env[key] ?? null)))`,
+          ],
+          {
+            env,
+            beforeRun: () => {
+              process.env.OPENCLAW_PUBLICATION_INHERITED = "admitted";
+            },
+          },
+        );
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout.toString("utf8"))).toEqual([
+          "admitted",
+          env ? "explicit" : "inherited",
+          env ? null : "inherited",
+          "1",
+          "1",
+        ]);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["reset", "created"] as const)(
     "pins a conditional push when the remote branch was %s after admission",
     async (change) => {
@@ -356,21 +452,39 @@ describe("GitHub publication index update", () => {
     expect((await fs.stat(f.file(".git", "index.lock"))).size).toBeGreaterThan(0);
   });
 
-  it("removes its owned lock after a definite ref CAS rejection", async () => {
-    await rejects(
-      f.update({
-        updateRef: async () => {
-          const result = await runCommandBuffered(
-            ["git", "update-ref", "refs/heads/main", f.headCommit, "f".repeat(40)],
-            { cwd: f.cwd },
-          );
-          assertGitHubPublicationRefCasCompleted(result);
-        },
-      }),
-      "workspace branch changed before commit",
-    );
+  it.each([false, true])(
+    "settles a definite ref CAS rejection (custody revoked: %s)",
+    async (revoked) => {
+      let current = true;
+      await rejects(
+        f.update({
+          assertCustody() {
+            if (!current) {
+              throw new Error("Publication custody revoked");
+            }
+          },
+          updateRef: async () => {
+            const result = await runCommandBuffered(
+              ["git", "update-ref", "refs/heads/main", f.headCommit, "f".repeat(40)],
+              { cwd: f.cwd },
+            );
+            current = !revoked;
+            assertGitHubPublicationRefCasCompleted(result);
+          },
+        }),
+        "workspace branch changed before commit",
+      );
 
-    await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
-  });
+      if (revoked) {
+        await expect(fs.stat(f.file(".git", "index.lock"))).resolves.toBeDefined();
+      } else {
+        await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
+      }
+      const recoveries = (await fs.readdir(f.file(".git"))).filter((name) =>
+        name.startsWith("index.openclaw-"),
+      );
+      expect(recoveries).toHaveLength(revoked ? 1 : 0);
+      expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
+    },
+  );
 });

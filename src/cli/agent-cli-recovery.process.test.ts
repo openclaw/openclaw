@@ -6,11 +6,11 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-fork-recovery-");
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
@@ -102,8 +102,23 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
 `,
     ),
   ]);
-  const configPath = path.join(root, "openclaw.json");
-  await writeJson(configPath, {
+  const fixture = createCliProcessFixture(root, {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    OPENCLAW_STATE_DIR: stateDir,
+    TMPDIR: tmpDir,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    NODE_ENV: undefined,
+    NODE_OPTIONS: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_HOME: root,
+    OPENCLAW_NO_RESPAWN: "1",
+    VITEST: undefined,
+  });
+  const { env } = fixture;
+  await fixture.writeConfig({
     session: { store: path.join(stateDir, "agents/{agentId}/sessions/sessions.json") },
     plugins: {
       allow: ["cli-fork-process-proof"],
@@ -119,12 +134,6 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
     },
   });
 
-  const env = {
-    ...process.env,
-    HOME: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-  };
   const entry = {
     sessionId: "openclaw-process-session",
     lifecycleRevision: "process-lifecycle",
@@ -140,32 +149,17 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
   await replaceSessionEntry({ sessionKey, storePath, env }, entry);
   closeOpenClawAgentDatabasesForTest();
 
-  const result = await runCliProcessChild({
-    nodeArgs: [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
-      "agent",
-      "--local",
-      "--session-key",
-      sessionKey,
-      "--model",
-      "proof-cli/proof-model",
-      "--message",
-      "prove stale fork ownership",
-      "--json",
-    ],
-    env: {
-      ...env,
-      USERPROFILE: root,
-      TMPDIR: tmpDir,
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      NODE_ENV: undefined,
-      NODE_OPTIONS: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_HOME: root,
-      OPENCLAW_NO_RESPAWN: "1",
-      VITEST: undefined,
-    },
-  });
+  const result = await fixture.run([
+    "agent",
+    "--local",
+    "--session-key",
+    sessionKey,
+    "--model",
+    "proof-cli/proof-model",
+    "--message",
+    "prove stale fork ownership",
+    "--json",
+  ]);
 
   expect(result, JSON.stringify(result)).toMatchObject({ code: 1, signal: null });
   expect(result.stderr).toContain("CLI turn failed and its fork successor could not be persisted");

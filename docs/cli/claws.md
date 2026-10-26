@@ -25,34 +25,42 @@ Enable **Claws** in **Settings → Labs** before adding one. On a headless insta
 Authoring and inspecting local Claw packages do not require the Labs toggle.
 
 The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
+JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
+Add refuses it before creating an agent or workspace.
 Publishing and searching Claws through ClawHub use the separate registry
-surface. The Control UI can browse official and community Claws from **Agents**,
-with each Claw attributed to its publisher.
+surface. The Control UI can browse official and community Claws from **Pages → Claws** at `/claws`
+when **Claws** is enabled in **Settings → Labs**.
 
 ## Create with an agent
 
-With Claws enabled in Labs, choose **Create a Claw** from an agent's settings,
-the chat companion rail, or the agent's left-sidebar context menu. The action
-sends the bundled `/skill create-claw` command into that agent's existing main
+With Claws enabled in Labs, choose **Create Claw** from the agent's left-sidebar
+row menu. Pinned agents keep this action in a focused row menu. The action sends
+the bundled `$create-claw` skill invocation into that agent's existing main
 chat. The agent proposes portable behavior with an input, job, output, and
-authority boundary, writes a private draft, and returns a review link in the
-same conversation. It does not create or fork a session. This flow currently
-requires a workspace on the Gateway host.
+authority boundary, then writes its private draft in that conversation. When
+the draft is ready, the Control UI opens a review modal; the agent does not
+return a review link or create or fork a session. This flow currently requires
+a workspace on the Gateway host.
 
-The review link opens a sectioned modal with the exact archive files and
-declared skill, plugin, MCP, and automation requirements. Change the name or
-description and uncheck any optional workspace file or requirement before
-publishing. **Ask for changes** returns to the same chat; inspect the rebuilt
-review after the agent revises the draft. The package includes only newly
+The review modal shows the exact archive files and
+declared skill, plugin, MCP, and automation requirements. The Name field is
+the new agent's display name, defaulted to readable title case; it does not
+change the package slug used as the Claw's registry identity. Change the name
+or description and uncheck any optional workspace file or requirement before
+publishing. **Ask for changes** returns to the same chat; review the rebuilt
+package after the agent revises the draft. The package includes only newly
 authored proposal contents; it does not copy the source workspace, memories,
 or raw conversations. Known private paths and credential-like text are
 rejected. Review the remaining text for personal facts and private context.
 
-Sign in with `clawhub login` on the Gateway host. Review shows the personal publisher
-and scoped package name. **Publish to ClawHub** uploads that exact reviewed
-artifact; changing the selection or publisher requires another review. An agent
-turn cannot authorize this step. The chat links to a submitted package and
-marks public discovery as pending security review.
+Sign in with `clawhub login` on the Gateway host. **Publish to ClawHub** uploads
+the exact reviewed artifact using that account; changing the selection
+requires another review. The editable Name is the agent display name; the
+ClawHub package slug and authenticated publisher are separate identities. An
+agent turn cannot authorize publication. After submission, a dismissing
+notification confirms that publication is pending security review and links
+to the Claw's ClawHub page.
 After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
 
 ## Author locally
@@ -173,6 +181,24 @@ Shared plugins and MCP servers must match existing declarations exactly or Add
 reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.
 
+Older packages may declare `agent.heartbeat` in the OpenClaw profile or include
+`HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
+and private job scratch instead of installing heartbeat configuration. Legacy
+`tasks:` entries become separate automations, and the remaining checklist stays
+in the monitor's scratch. An `every: 0m` declaration stays disabled.
+The Add review shows each converted job with its interval and owner delivery;
+existing cron schedules and `none` or last-channel delivery keep their meaning.
+Gateway review responses represent interval schedules as `{ everyMs }`, where
+`everyMs` is a positive integer, and
+owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
+and `none` or `last-channel` delivery variants.
+
+Add creates a job disabled until its imported scratch is saved and verified.
+If scratch import conflicts with another edit, or its write cannot be confirmed,
+Add reports a partial result and keeps the new agent and jobs for inspection.
+Check their scratch and enabled state before retrying; Add does not overwrite
+concurrent edits to make the import succeed.
+
 OpenClaw discovers optional harness settings from `profiles/openclaw.yml`.
 Those settings can refine the agent's tools, sandbox, memory search, and
 extension requirements, but cannot set a model, provider, credentials, or
@@ -210,6 +236,10 @@ and starts with "What can you do?" after a successful Add.
 `--agent-id` and `--workspace` override the default destination with an
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
+
+Gateway Add review responses describe schedules as either `{ cron, timezone }`
+or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
+values are `none`, `last-channel`, or `owner`.
 
 Add reuses matching shared dependencies, installs missing requirements,
 creates the agent and its workspace, and assigns its automations. An existing

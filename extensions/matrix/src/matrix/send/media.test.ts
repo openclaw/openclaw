@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { buildMediaContent, resolveMediaDurationMs } from "./media.js";
 
 const AIFC_SAMPLE_RATE = 44_100;
@@ -52,81 +52,48 @@ function buildAifcFixture(
   return Buffer.concat([form, chunks]);
 }
 
-describe("resolveMediaDurationMs", () => {
-  it.each([1, 2])(
-    "corrects Apple IMA4 packet-count durations for %i channel(s)",
-    async (channels) => {
-      await expect(
-        resolveMediaDurationMs({
-          buffer: buildAifcFixture({ channels }),
-          contentType: "audio/aiff",
-          fileName: "clip.aifc",
-          kind: "audio",
-        }),
-      ).resolves.toBe(640);
-    },
-  );
-
-  it("preserves IMA4 durations when COMM already contains decoded sample frames", async () => {
-    await expect(
-      resolveMediaDurationMs({
-        buffer: buildAifcFixture({ decodedFrameCount: true }),
-        contentType: "audio/aiff",
-        fileName: "clip.aifc",
-        kind: "audio",
-      }),
-    ).resolves.toBe(640);
-  });
-
-  it.each(["alaw", "ulaw"])("preserves non-IMA4 AIFC %s durations", async (codec) => {
-    await expect(
-      resolveMediaDurationMs({
-        buffer: buildAifcFixture({ codec }),
-        contentType: "audio/aiff",
-        fileName: "clip.aifc",
-        kind: "audio",
-      }),
-    ).resolves.toBe(10);
-  });
-
-  it("does not reinterpret malformed IMA4 sound data as complete packets", async () => {
-    await expect(
-      resolveMediaDurationMs({
-        buffer: buildAifcFixture({ malformedSoundData: true }),
-        contentType: "audio/aiff",
-        fileName: "clip.aifc",
-        kind: "audio",
-      }),
-    ).resolves.toBe(10);
-  });
+it.each([
+  ["mono IMA4 packet count", { channels: 1 }, 640],
+  ["stereo IMA4 packet count", { channels: 2 }, 640],
+  ["already decoded IMA4 frames", { decodedFrameCount: true }, 640],
+  ["non-IMA4 alaw", { codec: "alaw" }, 10],
+  ["non-IMA4 ulaw", { codec: "ulaw" }, 10],
+  ["malformed IMA4 packets", { malformedSoundData: true }, 10],
+] as const)("resolveMediaDurationMs: %s", async (_name, options, duration) => {
+  await expect(
+    resolveMediaDurationMs({
+      buffer: buildAifcFixture(options),
+      contentType: "audio/aiff",
+      fileName: "clip.aifc",
+      kind: "audio",
+    }),
+  ).resolves.toBe(duration);
 });
 
-describe("buildMediaContent", () => {
-  it.each([
-    {
-      name: "zero duration",
-      metadata: { size: 0, mimetype: "video/webm", durationMs: 0 },
-      info: { size: 0, mimetype: "video/webm", duration: 0 },
+it.each([
+  {
+    name: "zero duration",
+    metadata: { size: 0, mimetype: "video/webm", durationMs: 0 },
+    info: { size: 0, mimetype: "video/webm", duration: 0 },
+  },
+  {
+    name: "image field precedence before the duration override",
+    metadata: {
+      size: 10,
+      mimetype: "video/webm",
+      imageInfo: { size: undefined, mimetype: "image/webp", w: 2, h: 1 },
+      durationMs: 0,
     },
-    {
-      name: "image field precedence before the duration override",
-      metadata: {
-        size: 10,
-        mimetype: "video/webm",
-        imageInfo: { size: undefined, mimetype: "image/webp", w: 2, h: 1 },
-        durationMs: 0,
-      },
-      info: { size: undefined, mimetype: "image/webp", w: 2, h: 1, duration: 0 },
-    },
-  ])("preserves $name", ({ metadata, info }) => {
-    const before = structuredClone(metadata);
+    info: { size: undefined, mimetype: "image/webp", w: 2, h: 1, duration: 0 },
+  },
+])("buildMediaContent preserves $name", ({ metadata, info }) => {
+  const before = structuredClone(metadata);
 
-    expect(buildMediaContent({ msgtype: "m.video", body: "clip", ...metadata })).toStrictEqual({
-      msgtype: "m.video",
-      body: "clip",
-      filename: undefined,
-      info,
-    });
-    expect(metadata).toStrictEqual(before);
+  expect(buildMediaContent({ msgtype: "m.video", body: "clip", ...metadata })).toStrictEqual({
+    msgtype: "m.video",
+    body: "clip",
+    filename: undefined,
+    info,
   });
+  expect(metadata).toStrictEqual(before);
 });

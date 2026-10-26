@@ -1,8 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  assertAgentDatabaseAdmitted,
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
   createGatewaySchedulerClock,
@@ -56,6 +64,21 @@ vi.mock("../logging/subsystem.js", () => ({
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+const start = (getPath = () => "/synthetic/cron/jobs.json") =>
+  startCronMaintenance(scheduler, getPath);
+const pendingDatabase = () =>
+  createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [],
+    reason: "Startup preparation is pending",
+    pending: true,
+  });
+const completed = (lastSuccessAtMs: number) => ({
+  lastSuccessAtMs,
+  nextSweepAtMs: null,
+  pruned: 0,
+  skippedStores: 0,
+});
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
@@ -64,6 +87,7 @@ beforeEach(() => {
     .mockResolvedValue({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 });
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
+  recordAgentDatabaseAdmissions([]);
   scheduler = createTestGatewayScheduler(clock.clock);
 });
 afterEach(async () => {
@@ -71,6 +95,73 @@ afterEach(async () => {
   await scheduler.stop();
   vi.restoreAllMocks();
   gatewayWork.resetGatewayWorkAdmission();
+  recordAgentDatabaseAdmissions([]);
+});
+
+it("keeps pending database admission private when its publisher wakes retention", async () => {
+  const ownerContext = new AsyncLocalStorage<string>();
+  ownerContext.run("gateway", () => start());
+  const pending = pendingDatabase();
+  recordAgentDatabaseAdmissions([pending]);
+  mocks.registry.mockImplementation(async () => {
+    expect(ownerContext.getStore()).toBe("gateway");
+    assertAgentDatabaseAdmitted("healthy");
+    return {
+      nextSweepAtMs: null,
+      skippedStores: readAgentDatabaseAdmissionRefusal("main") ? 1 : 0,
+    };
+  });
+  await preparePendingAgentDatabase(pending, { assertCurrent() {} }, async () => {
+    sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+    await clock.advanceBy(0);
+    expect(mocks.info).toHaveBeenLastCalledWith(
+      "Session registry maintenance completed",
+      expect.objectContaining({ skippedStores: 1 }),
+    );
+  });
+  await clock.advanceBy(0);
+  expect(mocks.info).toHaveBeenLastCalledWith(
+    "Session registry maintenance completed",
+    expect.objectContaining({ skippedStores: 0 }),
+  );
+  expect(mocks.warn).not.toHaveBeenCalled();
+});
+
+it("finishes retention and rearms after a notifying preparation ends during a read", async () => {
+  const readEntered = createDeferredCore();
+  const readReply = createDeferredCore();
+  const pending = pendingDatabase();
+  start();
+  recordAgentDatabaseAdmissions([pending]);
+  mocks.registry
+    .mockImplementation(async () => {
+      assertAgentDatabaseAdmitted("main");
+      return { nextSweepAtMs: null };
+    })
+    .mockImplementationOnce(async () => {
+      readEntered.resolve();
+      await readReply.promise;
+      assertAgentDatabaseAdmitted("main");
+      return { nextSweepAtMs: 60_000 };
+    });
+  let tick = Promise.resolve();
+  try {
+    await preparePendingAgentDatabase(pending, { assertCurrent() {} }, async () => {
+      sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+      tick = Promise.resolve(clock.advanceBy(0));
+      await readEntered.promise;
+    });
+    readReply.resolve();
+    await tick;
+    await clock.advanceTo(60_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+    expect(mocks.warn).not.toHaveBeenCalled();
+    expect(mocks.info).toHaveBeenCalledTimes(2);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  } finally {
+    readReply.resolve();
+    await tick;
+  }
 });
 
 it.each([
@@ -83,7 +174,7 @@ it.each([
   async ({ pending, notification }) => {
     await withAgentDatabaseStartupAdmission(async (admission) => {
       const preparation = createDeferredCore();
-      startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+      start();
       // Preparation discovered after scheduling must not hold healthy retention either.
       if (pending) {
         admission.track(preparation.promise);
@@ -109,12 +200,7 @@ it.each([
         expect(mocks.registry).toHaveBeenCalledOnce();
         expect(mocks.info).toHaveBeenCalledExactlyOnceWith(
           "Session registry maintenance completed",
-          {
-            lastSuccessAtMs: 5_000,
-            nextSweepAtMs: null,
-            pruned: 0,
-            skippedStores: 0,
-          },
+          completed(5_000),
         );
       } finally {
         preparation.resolve();
@@ -127,7 +213,7 @@ it.each([
 it("sleeps until the retained session deadline when history is empty", async () => {
   mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 70_000 });
   let cronStorePath = "/synthetic/cron/first.json";
-  startCronMaintenance(scheduler, () => cronStorePath);
+  start(() => cronStorePath);
   await clock.advanceBy(5_000);
   await clock.advanceTo(65_000);
   expect(mocks.history).toHaveBeenCalledOnce();
@@ -144,7 +230,7 @@ it.each(["session", "stores", "config", "agent-ready"] as const)(
   "wakes for committed %s changes and replaces their previous expiry without polling unrelated sessions",
   async (kind) => {
     mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 200_000 });
-    startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+    start();
     await clock.advanceBy(5_000);
     await clock.advanceTo(10_000);
     sessionChanges.emit({ sessionKey: "agent:main:main", scope: "session-entry" });
@@ -166,25 +252,40 @@ it.each(["session", "stores", "config", "agent-ready"] as const)(
   },
 );
 
-it("retains a committed cron wake received while the previous registry read is in flight", async () => {
-  const entered = createDeferredCore();
-  const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
-  mocks.registry.mockImplementationOnce(() => {
-    entered.resolve();
-    return result.promise;
-  });
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
-  const sweep = clock.advanceBy(5_000);
-  await entered.promise;
-  sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
-  result.resolve({ nextSweepAtMs: 500_000 });
-  await sweep;
-  await clock.advanceTo(65_000);
-  expect(mocks.registry).toHaveBeenCalledTimes(2);
-});
+it.each(["registry", "history"] as const)(
+  "retains a %s invalidation received during its read",
+  async (owner) => {
+    const entered = createDeferredCore();
+    const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
+    mocks[owner].mockImplementationOnce(() => {
+      entered.resolve();
+      return result.promise;
+    });
+    start();
+    const sweep = clock.advanceBy(5_000);
+    await entered.promise;
+    if (owner === "registry") {
+      sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+    } else {
+      mocks.historyChanged?.("/synthetic/state.sqlite");
+    }
+    result.resolve({ nextSweepAtMs: 500_000 });
+    await sweep;
+    await clock.advanceTo(65_000);
+    expect(mocks[owner]).toHaveBeenCalledTimes(2);
+    if (owner === "history") {
+      await clock.advanceTo(500_000);
+      expect(mocks.history).toHaveBeenCalledTimes(2);
+      await stopCronMaintenance();
+      start();
+      await clock.advanceBy(5_000);
+      expect(mocks.history).toHaveBeenCalledTimes(3);
+    }
+  },
+);
 
 it("keeps the last completed sweep visible when missing cron facts defer the next pass", async () => {
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  start();
   await clock.advanceBy(5_000);
   mocks.registry.mockResolvedValueOnce({
     nextSweepAtMs: 125_000,
@@ -199,18 +300,16 @@ it("keeps the last completed sweep visible when missing cron facts defer the nex
   });
   expect(mocks.info).toHaveBeenCalledOnce();
   await clock.advanceTo(125_000);
-  expect(mocks.info).toHaveBeenLastCalledWith("Session registry maintenance completed", {
-    lastSuccessAtMs: 125_000,
-    nextSweepAtMs: null,
-    pruned: 0,
-    skippedStores: 0,
-  });
+  expect(mocks.info).toHaveBeenLastCalledWith(
+    "Session registry maintenance completed",
+    completed(125_000),
+  );
 });
 
 it("does not mistake an unknown failure with the snapshot error text for an expected deferral", async () => {
   const failure = new Error("Agent database deletion snapshot changed during consumption.");
   mocks.registry.mockRejectedValueOnce(failure);
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  start();
   await clock.advanceBy(5_000);
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", { error: failure });
   expect(mocks.info).not.toHaveBeenCalled();
@@ -227,7 +326,7 @@ describe("Cron maintenance admission diagnostics", () => {
       throw new Error("Expected to suspend task admission");
     }
     try {
-      startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+      start();
       const tick = clock.advanceBy(5_000);
       await scheduler.stop();
       await tick;
@@ -248,7 +347,7 @@ describe("Cron maintenance admission diagnostics", () => {
         throw new Error("Expected to suspend task admission");
       }
       try {
-        startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+        start();
         const pending = suspended ? clock.advanceBy(5_000) : undefined;
         gatewayWork.markGatewayRestartDraining();
         await pending;
@@ -269,17 +368,13 @@ describe("Cron maintenance admission diagnostics", () => {
       failure,
     );
 
-    try {
-      gatewayWork.markGatewayRestartDraining();
-      startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
-      await clock.advanceBy(5_000);
-      expect(mocks.history).not.toHaveBeenCalled();
-      expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
-        error: failure,
-      });
-    } finally {
-      await stopCronMaintenance();
-    }
+    gatewayWork.markGatewayRestartDraining();
+    start();
+    await clock.advanceBy(5_000);
+    expect(mocks.history).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
+      error: failure,
+    });
   });
 
   it.each([{ kind: "drain", failure: new gatewayWork.GatewayDrainingError() }])(
@@ -289,7 +384,7 @@ describe("Cron maintenance admission diagnostics", () => {
       mocks.history.mockImplementation(() => sweep.promise);
 
       try {
-        startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+        start();
         const tick = clock.advanceBy(5_000);
         expect(mocks.history).toHaveBeenCalledOnce();
         gatewayWork.markGatewayRestartDraining();
@@ -315,32 +410,9 @@ describe("Cron maintenance admission diagnostics", () => {
   );
 });
 
-it("keeps a history invalidation received during its async read and reconstructs on restart", async () => {
-  const entered = createDeferredCore();
-  const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
-  mocks.history.mockImplementationOnce(() => {
-    entered.resolve();
-    return result.promise;
-  });
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
-  const sweep = clock.advanceBy(5_000);
-  await entered.promise;
-  mocks.historyChanged?.("/synthetic/state.sqlite");
-  result.resolve({ nextSweepAtMs: 500_000 });
-  await sweep;
-  await clock.advanceTo(65_000);
-  expect(mocks.history).toHaveBeenCalledTimes(2);
-  await clock.advanceTo(500_000);
-  expect(mocks.history).toHaveBeenCalledTimes(2);
-  await stopCronMaintenance();
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
-  await clock.advanceBy(5_000);
-  expect(mocks.history).toHaveBeenCalledTimes(3);
-});
-
 it("runs overdue history retention after sleep and leaves unrelated writes parked", async () => {
   mocks.history.mockResolvedValueOnce({ nextSweepAtMs: 300_000 });
-  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  start();
   await clock.advanceBy(5_000);
   mocks.historyChanged?.("/unrelated/state.sqlite");
   await clock.advanceTo(299_999);

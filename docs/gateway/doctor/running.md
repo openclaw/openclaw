@@ -156,6 +156,12 @@ inventory, or historical cleanup. Use `doctor --lint --all` when you want the
 full registered lint audit, including those opt-in checks, or `--only <id>` for
 a targeted check.
 
+The `core/doctor/model-references` check also consults the selected Gateway's
+prepared catalog. Models it publishes do not receive an offline-catalog advisory;
+server-reported missing models and legacy-reference migrations still do. If the
+Gateway is unavailable, Doctor keeps its offline checks without discovering or
+probing providers.
+
 `doctor --fix` does not use the lint default profile and does not accept
 `--all`. It runs Doctor's ordered repair path: modern health checks may provide
 an optional `repair()` implementation, and older areas still use their legacy

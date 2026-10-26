@@ -2,8 +2,8 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import { cronRunResultEvent } from "../store/run-result.js";
+import { isDeferredCronAdmission } from "./admission-deferred.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
@@ -36,10 +36,31 @@ export async function finalizeCompletedCronRunOutcomes(
   if (!outcomes.length) {
     return [];
   }
+  if (
+    outcomes.length > 1 &&
+    outcomes.some((outcome) => isDeferredCronAdmission(outcome.job, outcome))
+  ) {
+    const completed = outcomes.filter((outcome) => !isDeferredCronAdmission(outcome.job, outcome));
+    const deferred = outcomes.filter((outcome) => isDeferredCronAdmission(outcome.job, outcome));
+    const finalized: TimedCronRunOutcome[] = [];
+    const failures: unknown[] = [];
+    // Completed siblings survive a failed deferred-admission transition.
+    for (const batch of [completed, ...deferred.map((outcome) => [outcome])]) {
+      try {
+        finalized.push(...(await finalizeCompletedCronRunOutcomes(state, batch, opts)));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Cron outcome settlement failed");
+    }
+    return finalized;
+  }
   const context =
     outcomes.find((outcome) => outcome.runReceiptContext)?.runReceiptContext ??
     captureOpenClawStateWorkerContext();
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);

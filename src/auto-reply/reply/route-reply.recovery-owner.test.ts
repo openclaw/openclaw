@@ -1,53 +1,39 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { drainMatrixReconnect } from "../../infra/outbound/deliver.queue-integration.test-support.js";
-import {
-  installDeliveryQueueTmpDirHooks,
-  loadPendingDeliveries,
-} from "../../infra/outbound/delivery-queue.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { loadPendingDeliveries } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../dispatch.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import { attachReplyDispatchUndeliveredFallback } from "./reply-dispatcher.js";
+import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
 import { routeReply } from "./route-reply.js";
 
 describe("caption fallback recovery ownership", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
+  const fixtures = installRouteReplyFixture(true);
 
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  it.each([
-    { withCustody: false, callerFailure: "before" },
-    { withCustody: true, callerFailure: "after" },
-  ] as const)(
-    "keeps retained no-send as the only retry owner, custody=$withCustody caller=$callerFailure",
-    async ({ withCustody, callerFailure }) => {
+  it.each([false, true])(
+    "keeps retained no-send as the only retry owner with custody=%s",
+    async (withCustody) => {
       const custody = {
         storePath: path.join(fixtures.tmpDir(), "sessions.json"),
         sessionKey: "agent:main:recovery-owner",
         sessionId: "owner-session",
         intentId: "owner-intent",
         deliveryId: "owner-delivery",
+      };
+      const expectCustody = (state: "queued" | "delivered") => {
+        if (withCustody) {
+          expect(
+            (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+          ).toEqual([{ id: custody.deliveryId, state }]);
+        }
       };
       if (withCustody) {
         await replaceSessionEntry(custody, {
@@ -84,15 +70,7 @@ describe("caption fallback recovery ownership", () => {
           return { channel: "matrix", messageId: "media-recovered" };
         },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({ id: "matrix", outbound }),
-          },
-        ]),
-      );
+      fixtures.register(outbound);
       await dispatchInboundMessageWithRoutedChannelDispatcher({
         cfg: {},
         ctx: {
@@ -146,11 +124,11 @@ describe("caption fallback recovery ownership", () => {
           }
           attachReplyDispatchUndeliveredFallback(payload, buildCaptionedFinalTextFallback(payload));
           ledger = createReplyTurnLedger(dispatcher);
-          if (callerFailure === "before") {
+          if (!withCustody) {
             ledger.sendQueued("tool", { text: "preflight" });
           }
           ledger.sendQueued("final", payload);
-          if (callerFailure === "after") {
+          if (withCustody) {
             ledger.sendQueued("tool", { text: "preflight" });
           }
           await ledger.settleQueued();
@@ -158,30 +136,19 @@ describe("caption fallback recovery ownership", () => {
           return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
         },
       });
-      const beforeRecovery = [...visible];
+      expect(visible).toEqual([]);
       expect(settled).toBe(true);
       expect(ledger?.mayHaveDelivered()).toBe(false);
       expect(ledger?.hasObservedDelivery()).toBe(false);
       expect(ledger?.canAttemptFallback()).toBe(false);
-      if (withCustody) {
-        expect(
-          (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
-        ).toEqual([{ id: custody.deliveryId, state: "queued" }]);
-      }
+      expectCustody("queued");
       expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(1);
 
       await drainMatrixReconnect({ deliver: deliverOutboundPayloads, stateDir: fixtures.tmpDir() });
 
-      expect({ beforeRecovery, afterRecovery: visible }).toEqual({
-        beforeRecovery: [],
-        afterRecovery: ["media"],
-      });
+      expect(visible).toEqual(["media"]);
       expect(await loadPendingDeliveries(fixtures.tmpDir())).toHaveLength(0);
-      if (withCustody) {
-        expect(
-          (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
-        ).toEqual([{ id: custody.deliveryId, state: "delivered" }]);
-      }
+      expectCustody("delivered");
     },
   );
 });

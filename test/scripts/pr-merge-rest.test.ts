@@ -541,13 +541,54 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(() => f.record()).toThrow();
   });
 
-  it.each(["missing", "classic", "queue", "unsupported", "no-admin"])(
+  it("lands ordinary REST squash without classic-policy discovery", () => {
+    const f = restFixture({ restPolicy: "not-found" });
+    expectAdmission(f);
+    expect(f.state().restMergePayload).toMatchObject({
+      sha: f.head,
+      merge_method: "squash",
+      bypass_rules: false,
+    });
+    expect(
+      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
+    ).toBe(false);
+  });
+
+  it("retains a provider protection refusal without replaying through another route", () => {
+    const f = restFixture({
+      restPolicy: "not-found",
+      restMergeRefusal: 'HTTP/2.0 403 Forbidden\n\n{"message":"Protected branch update failed"}\n',
+    });
+    expectExit(f.run(), 1);
+    const intent = f.git(["rev-parse", outcomeRef]);
+    expect(f.record()).toMatchObject({ phase: "intent", accepted: false });
+    expectExit(f.run(), 1);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(intent);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 0, graphqlMergePayloads: [] });
+  });
+
+  it("lands an ordinary writer's pinned squash with unavailable GraphQL", () => {
+    const f = restFixture({ quotaAt: "checks", restPolicy: "not-found" });
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, push: true };
+    f.save(state);
+    expectExit(f.run(), 0);
+    expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
+    expect(f.state()).toMatchObject({
+      mutations: 1,
+      posts: 1,
+      restMergePayload: { sha: f.head, merge_method: "squash", bypass_rules: false },
+    });
+    expect(f.state().graphqlMergePayloads).toEqual([]);
+  });
+
+  it.each(["missing", "queue", "unsupported", "no-write"])(
     "rejects %s policy before REST intent",
     (restPolicy) => {
       const f = restFixture();
       const state = f.state();
-      if (restPolicy === "no-admin") {
-        state.repoAuthority.permissions = { admin: false };
+      if (restPolicy === "no-write") {
+        state.repoAuthority.permissions = { admin: false, push: false };
       }
       f.save({ ...state, quotaAt: "checks", restPolicy });
 
@@ -678,7 +719,6 @@ describePosix("native merge with exhausted GraphQL quota", () => {
 
   it.each([
     "supported",
-    "classic",
     "queue",
     "unsupported",
     "no-admin",

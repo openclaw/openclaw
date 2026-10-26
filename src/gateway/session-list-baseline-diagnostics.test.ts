@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -11,7 +10,6 @@ import {
   shareSidebarSessionRows,
 } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
@@ -20,197 +18,107 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
 });
 
-it("accounts for conditional encodings after legacy reads and releases shared rows fully", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const publication = prepareSessionRowPublicationView(projection)();
-    const present = () => prepareSessionRowPublication(projection, 1)();
-    const opts = { rowMode: "compact" } as const;
-    const row: GatewaySessionRow = {
-      key: "agent:main:one",
-      kind: "direct",
-      updatedAt: 1,
-      rowMode: "compact",
-      label: "synthetic ".repeat(256),
-    };
-    let retainedBytes = 0;
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "sessions.list.retention") {
-        retainedBytes = event.estimatedBytes;
-      }
-    });
-    const flush = async () => {
-      await setImmediate();
-      await waitForDiagnosticEventsDrained();
-      return retainedBytes;
-    };
-    try {
-      present().list([row], opts);
-      present().list([row], { ...opts, limit: 2 });
-      const legacyBytes = await flush();
-      present().list([row], { ...opts, ifRowsRevision: "" });
-      const encoded = JSON.stringify(row);
-      const packedBytes = encoded.length * 2 + Buffer.byteLength(`[${encoded}]`);
-      const factBytes = JSON.stringify({ label: row.label }).length * 2;
-      expect(await flush()).toBe(legacyBytes + packedBytes + factBytes);
-      const promoted = [...publication.lists.values()].find((view) => view.conditional)!;
-      expect(promoted.rowHistory).toBeUndefined();
-      present().list([{ ...row, updatedAt: 2 }], opts);
-      expect(promoted.rowHistory).toHaveLength(1);
-      expect(promoted.encodedBytes).toBeGreaterThan(row.label!.length * 3);
-      publication.lists.retireRows(promoted);
-      for (const view of publication.lists.values()) {
-        publication.lists.retireRows(view);
-      }
-      expect(await flush()).toBe(
-        [...publication.lists.values()].reduce((bytes, view) => bytes + view.bytes, 0),
-      );
-    } finally {
-      projection.dispose();
-      await flush();
-      unsubscribe();
-    }
-    expect(retainedBytes).toBe(0);
-  });
-});
+const baseRow: GatewaySessionRow = { key: "agent:main:one", kind: "direct", updatedAt: 1 };
 
-it("counts each retirement event once across invalidations and bounded evictions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const causes: string[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "sessions.list.baseline.retired") {
-        causes.push(event.cause);
+async function publicationFixture() {
+  const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+  let state = projection.state;
+  vi.spyOn(projection, "state", "get").mockImplementation(() => state);
+  const causes: string[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event) => {
+    if (event.type === "sessions.list.baseline.retired") {
+      causes.push(event.cause);
+    }
+  });
+  return {
+    projection,
+    present: () => prepareSessionRowPublication(projection, 1)().getPresentation(),
+    invalidate: (cause: "projection-revision" | "config" | "identity") => {
+      if (cause === "identity") {
+        state.rowContext.identityProjection?.invalidate();
+      } else {
+        state = { ...state, revision: {}, cfg: cause === "config" ? { ...state.cfg } : state.cfg };
       }
-    });
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    let state = projection.state;
-    // Control upstream revisions; exercise the real publication owner and its bounded caches.
-    vi.spyOn(projection, "state", "get").mockImplementation(() => state);
-    const present = () => prepareSessionRowPublication(projection, 1)();
-    const row: GatewaySessionRow = {
-      key: "agent:main:one",
-      kind: "direct",
-      updatedAt: 1,
-      rowMode: "sidebar",
-    };
-    const opts = { rowMode: "sidebar" } as const;
-    const expectCauses = async (expected: string[]) => {
+    },
+    expectCauses: async (expected: string[]) => {
       await waitForDiagnosticEventsDrained();
       expect(causes.splice(0)).toEqual(expected);
-    };
-    try {
-      state = { ...state, revision: {} };
+    },
+    [Symbol.dispose]() {
+      unsubscribe();
+      projection.dispose();
+    },
+  };
+}
+
+it.each([true, false])(
+  "reports baseline retirement only for sidebar rows (sidebar=%s)",
+  (sidebar) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      using fixture = await publicationFixture();
+      const { projection, present, invalidate, expectCauses } = fixture;
+      const opts = { rowMode: sidebar ? "sidebar" : "compact" } as const;
+      const row: GatewaySessionRow = { ...baseRow, ...opts };
+      const populate = () => {
+        if (sidebar) {
+          present().list([row], opts);
+          present().list([row], { ...opts, limit: 2 });
+          return;
+        }
+        present().select({ rowMode: "sidebar" }, () => ({
+          entries: [],
+          totalCount: 0,
+          ownerFacet: [],
+          ownerCount: 0,
+          offset: 0,
+          nextOffset: null,
+          hasMore: false,
+        }));
+        present().list([{ ...baseRow, rowMode: "compact" }], { rowMode: "compact" });
+      };
+      invalidate("projection-revision");
       present();
       await expectCauses([]);
       present().list([], opts);
-      state = { ...state, revision: {} };
+      invalidate("projection-revision");
       present();
       await expectCauses([]);
-      for (const cause of ["config", "identity"] as const) {
-        present().list([row], opts);
-        present().list([row], { ...opts, limit: 2 });
-        if (cause === "identity") {
-          state.rowContext.identityProjection?.invalidate();
-        } else {
-          state = Object.assign(
-            {},
-            state,
-            { revision: {} },
-            cause === "config" ? { cfg: { ...state.cfg } } : {},
-          );
-        }
-        present();
-        present();
-        await expectCauses([cause]);
-      }
-
-      const historyView = present();
-      let initialRevision: string | undefined;
-      for (let generation = 0; generation <= 33; generation++) {
-        const { sessions, rowHistory } = historyView.list(
-          [{ ...row, updatedAt: generation }],
-          opts,
-        );
-        const result = shareSidebarSessionRows(sessions, undefined, rowHistory);
-        initialRevision ??= result.rowsRevision;
-        if (generation === 32) {
-          expect(rowHistory).toHaveLength(32);
-          await expectCauses([]);
-        } else if (generation === 33) {
-          expect(
-            shareSidebarSessionRows(sessions, `delta:${initialRevision}`, rowHistory).rowsDelta,
-          ).toBeUndefined();
-          await expectCauses(["history-evicted"]);
-        }
-      }
-      for (let limit = 1; limit <= 512; limit++) {
-        present().list([row], { ...opts, limit });
-      }
-      await expectCauses(["view-evicted"]);
-      projection.dispose();
-      await expectCauses(["selection-reset"]);
-      projection.dispose();
-      await expectCauses([]);
-    } finally {
-      unsubscribe();
-      projection.dispose();
-    }
-  });
-});
-
-it("does not count selection-only or non-sidebar views as retired baselines", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const causes: string[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "sessions.list.baseline.retired") {
-        causes.push(event.cause);
-      }
-    });
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    let state = projection.state;
-    vi.spyOn(projection, "state", "get").mockImplementation(() => state);
-    const present = () => prepareSessionRowPublication(projection, 1)();
-    const populate = () => {
-      present().select({ rowMode: "sidebar" }, () => ({
-        entries: [],
-        totalCount: 0,
-        ownerFacet: [],
-        ownerCount: 0,
-        offset: 0,
-        nextOffset: null,
-        hasMore: false,
-      }));
-      for (const rowMode of [undefined, "compact", "dashboard"] as const) {
-        present().list([{ key: "agent:main:one", kind: "direct", updatedAt: 1, rowMode }], {
-          rowMode,
-        });
-      }
-    };
-    try {
       for (const cause of ["projection-revision", "config", "identity"] as const) {
         populate();
-        if (cause === "identity") {
-          state.rowContext.identityProjection?.invalidate();
-        } else {
-          state = Object.assign(
-            {},
-            state,
-            { revision: {} },
-            cause === "config" ? { cfg: { ...state.cfg } } : {},
-          );
-        }
+        invalidate(cause);
         present();
+        present();
+        await expectCauses(sidebar && cause !== "projection-revision" ? [cause] : []);
       }
-      populate();
-      for (let limit = 1; limit <= 513; limit++) {
-        present().list([], { rowMode: "compact", limit });
+      if (sidebar) {
+        const historyView = present();
+        let initialRevision: string | undefined;
+        for (let generation = 0; generation <= 33; generation++) {
+          const { sessions, rowHistory } = historyView.list(
+            [{ ...row, updatedAt: generation }],
+            opts,
+          );
+          initialRevision ??= shareSidebarSessionRows(sessions, undefined, rowHistory).rowsRevision;
+          if (generation === 32) {
+            expect(rowHistory).toHaveLength(32);
+            await expectCauses([]);
+          } else if (generation === 33) {
+            expect(
+              shareSidebarSessionRows(sessions, `delta:${initialRevision}`, rowHistory).rowsDelta,
+            ).toBeUndefined();
+            await expectCauses(["history-evicted"]);
+          }
+        }
+      } else {
+        populate();
       }
+      for (let limit = 1; limit <= (sidebar ? 512 : 513); limit++) {
+        present().list(sidebar ? [row] : [], { ...opts, limit });
+      }
+      await expectCauses(sidebar ? ["view-evicted"] : []);
       projection.dispose();
-      await waitForDiagnosticEventsDrained();
-      expect(causes).toEqual([]);
-    } finally {
-      unsubscribe();
+      await expectCauses(sidebar ? ["selection-reset"] : []);
       projection.dispose();
-    }
-  });
-});
+      await expectCauses([]);
+    }),
+);

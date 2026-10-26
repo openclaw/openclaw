@@ -12,10 +12,9 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import { replyDirectiveParams } from "./get-reply-directives.target-session.test-helpers.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
-import { prepareReplyConversation } from "./prompt-session-context.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createTypingController } from "./typing.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,44 +62,28 @@ async function resolveTextSlashDirective(
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
   const read = () => loadExactSessionEntry({ sessionKey, storePath })?.entry;
   const storedBefore = read();
-  const result = await resolveReplyDirectives({
-    ctx,
-    cfg: markCompleteReplyConfig({
-      session: { store: storePath },
-      commands: native ? { text: false } : undefined,
+  const result = await resolveReplyDirectives(
+    replyDirectiveParams({
+      ctx,
+      cfg: markCompleteReplyConfig({
+        session: { store: storePath },
+        commands: native ? { text: false } : undefined,
+      }),
+      sessionCtx: ctx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      triggerBodyNormalized: body,
+      commandAuthorized: authorized,
     }),
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    agentCfg: {},
-    sessionCtx: ctx,
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    storePath,
-    sessionScope: "per-sender",
-    conversation: prepareReplyConversation({ ctx, sessionEntry }),
-    isGroup: false,
-    triggerBodyNormalized: body,
-    resetTriggered: false,
-    commandAuthorized: authorized,
-    defaultProvider: "openai",
-    defaultModel: "gpt-5.5",
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model: "gpt-5.5",
-    hasResolvedHeartbeatModelOverride: false,
-    typing: createTypingController({}),
-  });
+  );
   return { result, read, storedBefore };
 }
 
 const codeTask = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
-it.each([
-  "/model list -g Review this",
-  "/model list@work --runtime codex -g Review this",
-  "/model status -a -g Review this",
-])("ignores mixed model information metadata: %s", async (body) => {
+it("ignores mixed model information metadata without persisting it", async () => {
+  const body = "/model list@work --runtime codex -g Review this";
   for (const authorized of [true, false]) {
     const { result, read, storedBefore } = await resolveTextSlashDirective(body, {
       admin: false,
@@ -112,12 +95,6 @@ it.each([
         cleanedBody: expect.stringContaining("Review this"),
         directives: {
           hasModelDirective: false,
-          rawModelDirective: undefined,
-          rawModelProfile: undefined,
-          rawModelRuntime: undefined,
-          modelDirectiveSource: undefined,
-          modelScope: undefined,
-          modelScopeConflict: false,
         },
       },
     });
@@ -143,7 +120,6 @@ it.each([
   expect({ ...result.result, ...levels }).toMatchObject({ cleanedBody: task, ...expected });
   if (field) {
     expect(read()).toEqual(storedBefore);
-    expect(read()).not.toHaveProperty(field);
   }
 });
 

@@ -65,6 +65,10 @@ Human output is a table with Status, Hook, Description, and Source columns,
 preceded by `Hooks (<ready>/<total> ready)`. Plugin-managed sources appear as
 `plugin:<id>`.
 
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in hook metadata before styling. JSON output retains the original
+descriptor values.
+
 <Note>
 `ready`, `eligible`, and `loadable` are inventory results, not a live handler
 registration check. The report does not apply the Gateway's master switch or

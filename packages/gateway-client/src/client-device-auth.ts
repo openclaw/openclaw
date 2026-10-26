@@ -1,3 +1,5 @@
+import { toStringifiedError } from "@openclaw/normalization-core";
+
 export type DeviceAuthTokenRecord = {
   token?: string;
   scopes?: string[];
@@ -68,7 +70,7 @@ export class GatewayClientDeviceAuth {
     onFailed: (error: Error) => boolean,
   ) {
     const failed = (error: unknown): never => {
-      const failure = error instanceof Error ? error : new Error(String(error));
+      const failure = toStringifiedError(error);
       let reported = false;
       try {
         reported = onFailed(failure);

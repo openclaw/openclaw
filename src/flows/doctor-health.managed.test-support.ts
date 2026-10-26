@@ -4,8 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import * as doctorConfigFlow from "../commands/doctor-config-flow.js";
+import { mockDoctorServicePlatform } from "../commands/doctor-maintenance.state-owner.test-support.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -172,10 +174,10 @@ async function runManagedRepair(
       outcome.startsWith("clean-stopped-") || outcome === "update-no-restart-stopped";
     const inconclusiveActivation =
       outcome.startsWith("clean-stopped-") && outcome !== "clean-stopped-repair";
-    const platform =
-      outcome === "clean-stopped-manager-unknown"
-        ? vi.spyOn(process, "platform", "get").mockReturnValue("linux")
-        : undefined;
+    const linuxService = outcome === "clean-stopped-manager-unknown";
+    if (linuxService) {
+      mockDoctorServicePlatform("linux");
+    }
     let running = !initiallyStopped;
     if (initiallyStopped) {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
@@ -358,9 +360,9 @@ async function runManagedRepair(
     if (outcome === "config-refused") {
       runtime.exit.mockImplementation(expectProcessOwnerReleased);
     }
-    const originalTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    const ttyMock = createCliTtyMock([process.stdin]);
     if (interactive) {
-      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+      ttyMock.set(true);
       mocks.confirm.mockReset().mockResolvedValue(false).mockResolvedValueOnce(!declined);
     }
     try {
@@ -499,17 +501,15 @@ async function runManagedRepair(
       }
     } finally {
       if (interactive) {
-        if (originalTty) {
-          Object.defineProperty(process.stdin, "isTTY", originalTty);
-        } else {
-          Reflect.deleteProperty(process.stdin, "isTTY");
-        }
+        ttyMock.restore();
         mocks.confirm.mockReset().mockResolvedValue(true);
       }
       archiveRepair?.mockRestore();
       archiveTransform?.mockRestore();
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
-      platform?.mockRestore();
+      if (linuxService) {
+        vi.restoreAllMocks();
+      }
     }
   });
 }

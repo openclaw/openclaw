@@ -29,7 +29,7 @@ function keepSheetFocus(panel: HTMLElement, targets: readonly HTMLElement[], eve
   }
 }
 
-type SidebarSessionFilterPopoverProps = {
+export function SidebarSessionFilterPopover(props: {
   class?: string;
   anchor: HTMLElement | null;
   label: string;
@@ -37,9 +37,7 @@ type SidebarSessionFilterPopoverProps = {
   focusTargets: () => readonly HTMLElement[];
   content: JSX.Element;
   onClose: (restoreFocus: boolean) => void;
-};
-
-export function SidebarSessionFilterPopover(props: SidebarSessionFilterPopoverProps) {
+}) {
   let host!: HTMLElement;
   let handle: PopoverHandle | undefined;
   let disconnectKeydown: (() => void) | undefined;

@@ -5,9 +5,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
@@ -38,30 +36,14 @@ import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publi
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { registerSubagentRun } from "../registry/subagent-registry.test-helpers.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
+import { collectFailure } from "./subagent-spawn.fixtures.test-support.js";
+import type { RequestCustodySpawnCaseOptions } from "./subagent-spawn.production-boundary.test-support.js";
 
-type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 const killNative = nativeControl.killSubagentRunAdmin;
 
-export function registerNativeCancellationCases<
-  Bound extends {
-    cfg: OpenClawConfig;
-    context: unknown;
-    storePath: string;
-    resolveGatewayContext: () => GatewayRequestContext;
-  },
->(options: {
-  createBoundParent: () => Promise<Bound>;
-  createBoundGateway: (bound: Bound) => Promise<{ runtime: GatewayRuntime }>;
-  closeBoundGateway: (
-    bound: Bound,
-    runtime: GatewayRuntime,
-    childRunId?: string,
-  ) => Promise<unknown[]>;
-  throwBoundFailures: (failures: unknown[]) => void;
-  parentSessionKey: string;
-  parentRunId: string;
-  assertNoModelExecution: () => void;
-}) {
+export function registerNativeCancellationCases(
+  options: Omit<RequestCustodySpawnCaseOptions, "runEmbeddedAgent">,
+) {
   const { parentSessionKey, parentRunId } = options;
   it.for([
     "before interruption",
@@ -375,11 +357,7 @@ export function registerNativeCancellationCases<
         }
         await pendingSettled;
         failures.push(...(await options.closeBoundGateway(bound, runtime, targetRunId)));
-        try {
-          await settleRootWork(true);
-        } catch (error) {
-          failures.push(error);
-        }
+        await collectFailure(failures, () => settleRootWork(true));
         options.throwBoundFailures(failures);
       }
     },

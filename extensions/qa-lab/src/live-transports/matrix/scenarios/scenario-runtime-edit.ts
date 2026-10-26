@@ -32,12 +32,6 @@ export async function runInboundEditIgnoredScenario(context: MatrixQaScenarioCon
     unexpectedMessage: "unexpected SUT reply after Matrix edit-to-mention event",
   });
   return {
-    artifacts: {
-      editEventId,
-      editedToken,
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      rootEventId,
-    },
     details: [
       `root event: ${rootEventId}`,
       `edit event: ${editEventId}`,
@@ -68,14 +62,6 @@ export async function runInboundEditNoDuplicateTriggerScenario(context: MatrixQa
     unexpectedMessage: "unexpected duplicate SUT reply after Matrix edit",
   });
   return {
-    artifacts: {
-      editEventId,
-      editedToken,
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      originalDriverEventId: first.driverEventId,
-      originalReply: first.reply,
-      originalToken: first.token,
-    },
     details: [
       `original driver event: ${first.driverEventId}`,
       ...buildMatrixReplyDetails("original reply", first.reply),

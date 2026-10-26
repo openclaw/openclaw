@@ -7,6 +7,8 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -131,7 +133,11 @@ function normalizeMemoryUsage(
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
     ...(collectDiagnostics
-      ? { ...sampleTrackedWorkerMemory(), workerMessages: getWorkerMessageMetrics() }
+      ? {
+          ...sampleTrackedWorkerMemory(),
+          workerMessages: getWorkerMessageMetrics(),
+          sessionRowSelections: getSessionRowSelectionMetrics(),
+        }
       : {}),
   };
 }
@@ -269,6 +275,11 @@ function logMemoryPressure(pressure: MemoryPressure): void {
       pressure.memory.workerArrayBuffersBytes,
     ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
+    formatOptionalPressureMetric("postgresBridgeCount", pressure.memory.postgresBridgeCount) +
+    formatOptionalPressureMetric(
+      "postgresPoolSelfRootCount",
+      pressure.memory.postgresPoolSelfRootCount,
+    ) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
     formatOptionalPressureMetric(
       "workerArrayBuffersSampledCount",
@@ -292,7 +303,7 @@ function logMemoryPressure(pressure: MemoryPressure): void {
     formatOptionalPressureMetric("usedBytes", pressure.usedBytes) +
     formatOptionalPressureMetric("workerThreadId", pressure.workerThreadId) +
     (pressure.memory.workerCount
-      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested worker heaps are not included."
       : "") +
     ` ${nextStep}`;
   log.warn(message);
@@ -328,6 +339,8 @@ export function emitDiagnosticMemorySample(
   ].filter(isPositiveMemoryLimit);
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
+  memory.heapSizeLimitBytes = heapLimitBytes;
+  memory.oldGenerationAfterGcBytes = isBun ? undefined : getOldGenerationAfterGcBytes();
 
   if (shouldEmitSample) {
     publishMemorySample(memory, options?.uptimeMs ?? Math.round(process.uptime() * 1000));

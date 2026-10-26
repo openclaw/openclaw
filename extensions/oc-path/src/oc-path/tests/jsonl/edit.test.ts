@@ -149,7 +149,7 @@ describe("JSONL source edits", () => {
     const ast = parseJsonl(original);
     const value = { kind: "string" as const, value: REDACTED_SENTINEL };
     expect(() => setJsonlOcPath(ast, parseOcPath("oc://x.jsonl/L1/event"), value)).toThrow(
-      expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: "oc://x.jsonl/L1/event" }),
+      `emit refused to write "${REDACTED_SENTINEL}" sentinel literal at oc://x.jsonl/L1/event`,
     );
     expect(() => appendJsonlOcPath(ast, value)).toThrow();
     expect(ast.raw).toBe(original);

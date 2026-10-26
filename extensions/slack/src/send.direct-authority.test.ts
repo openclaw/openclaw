@@ -8,11 +8,22 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { slackOutbound } from "./outbound-adapter.js";
 import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 
+const POST = "/api/chat.postMessage",
+  OPEN = "/api/conversations.open";
+const REVOKED = "direct delivery is no longer active";
+function directOptions(cfg: OpenClawConfig, live = () => true) {
+  const assertDirectAdapterHandoff = () => {
+    if (!live()) {
+      throw new Error(REVOKED);
+    }
+  };
+  return { cfg, assertDirectAdapterHandoff };
+}
 function withSlackApi(
   respond: (url: string, attempt: number) => object | Promise<object>,
   run: (cfg: OpenClawConfig, paths: string[]) => Promise<void>,
@@ -29,165 +40,108 @@ function withSlackApi(
       paths.push(url);
       request.resume();
       void Promise.resolve(respond(url, paths.length)).then((payload) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(payload));
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify(payload));
       });
     },
     async (baseUrl) => {
       vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
-      await run(
-        { channels: { slack: { botToken: "xoxb-direct-authority", textChunkLimit } } },
-        paths,
-      );
+      const slack = { botToken: "xoxb-direct-authority", textChunkLimit };
+      await run({ channels: { slack } }, paths);
     },
   );
 }
-function assertLive(resolveLive: () => boolean) {
-  return () => {
-    if (!resolveLive()) {
-      throw new Error("direct delivery is no longer active");
-    }
-  };
-}
-beforeEach(() =>
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "slack",
-        plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
-        source: "test",
-      },
-    ]),
-  ),
-);
+beforeEach(() => {
+  const plugin = createOutboundTestPlugin({ id: "slack", outbound: slackOutbound });
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+});
 afterEach(() => {
   vi.unstubAllEnvs();
   clearSlackThreadParticipationCache();
   resetPluginRuntimeStateForTest();
 });
 
-describe("Slack direct-delivery request authority", () => {
-  it("carries core currentness through the adapter and actual transport", async () => {
-    let live = true;
-    await withSlackApi(
-      () => {
-        live = false;
-        return { ok: true, ts: "171234.1", channel: "C123" };
-      },
-      async (cfg, paths) => {
+it.each(["core", "DM", "native"])("rechecks authority after %s preparation", async (stage) => {
+  const dm = stage === "DM";
+  const to = dm ? "user:U123" : "channel:C123";
+  const response = dm
+    ? { ok: true, channel: { id: "D123" } }
+    : stage === "core"
+      ? { ok: true, ts: "171234.1", channel: "C123" }
+      : { ok: false, error: "invalid_blocks" };
+  let live = true;
+  await withSlackApi(
+    () => {
+      live = false;
+      return response;
+    },
+    async (cfg, paths) => {
+      const authority = directOptions(cfg, () => live);
+      if (stage === "core") {
         const result = await sendDurableMessageBatch({
-          cfg,
+          ...authority,
           channel: "slack",
-          to: "channel:C123",
+          to,
           payloads: [{ text: "alpha beta" }],
           skipQueue: true,
-          assertDirectAdapterHandoff: assertLive(() => live),
         });
         expect(result).toMatchObject({
           status: "partial_failed",
-          results: [expect.objectContaining({ messageId: "171234.1" })],
+          results: [{ messageId: "171234.1" }],
         });
-        expect(paths).toEqual(["/api/chat.postMessage"]);
-      },
-      5,
-    );
-  });
-
-  it("stops a revoked direct send after the per-target queue", async () => {
-    const started = createDeferred<void>();
-    const release = createDeferred<void>();
-    await withSlackApi(
-      async (_url, attempt) => {
-        if (attempt === 1) {
-          started.resolve();
-          await release.promise;
-        }
-        return { ok: true, ts: `${attempt}.1`, channel: "C123" };
-      },
-      async (cfg, paths) => {
-        const first = sendMessageSlack("channel:C123", "first", {
-          cfg,
-          assertDirectAdapterHandoff: assertLive(() => true),
-        });
-        await started.promise;
-        let live = true;
-        const secondError = sendMessageSlack("channel:C123", "second", {
-          cfg,
-          assertDirectAdapterHandoff: assertLive(() => live),
-        }).catch((error: unknown) => error);
-        live = false;
-        release.resolve();
-        await expect(first).resolves.toMatchObject({ messageId: "1.1" });
-        await expect(secondError).resolves.toMatchObject({
-          message: expect.stringContaining("direct delivery is no longer active"),
-        });
-        expect(paths).toEqual(["/api/chat.postMessage"]);
-      },
-    );
-  });
-
-  it.each([
-    {
-      stage: "DM preparation",
-      to: "user:U123",
-      options: { threadTs: "171234.1" },
-      response: { ok: true, channel: { id: "D123" } },
-      path: "/api/conversations.open",
-    },
-    {
-      stage: "native-data rejection",
-      to: "channel:C123",
-      options: {
-        blocks: [
-          {
-            type: "data_table",
-            rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-          },
-        ],
-      },
-      response: { ok: false, error: "invalid_blocks" },
-      path: "/api/chat.postMessage",
-    },
-  ])("stops a revoked direct send after $stage", async ({ to, options, response, path }) => {
-    let live = true;
-    await withSlackApi(
-      () => {
-        live = false;
-        return response;
-      },
-      async (cfg, paths) => {
+      } else {
+        const rows = ["Account", "Acme"].map((text) => [{ type: "raw_text", text }]);
+        const options = dm ? { threadTs: "171234.1" } : { blocks: [{ type: "data_table", rows }] };
         await expect(
-          sendMessageSlack(to, "Pipeline", {
-            cfg,
-            ...options,
-            assertDirectAdapterHandoff: assertLive(() => live),
-          }),
-        ).rejects.toThrow("direct delivery is no longer active");
-        expect(paths).toEqual([path]);
-      },
-    );
-  });
+          sendMessageSlack(to, "Pipeline", { ...authority, ...options }),
+        ).rejects.toThrow(REVOKED);
+      }
+      expect(paths).toEqual([dm ? OPEN : POST]);
+    },
+    stage === "core" ? 5 : undefined,
+  );
+});
 
-  it("reuses the credential-scoped DM cache across direct sends", async () => {
-    await withSlackApi(
-      (url, attempt) =>
-        url === "/api/conversations.open"
-          ? { ok: true, channel: { id: "D123" } }
-          : { ok: true, ts: `${attempt}.1`, channel: "D123" },
-      async (cfg, paths) => {
-        const options = {
-          cfg,
-          threadTs: "171234.1",
-          assertDirectAdapterHandoff: assertLive(() => true),
-        };
-        await sendMessageSlack("user:U123", "first", options);
-        await sendMessageSlack("user:U123", "second", options);
-        expect(paths).toEqual([
-          "/api/conversations.open",
-          "/api/chat.postMessage",
-          "/api/chat.postMessage",
-        ]);
-      },
-    );
-  });
+it("stops a revoked direct send after the per-target queue", async () => {
+  const started = createDeferred<void>(),
+    release = createDeferred<void>();
+  await withSlackApi(
+    async (_url, attempt) => {
+      if (attempt === 1) {
+        started.resolve();
+        await release.promise;
+      }
+      return { ok: true, ts: `${attempt}.1`, channel: "C123" };
+    },
+    async (cfg, paths) => {
+      const first = sendMessageSlack("channel:C123", "first", directOptions(cfg));
+      await started.promise;
+      let live = true;
+      const options = directOptions(cfg, () => live);
+      const secondError = sendMessageSlack("channel:C123", "second", options).catch(
+        (error: unknown) => error,
+      );
+      live = false;
+      release.resolve();
+      await expect(first).resolves.toMatchObject({ messageId: "1.1" });
+      expect(await secondError).toMatchObject({ message: expect.stringContaining(REVOKED) });
+      expect(paths).toEqual([POST]);
+    },
+  );
+});
+
+it("reuses the credential-scoped DM cache across direct sends", async () => {
+  await withSlackApi(
+    (url, attempt) =>
+      url === OPEN
+        ? { ok: true, channel: { id: "D123" } }
+        : { ok: true, ts: `${attempt}.1`, channel: "D123" },
+    async (cfg, paths) => {
+      const options = { ...directOptions(cfg), threadTs: "171234.1" };
+      await sendMessageSlack("user:U123", "first", options);
+      await sendMessageSlack("user:U123", "second", options);
+      expect(paths).toEqual([OPEN, POST, POST]);
+    },
+  );
 });

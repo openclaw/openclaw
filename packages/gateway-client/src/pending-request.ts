@@ -5,6 +5,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
+import { toStringifiedError } from "@openclaw/normalization-core";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -21,10 +22,6 @@ export type GatewayProtocolRequestTiming = {
   startedAtMs: number;
   endedAtMs: number;
   errorCode?: string;
-};
-
-type GatewayRequestSender = {
-  send: (data: string) => void;
 };
 
 type GatewayPendingRequest = {
@@ -138,16 +135,17 @@ export class GatewayPendingRequests {
   }
 
   request<T>(
-    sender: GatewayRequestSender,
+    sender: { send: (data: string) => void },
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     let id: string;
     try {
-      id = this.allocateRequestId();
+      this.requestSequence += 1;
+      id = `${this.requestSequence}:${this.opts.createRequestId()}`;
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      return Promise.reject(toStringifiedError(error));
     }
     const requestedTimeoutMs =
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
@@ -264,7 +262,7 @@ export class GatewayPendingRequests {
             this.invoke("sent", () => options?.onSent?.(id));
           } catch (error) {
             if (retire("CLIENT_SEND_ERROR")) {
-              reject(error instanceof Error ? error : new Error(String(error)));
+              reject(toStringifiedError(error));
             }
           }
         };
@@ -291,7 +289,7 @@ export class GatewayPendingRequests {
         send();
       } catch (error) {
         if (retire("CLIENT_SEND_ERROR")) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          reject(toStringifiedError(error));
         }
       }
     });
@@ -393,11 +391,6 @@ export class GatewayPendingRequests {
       this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-  }
-
-  private allocateRequestId(): string {
-    this.requestSequence += 1;
-    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(

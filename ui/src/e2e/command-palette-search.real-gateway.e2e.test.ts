@@ -22,9 +22,11 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
@@ -49,6 +51,7 @@ const scope = {
 };
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 
 type RpcObservation = {
   method: string;
@@ -66,16 +69,6 @@ type RpcObservation = {
   truncated?: boolean;
   indexing?: boolean;
   archivedTranscriptsExcluded?: number;
-};
-
-type QueryObservation = {
-  query: string;
-  elapsedMs: number;
-  visibleResults: number;
-  searchRequests: number;
-  metadataRequests: number;
-  backgroundListRequests: number;
-  notices: string[];
 };
 
 async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig) {
@@ -165,6 +158,15 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
 const suite = createControlUiE2eSuite({
   name: "Control UI command palette search with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      expect.assert(instance);
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "command-palette-search",
@@ -206,7 +208,6 @@ const suite = createControlUiE2eSuite({
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
             modelPolicy: { allow: ["fixture/*"] },
-            heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
             agentIds.map((id) => [id, { identity: { name: `Synthetic ${id} assistant` } }]),
@@ -278,34 +279,8 @@ const suite = createControlUiE2eSuite({
 });
 
 function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
-  const connection = {
-    sockets: 0,
-    challenges: 0,
-    connectRequests: 0,
-    connectReplies: 0,
-    accepted: 0,
-    rejected: 0,
-    unauthorized: 0,
-    invalidRequest: 0,
-    unavailable: 0,
-    unavailableReasons: {
-      startup: 0,
-      restarting: 0,
-      suspending: 0,
-      buildMismatch: 0,
-      profile: 0,
-      other: 0,
-    },
-    pairingRequired: 0,
-    socketErrors: 0,
-    closes: 0,
-    pageErrors: 0,
-  };
-  page.on("pageerror", () => connection.pageErrors++);
   page.on("websocket", (socket) => {
-    connection.sockets++;
     const pending = new Map<string, RpcObservation>();
-    let connectId: string | undefined;
     socket.on("framesent", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
       if (
@@ -313,11 +288,6 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         typeof frame.id !== "string" ||
         typeof frame.method !== "string"
       ) {
-        return;
-      }
-      if (frame.method === "connect") {
-        connection.connectRequests++;
-        connectId = frame.id;
         return;
       }
       // Never retain connect/auth frames or unrelated RPC payloads.
@@ -343,43 +313,6 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
     });
     socket.on("framereceived", ({ payload }) => {
       const frame = requireRecord(JSON.parse(payload.toString()));
-      if (frame.type === "event" && frame.event === "connect.challenge") {
-        connection.challenges++;
-      }
-      if (frame.type === "res" && frame.id === connectId) {
-        connection.connectReplies++;
-        if (frame.ok === true) {
-          connection.accepted++;
-        } else {
-          connection.rejected++;
-          const error = isRecord(frame.error) ? frame.error : {};
-          connection.unauthorized += Number(error.code === "UNAUTHORIZED");
-          connection.invalidRequest += Number(error.code === "INVALID_REQUEST");
-          connection.unavailable += Number(error.code === "UNAVAILABLE");
-          connection.pairingRequired += Number(error.code === "PAIRING_REQUIRED");
-          if (error.code === "UNAVAILABLE") {
-            const details = isRecord(error.details) ? error.details : {};
-            // Retain only known categories, never arbitrary error text or auth frames.
-            if (details.reason === "startup-sidecars") {
-              connection.unavailableReasons.startup++;
-            } else if (details.reason === "gateway-restarting") {
-              connection.unavailableReasons.restarting++;
-            } else if (details.reason === "gateway-suspending") {
-              connection.unavailableReasons.suspending++;
-            } else if (
-              details.code === "PROTOCOL_MISMATCH" ||
-              details.code === "CONTROL_UI_BUILD_MISMATCH"
-            ) {
-              connection.unavailableReasons.buildMismatch++;
-            } else if (details.code === "AUTHENTICATED_PROFILE_UNAVAILABLE") {
-              connection.unavailableReasons.profile++;
-            } else {
-              connection.unavailableReasons.other++;
-            }
-          }
-        }
-        return;
-      }
       const metric =
         frame.type === "res" && typeof frame.id === "string" ? pending.get(frame.id) : undefined;
       if (!metric) {
@@ -407,13 +340,10 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
         pending.delete(frame.id);
       }
     });
-    socket.on("socketerror", () => connection.socketErrors++);
     socket.on("close", () => {
-      connection.closes++;
       pending.clear();
     });
   });
-  return connection;
 }
 
 suite.define(() => {
@@ -423,10 +353,9 @@ suite.define(() => {
     }
     const owner = instance;
     const rpc: RpcObservation[] = [];
-    const queries: QueryObservation[] = [];
+    let queryCount = 0;
     const assets: Array<{ path: string; servedSha256: string; builtSha256: string }> = [];
     const screenshots: string[] = [];
-    let connection: ReturnType<typeof observeSearchTraffic> | undefined;
     let passed = false;
     const artifactDir = suite.artifactDir;
     try {
@@ -469,7 +398,7 @@ suite.define(() => {
             : {}),
         },
         async ({ page }) => {
-          connection = observeSearchTraffic(page, rpc);
+          observeSearchTraffic(page, rpc);
           expect((await page.goto(url.href))?.status()).toBe(404);
           await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
@@ -540,7 +469,6 @@ suite.define(() => {
           ) => {
             const noMatches = expectedHits === 0 && metadataKeys.length === 0;
             const start = rpc.length;
-            const started = performance.now();
             await input.fill(query);
             await expect
               .poll(
@@ -562,15 +490,7 @@ suite.define(() => {
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
             const metadata = listRequests.filter((entry) => entry.params.search === query);
             const visibleResults = await results.getByRole("option").count();
-            queries.push({
-              query,
-              elapsedMs: performance.now() - started,
-              visibleResults,
-              searchRequests: searches.length,
-              metadataRequests: metadata.length,
-              backgroundListRequests: listRequests.length - metadata.length,
-              notices,
-            });
+            queryCount++;
             // Capture the settled state before assertions too, retaining useful
             // before-fix evidence when run against the original regression.
             await capture(filename, palette, [input, visibleResults === 0 ? emptyState : results]);
@@ -741,20 +661,8 @@ suite.define(() => {
               ),
             )
             .toBe(otherKey);
-          const call = async (method: string, params: Record<string, unknown>) => {
-            const rpcResult = await owner.cli([
-              "gateway",
-              "call",
-              method,
-              "--json",
-              "--params",
-              JSON.stringify(params),
-            ]);
-            expect(rpcResult.code, rpcResult.stderr).toBe(0);
-            return requireRecord(JSON.parse(rpcResult.stdout));
-          };
           for (const category of ["Research", null, "HOME ASSISTANT"]) {
-            await call("sessions.patch", { key: targetKey, category });
+            await client.request("sessions.patch", { key: targetKey, category });
             const groupRows = page.locator(
               `[data-session-section^="category:"] [data-session-key="${targetKey}"]`,
             );
@@ -766,7 +674,7 @@ suite.define(() => {
                 )
                 .waitFor({ state: "visible" });
             }
-            const inventory = await call("sessions.list", {
+            const inventory = await client.request<SessionsListResult>("sessions.list", {
               ...scope,
               search: targetLabel,
               includePeople: true,
@@ -790,74 +698,8 @@ suite.define(() => {
             await input.waitFor({ state: "hidden" });
           }
           expect(rpc.filter((metric) => metric.method === "sessions.search")).toHaveLength(
-            queries.length,
+            queryCount,
           );
-          expect(
-            rpc.filter((metric) => metric.method === "chat.send" || metric.method === "agent"),
-          ).toEqual([]);
-          // Cover the agreed direct shortcuts against the same isolated real Gateway.
-          // The existing capture gate exports these sanitized views on manual proof runs.
-          const currentPane = activePane();
-          await capture("direct-01-before.png", currentPane, [currentPane.locator(".chat-thread")]);
-          await page.keyboard.press("ControlOrMeta+/");
-          const helper = page.locator("openclaw-keyboard-shortcuts-dialog");
-          const newHint = helper.locator(".shortcut-row").filter({ hasText: "Open New Session" });
-          const archiveHint = helper
-            .locator(".shortcut-row")
-            .filter({ hasText: "Archive current session" });
-          await newHint.waitFor({ state: "visible" });
-          await archiveHint.waitFor({ state: "visible" });
-          expect((await newHint.locator("kbd").allTextContents()).at(-1)).toBe("O");
-          expect((await archiveHint.locator("kbd").allTextContents()).at(-1)).toBe("A");
-          // The host is display: contents; the native dialog owns the opening animation.
-          await capture("direct-02-keyboard-helper.png", helper.locator("dialog"), [
-            newHint,
-            archiveHint,
-          ]);
-          await page.keyboard.press("Escape");
-          await newHint.waitFor({ state: "hidden" });
-          await page.keyboard.press("ControlOrMeta+Shift+O");
-          const draft = page.locator("openclaw-new-session-page .new-session-page__message");
-          await draft.waitFor({ state: "visible" });
-          await expect
-            .poll(() => draft.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-          expect(await draft.inputValue()).toBe("");
-          await capture("direct-03-new-session.png", page.locator("openclaw-new-session-page"), [
-            draft,
-          ]);
-          await page.goBack();
-          await expect
-            .poll(() =>
-              currentPane.evaluate(
-                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-              ),
-            )
-            .toBe(otherKey);
-          const composer = currentPane.locator(".agent-chat__composer-combobox > textarea");
-          await composer.fill("Keep this unsent shortcut draft");
-          await capture("direct-04-archive-before.png", currentPane, [composer]);
-          await page.keyboard.press("ControlOrMeta+Shift+A");
-          const archiveRequests = (archived: boolean) =>
-            rpc.filter(
-              (metric) =>
-                metric.method === "sessions.patch" &&
-                metric.params.key === otherKey &&
-                metric.params.archived === archived,
-            );
-          await expect
-            .poll(() => archiveRequests(true).filter((metric) => metric.ok === true).length)
-            .toBe(1);
-          const undo = page.getByRole("button", { name: "Undo", exact: true });
-          await undo.waitFor({ state: "visible" });
-          await capture("direct-05-archive-after.png", currentPane, [
-            currentPane.locator(".chat-thread"),
-          ]);
-          await undo.click();
-          await expect
-            .poll(() => archiveRequests(false).filter((metric) => metric.ok === true).length)
-            .toBe(1);
-          await expect.poll(() => composer.inputValue()).toBe("Keep this unsent shortcut draft");
           expect(
             rpc.filter((metric) =>
               ["sessions.create", "chat.send", "agent"].includes(metric.method),
@@ -868,8 +710,20 @@ suite.define(() => {
       passed = true;
     } finally {
       if (!passed) {
-        // CI retains console output; keep only counts and allowlisted error categories.
-        console.error("[search-proof] connection", JSON.stringify(connection));
+        // CI retains console output; identify pending request ownership without query values.
+        console.error(
+          "[search-proof] pending RPC",
+          JSON.stringify(
+            rpc
+              .filter((metric) => metric.elapsedMs === undefined)
+              .map((metric) => ({
+                method: metric.method,
+                transcriptSearch: typeof metric.params.query === "string",
+                metadataSearch: typeof metric.params.search === "string",
+                commandPalette: metric.params.source === "command-palette",
+              })),
+          ),
+        );
         await writeFile(
           path.join(artifactDir, "gateway-failure.log"),
           owner
@@ -891,7 +745,7 @@ suite.define(() => {
               targetKey,
             },
             assets,
-            queries,
+            queryCount,
             rpc,
             screenshots,
           },

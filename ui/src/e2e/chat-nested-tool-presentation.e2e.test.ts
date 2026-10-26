@@ -82,16 +82,14 @@ suite.define(() => {
         methodResponses: {
           "chat.history": prepareChatHistoryFixture([
             { role: "user", content: "Sign in to GitHub so I can authorize access.", timestamp },
-            {
-              role: "assistant",
-              content: textContent("Starting GitHub authentication."),
+            chatMessage("assistant", "Starting GitHub authentication.", {
               openclawStreamFallback: {
                 itemId: "github-commentary",
                 replacementText: "Starting GitHub authentication.",
                 source: "segment",
               },
               timestamp: timestamp + 100,
-            },
+            }),
             toolCall(
               "github-wrapper",
               { title: "Start GitHub authentication", code: wrapperCode },
@@ -109,7 +107,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText(conclusion, { exact: true }).waitFor();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const work = page.locator(".chat-activity-group").first();
       const summary = work.locator(":scope > .chat-activity-group__summary");
       await summary.waitFor();
@@ -140,7 +138,7 @@ suite.define(() => {
       await summary.click();
       expect(await summary.getAttribute("aria-expanded")).toBe("false");
       await page.reload();
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await summary.waitFor();
       await expectCollapsed(work);
       await page.emulateMedia({ reducedMotion: "reduce" });

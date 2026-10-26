@@ -1,10 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
+import {
+  modelSelectionPoliciesMatch,
+  prepareOperatorModelPolicyPresentation,
+} from "./operator-model-presentation.js";
+
+it("reuses row redactions before copying while evaluating current model visibility", () => {
+  let visible = false;
+  const allows = vi.fn(() => visible);
+  const presentation = prepareOperatorModelPolicyPresentation({
+    cfg: {},
+    policy: { models: [], allows },
+  })!;
+  const readLabel = vi.fn(() => "Synthetic row");
+  const row = Object.freeze({
+    get label() {
+      return readLabel();
+    },
+    modelProvider: "fixture",
+    model: "private",
+    activeModelProvider: null,
+    activeModel: null,
+    contextBudgetStatus: { provider: "fixture", model: "private" },
+  });
+  const variants: (typeof row)[] = [];
+  const first = presentation.session(row, variants);
+  expect(first).toEqual({ label: "Synthetic row", activeModelProvider: null, activeModel: null });
+  readLabel.mockClear();
+  allows.mockClear();
+  expect(presentation.session(row, variants)).toBe(first);
+  expect(readLabel).not.toHaveBeenCalled();
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(allows).toHaveBeenCalledTimes(2);
+  visible = true;
+  expect(presentation.session(row, variants)).toBe(row);
+  visible = false;
+  expect(presentation.session(row, variants)).toBe(first);
+  expect(variants).toEqual([first]);
+});
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => {
@@ -21,14 +59,9 @@ const configWithPrimary = (primary: string): OpenClawConfig => ({
       vllm: {
         baseUrl: "http://127.0.0.1:1/v1",
         api: "openai-completions",
-        models: ["model-a", "model-b"].map((id) => ({
-          id,
-          name: id,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          maxTokens: 1024,
-        })),
+        models: ["model-a", "model-b"].map((id) =>
+          modelDefinition(id, { reasoning: false, maxTokens: 1024 }),
+        ),
       },
     },
   },

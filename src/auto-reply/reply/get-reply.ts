@@ -1,8 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
-  hasLegacyAutoFallbackWithoutOrigin,
-  resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -10,7 +8,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
@@ -23,6 +20,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -36,7 +34,6 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
@@ -44,8 +41,6 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import type { GetReplyOptions } from "../get-reply-options.types.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
@@ -72,7 +67,11 @@ import {
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import { prepareInternalGetReplyOptions, withExtractedFileImages } from "./get-reply.types.js";
+import {
+  prepareInternalGetReplyOptions,
+  withExtractedFileImages,
+  type InternalGetReplyOptions,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -80,12 +79,7 @@ import {
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { createModelSelectionState } from "./model-selection.js";
-import {
-  classifyHeartbeatPendingFinalDelivery,
-  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery-state.js";
+import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -99,12 +93,13 @@ import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-sou
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
+import { resolveScheduledSessionModelSelection } from "./session-event-model-selection.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
-import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
+import { resolveReplyStoredModelSelection } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
@@ -114,7 +109,7 @@ const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
-  options?: GetReplyOptions,
+  options?: InternalGetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   return withReplySessionDiffBaseline((baseline) =>
@@ -124,7 +119,7 @@ export async function getReplyFromConfig(
 
 async function resolveReplyFromConfig(
   ctx: MsgContext,
-  options: GetReplyOptions | undefined,
+  options: InternalGetReplyOptions | undefined,
   configOverride: OpenClawConfig | undefined,
   baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -140,7 +135,7 @@ async function resolveReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  const source = prepareReplySourceInput(ctx, cfg, opts);
+  const source = await prepareReplySourceInput(ctx, cfg, opts);
   opts = source.options;
   try {
     // Retain preparation timings before a stall happens. Whole-turn summaries
@@ -202,7 +197,6 @@ async function resolveReplyFromConfig(
     const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
       surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
       hasSessionKey: Boolean(agentSessionKey),
-      isHeartbeat: opts?.isHeartbeat === true,
       hasMedia: hasInboundMedia(finalized),
     }));
     const messageId = finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast;
@@ -251,34 +245,17 @@ async function resolveReplyFromConfig(
           agentId,
         }),
     );
-    let provider = defaultProvider;
-    let model = defaultModel;
-    let hasResolvedHeartbeatModelOverride = false;
-    let heartbeatAuthProfile: { provider: string; model: string; profileId: string } | undefined;
-    if (opts?.isHeartbeat) {
-      // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
-      // fall back to the global defaults heartbeat model for backward compatibility.
-      const heartbeatRaw =
-        normalizeOptionalString(opts.heartbeatModelOverride) ??
-        normalizeOptionalString(agentCfg?.heartbeat?.model) ??
-        "";
-      const heartbeatRef = heartbeatRaw
-        ? resolveModelRefFromString({
-            cfg,
-            agentId,
-            raw: heartbeatRaw,
-            defaultProvider,
-            aliasIndex,
-          })
-        : null;
-      if (heartbeatRef) {
-        provider = heartbeatRef.ref.provider;
-        model = heartbeatRef.ref.model;
-        hasResolvedHeartbeatModelOverride = true;
-        const profileId = splitTrailingAuthProfile(heartbeatRaw).profile;
-        heartbeatAuthProfile = profileId ? { ...heartbeatRef.ref, profileId } : undefined;
-      }
-    }
+    const turnModelOverride = resolveTurnModelSelection({
+      cfg,
+      agentId,
+      defaultProvider,
+      aliasIndex,
+      options: opts,
+    });
+    let provider = turnModelOverride?.ref.provider ?? defaultProvider;
+    let model = turnModelOverride?.ref.model ?? defaultModel;
+    let hasResolvedTurnModelOverride = turnModelOverride !== undefined;
+    let turnAuthProfile = turnModelOverride?.authProfile;
 
     const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
       resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
@@ -385,13 +362,12 @@ async function resolveReplyFromConfig(
       );
     } catch (error) {
       if (
-        opts?.isHeartbeat === true ||
         !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
       ) {
         throw error;
       }
       // Permanent failures must finish ingress even in tool-only conversations.
-      // Keep host paths in operator logs; heartbeat failures retain their own owner.
+      // Keep host paths in operator logs.
       typing.cleanup();
       logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
       const text =
@@ -558,13 +534,32 @@ async function resolveReplyFromConfig(
     const replySession = { sessionEntry, sessionStore, sessionKey, storePath };
     const replyContext = { ...workspaceContext, ...replySession };
     const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
-    if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
-      // Heartbeat routing is turn-local. A native harness lock owns the durable
-      // model selection, so heartbeat.model must not retarget its AppServer turn.
+    const scheduledModel = opts?.scheduledAutomation
+      ? await resolveScheduledSessionModelSelection({
+          automation: opts.scheduledAutomation,
+          cfg,
+          agentId,
+          agentDir,
+          workspaceDir,
+          sessionKey,
+          sessionEntry,
+          publishedRuntime: preparedReplyDispatchRuntime,
+        })
+      : undefined;
+    if (scheduledModel && !sessionModelSelectionLocked) {
+      provider = scheduledModel.provider;
+      model = scheduledModel.model;
+      hasResolvedTurnModelOverride = true;
+      turnAuthProfile = scheduledModel.configuredProfileId
+        ? { provider, model, profileId: scheduledModel.configuredProfileId }
+        : undefined;
+    }
+    if (sessionModelSelectionLocked && hasResolvedTurnModelOverride) {
+      // Turn-local overrides cannot retarget a native harness with a locked model.
       provider = defaultProvider;
       model = defaultModel;
-      hasResolvedHeartbeatModelOverride = false;
-      heartbeatAuthProfile = undefined;
+      hasResolvedTurnModelOverride = false;
+      turnAuthProfile = undefined;
     }
     // Utility-model narration is turn-local decoration. Initialize the durable
     // session first, then keep it completely outside model-locked native runs.
@@ -574,6 +569,23 @@ async function resolveReplyFromConfig(
       : sessionEntry.toolOverrides;
     const optsWithSessionSkillOverrides = {
       ...optsWithCommandQueueOverride,
+      ...(scheduledModel ? { thinkingLevelOverride: scheduledModel.thinkingLevelOverride } : {}),
+      ...(scheduledModel && opts?.scheduledAutomation && !sessionModelSelectionLocked
+        ? {
+            scheduledAutomation: {
+              ...opts.scheduledAutomation,
+              modelFallbackPolicy: {
+                useSubagentFallbacks: scheduledModel.useSubagentFallbacks,
+                inheritDefaultFallbacksForAgentStringModel:
+                  scheduledModel.inheritDefaultFallbacksForAgentStringModel,
+                sessionModelOverrideSource:
+                  scheduledModel.modelSource === "session"
+                    ? (resolveSessionModelOverrideSource(sessionEntry) ?? undefined)
+                    : undefined,
+              },
+            },
+          }
+        : {}),
       ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
       ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
     };
@@ -593,37 +605,11 @@ async function resolveReplyFromConfig(
       storePath,
     });
 
-    // Heartbeats may safely clear ack-only pending state, but must not replay
-    // user-facing pending finals through a different delivery target.
-    if (opts?.isHeartbeat && sessionEntry.pendingFinalDelivery?.kind === "replayable") {
-      const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
-      if (heartbeatPending.shouldClear) {
-        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-        sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && storePath) {
-          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-          await updateSessionEntry(
-            { storePath, sessionKey },
-            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
-            {
-              skipMaintenance: true,
-              takeCacheOwnership: true,
-            },
-          );
-        }
-      }
-    }
-
     if (resetTriggered && normalizeOptionalString(bodyStripped)) {
       const { applyResetModelOverride } = await import("./session-reset-model.js");
       try {
         await applyResetModelOverride({
           ...replyContext,
-          resetTriggered,
           bodyStripped,
           sessionCtx,
           sessionEntryHandle,
@@ -667,7 +653,7 @@ async function resolveReplyFromConfig(
         })
       : null;
     const resolvedChannelModelOverride =
-      channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
+      channelModelOverride && !hasResolvedTurnModelOverride && !sessionModelSelectionLocked
         ? resolveModelRefFromString({
             cfg,
             agentId,
@@ -678,11 +664,11 @@ async function resolveReplyFromConfig(
         : null;
     const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
     const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
-    const hasSessionModelOverride = Boolean(
-      normalizeOptionalString(sessionEntry.modelOverride) ||
-      normalizeOptionalString(sessionEntry.providerOverride),
-    );
-    const storedModelOverride = await resolveStoredModelOverrideAsync({
+    const {
+      modelOverride: storedModelOverride,
+      autoFallbackPrimaryProbe,
+      hasEffectiveStoredModelOverride,
+    } = await resolveReplyStoredModelSelection({
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -691,50 +677,18 @@ async function resolveReplyFromConfig(
         sessionCtx.ModelParentSessionKey ??
         sessionCtx.ParentSessionKey,
       defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      sessionModelSelectionLocked,
+      hasResolvedTurnModelOverride,
     });
-    const staleHeartbeatAutoFallbackOverride =
-      !sessionModelSelectionLocked &&
-      isStaleHeartbeatAutoFallbackOverride({
-        isHeartbeat: opts?.isHeartbeat === true,
-        hasResolvedHeartbeatModelOverride,
-        sessionEntry,
-        storedOverride: storedModelOverride,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-      });
-    const staleLegacyAutoFallbackWithoutOrigin =
-      !sessionModelSelectionLocked &&
-      storedModelOverride?.source === "session" &&
-      hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
-    if (
-      storedModelOverride?.model &&
-      !hasResolvedHeartbeatModelOverride &&
-      !staleHeartbeatAutoFallbackOverride &&
-      !staleLegacyAutoFallbackWithoutOrigin
-    ) {
-      provider = storedModelOverride.provider ?? defaultProvider;
+    if (storedModelOverride) {
+      provider = storedModelOverride.provider;
       model = storedModelOverride.model;
     }
-    const canApplyAutoFallbackPrimaryProbe =
-      !sessionModelSelectionLocked &&
-      !hasResolvedHeartbeatModelOverride &&
-      !staleHeartbeatAutoFallbackOverride;
-    const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
-      ? resolveAutoFallbackPrimaryProbe({
-          entry: sessionEntry,
-          sessionKey,
-          primaryProvider,
-          primaryModel,
-        })
-      : undefined;
-    const hasEffectiveStoredModelOverride =
-      Boolean(storedModelOverride || hasSessionModelOverride) &&
-      !staleHeartbeatAutoFallbackOverride &&
-      !staleLegacyAutoFallbackWithoutOrigin;
     if (
-      !hasResolvedHeartbeatModelOverride &&
+      !hasResolvedTurnModelOverride &&
       !hasEffectiveStoredModelOverride &&
       resolvedChannelModelOverride
     ) {
@@ -748,7 +702,6 @@ async function resolveReplyFromConfig(
         ctx: sessionCtx,
         sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
         groupResolution,
-        isHeartbeat: opts?.isHeartbeat,
       });
 
     const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
@@ -770,7 +723,7 @@ async function resolveReplyFromConfig(
         aliasIndex,
         provider,
         model,
-        hasResolvedHeartbeatModelOverride,
+        hasResolvedTurnModelOverride,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
         skillFilter: mergedSkillFilter,
@@ -907,8 +860,7 @@ async function resolveReplyFromConfig(
           model: runModel,
           hasModelDirective: false,
           skipStoredModelOverride: true,
-          hasResolvedHeartbeatModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
+          hasResolvedTurnModelOverride,
           preparedModelCatalog,
           operatorAuthority: resolvedOpts?.operatorAuthority,
         });
@@ -1040,10 +992,10 @@ async function resolveReplyFromConfig(
         modelState: runModelState,
         provider: runProvider,
         model: runModel,
-        ...(hasResolvedHeartbeatModelOverride &&
-        heartbeatAuthProfile?.provider === runProvider &&
-        heartbeatAuthProfile.model === runModel
-          ? { configuredProfileId: heartbeatAuthProfile.profileId }
+        ...(hasResolvedTurnModelOverride &&
+        turnAuthProfile?.provider === runProvider &&
+        turnAuthProfile.model === runModel
+          ? { configuredProfileId: turnAuthProfile.profileId }
           : {}),
         requestedRouteResolution: runAutoFallbackPrimaryProbe
           ? runModelState.requestedRouteResolution

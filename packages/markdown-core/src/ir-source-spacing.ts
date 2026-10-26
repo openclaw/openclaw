@@ -1,9 +1,5 @@
-type SourceMappedToken = {
-  map?: [number, number] | null;
-};
-
 /** Prepare the next mapped block start for each token in one reverse pass. */
-export function computeNextMappedBlockStarts(tokens: readonly SourceMappedToken[]) {
+export function computeNextMappedBlockStarts(tokens: readonly { map?: [number, number] | null }[]) {
   const nextStarts: Array<number | undefined> = [];
   let nextStart: number | undefined;
   for (let index = tokens.length - 1; index >= 0; index -= 1) {

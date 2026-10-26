@@ -1,9 +1,9 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { createTestDraft } from "./draft-controller.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionDraft } from "./draft.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,14 +16,6 @@ it.each(["last-used", "configured"] as const)(
     const listing = createDeferred<unknown>();
     let directoryReads = 0;
     const fixture = createDraftFixture({
-      agents: [
-        {
-          id: "main",
-          workspace: "/workspace",
-          workspaceGit: false,
-          model: { primary: "openai/default-model" },
-        },
-      ],
       request: (method) => {
         if (method === "fs.listDir") {
           directoryReads++;
@@ -36,17 +28,7 @@ it.each(["last-used", "configured"] as const)(
     });
     const { context } = fixture;
     Object.assign(context.config.current, { newSessionModelDefaults: policy });
-    const controller = new NewSessionDraft(
-      () => ({ context, data: undefined, isConnected: true }),
-      {
-        changed: vi.fn(),
-        updateComplete: () => Promise.resolve(),
-        closeTransientUi: vi.fn(),
-        activeElement: () => null,
-        onInvalidate: vi.fn(),
-        onRecoveryReady: vi.fn(),
-      },
-    );
+    const controller = createTestDraft(context);
     controller.gateway.synchronize(context.gateway);
     vi.spyOn(controller.gateway, "readPreference").mockReturnValue({
       workspace: "/workspace",
@@ -83,14 +65,7 @@ it("wakes background discovery only while the draft is connected", async () => {
         ? { machineName: "Visible Gateway" }
         : { profiles: [], environments: [] },
   });
-  const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
-    changed: vi.fn(),
-    updateComplete: () => Promise.resolve(),
-    closeTransientUi: vi.fn(),
-    activeElement: () => null,
-    onInvalidate: vi.fn(),
-    onRecoveryReady: vi.fn(),
-  });
+  const draft = createTestDraft(context);
   onTestFinished(() => draft.disconnect());
   draft.connect();
   expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);

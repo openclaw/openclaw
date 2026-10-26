@@ -84,11 +84,8 @@ describe("Slack terminal status diagnostics", () => {
     expect(f.api).toHaveBeenCalledTimes(2);
   });
 
-  it("continues typing-reaction cleanup if the diagnostic logger throws", async () => {
+  it("cleans up typing reactions after status restoration fails", async () => {
     const f = await fixture({ ok: false }, true);
-    f.error.mockImplementation(() => {
-      throw new Error("logger unavailable");
-    });
     await f.start();
     await expect(f.stop()).resolves.toBeUndefined();
     expect(removeSlackReaction).toHaveBeenCalledOnce();

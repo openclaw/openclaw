@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -287,6 +288,7 @@ export function createSessionRowPlacementProjection(
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
       prepareSelection?: () => Promise<void> | undefined,
     ): Promise<T> {
+      const task = getMainThreadTaskName() ?? "gateway";
       const signal = getAsyncWorkSignal();
       const memory = getSessionActorStorageBinding({});
       const assertActive = () => {
@@ -386,34 +388,41 @@ export function createSessionRowPlacementProjection(
         const cfg = projection.state.cfg;
         const consumePrepared = (
           privateRows?: ReadonlyMap<string, Row | undefined>,
-        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation => {
-          assertActive();
-          const privateIds = privateRows
-            ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
-            : [];
-          if (
-            projection.state.cfg !== cfg ||
-            missing(privateIds).some((id) => !placement?.has(id))
-          ) {
-            return stalePrivatePreparation;
-          }
-          const previous = exact;
-          if (placement) {
-            exact = placement;
-          }
-          try {
-            return readPreparedSessionRows(
-              projection,
-              isActive,
-              () => preparedQueries,
-              (read) => consume(read, preparedQueries),
-              privateRepositories,
-              privateRows,
-            );
-          } finally {
-            exact = previous;
-          }
-        };
+        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation =>
+          runWithMainThreadTask(
+            task,
+            () => {
+              assertActive();
+              const privateIds = privateRows
+                ? [...privateRows.values()].flatMap((row) =>
+                    row?.entry ? [row.entry.sessionId] : [],
+                  )
+                : [];
+              if (
+                projection.state.cfg !== cfg ||
+                missing(privateIds).some((id) => !placement?.has(id))
+              ) {
+                return stalePrivatePreparation;
+              }
+              const previous = exact;
+              if (placement) {
+                exact = placement;
+              }
+              try {
+                return readPreparedSessionRows(
+                  projection,
+                  isActive,
+                  () => (hasPrivateQueries ? preparedQueries : []),
+                  (read) => consume(read, preparedQueries),
+                  privateRepositories,
+                  privateRows,
+                );
+              } finally {
+                exact = previous;
+              }
+            },
+            "session-rows:consume",
+          );
         return hasPrivateQueries
           ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
           : consumePrepared();
@@ -423,8 +432,8 @@ export function createSessionRowPlacementProjection(
         if (pending) {
           return pending;
         }
-        selectRows();
-        return prepareSelectedRows();
+        runWithMainThreadTask(task, selectRows, "session-rows:select");
+        return runWithMainThreadTask(task, prepareSelectedRows, "session-rows:prepare");
       };
       const assertPublicationCurrent = () => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
@@ -442,10 +451,10 @@ export function createSessionRowPlacementProjection(
           await pending;
           assertActive();
         }
-        selectRows();
+        runWithMainThreadTask(task, selectRows, "session-rows:select");
         const requested = missing(selectedIds);
         if (!reader || requested.length === 0) {
-          const pending = prepareSelectedRows();
+          const pending = runWithMainThreadTask(task, prepareSelectedRows, "session-rows:prepare");
           if (pending) {
             await pending;
             continue;

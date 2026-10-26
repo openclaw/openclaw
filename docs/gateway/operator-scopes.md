@@ -42,6 +42,14 @@ require the `node` role.
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
 
+Personal profile editing is a narrowly self-scoped exception to read-only
+behavior: `operator.read` or `operator.sessions.read` (including their implied
+write/admin scopes) allows an authenticated person to change their own display
+name, avatar, and credit preference. Avatar downloads under session-only scopes
+are restricted to that person's profile. Editing someone else's profile,
+assigning roles, linking identity aliases, and merging profiles still require
+`operator.admin`. These edits do not grant general write access.
+
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
@@ -327,6 +335,14 @@ Bounded automatic metadata, operator-configured
 inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
+
+Activity recaps are shared Gateway metadata under the owning agent's utility
+route, including recaps of operator-created sessions. They do not inherit the
+operator's model policy, so recap calls can continue after a role model-policy
+revocation is acknowledged. Requesting a recap refresh still requires session
+write access; that permission queues the same service-owned work rather than
+delegating the caller's model authority. Disable the owning agent's utility
+routing to stop recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
 
 Native Codex staff work without a model policy has a limited attribution case
 when qualified native hooks are disabled or unavailable: previously accepted

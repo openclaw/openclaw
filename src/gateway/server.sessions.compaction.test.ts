@@ -40,7 +40,10 @@ import {
   seedTranscriptRows,
 } from "./server.sessions.compaction-fixtures.test-support.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
-import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import {
+  createClaudeCliRegistrationFixture,
+  getTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
 import { holdCompaction } from "./test/server-sessions-compaction.test-helpers.js";
@@ -51,7 +54,7 @@ import {
   expectNoSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
-import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 // Load after the fixture mocks, during collection rather than the first RPC deadline.
 import "./server-methods/sessions-compact.js";
 
@@ -419,16 +422,7 @@ test("sessions.compact records terminal Codex native compaction with a stale neg
 
 test("sessions.compact targets the persisted native CLI session", async () => {
   const pluginRegistry = getTestPluginRegistry();
-  pluginRegistry.cliBackends.push({
-    pluginId: "anthropic",
-    source: "test",
-    backend: {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      config: { command: "claude" },
-      bundleMcp: false,
-    },
-  });
+  pluginRegistry.cliBackends.push(createClaudeCliRegistrationFixture());
   setActivePluginRegistry(pluginRegistry);
   await createCompactionSession("sess-claude", {
     totalLines: 2,
@@ -791,15 +785,13 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
 test("sessions.compact refuses real compaction while a worker inference owns the session", async () => {
   const { storePath, sessionId } = await createCompactionSession("sess-compact-worker-inference");
   const hasSession = vi.fn((candidateSessionId: string) => candidateSessionId === sessionId);
-  const workerEnvironmentService = {};
-  registerWorkerInferenceSessionControl(workerEnvironmentService, {
-    hasSession,
-    reserveSessionDrain: () => {
+  const workerEnvironmentService = createWorkerInferenceDrainService(
+    () => {
       throw new Error("Compaction must reject active inference before draining");
     },
-    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
-    resolveSessionTargetForRunId: () => undefined,
-  });
+    undefined,
+    hasSession,
+  );
   const runtimeConfig = {
     agents: { entries: { main: {} } },
     session: { store: storePath },

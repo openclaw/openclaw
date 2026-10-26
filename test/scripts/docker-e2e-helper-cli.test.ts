@@ -64,6 +64,12 @@ function expectUsageError(result: ReturnType<typeof runHelper>, message: string)
   expect(result.stderr).not.toContain("at file:");
 }
 
+function expectSuccess(result: ReturnType<typeof runHelper>) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toBe("");
+  return result.stdout;
+}
+
 function expectText(text: string, included: readonly string[], excluded: readonly string[] = []) {
   for (const value of included) {
     expect(text).toContain(value);
@@ -91,45 +97,33 @@ function mockGitHub(
   mkdirSync(binDir, { recursive: true });
   writeFileSync(
     ghPath,
-    [
-      "#!/usr/bin/env node",
-      "const fs = require('node:fs');",
-      "const path = require('node:path');",
-      "const args = process.argv.slice(2);",
-      "if (args[0] === 'run' && args[1] === 'view') {",
-      `  console.log(JSON.stringify(${JSON.stringify(info)}));`,
-      "  process.exit(0);",
-      "}",
-      "if (args[0] === 'api') {",
-      `  console.log(JSON.stringify(${JSON.stringify(artifactNames.map((name) => ({ expired: false, name })))}));`,
-      "  process.exit(0);",
-      "}",
-      "if (args[0] === 'run' && args[1] === 'download') {",
-      "  const name = args[args.indexOf('--name') + 1];",
-      "  const dir = args[args.indexOf('--dir') + 1];",
-      `  const target = path.join(dir, ${JSON.stringify(download.nested ?? "")});`,
-      "  fs.mkdirSync(target, { recursive: true });",
-      ...(download.collision
-        ? [
-            "  const plan = path.join(target, 'targeted-plan.json');",
-            "  if (fs.existsSync(plan)) {",
-            "    console.error('targeted-plan.json already exists');",
-            "    process.exit(2);",
-            "  }",
-            "  fs.writeFileSync(plan, '{}');",
-          ]
-        : []),
-      "  fs.writeFileSync(path.join(target, 'failures.json'), JSON.stringify({",
-      "    lanes: [{ name: name.endsWith('-b') ? 'install-e2e' : 'gateway-network', status: 1 }],",
-      `    ref: ${download.mixed ? "(name.endsWith('-a') ? 'a' : 'b')" : "'d'"}.repeat(40),`,
-      "    status: 'failed',",
-      "  }));",
-      "  process.exit(0);",
-      "}",
-      "console.error(`unexpected gh args: ${args.join(' ')}`);",
-      "process.exit(1);",
-      "",
-    ].join("\n"),
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const download = ${JSON.stringify(download)};
+if (args[0] === 'run' && args[1] === 'view') {
+  console.log(JSON.stringify(${JSON.stringify(info)}));
+} else if (args[0] === 'api') {
+  console.log(JSON.stringify(${JSON.stringify(artifactNames.map((name) => ({ expired: false, name })))}));
+} else if (args[0] === 'run' && args[1] === 'download') {
+  const name = args[args.indexOf('--name') + 1];
+  const dir = args[args.indexOf('--dir') + 1];
+  const target = path.join(dir, download.nested ?? '');
+  fs.mkdirSync(target, { recursive: true });
+  if (download.collision) {
+    fs.writeFileSync(path.join(target, 'targeted-plan.json'), '{}', { flag: 'wx' });
+  }
+  fs.writeFileSync(path.join(target, 'failures.json'), JSON.stringify({
+    lanes: [{ name: name.endsWith('-b') ? 'install-e2e' : 'gateway-network', status: 1 }],
+    ref: (download.mixed ? (name.endsWith('-a') ? 'a' : 'b') : 'd').repeat(40),
+    status: 'failed',
+  }));
+} else {
+  console.error('unexpected gh args: ' + args.join(' '));
+  process.exit(1);
+}
+`,
     "utf8",
   );
   chmodSync(ghPath, 0o755);
@@ -149,24 +143,22 @@ function downloadedDir(stdout: string) {
   return dir;
 }
 
-function emittedWorkflowCommands(stdout: string): string[] {
-  return stdout
-    .split(/\r?\n/u)
-    .filter((line) => line.includes("gh workflow run"))
-    .map((line) => line.slice(line.indexOf("gh workflow run")));
-}
-
-function expectDeclaredDispatchInputs(command: string): void {
+function expectDeclaredDispatchInputs(stdout: string): void {
   const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW, "utf8")) as {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
   };
   const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
-  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
-    match[1] === undefined ? [] : [match[1]],
-  );
-  expect(emitted.length).toBeGreaterThan(0);
-  for (const input of emitted) {
-    expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
+  const commands = stdout.split(/\r?\n/u).filter((line) => line.includes("gh workflow run"));
+  expect(commands.length).toBeGreaterThan(0);
+  for (const line of commands) {
+    const command = line.slice(line.indexOf("gh workflow run"));
+    const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
+    expect(emitted.length).toBeGreaterThan(0);
+    for (const input of emitted) {
+      expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
+    }
   }
 }
 
@@ -188,9 +180,10 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("prints scheduler helper usage errors without a Node stack trace", () => {
-    const result = runHelper("scripts/docker-e2e.mjs");
-
-    expectUsageError(result, "node scripts/docker-e2e.mjs github-outputs <plan.json>");
+    expectUsageError(
+      runHelper("scripts/docker-e2e.mjs"),
+      "node scripts/docker-e2e.mjs github-outputs <plan.json>",
+    );
   });
 
   it("rejects oversized scheduler helper JSON artifacts without a Node stack trace", () => {
@@ -236,9 +229,8 @@ describe("Docker E2E helper CLIs", () => {
         ref: "HEAD",
       }),
     );
-    expect(result).toMatchObject({ status: 0, stderr: "" });
     expectText(
-      result.stdout,
+      expectSuccess(result),
       [
         "Failed Docker E2E entries: cleanup-smoke",
         "No targetable failed Docker E2E lanes found.",
@@ -255,9 +247,7 @@ describe("Docker E2E helper CLIs", () => {
 
     const result = rerun(file, "--ref", EXACT_TARGET_REF);
 
-    expect(result).toMatchObject({ status: 0, stderr: "" });
-    expect(result.stdout).toContain("docker_lanes='gateway-network'");
-    expect(result.stdout).not.toContain("poisoned-command");
+    expectText(expectSuccess(result), ["docker_lanes='gateway-network'"], ["poisoned-command"]);
   });
 
   it("uses the exact artifact target from summary.json instead of the workflow head", () => {
@@ -270,14 +260,11 @@ describe("Docker E2E helper CLIs", () => {
       status: "failed",
     });
 
-    const result = rerun(file, {
-      GITHUB_SHA: workflowHead,
-    });
-
-    expect(result).toMatchObject({ status: 0, stderr: "" });
-    expect(result.stdout).toContain(`Ref: ${targetRef}`);
-    expect(result.stdout).toContain(`-f ref='${targetRef}'`);
-    expect(result.stdout).not.toContain(workflowHead);
+    expectText(
+      expectSuccess(rerun(file, { GITHUB_SHA: workflowHead })),
+      [`Ref: ${targetRef}`, `-f ref='${targetRef}'`],
+      [workflowHead],
+    );
   });
 
   it("lets an explicit target ref override artifact refs", () => {
@@ -338,11 +325,7 @@ describe("Docker E2E helper CLIs", () => {
       [...ignored, "--ref 'full-release-validation-temp-deleted'"],
     );
     expectText(result.stdout, reused, [...ignored, "do-not-copy"]);
-    const commands = emittedWorkflowCommands(result.stdout);
-    expect(commands.length).toBeGreaterThan(0);
-    for (const command of commands) {
-      expectDeclaredDispatchInputs(command);
-    }
+    expectDeclaredDispatchInputs(result.stdout);
   });
 
   it("downloads GitHub run artifacts into distinct default directories", () => {

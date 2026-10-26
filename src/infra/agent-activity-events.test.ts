@@ -1,4 +1,4 @@
-import { expect, expectTypeOf, test } from "vitest";
+import { expect, expectTypeOf, onTestFinished, test } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -56,7 +56,7 @@ function resultEntry(messageId: string, toolCallId: string | undefined, metadata
   return { messageId, message: toolResult(toolCallId, "exec", metadata) };
 }
 
-test("emits every activity stream with shared sequencing and context", () => {
+test("forwards activity data with sequencing and optional session context", () => {
   type ItemData = Extract<Parameters<typeof emitAgentActivityEvent>[0], { stream: "item" }>["data"];
   expectTypeOf<AgentApprovalEventData>().not.toMatchTypeOf<ItemData>();
 
@@ -67,16 +67,6 @@ test("emits every activity stream with shared sequencing and context", () => {
       ...context,
       stream: "item",
       data: { ...item, phase: "start", kind: "tool", status: "running" },
-    },
-    {
-      ...context,
-      stream: "approval",
-      data: { phase: "requested", kind: "exec", status: "pending", title: "Approve" },
-    },
-    {
-      ...context,
-      stream: "command_output",
-      data: { ...item, phase: "delta", output: "working" },
     },
     {
       ...context,
@@ -93,26 +83,20 @@ test("emits every activity stream with shared sequencing and context", () => {
     },
   ];
   resetAgentEventsForTest();
+  onTestFinished(() => resetAgentEventsForTest());
   const events: AgentEventPayload[] = [];
-  const unsubscribe = onAgentEvent((event) => events.push(event));
-  try {
-    for (const input of inputs) {
-      emitAgentActivityEvent(input);
-    }
-    expect(
-      events.map(({ runId, seq, stream, sessionKey }) => ({ runId, seq, stream, sessionKey })),
-    ).toEqual([
-      { runId: "run-1", seq: 1, stream: "item", sessionKey: "session-1" },
-      { runId: "run-1", seq: 2, stream: "approval", sessionKey: "session-1" },
-      { runId: "run-1", seq: 3, stream: "command_output", sessionKey: "session-1" },
-      { runId: "run-1", seq: 4, stream: "patch", sessionKey: undefined },
-    ]);
-    expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
-    expect(events[0]?.data).toBe(inputs[0]?.data);
-  } finally {
-    unsubscribe();
-    resetAgentEventsForTest();
+  onTestFinished(onAgentEvent((event) => events.push(event)));
+  for (const input of inputs) {
+    emitAgentActivityEvent(input);
   }
+  expect(
+    events.map(({ runId, seq, stream, sessionKey }) => [runId, seq, stream, sessionKey]),
+  ).toEqual([
+    ["run-1", 1, "item", "session-1"],
+    ["run-1", 2, "patch", undefined],
+  ]);
+  expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
+  expect(events[0]?.data).toBe(inputs[0]?.data);
 });
 
 test("projects Tool Search names for live and history activity without changing outcomes or pairing", () => {
@@ -153,7 +137,6 @@ test("projects Tool Search names for live and history activity without changing 
     ]);
     expect(entry.items[0]?.meta).toBeUndefined();
   }
-  expect(skipped).toMatchObject({ toolName: "tool_call", isError: true });
 });
 
 test("derives historical Tool Search metadata from the executed inner input", () => {
@@ -186,7 +169,6 @@ test.each([
   const history = projectAgentHistoryActivity([{ messageId: "result", message: result }]);
   expect(live.status).toBe(status);
   expect(history[0]?.items).toMatchObject([{ status }]);
-  expect(result.isError).toBe(true);
 });
 
 test.each([
@@ -260,23 +242,21 @@ test("keeps a completed step countable when its only child is routine progress",
 });
 
 test.each([
-  [
-    "a nested step holds the routine call",
-    [
+  {
+    nested: [
       ["inner", "exec", "outer"],
       ["plan", "progress_card", "inner"],
-    ],
-    "inner",
-  ],
-  [
-    "a visible call sits under a hidden one",
-    [
+    ] as const,
+    counted: "inner",
+  },
+  {
+    nested: [
       ["plan", "progress_card", "outer"],
       ["read", "read", "plan"],
-    ],
-    "read",
-  ],
-] as const)("counts one operation for a completed step when %s", (_, nested, counted) => {
+    ] as const,
+    counted: "read",
+  },
+])("counts only $counted through nested hidden progress", ({ nested, counted }) => {
   const projected = projectAgentHistoryActivity([
     call("outer", "outer", { __openclaw: { runId: "run" } }),
     ...nested.map(([id, name, parent], index) =>

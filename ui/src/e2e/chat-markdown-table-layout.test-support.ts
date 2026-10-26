@@ -116,7 +116,8 @@ export function expectResponsiveTableGeometry(
   } else {
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      expect(geometry.width).toBeCloseTo(width - 2 * 20, 0);
+      // Full-width mobile shell keeps the 16px reading gutter on each side.
+      expect(geometry.width).toBeCloseTo(width - 2 * 16, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }

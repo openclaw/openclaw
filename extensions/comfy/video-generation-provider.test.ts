@@ -1,6 +1,11 @@
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildComfyConfig, fetchGuardJson, registerComfyProviders } from "./test-helpers.js";
+import {
+  buildComfyConfig,
+  fetchGuardJson,
+  fetchGuardResponse,
+  registerComfyProviders,
+} from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -24,13 +29,9 @@ function mockLocalVideoResponses(
     .mockResolvedValueOnce(fetchGuardJson({ "local-video": { outputs } }));
 
   if (download) {
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(Buffer.from(download.body), {
-        status: 200,
-        headers: { "content-type": download.contentType },
-      }),
-      release: vi.fn(async () => {}),
-    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      fetchGuardResponse(Buffer.from(download.body), download.contentType),
+    );
   }
 }
 

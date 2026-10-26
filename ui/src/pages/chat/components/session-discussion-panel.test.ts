@@ -105,6 +105,7 @@ describe("session discussion panel", () => {
   it("offers the valid open URL when a same-origin embed is rejected", async () => {
     const openUrl = "https://discussion.example/thread";
     const panel = mount({
+      presentation: "desktop",
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
         embedUrl: new URL("/embed/thread", window.location.origin).href,

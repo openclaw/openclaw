@@ -85,25 +85,22 @@ describe("runtime path ownership", () => {
   it.each(["overlapping", "checkout-sized"])(
     "relocates %s rules with ordered aliases and exact boundaries",
     (shape) => {
-      const base = path.resolve("runtime-path-rules");
-      const source = path.join(base, "source");
-      const broad = path.join(base, "broad");
-      const narrow = path.join(base, "narrow");
+      const at = (relative: string) => path.resolve("runtime-path-rules", relative);
+      const makeRule = (source: string, destination: string, ...aliases: string[]) => ({
+        sourceRoot: at(source),
+        destinationRoot: at(destination),
+        sourceAliases: aliases.length ? aliases.map(at) : undefined,
+      });
       const scaled = shape === "checkout-sized";
       const rules = scaled
-        ? Array.from({ length: 5_000 }, (_, index) => ({
-            sourceRoot: path.join(source, `package-${index}`),
-            sourceAliases: [path.join(base, "aliases", `package-${index}`)],
-            destinationRoot: path.join(base, "retained", `package-${index}`),
-          }))
+        ? Array.from({ length: 5_000 }, (_, index) => {
+            const name = `package-${index}`;
+            return makeRule(`source/${name}`, `retained/${name}`, `aliases/${name}`);
+          })
         : [
-            {
-              sourceRoot: source,
-              destinationRoot: broad,
-              sourceAliases: [path.join(base, "alias"), path.join(base, "alias", "deep")],
-            },
-            { sourceRoot: path.join(source, "deep"), destinationRoot: narrow },
-            { sourceRoot: source, destinationRoot: narrow },
+            makeRule("source", "broad", "alias", "alias/deep"),
+            makeRule("source/deep", "narrow"),
+            makeRule("source", "narrow"),
           ];
       const prepared = prepareRuntimeRelocations(rules);
       const checks: [string, string][] = scaled
@@ -117,10 +114,10 @@ describe("runtime path ownership", () => {
             ];
           })
         : [
-            [path.join(source, "deep", "file"), path.join(broad, "deep", "file")],
-            [path.join(base, "alias", "deep", "file"), path.join(broad, "deep", "file")],
-            [path.join(base, "source-sibling", "file"), path.join(base, "source-sibling", "file")],
-          ];
+            ["source/deep/file", "broad/deep/file"],
+            ["alias/deep/file", "broad/deep/file"],
+            ["source-sibling/file", "source-sibling/file"],
+          ].map(([input, expected]): [string, string] => [at(input!), at(expected!)]);
       for (const lookup of scaled ? [prepared] : [rules, prepared]) {
         for (const [input, expected] of checks) {
           expect(relocateRuntimePath(input, lookup)).toBe(expected);

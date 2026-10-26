@@ -55,6 +55,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   jobId: string;
   target: CronAnnounceTarget;
   payload: ReplyPayload | ReplyPayload[];
+  /** The isolated finalizer already selected the visible reply lanes. */
+  admittedReasoning?: true;
   abortSignal: AbortSignal;
   bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
@@ -120,6 +122,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   const payloads = appendCronRunInspectionLink(
     prepared.filter((payload) => hasReplyPayloadContent(payload, { trimText: true })),
     params.inspectionUrl,
+    channelId,
   );
   if (payloads.length === 0) {
     return { status: "suppressed", reason: "empty_after_tts" };
@@ -177,6 +180,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
         undefined,
         undefined,
         params.sessionGeneration,
+        params.admittedReasoning,
       );
       if (!recipientReached) {
         recipientReached = durableMessageBatchMayHaveReachedRecipient(result);

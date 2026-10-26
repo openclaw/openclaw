@@ -6,6 +6,7 @@ export const omitWireFields = (value: Record<string, unknown>, fields: string[])
 export type WireApi = "openai-responses" | "openai-completions" | "anthropic-messages";
 type ToolCall = { id: string; name: string; itemId?: string };
 type WireRecord = Record<string, unknown>;
+const event = (type: string, fields: WireRecord = {}): WireRecord => ({ type, ...fields });
 type ModelSettings = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
 >[string];
@@ -83,6 +84,12 @@ export function providerResponse(params: {
   const tool = calls.length > 0;
   const cached = (key: string) =>
     cacheRead === undefined ? {} : { [key]: { cached_tokens: cacheRead } };
+  const usage = (input: string, outputTokens: string, details: string) => ({
+    [input]: 1000,
+    [outputTokens]: 2,
+    total_tokens: 1002,
+    ...cached(details),
+  });
   const message = (value: string) => ({
     type: "message",
     id: params.messageId,
@@ -97,8 +104,7 @@ export function providerResponse(params: {
       ? calls.map((call) => ({ type: "tool_use", id: call.id, name: call.name, input: {} }))
       : [{ type: "text", text: "" }];
     events = [
-      {
-        type: "message_start",
+      event("message_start", {
         message: {
           id,
           type: "message",
@@ -111,24 +117,22 @@ export function providerResponse(params: {
             ...(cacheRead === undefined ? {} : { cache_read_input_tokens: cacheRead }),
           },
         },
-      },
+      }),
       ...blocks.flatMap((block, index) => [
-        { type: "content_block_start", index, content_block: block },
-        {
-          type: "content_block_delta",
+        event("content_block_start", { index, content_block: block }),
+        event("content_block_delta", {
           index,
           delta: tool
             ? { type: "input_json_delta", partial_json: "{}" }
             : { type: "text_delta", text },
-        },
-        { type: "content_block_stop", index },
+        }),
+        event("content_block_stop", { index }),
       ]),
-      {
-        type: "message_delta",
+      event("message_delta", {
         delta: { stop_reason: tool ? "tool_use" : "end_turn" },
         usage: { output_tokens: 2 },
-      },
-      { type: "message_stop" },
+      }),
+      event("message_stop"),
     ];
   } else if (api === "openai-completions") {
     const chunk = {
@@ -152,12 +156,7 @@ export function providerResponse(params: {
       {
         ...chunk,
         choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }],
-        usage: {
-          prompt_tokens: 1000,
-          completion_tokens: 2,
-          total_tokens: 1002,
-          ...cached("prompt_tokens_details"),
-        },
+        usage: usage("prompt_tokens", "completion_tokens", "prompt_tokens_details"),
       },
     ];
   } else {
@@ -181,39 +180,32 @@ export function providerResponse(params: {
     }
     events = [
       ...output.flatMap((item, output_index) => [
-        {
-          type: "response.output_item.added",
+        event("response.output_item.added", {
           output_index,
           item:
             item.type === "function_call" ? { ...item, arguments: "" } : { ...item, content: [] },
-        },
+        }),
         ...(item.type === "function_call"
-          ? [{ type: "response.function_call_arguments.delta", output_index, delta: "{}" }]
+          ? [event("response.function_call_arguments.delta", { output_index, delta: "{}" })]
           : []),
-        { type: "response.output_item.done", output_index, item },
+        event("response.output_item.done", { output_index, item }),
       ]),
-      {
-        type: failure ? "response.failed" : "response.completed",
+      event(failure ? "response.failed" : "response.completed", {
         response: {
           id,
           status: failure ? "failed" : "completed",
           output,
           ...(failure ? { error: { code: failure.code, message: failure.message } } : {}),
-          usage: {
-            input_tokens: 1000,
-            output_tokens: 2,
-            total_tokens: 1002,
-            ...cached("input_tokens_details"),
-          },
+          usage: usage("input_tokens", "output_tokens", "input_tokens_details"),
         },
-      },
+      }),
     ];
   }
   const body =
     events
       .map(
-        (event) =>
-          `${api === "anthropic-messages" ? `event: ${String(event.type)}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+        (frame) =>
+          `${api === "anthropic-messages" ? `event: ${String(frame.type)}\n` : ""}data: ${JSON.stringify(frame)}\n\n`,
       )
       .join("") + ((params.done ?? api !== "anthropic-messages") ? "data: [DONE]\n\n" : "");
   return {

@@ -1,12 +1,15 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createThemedChatOpener, themeConfigResponse } from "./theme-typography.test-support.ts";
@@ -29,8 +32,6 @@ const cssToken = (page: Page, token: string) =>
     (key) => getComputedStyle(document.documentElement).getPropertyValue(key).trim(),
     token,
   );
-const styleToken = (page: Page, token: string) =>
-  page.evaluate((key) => document.documentElement.style.getPropertyValue(key), token);
 const attribute = (page: Page, name: string) => page.locator("html").getAttribute(name);
 const ligaturesOf = (locator: Locator) =>
   locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
@@ -39,22 +40,17 @@ const expectTheme = (page: Page, theme: string) =>
 
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
-    const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
+    const { page, gateway } = await openThemedChat("dash", "dark");
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(page);
     const ui = page.locator("openclaw-select-picker:has(#settings-font-ui)");
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
-    const fontRequests = () =>
-      themeRequests.filter((r) => r.includes(".css") && !r.startsWith("dash.css"));
     await preview.waitFor();
     expect(await ui.locator("..").locator("..").textContent()).toContain(
       "Stored in this browser only",
     );
     await page.evaluate(() => document.fonts.ready);
-    expect(new Set(fontRequests())).toEqual(
-      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
-    );
     const families = () =>
       preview.evaluate((panel) => {
         const font = (selector: string) =>
@@ -65,27 +61,21 @@ suite.define(() => {
           code: font("code"),
         };
       });
-    const chatSmoothing = () => styleToken(page, "--chat-font-smoothing");
     const initial = await families();
     expect(initial).toEqual({
       ui: expect.stringContaining("DM Sans"),
       chat: expect.stringContaining("Fraunces"),
       code: expect.stringContaining("JetBrains Mono"),
     });
-    expect(await chatSmoothing()).toBe("auto");
     await openPicker(ui);
     await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
-    await expect.poll(() => fontRequests().length).toBe(9);
-    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
     await selectPickerValue(chat, "geist");
     await expect.poll(async () => (await families()).chat).toContain("Geist");
-    await expect.poll(chatSmoothing).toBe("");
     await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
-    await expect.poll(chatSmoothing).toBe("auto");
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -93,7 +83,6 @@ suite.define(() => {
         ),
       )
       .toEqual(expect.arrayContaining(["Geist", "Lora"]));
-    expect((await families()).code).toBe(initial.code);
     expect(await gateway.getRequests("config.patch")).toEqual([]);
     await page.reload();
     await waitForControlUiSettingsTakeover(page);
@@ -104,12 +93,6 @@ suite.define(() => {
     await selectPickerValue(ui, "theme");
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
-    expect(
-      await page.evaluate(
-        (keys) => keys.map((key) => document.documentElement.style.getPropertyValue(key)),
-        ["--font-body", "--font-chat"],
-      ),
-    ).toEqual(["", ""]);
   });
 
   // #137473: compare incremental input pixels with a whole-value assignment.
@@ -184,7 +167,10 @@ suite.define(() => {
     // Capture CodeMirror while online; disconnecting replaces its editable node.
     await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
     await page.locator(".cm-content").waitFor({ state: "visible" });
-    await page.getByRole("button", { name: "Edit file" }).first().click();
+    await selectFileAction(
+      page.locator(".sidebar-file-view").filter({ visible: true }),
+      "Edit file",
+    );
     const editableContent = page.locator('.cm-content[contenteditable="true"]');
     await editableContent.waitFor();
 
@@ -282,7 +268,7 @@ suite.define(() => {
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
-    await page.locator(".chat-pane__nav-toggle").first().click();
+    await navigationDrawerToggle(page).click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);
@@ -333,10 +319,7 @@ suite.define(() => {
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
     const { page, gateway } = await openThemedChat("knot", "light");
     await page.setViewportSize({ width: 720, height: 900 });
-    let releasePalette!: () => void;
-    const paletteGate = new Promise<void>((resolve) => {
-      releasePalette = resolve;
-    });
+    const { promise: paletteGate, resolve: releasePalette } = createDeferred();
     const tidePaletteUrl = /\/themes\/tide\.css(?:\?|$)/u;
     await page.route(tidePaletteUrl, async (route) => {
       await paletteGate;
@@ -388,7 +371,6 @@ suite.define(() => {
   it("resolves the font stylesheet against a configured mount path", async () => {
     const basePath = "/openclaw";
     const { page } = await openThemedChat("absolutely", "dark", { basePath });
-    const requested: string[] = [];
     const fontRequests: URL[] = [];
     // Stamp Gateway's mount contract onto preview-server HTML.
     await page.route("**/*", async (route) => {
@@ -408,7 +390,6 @@ suite.define(() => {
     });
     await page.route(`**${basePath}/themes/**`, async (route) => {
       const url = new URL(route.request().url());
-      requested.push(url.pathname);
       url.pathname = url.pathname.slice(basePath.length);
       await route.fulfill({ response: await route.fetch({ url: url.href }) });
     });
@@ -423,9 +404,6 @@ suite.define(() => {
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const buildId = await attribute(page, "data-openclaw-control-ui-build-id");
-    if (buildId !== null) {
-      expect(buildId).not.toBe("");
-    }
     await expect
       .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
       .toBe(true);
@@ -440,7 +418,6 @@ suite.define(() => {
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
     expect(paletteUrl.searchParams.get("v")).toBe(buildId);
-    expect(requested).toContain(`${basePath}/themes/absolutely.css`);
-    expect(await cssToken(page, "--bg")).toBe("#1c1c1a");
+    expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });

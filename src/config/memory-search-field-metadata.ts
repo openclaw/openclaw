@@ -20,6 +20,7 @@ export const MEMORY_SEARCH_FIELD_LABELS: Record<string, string> = {
   "memory.search.model": "Memory Search Model",
   "memory.search.inputType": "Memory Search Input Type",
   "memory.search.queryInputType": "Memory Search Query Input Type",
+  "memory.search.queryInstruction": "Memory Search Query Instruction",
   "memory.search.documentInputType": "Memory Search Document Input Type",
   "memory.search.outputDimensionality": "Memory Search Output Dimensionality",
   "memory.search.fallback": "Memory Search Fallback",

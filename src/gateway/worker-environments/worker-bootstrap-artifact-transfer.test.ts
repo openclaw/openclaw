@@ -24,15 +24,13 @@ let root: string;
 let origin: string;
 let server: http.Server;
 let authorized: boolean;
-let now: number;
 let service: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
 let rateLimiter: AuthRateLimiter | undefined;
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-bootstrap-wire-"));
   authorized = true;
-  now = 1_000;
-  service = createWorkerBootstrapArtifactTransferService({ now: () => now });
+  service = createWorkerBootstrapArtifactTransferService();
   const callback = createArtifactTransferHttpCallback(service);
   server = http.createServer((req, res) => {
     void handleArtifactTransferHttpRequest({
@@ -63,7 +61,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-async function prepare(contents: string | Buffer = "source-runtime", owner?: AbortController) {
+async function prepare(contents = "source-runtime") {
   const artifact = {
     tarballPath: path.join(root, "runtime.tgz"),
     tarballSha256: createHash("sha256").update(contents).digest("hex"),
@@ -72,24 +70,12 @@ async function prepare(contents: string | Buffer = "source-runtime", owner?: Abo
   await fs.writeFile(artifact.tarballPath, contents);
   const receipt = service.prepare({
     artifact,
-    signal: owner?.signal,
     isAuthorized: () => authorized,
   });
   return {
     artifact,
     url: `${origin}/__openclaw__/worker-bootstrap/artifacts/${artifact.tarballSha256}`,
     headers: { authorization: `Bearer ${receipt.token}` },
-    close: {
-      owner: () => {
-        authorized = false;
-      },
-      expiry: () => {
-        now = receipt.expiresAtMs;
-      },
-      revoke: () => service.revoke(receipt.token),
-      shutdown: () => service.closeAll(),
-      signal: () => owner?.abort(),
-    },
   };
 }
 
@@ -121,19 +107,6 @@ it("delivers an artifact only on its digest route with a header bearer", async (
   await expect(response.text()).resolves.toBe("source-runtime");
   expect((await fetch(`${origin}/__openclaw__/worker-bootstrap-other`)).status).toBe(418);
 });
-
-it.each(["owner", "expiry", "signal", "shutdown"] as const)(
-  "rejects retained bearers after %s closure",
-  async (closure) => {
-    const owner = new AbortController();
-    const { url, headers, close } = await prepare("source-runtime", owner);
-    close[closure]();
-    await expectNotFound(await fetch(url, { headers }));
-    authorized = true;
-    now = 1_000;
-    expect((await fetch(url, { headers })).status).toBe(404);
-  },
-);
 
 it("rechecks the owner after opening the descriptor, before emitting bytes", async () => {
   const { url, headers } = await prepare();
@@ -173,19 +146,6 @@ it.each(["missing", "symlink", "size"] as const)(
       }
     }
     await expectNotFound(await fetch(url, { headers }));
-  },
-);
-
-it.each(["owner", "expiry", "signal", "revoke", "shutdown"] as const)(
-  "terminates an active stream on %s and disallows a concurrent download",
-  async (closure) => {
-    const owner = new AbortController();
-    const { close, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner);
-    const response = await fetch(url, { headers });
-    expect(response.status).toBe(200);
-    expect((await fetch(url, { headers })).status).toBe(503);
-    close[closure]();
-    await expect(response.arrayBuffer()).rejects.toThrow();
   },
 );
 

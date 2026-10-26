@@ -1,73 +1,84 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { expect, it } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import type { CronJob } from "./types.js";
+import { cronStoreKey } from "./store/key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./store/row-codec.js";
+import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-config-revision-" });
 const message = "Summarize the day";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
-  return {
+  return cronTestJob({
     id: "job-1",
     name: "daily report",
-    enabled: true,
     createdAtMs: 1_000,
     updatedAtMs: 2_000,
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message },
     delivery: { mode: "announce", channel: "telegram", to: "chat-1" },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
-it("preserves order when case-insensitive command env keys collide on Windows", () => {
-  const firstWinsLast: CronJob = {
+it.each([
+  { sessionId: "replacement-session" },
+  { lifecycleRevision: "replacement-generation" },
+  { scopeKey: "different-sandbox" },
+  { workspaceDir: "/other/workspace" },
+  { configLabel: "changed-policy" },
+  {
+    operator: {
+      ...makeCronStreamSandboxTarget().operator!,
+      gatewayAccessGrant: { pluginId: "access", grantId: "replacement-grant" },
+    },
+  },
+])("binds sandbox target and original authority changes: %j", (change) => {
+  const job: CronStoredJob = {
     ...makeJob(),
-    payload: {
-      kind: "command",
-      argv: ["printenv"],
-      env: { Path: "first", PATH: "second" },
-    },
+    schedule: { kind: "stream", command: ["watch-source"] },
+    streamSandbox: makeCronStreamSandboxTarget(),
   };
-  const secondWinsLast: CronJob = {
-    ...firstWinsLast,
-    payload: {
-      kind: "command",
-      argv: ["printenv"],
-      env: { PATH: "second", Path: "first" },
-    },
-  };
+  expect(
+    resolveCronJobConfigRevision({ ...job, streamSandbox: makeCronStreamSandboxTarget(change) }),
+  ).not.toBe(resolveCronJobConfigRevision(job));
+});
 
-  expect(resolveCronJobConfigRevision(firstWinsLast)).not.toBe(
-    resolveCronJobConfigRevision(secondWinsLast),
+it("preserves order when case-insensitive command env keys collide on Windows", () => {
+  const revision = (env: Record<string, string>) =>
+    resolveCronJobConfigRevision(
+      makeJob({ payload: { kind: "command", argv: ["printenv"], env } }),
+    );
+  expect(revision({ Path: "first", PATH: "second" })).not.toBe(
+    revision({ PATH: "second", Path: "first" }),
   );
 });
 
 it("distinguishes inherited and explicitly cleared delivery fields", () => {
   const inherited = makeJob();
-  const explicitlyCleared: CronJob = {
-    ...inherited,
-    delivery: {
-      mode: "announce",
-      channel: "telegram",
-      to: "chat-1",
-      failureDestination: { channel: undefined },
-    },
-  };
-
-  expect(resolveCronJobConfigRevision(explicitlyCleared)).not.toBe(
-    resolveCronJobConfigRevision(inherited),
-  );
+  expect(
+    resolveCronJobConfigRevision({
+      ...inherited,
+      delivery: { ...inherited.delivery!, failureDestination: { channel: undefined } },
+    }),
+  ).not.toBe(resolveCronJobConfigRevision(inherited));
 });
 
 it("matches SQLite normalization across optional fields, schedules, payloads, triggers, and alerts", async () => {
   const { storePath } = await makeStorePath();
-  const jobs = [
+  const jobs: CronStoredJob[] = [
+    {
+      ...makeJob(),
+      id: "sandbox-stream",
+      schedule: { kind: "stream", command: ["watch-source"] },
+      streamSandbox: makeCronStreamSandboxTarget(),
+    },
     makeJob({
       agentId: undefined,
       description: undefined,
@@ -109,12 +120,25 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
     }),
   ];
   await saveCronStore(storePath, { version: 1, jobs });
+  const sandboxRow = expectDefined(
+    loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath)).find(
+      (row) => row.job_id === "sandbox-stream",
+    ),
+    "persisted sandbox stream row",
+  );
+  expect(JSON.parse(sandboxRow.job_json)).toMatchObject({
+    schedule: { kind: "sandbox-stream", command: ["watch-source"] },
+    streamSandbox: makeCronStreamSandboxTarget(),
+  });
+  expect(loadedCronStoreFromRows([sandboxRow]).configJobs[0]).toMatchObject({
+    schedule: { kind: "sandbox-stream" },
+  });
+  expect(
+    loadedCronStoreFromRows([{ ...sandboxRow, state_json: "invalid" }]).invalidConfigRows[0],
+  ).toMatchObject({ reason: "invalid-state", job: { schedule: { kind: "sandbox-stream" } } });
   const reloadedById = new Map((await loadCronStore(storePath)).jobs.map((job) => [job.id, job]));
   for (const job of jobs) {
-    const reloaded = reloadedById.get(job.id);
-    if (!reloaded) {
-      throw new Error(`expected persisted cron job ${job.id} to reload`);
-    }
+    const reloaded = expectDefined(reloadedById.get(job.id), `persisted cron job ${job.id}`);
     expect(resolveCronJobConfigRevision(reloaded), job.id).toBe(resolveCronJobConfigRevision(job));
   }
 });

@@ -1,4 +1,6 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type TerminalRequester = {
   caseName: string;
@@ -19,12 +21,12 @@ export type QaTerminalRequesterSettlement = {
 export function createTerminalRequesterSettleGate() {
   const settledChildren = new Set<string>();
   const requesters = new Map<string, TerminalRequester>();
-  const waiters = new Map<string, { promise: Promise<void>; finish: (error?: Error) => void }>();
+  const waiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
   const childKey = (caseName: string, childSessionKey: string) => `${caseName}\n${childSessionKey}`;
   const markSettled = (key: string) => {
     settledChildren.add(key);
     requesters.delete(key);
-    waiters.get(key)?.finish();
+    waiters.get(key)?.resolve();
   };
   return {
     onResponseSent(requester: TerminalRequester) {
@@ -75,28 +77,18 @@ export function createTerminalRequesterSettleGate() {
       if (existing) {
         return await existing.promise;
       }
-      let finish!: (error?: Error) => void;
-      const promise = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          finish(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
-        }, 120_000);
-        finish = (error) => {
-          clearTimeout(timeout);
-          waiters.delete(key);
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        };
-      });
-      waiters.set(key, { promise, finish });
+      const completed = createDeferred();
+      const promise = raceWithTimeout(completed.promise, 120_000, () => {
+        throw new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`);
+      }).finally(() => waiters.delete(key));
+      waiters.set(key, { ...completed, promise });
       await promise;
     },
     stop() {
       for (const waiter of waiters.values()) {
-        waiter.finish(new Error("terminal requester fixture stopped"));
+        waiter.reject(new Error("terminal requester fixture stopped"));
       }
+      waiters.clear();
       requesters.clear();
       settledChildren.clear();
     },

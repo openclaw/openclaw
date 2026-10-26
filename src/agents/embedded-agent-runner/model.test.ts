@@ -47,12 +47,9 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
 const preparedSnapshots = vi.hoisted(() => new Map<string, unknown>());
 
 // mock-isolation: Model-resolution fixtures own prepared auth snapshots; provider discovery must not add host credentials or registries.
-vi.mock("../../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../../plugins/provider-external-auth-core.js", async () =>
+  (await import("../../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -119,19 +116,14 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
     const snapshot = {
-      catalogOwner: undefined,
-      agentDir: input.agentDir,
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: input.agentDir,
+        config: input.config ?? {},
+        metadataSnapshot,
+        createStores: () => ({ authStorage, modelRegistry }),
+      }),
       ...(workspaceDir ? { workspaceDir } : {}),
-      activeProjectKeys: [],
-      config: input.config ?? {},
-      authModes: {},
-      metadataSnapshot,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup([], metadataSnapshot),
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshots.set(key, snapshot);
     return snapshot;

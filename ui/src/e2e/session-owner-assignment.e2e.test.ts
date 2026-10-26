@@ -65,7 +65,12 @@ function directoryResponse(extraNames: string[]): UsersListResult {
   };
 }
 
-async function installOwnerGateway(page: Page, archived = false, extraNames: string[] = []) {
+async function installOwnerGateway(
+  page: Page,
+  archived = false,
+  extraNames: string[] = [],
+  initialPage: "chat" | "sessions" = "chat",
+) {
   await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const result = sessionsListResponse(archived);
   const gateway = await installMockGateway(page, {
@@ -97,11 +102,15 @@ async function installOwnerGateway(page: Page, archived = false, extraNames: str
     sessionKey,
   });
   await page.goto(
-    archived
-      ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
-      : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+    initialPage === "sessions"
+      ? `${suite.server.baseUrl}sessions`
+      : archived
+        ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
+        : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
   );
-  await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  if (initialPage === "chat") {
+    await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  }
   await gateway.deferNext("sessions.assignOwner");
   return gateway;
 }
@@ -119,14 +128,18 @@ async function expectAssignmentRequest(
   });
 }
 
-async function expectAssignmentAvatarLayout(page: Page): Promise<void> {
-  const layout = await page
-    .locator('button[data-value^="assign-owner:"]:visible')
-    .evaluateAll((items) =>
+async function expectAssignmentAvatarLayout(page: Page, compact = false): Promise<void> {
+  const rows = ownerChoices(page, compact);
+  const choices = rows.filter({ has: page.locator(".session-menu__avatar") });
+  await expectBrowser(choices).toHaveCount((await rows.count()) - (compact ? 1 : 0));
+  const layout = await choices.evaluateAll(
+    (items, isCompact) =>
       items.map((item) => {
         const avatar = item.querySelector(".viewer-avatar")!;
         const slot = item.querySelector(".session-menu__avatar")!;
-        const label = item.querySelector(".session-menu__text")!;
+        const label = item.querySelector(
+          isCompact ? ":scope > span:not([aria-hidden])" : ".session-menu__text",
+        )!;
         const bounds = avatar.getBoundingClientRect();
         const slotBounds = slot.getBoundingClientRect();
         const style = getComputedStyle(avatar);
@@ -138,7 +151,8 @@ async function expectAssignmentAvatarLayout(page: Page): Promise<void> {
           gap: label.getBoundingClientRect().left - bounds.right,
         };
       }),
-    );
+    compact,
+  );
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
     expect(avatar).toMatchObject({ width: "24px", height: "24px", square: true, contained: true });
@@ -156,8 +170,18 @@ function menuItem(scope: Page | Locator, name: string) {
   return scope.getByRole("menuitem", { name, exact: true });
 }
 
-function assignee(scope: Page | Locator, name: string) {
-  return scope.getByRole("menuitemradio", { name, exact: true });
+function assignee(scope: Page | Locator, name: string, compact = false) {
+  return compact
+    ? scope.getByRole("button", { name, exact: true })
+    : scope
+        .getByRole("menuitemradio", { name, exact: true })
+        .or(scope.getByRole("radio", { name, exact: true }));
+}
+
+function ownerChoices(page: Page, compact: boolean) {
+  return compact
+    ? page.locator(".session-actions-page:visible button[aria-pressed]")
+    : page.getByRole("menuitemradio");
 }
 
 async function confirmOwner(
@@ -178,7 +202,7 @@ async function confirmOwner(
 function ownerControls(page: Page) {
   const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
   const row = page.locator(`[data-session-key="${sessionKey}"]`);
-  const assignTo = menuItem(page, "Assign to…");
+  const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
   return {
     activePane,
     row,
@@ -208,21 +232,48 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
 }
 
 suite.define(() => {
+  it.each(["sidebar", "header"])(
+    "filters the hovered assignment submenu from the %s without clicking search",
+    (surface) =>
+      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installOwnerGateway(page);
+        await openSessionActions(page, surface);
+        const { assignTo, panel } = ownerControls(page);
+        await assignTo.hover();
+        const search = panel.getByRole("searchbox");
+        await expectBrowser(search).toBeVisible();
+        await page.keyboard.type("zz");
+        await expectBrowser(search).toHaveValue("zz");
+        await expectBrowser(panel).toContainText("No matching people or agents");
+        await page.keyboard.press("Escape");
+        await expectBrowser(search).toHaveValue("");
+        await page.keyboard.type("carol");
+        await expectBrowser(search).toHaveValue("carol");
+        await expectBrowser(search).toBeFocused();
+        await expectBrowser(panel.locator('[role="menuitemradio"] .session-menu__text')).toHaveText(
+          ["Carol"],
+        );
+        expect(await gateway.getRequests("sessions.assignOwner")).toHaveLength(0);
+        await page.keyboard.press("ArrowDown");
+        await expectBrowser(assignee(panel, "Carol")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expectAssignmentRequest(gateway, "profile-carol");
+      }),
+  );
+
   it.each([1280, 390])(
     "keeps the Sessions page owner selected and assignment failures visible at width %i",
     (width) =>
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          const gateway = await installOwnerGateway(page);
-          await page.goto(`${suite.server.baseUrl}sessions`);
-          await gateway.deferNext("sessions.assignOwner");
+          const gateway = await installOwnerGateway(page, false, [], "sessions");
           const roster = page.locator("openclaw-sessions-page");
           const row = roster.locator("tbody tr").filter({
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
           });
-          await row.getByRole("button", { name: "Open session menu", exact: true }).click();
-          const assignTo = menuItem(page, "Assign to…");
+          await row.getByRole("button", { name: "Open session menu" }).click();
+          const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
           await expandAssignment(assignTo, width < 560);
           const current = assignee(page, "Bob");
           await current.waitFor();
@@ -509,18 +560,31 @@ suite.define(() => {
         );
         await openSessionActions(page, surface);
         const { assignTo } = ownerControls(page);
-        await expandAssignment(assignTo, surface === "compact header");
-        await assignee(page, "Me").waitFor();
+        const compact = surface === "compact header";
+        await expandAssignment(assignTo, compact);
+        await assignee(page, "Me", compact).waitFor();
         await expectBrowser(
-          page.getByRole("menuitemradio").locator(".session-menu__text"),
-        ).toHaveText([...ownerNames, ...extraNames]);
-        await expectAssignmentAvatarLayout(page);
+          ownerChoices(page, compact).locator(
+            compact ? ":scope > span:not([aria-hidden])" : ".session-menu__text",
+          ),
+        ).toHaveText([...(compact ? ["Unassigned"] : []), ...ownerNames, ...extraNames]);
+        if (compact) {
+          const unassigned = assignee(page, "Unassigned", true);
+          await expectBrowser(unassigned).toBeDisabled();
+          await expectBrowser(unassigned).toHaveAttribute("aria-pressed", "false");
+          const selected = assignee(page, "Bob", true);
+          await expectBrowser(selected).toBeDisabled();
+          await expectBrowser(selected).toHaveAttribute("aria-pressed", "true");
+        }
+        await expectAssignmentAvatarLayout(page, compact);
         const target = extraNames.at(-1) ?? "Carol";
         if (extraNames.length > 0) {
           await page.getByRole("searchbox", { name: "Search people and agents…" }).fill(target);
-          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
+          await expectBrowser(page.locator('button[value^="assign-owner:"]:visible')).toHaveCount(
+            1,
+          );
         }
-        const owner = assignee(page, target);
+        const owner = assignee(page, target, compact);
         await owner.scrollIntoViewIfNeeded();
         await expectBrowser(owner).toBeInViewport();
         await owner.click();
@@ -538,6 +602,7 @@ suite.define(() => {
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
+          const compact = width < 560;
           const names = Array.from(
             { length: 1000 },
             (_, i) => `Teammate ${String(i).padStart(4, "0")}`,
@@ -550,23 +615,31 @@ suite.define(() => {
           });
           const openAssignment = async () => {
             await trigger.click();
-            const assignTo = menuItem(page, "Assign to…");
-            await expandAssignment(assignTo, width < 560);
+            const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
+            await expandAssignment(assignTo, compact);
           };
           await openAssignment();
+          if (compact) {
+            const unassigned = assignee(page, "Unassigned", true);
+            await expectBrowser(unassigned).toBeDisabled();
+            await expectBrowser(unassigned).toHaveAttribute("aria-pressed", "false");
+          }
           const search = page.getByRole("searchbox", { name: "Search people and agents…" });
           await search.fill("Teammate 0999");
           await gateway.resolveDeferred("users.list", directoryResponse(names));
           await expectBrowser(search).toHaveValue("Teammate 0999");
-          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
           await search.clear();
-          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1004);
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 1005 : 1004);
           await search.fill("Teammate 0999");
           await search.press("Escape");
-          await expectBrowser(search).toHaveValue("");
-          await expectBrowser(trigger).toHaveAttribute("aria-expanded", "true");
-          await search.press("Escape");
-          if (width >= 560) {
+          if (width < 560) {
+            await expectBrowser(page.locator(".session-actions-page")).toBeHidden();
+            await expectBrowser(trigger).toBeFocused();
+          } else {
+            await expectBrowser(search).toHaveValue("");
+            await expectBrowser(trigger).toHaveAttribute("aria-expanded", "true");
+            await search.press("Escape");
             const assignment = menuItem(page, "Assign to…");
             await expectBrowser(assignment).toHaveAttribute("aria-expanded", "false");
             await page.keyboard.press("Escape");
@@ -582,10 +655,10 @@ suite.define(() => {
           await gateway.setMethodResponse("users.list", directory);
           await openAssignment();
           await search.fill("Renamed teammate");
-          const match = assignee(page, "Renamed teammate");
+          const match = assignee(page, "Renamed teammate", compact);
           await expectBrowser(match).toBeVisible();
-          await expectBrowser(page.getByRole("menuitemradio")).toHaveCount(1);
-          await search.press("ArrowDown");
+          await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
+          await search.press(width < 560 ? "Tab" : "ArrowDown");
           await expectBrowser(match).toBeFocused();
           await page.keyboard.press("Enter");
           await expectAssignmentRequest(gateway, "profile-teammate-0999");
@@ -661,12 +734,18 @@ suite.define(() => {
               .getByRole("alert")
               .filter({ hasText: message }),
           ).toBeVisible();
-          await expectBrowser(
-            (surface === "header" ? activePane : row).getByRole("img", {
-              name: "Created by Bob",
-              exact: true,
-            }),
-          ).toHaveCount(1);
+          if (surface === "header") {
+            await openSessionActions(page, surface);
+            await openSessionMenuSubmenu(page, "Assign to…");
+            const { panel } = ownerControls(page);
+            const retainedOwner = assignee(panel, "Bob");
+            await expectBrowser(retainedOwner).toHaveAttribute("aria-checked", "true");
+            await expectBrowser(retainedOwner).toBeDisabled();
+          } else {
+            await expectBrowser(
+              row.getByRole("img", { name: "Created by Bob", exact: true }),
+            ).toHaveCount(1);
+          }
         },
       ),
   );

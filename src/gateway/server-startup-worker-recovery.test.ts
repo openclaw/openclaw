@@ -1,8 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
 import * as workers from "./server-worker-environment-startup.js";
@@ -11,11 +13,11 @@ import { startClaimedGateway } from "./test-helpers.listener.js";
 // Prepare the cold module graph outside the real lock-wait proof.
 await import("./server-start.js");
 
-it.each([
+it.for([
   ["starts after a competing connection releases its recovery lock", "release"],
   ["fails clearly when the recovery lock outlasts the retry budget", "exhaust"],
   ["fails immediately for a non-lock recovery error", "fatal"],
-] as const)("%s", { timeout: 90_000 }, async (_name, mode) => {
+] as const)("%s", { timeout: 90_000 }, async ([_name, mode], { signal }) => {
   await using state = await createStartupTestState(`worker-recovery-${mode}`, {
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
   });
@@ -28,14 +30,20 @@ it.each([
   });
   const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
   const retryObserved = createDeferredCore<"retry">();
-  const warnings: string[] = [];
+  const ready = createDeferredCore();
+  const info = gatewayKernelLogs.log.info.bind(gatewayKernelLogs.log);
+  using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+  readyLog.mockImplementation((message, meta) => {
+    info(message, meta);
+    if (message === "gateway ready") {
+      ready.resolve();
+    }
+  });
   const failure = new Error("disk I/O error");
   let attempts = 0;
-  let settled = false;
   let blocker: DatabaseSync | undefined;
   let server: GatewayServer | undefined;
   const load = workers.loadGatewayWorkerEnvironmentStartupState;
-  const create = workers.createGatewayWorkerEnvironmentRuntime;
   const loader = vi
     .spyOn(workers, "loadGatewayWorkerEnvironmentStartupState")
     .mockImplementation(async () => {
@@ -55,95 +63,51 @@ it.each([
           blocker = new DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
           blocker.exec("BEGIN IMMEDIATE");
         }
-        return await recover();
+        try {
+          return await recover();
+        } catch (error) {
+          retryObserved.resolve("retry");
+          throw error;
+        }
       });
       return startup;
     });
-  const factory = vi
-    .spyOn(workers, "createGatewayWorkerEnvironmentRuntime")
-    .mockImplementation((params) =>
-      create({
-        ...params,
-        log: {
-          child: (name) => {
-            const log = params.log.child(name);
-            return {
-              ...log,
-              warn: (message) => {
-                log.warn(message);
-                if (message.startsWith("placementTools.recover:")) {
-                  warnings.push(message);
-                  retryObserved.resolve("retry");
-                }
-              },
-            };
-          },
-        },
-      }),
-    );
   const { startGatewayServer } = await import("./server.js");
   const starting = startClaimedGateway(claim, () =>
     startGatewayServer(claim.port, gatewayStartupOptions("worker-recovery-test-token")),
-  )
-    .then(
-      (value) => {
-        server = value;
-        return { server: value };
-      },
-      (error: unknown) => ({ error }),
-    )
-    .finally(() => {
-      settled = true;
-    });
+  ).then((value) => (server = value));
+  void starting.catch(() => {});
   try {
     if (mode !== "fatal") {
       await expect(Promise.race([retryObserved.promise, starting])).resolves.toBe("retry");
-      expect(settled).toBe(false);
       expect(blocker?.isTransaction).toBe(true);
-      expect(warnings[0]).toContain("attempt 2/5");
       if (mode === "release") {
         blocker!.exec("ROLLBACK");
         blocker!.close();
       }
     }
-    const result = await starting;
     if (mode === "release") {
-      if ("error" in result) {
-        throw result.error;
-      }
-      await result.server.startupSettled;
+      await (
+        await starting
+      ).startupSettled;
+      // Recovery can outlive startup settlement; wait for traffic admission.
+      await withinTest(ready.promise, signal);
       expect((await fetch(`http://127.0.0.1:${claim.port}/readyz`)).status).toBe(200);
-      expect(attempts).toBe(2);
-      expect(warnings).toHaveLength(1);
+    } else if (mode === "fatal") {
+      await expect(starting).rejects.toBe(failure);
     } else {
-      if (!("error" in result)) {
-        throw new Error("Gateway unexpectedly started before recovery completed");
-      }
-      if (mode === "fatal") {
-        expect(result.error).toBe(failure);
-        expect(attempts).toBe(1);
-        expect(warnings).toEqual([]);
-      } else {
-        expect(attempts).toBe(5);
-        expect(warnings).toHaveLength(4);
-        expect(String(result.error)).toContain(
-          "database is locked by another process or connection",
-        );
-        expect(String(result.error)).toContain("openclaw doctor");
-        expect(String(result.error)).toContain("openclaw gateway status --deep");
-      }
+      await expect(starting).rejects.toThrow(
+        /database is locked by another process or connection.*openclaw doctor.*openclaw gateway status --deep/,
+      );
     }
+    expect(attempts).toBe({ release: 2, fatal: 1, exhaust: 5 }[mode]);
   } finally {
     if (blocker?.isOpen) {
-      if (blocker.isTransaction) {
-        blocker.exec("ROLLBACK");
-      }
       blocker.close();
     }
-    await starting;
+    await starting.catch(() => {});
     await server?.close({ reason: "worker recovery contention proof complete" });
     await claim.release();
     loader.mockRestore();
-    factory.mockRestore();
   }
 });

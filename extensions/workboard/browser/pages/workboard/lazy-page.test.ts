@@ -1,7 +1,7 @@
 import "../../test/dom.setup.ts";
 import assert from "node:assert/strict";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { createViewContext } from "../../test/host.ts";

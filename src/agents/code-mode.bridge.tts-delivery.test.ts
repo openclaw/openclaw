@@ -1,4 +1,3 @@
-/** Nested TTS crosses real catalog acceptance and subscribed source delivery. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,18 +14,14 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 
 const audioPath = "/tmp/nested-tts-reply.mp3";
-const speechResult = {
-  success: true,
-  audioPath,
-  provider: "test",
-  voiceCompatible: false,
-};
+const speechResult = { success: true, audioPath, provider: "test" };
 const suppressionState = {
   ctx: {},
   explicitCommandTurnCtx: false,
   suppressAutomaticSourceDelivery: true,
   sendPolicyDenied: false,
 };
+const harnesses: Array<{ dispose: () => void }> = [];
 
 function createTtsHarness(name: string, target: AnyAgentTool = createTtsTool({ config: {} })) {
   const delivered: ReplyPayload[] = [];
@@ -39,6 +34,7 @@ function createTtsHarness(name: string, target: AnyAgentTool = createTtsTool({ c
       }
     },
   });
+  harnesses.push(harness);
   applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
   const runtime = new ToolSearchRuntime(harness, resolveToolSearchConfig(harness.config));
   return { ...harness, runtime, delivered };
@@ -58,40 +54,36 @@ async function finishReply(harness: ReturnType<typeof createTtsHarness>, text = 
 
 describe("Code Mode nested TTS delivery", () => {
   afterEach(async () => {
+    for (const harness of harnesses.splice(0)) {
+      harness.dispose();
+    }
     await resetCodeModeTestState();
     vi.restoreAllMocks();
   });
 
-  it.each([["private", "Private final text must not be sent."]])(
-    "delivers accepted speech with a %s final",
-    async (name, finalText) => {
-      const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
-      const harness = createTtsHarness(name);
-      try {
-        const result = await runUntilCompleted({
-          execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
-          waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
-          code: 'return await tts({ text: "Synthetic speech" });',
-        });
-        expect(result.status).toBe("completed");
-        expect(synthesize).toHaveBeenCalledOnce();
-        await finishReply(harness, finalText);
+  it("delivers accepted speech with a private final", async () => {
+    const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
+    const harness = createTtsHarness("private");
+    const result = await runUntilCompleted({
+      execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
+      waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
+      code: 'return await tts({ text: "Synthetic speech" });',
+    });
+    expect(result.status).toBe("completed");
+    expect(synthesize).toHaveBeenCalledOnce();
+    await finishReply(harness, "Private final text must not be sent.");
 
-        expect(harness.delivered).toEqual([
-          expect.objectContaining({ mediaUrl: audioPath, mediaUrls: [audioPath] }),
-        ]);
-        expect(harness.delivered[0]?.text).toBeUndefined();
-        expect(
-          shouldDeliverDespiteSourceReplySuppression(
-            expectDefined(harness.delivered[0], "delivered speech"),
-            { ...suppressionState, sendPolicyDenied: true },
-          ),
-        ).toBe(false);
-      } finally {
-        harness.dispose();
-      }
-    },
-  );
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({ mediaUrl: audioPath, mediaUrls: [audioPath] }),
+    ]);
+    expect(harness.delivered[0]?.text).toBeUndefined();
+    expect(
+      shouldDeliverDespiteSourceReplySuppression(
+        expectDefined(harness.delivered[0], "delivered speech"),
+        { ...suppressionState, sendPolicyDenied: true },
+      ),
+    ).toBe(false);
+  });
 
   it("does not authorize same-shaped unmarked media", async () => {
     const target = createTtsTool({ config: {} });
@@ -99,14 +91,10 @@ describe("Code Mode nested TTS delivery", () => {
       jsonResult({ media: { mediaUrl: audioPath, trustedLocalMedia: true } }),
     );
     const harness = createTtsHarness("unmarked", target);
-    try {
-      await harness.runtime.call("tts", { text: "Synthetic speech" });
-      expect(target.execute).toHaveBeenCalledOnce();
-      await finishReply(harness, "Private final text.");
-      expect(harness.delivered).toEqual([]);
-    } finally {
-      harness.dispose();
-    }
+    await harness.runtime.call("tts", { text: "Synthetic speech" });
+    expect(target.execute).toHaveBeenCalledOnce();
+    await finishReply(harness, "Private final text.");
+    expect(harness.delivered).toEqual([]);
   });
 
   it("does not deliver synthesized speech rejected by output acceptance", async () => {
@@ -114,19 +102,15 @@ describe("Code Mode nested TTS delivery", () => {
     const target = createTtsTool({ config: {} });
     target.outputSchema = Type.Object({ accepted: Type.Boolean() });
     const harness = createTtsHarness("rejected-output", target);
-    try {
-      await expect(harness.runtime.call("tts", { text: "Synthetic speech" })).rejects.toThrow(
-        "returned details that do not match its declared outputSchema",
-      );
-      expect(synthesize).toHaveBeenCalledOnce();
-      await finishReply(harness);
-      expect(harness.delivered).toEqual([]);
-      expect(harness.subscription.toolMetas).toEqual([
-        expect.objectContaining({ toolName: "tts", isError: true }),
-      ]);
-    } finally {
-      harness.dispose();
-    }
+    await expect(harness.runtime.call("tts", { text: "Synthetic speech" })).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+    expect(synthesize).toHaveBeenCalledOnce();
+    await finishReply(harness);
+    expect(harness.delivered).toEqual([]);
+    expect(harness.subscription.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "tts", isError: true }),
+    ]);
   });
 
   it("does not publish a raw speech result that completes after cancellation", async () => {
@@ -157,7 +141,6 @@ describe("Code Mode nested TTS delivery", () => {
       expect(harness.delivered).toEqual([]);
     } finally {
       releaseSpeech.resolve();
-      harness.dispose();
     }
   });
 });

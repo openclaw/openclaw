@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import {
   cleanupMcpCliTestState,
@@ -134,6 +135,36 @@ afterEach(async () => {
   }
 });
 
+it("escapes MCP report fields without altering JSON or the saved server", async () => {
+  const name = "café\x1b[31m\nforged\tserver\r\x00\x85end";
+  const servers = {
+    [name]: { command: "node", args: ["café\x1b[31m\nforged-arg"], enabled: false },
+    normal: { command: "node", enabled: false },
+  };
+  await writeMcpServers(servers);
+  const before = await fs.readFile(configPath, "utf8");
+  for (const args of [["list"], ["show", name], ["status", "--verbose"], ["doctor"]]) {
+    mockLog.mockClear();
+    await mcp(...args);
+    const report = args[0] === "show" ? String(mockLog.mock.calls[0]?.[0]) : logOutput();
+    expect(report).toContain("café\\nforged\\tserver\\rend");
+    expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+  }
+  expect(await readJson("list")).toEqual(servers);
+  expect(await fs.readFile(configPath, "utf8")).toBe(before);
+});
+
+it("escapes mutation acknowledgements and unknown-server errors without rewriting names", async () => {
+  const name = "café\x1b[31m\nforged";
+  await setServer({ command: "node", enabled: false }, name);
+  expect(lastLogLine()).toContain('Saved MCP server "café\\nforged"');
+  expect(await readJson("list")).toHaveProperty(name);
+  mockError.mockClear();
+  await expect(mcp("show", `${name}-missing`)).rejects.toMatchObject({ code: 1 });
+  expect(lastErrorLine()).toContain('No MCP server named "café\\nforged-missing"');
+  expect(lastErrorLine()).not.toMatch(/\p{Cc}/u);
+});
+
 it("adds a configured MCP server from flags without replacing operator knobs", async () => {
   await mcp(
     "add",
@@ -156,7 +187,7 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
   expect(await readServer()).toEqual({
     url: "https://mcp.example.com/mcp",
     transport: "streamable-http",
-    headers: { Authorization: "Bearer token" },
+    headers: { Authorization: REDACTED_SENTINEL },
     auth: "oauth",
     oauth: { scope: "docs.read" },
     toolFilter: { include: ["search", "read_*"] },
@@ -165,6 +196,87 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
     supportsParallelToolCalls: true,
     codex: { defaultToolsApprovalMode: "approve" },
   });
+  expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers.docs.headers).toEqual({
+    Authorization: "Bearer token",
+  });
+});
+
+it("redacts MCP registry inspection without changing saved credentials", async () => {
+  vi.stubEnv("MCP_DISPLAY_TOKEN", "example-resolved-token-not-real");
+  vi.stubEnv("MCP_DISPLAY_HEADER", "example-header-token-not-real");
+  const servers = {
+    remote: {
+      url: "https://mcp.example.com/mcp",
+      headers: {
+        Authorization: "Bearer ${MCP_DISPLAY_HEADER}",
+        "X-Goog-Api-Key": "example-maps-key-not-real",
+        "X-Custom-Credential": "example-custom-header-not-real",
+      },
+    },
+    local: {
+      command: "node",
+      args: ["server.mjs", "--api-key", "example-argv-key-not-real", "--region", "us-east-1"],
+      env: {
+        SERVICE_TOKEN: "example-env-token-not-real",
+        REFERENCE: "${MCP_DISPLAY_TOKEN}",
+      },
+    },
+  };
+  await writeMcpServers(servers);
+
+  for (const args of [
+    ["list", "--json"],
+    ["show", "--json"],
+    ["show", "remote", "--json"],
+    ["show", "local", "--json"],
+    ["show"],
+    ["show", "remote"],
+    ["show", "local"],
+  ]) {
+    mockLog.mockClear();
+    await mcp(...args);
+    const output = logOutput();
+    for (const secret of [
+      "example-header-token-not-real",
+      "example-maps-key-not-real",
+      "example-custom-header-not-real",
+      "example-argv-key-not-real",
+      "example-env-token-not-real",
+      "example-resolved-token-not-real",
+    ]) {
+      expect(output, args.join(" ")).not.toContain(secret);
+    }
+    const inspected = JSON.parse(lastLogLine());
+    if (args[1] !== "remote" && args[1] !== "local") {
+      expect(inspected.remote.url).toBe("https://mcp.example.com/mcp");
+      expect(inspected.local.args).toContain("us-east-1");
+      expect(inspected.local.env.REFERENCE).toBe(REDACTED_SENTINEL);
+    }
+  }
+
+  expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers).toEqual(servers);
+  await setServer(await readServer("remote"), "remote");
+  await setServer(await readServer("local"), "local");
+  expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers).toEqual(servers);
+});
+
+it.each(["node", " node "])("preserves literal stdio paths from add flags: %j", async (name) => {
+  const command = path.join(workspaceDir, name);
+  const cwd = path.join(workspaceDir, `${name}-workspace `);
+  await mcp(
+    "add",
+    "literal",
+    "--command",
+    command,
+    "--arg",
+    "server.mjs",
+    "--cwd",
+    cwd,
+    "--no-probe",
+  );
+  const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(saved.mcp.servers.literal).toEqual({ command, args: ["server.mjs"], cwd });
+  expect(await readServer("literal")).toEqual({ command, args: ["server.mjs"], cwd });
 });
 
 it.each([
@@ -202,17 +314,17 @@ it.each([
   expect(await readServer()).toEqual({ command: "node", args: [script] });
 });
 
-it("updates approval mode without replacing saved Codex metadata", async () => {
+it("configures approval and exclusions without replacing sibling metadata", async () => {
   await setServer({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
   });
-
-  await mcp("configure", "docs", "--approval", "approve");
-
+  await mcp("configure", "docs", "--approval", "approve", "--exclude", "write_*");
   expect(await readServer()).toEqual({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
+    toolFilter: { include: ["old_*"], exclude: ["write_*"] },
   });
 });
 
@@ -305,22 +417,6 @@ it("explains only disabled servers and overrides while preserving JSON output", 
     servers: {},
     tools: [],
     diagnostics: [],
-  });
-});
-
-it("preserves sibling tool filters for configure --exclude", async () => {
-  await setServer({
-    command: "node",
-    args: ["server.mjs"],
-    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-  });
-  await mcp("configure", "docs", "--exclude", "write_*");
-
-  mockLog.mockClear();
-  await mcp("show", "docs", "--json");
-  expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
-    include: ["old_*"],
-    exclude: ["write_*"],
   });
 });
 

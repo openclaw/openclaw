@@ -55,19 +55,6 @@ function isRichConsoleEnv(): boolean {
 // Chalk caches style builders per instance; select between fixed levels on each message.
 const consoleColors: [ChalkInstance?, ChalkInstance?] = [];
 
-function getColorForConsole(): ChalkInstance {
-  const hasForceColor =
-    typeof process.env.FORCE_COLOR === "string" &&
-    process.env.FORCE_COLOR.trim().length > 0 &&
-    process.env.FORCE_COLOR.trim() !== "0";
-  const level =
-    hasForceColor ||
-    (!process.env.NO_COLOR && (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
-      ? 1
-      : 0;
-  return (consoleColors[level] ??= new Chalk({ level }));
-}
-
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
 const SUBSYSTEM_COLOR_OVERRIDES = new Map<string, (typeof SUBSYSTEM_COLORS)[number]>([
   ["gmail-watcher", "blue"],
@@ -173,7 +160,17 @@ function createConsoleLineFormatter(subsystem: string) {
   const prefix = `[${displaySubsystem}]`;
   const prefixColor = pickSubsystemColor(displaySubsystem);
   return (level: LogLevel, message: string, style: "pretty" | "compact"): string => {
-    const color = getColorForConsole();
+    const hasForceColor =
+      typeof process.env.FORCE_COLOR === "string" &&
+      process.env.FORCE_COLOR.trim().length > 0 &&
+      process.env.FORCE_COLOR.trim() !== "0";
+    const colorLevel =
+      hasForceColor ||
+      (!process.env.NO_COLOR &&
+        (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
+        ? 1
+        : 0;
+    const color = (consoleColors[colorLevel] ??= new Chalk({ level: colorLevel }));
     const levelColor =
       level === "error" || level === "fatal"
         ? color.red
@@ -367,6 +364,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
+      meta?.consoleMessage !== false &&
       isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
@@ -377,9 +375,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     let fileMeta = meta;
     let consoleFields = meta;
     if (meta && Object.keys(meta).length > 0) {
-      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-        consoleMessage?: unknown;
-      };
+      const { consoleMessage, ...rest } = meta;
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }

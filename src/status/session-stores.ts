@@ -22,6 +22,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 export const STATUS_RECENT_SESSION_LIMIT = 10;
 const SESSION_STORE_READ_SLICE_MS = 8;
 type SessionStoreSummary = Awaited<ReturnType<SessionHistoryWorkerDatabase["readStoreSummary"]>>;
+const projectionSummaries = new WeakMap<
+  SessionRowProjection,
+  Map<string, Map<number, SessionStoreSummary>>
+>();
 export type PreparedStatusSessionStores = Awaited<
   ReturnType<
     typeof prepareStatusSessionStores<
@@ -51,9 +55,27 @@ function compareSessionRows(
 function summarizeProjectionRows(
   projection: SessionRowProjection,
   storePath: string,
-  agentIds: readonly string[],
   recentLimit: number,
 ): SessionStoreSummary {
+  const revision = projection.state.revision;
+  let stores = projectionSummaries.get(projection);
+  if (!stores) {
+    stores = new Map();
+    projectionSummaries.set(projection, stores);
+    const retained = stores;
+    projection.onSelectionChange((change) => {
+      if (change.kind === "reset" || !change.row) {
+        retained.clear();
+      } else {
+        retained.delete(change.row.storeTarget.storePath);
+      }
+    });
+  }
+  let windows = stores.get(storePath);
+  const cached = windows?.get(recentLimit);
+  if (cached) {
+    return cached;
+  }
   const rows = projection.selectEntries({ storePath, sortBy: null });
   // Keep each namespace's candidates until the publisher selects surviving windows.
   if (recentLimit !== 0) {
@@ -63,9 +85,7 @@ function summarizeProjectionRows(
         (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
     );
   }
-  const byAgent: SessionStoreSummary["byAgent"] = new Map(
-    agentIds.map((agentId) => [agentId, { count: 0, recent: [] }]),
-  );
+  const byAgent: SessionStoreSummary["byAgent"] = new Map();
   for (const row of rows) {
     let agent = byAgent.get(row.agentId);
     if (!agent) {
@@ -77,7 +97,15 @@ function summarizeProjectionRows(
       agent.recent.push({ sessionKey: row.key, entry: row.entry });
     }
   }
-  return { count: rows.length, recent: [], byAgent };
+  const summary: SessionStoreSummary = { count: rows.length, recent: [], byAgent };
+  // Selection can acquire dirty entries; retain only a stable owner revision.
+  if (projection.state.revision === revision) {
+    if (!windows) {
+      stores.set(storePath, (windows = new Map()));
+    }
+    windows.set(recentLimit, summary);
+  }
+  return summary;
 }
 
 /** One collection owns each physical store's bounded snapshot, including its agent windows. */
@@ -128,7 +156,7 @@ function createStatusSessionStoreReader(
             if (!store) {
               let snapshot: SessionStoreSummary;
               try {
-                snapshot = summarizeProjectionRows(projection, path, agentIds, recentLimit);
+                snapshot = summarizeProjectionRows(projection, path, recentLimit);
               } catch (error) {
                 if (!options.recoverReadError) {
                   throw error;

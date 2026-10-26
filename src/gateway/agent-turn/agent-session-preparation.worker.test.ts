@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeSqliteReadSql,
@@ -15,97 +16,79 @@ import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
-describe("agent session preparation worker boundary", () => {
-  it("prepares ordinary and failed turns and rejects archived sessions without host row reads", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = {};
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      for (const kind of ["ordinary", "failed-present", "failed-missing", "archived"] as const) {
-        const sessionKey = `agent:main:preparation-${kind}`;
-        const scope = { agentId: "main", sessionKey, sessionId: kind };
-        await upsertSessionEntryCore(scope, {
-          sessionId: kind,
-          updatedAt: Date.now(),
-          sessionStartedAt: Date.now(),
-          ...(kind.startsWith("failed") ? { status: "failed" as const } : {}),
-          ...(kind === "archived" ? { archivedAt: Date.now() } : {}),
-        });
-        if (kind === "failed-present") {
-          await appendTranscriptEvent(scope, { type: "session", id: kind, version: 3 });
-        }
-        const respond = vi.fn();
-        const reserveDedupe = vi.fn();
-        const bindDedupeSessionTarget = vi.fn();
-        const request = { sessionKey, message: "continue", idempotencyKey: kind };
-        const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        try {
-          const routing = await prepareAgentRequestRouting({
-            cfg,
-            request,
-            isRawModelRun: false,
-            runId: kind,
-            agentDedupeKeys: [kind],
-            context,
-            respond,
-            reserveDedupe,
-            bindDedupeSessionTarget,
-            clearDedupe: vi.fn(),
-            ...(kind === "ordinary"
-              ? {
-                  execApprovalFollowupApprovalId: "followup",
-                  request: { ...request, execApprovalFollowupExpectedSessionId: kind },
-                }
-              : {}),
-          });
-          if (kind === "archived") {
-            expect(routing).toBeUndefined();
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "INVALID_REQUEST" }),
-            );
-          } else {
-            expect(routing?.preAttachmentSession).toEqual({
-              canonicalKey: sessionKey,
-              sessionId: kind,
-            });
-            expect(bindDedupeSessionTarget).toHaveBeenCalledWith({
-              sessionKey,
-              agentId: "main",
-              sessionId: kind,
-            });
-            const prepared = await prepareAgentSession({
-              cfg,
-              requestedSessionKey: sessionKey,
-              request,
-              canUseCronRunContinuation: false,
-              lifecycleGeneration: "preparation",
-              preAttachmentSession: routing?.preAttachmentSession,
-              respond,
-            });
-            if (!prepared) {
-              throw new Error("Session preparation did not return a candidate");
-            }
-            const patch = await buildAgentSessionPatch({
-              ...prepared,
-              freshEntry: prepared.entry,
-              initialEntry: prepared.entry,
-              sessionAgentId: prepared.canonicalSessionAgentId,
-              canonicalSessionKey: prepared.canonicalKey,
-              normalizedSpawned: {},
-              requestDeliveryHint: undefined,
-              hasRestoredCronContinuation: false,
-            });
-            expect(patch.patch.sessionId === kind).toBe(kind !== "failed-missing");
-            expect(respond).not.toHaveBeenCalled();
-          }
-          expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
-        } finally {
-          observation.restore();
-        }
+it("prepares active/failed sessions and rejects archives without host row reads", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {};
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    for (const kind of ["ordinary", "failed-present", "failed-missing", "archived"] as const) {
+      const sessionKey = `agent:main:preparation-${kind}`;
+      const scope = { agentId: "main", sessionKey, sessionId: kind };
+      await upsertSessionEntryCore(scope, {
+        sessionId: kind,
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        ...(kind.startsWith("failed") ? { status: "failed" as const } : {}),
+        ...(kind === "archived" ? { archivedAt: Date.now() } : {}),
+      });
+      if (kind === "failed-present") {
+        await appendTranscriptEvent(scope, { type: "session", id: kind, version: 3 });
       }
-    });
-  });
-});
+      const respond = vi.fn();
+      const bindDedupeSessionTarget = vi.fn();
+      const request = { sessionKey, message: "continue", idempotencyKey: kind };
+      const common = { cfg, request, respond };
+      const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      using _ = { [Symbol.dispose]: observation.restore };
+      const routing = await prepareAgentRequestRouting({
+        ...common,
+        isRawModelRun: false,
+        runId: kind,
+        agentDedupeKeys: [kind],
+        context,
+        reserveDedupe: vi.fn(),
+        bindDedupeSessionTarget,
+        clearDedupe: vi.fn(),
+        ...(kind === "ordinary" && {
+          execApprovalFollowupApprovalId: "followup",
+          request: { ...request, execApprovalFollowupExpectedSessionId: kind },
+        }),
+      });
+      if (kind === "archived") {
+        expect(routing).toBeUndefined();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+      } else {
+        expect(routing?.preAttachmentSession).toEqual({
+          canonicalKey: sessionKey,
+          sessionId: kind,
+        });
+        expect(bindDedupeSessionTarget).toHaveBeenCalledWith(scope);
+        const prepared = await prepareAgentSession({
+          ...common,
+          requestedSessionKey: sessionKey,
+          canUseCronRunContinuation: false,
+          lifecycleGeneration: "preparation",
+          preAttachmentSession: routing?.preAttachmentSession,
+        });
+        assert(prepared, "Session preparation did not return a candidate");
+        const patch = await buildAgentSessionPatch({
+          ...prepared,
+          freshEntry: prepared.entry,
+          initialEntry: prepared.entry,
+          sessionAgentId: prepared.canonicalSessionAgentId,
+          canonicalSessionKey: prepared.canonicalKey,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+        });
+        expect(patch.patch.sessionId === kind).toBe(kind !== "failed-missing");
+        expect(respond).not.toHaveBeenCalled();
+      }
+      expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    }
+  }));

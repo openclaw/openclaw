@@ -22,17 +22,15 @@ const BUNDLED_PROVIDER_COMPAT_CONTRACTS: ReadonlySet<PluginManifestContractListK
   BUNDLED_PROVIDER_COMPAT_CONTRACT_KEYS,
 );
 
-type BundledProviderCompatPlugin = {
-  origin: string;
-  providers?: readonly unknown[];
-  contracts?: Partial<Record<PluginManifestContractListKey, readonly unknown[]>>;
-};
-
 export function isBundledProviderCompatContract(contract: PluginManifestContractListKey): boolean {
   return BUNDLED_PROVIDER_COMPAT_CONTRACTS.has(contract);
 }
 
-export function isBundledProviderCompatPlugin(plugin: BundledProviderCompatPlugin): boolean {
+export function isBundledProviderCompatPlugin(plugin: {
+  origin: string;
+  providers?: readonly unknown[];
+  contracts?: Partial<Record<PluginManifestContractListKey, readonly unknown[]>>;
+}): boolean {
   return (
     plugin.origin === "bundled" &&
     ((plugin.providers?.length ?? 0) > 0 ||

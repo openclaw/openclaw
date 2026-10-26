@@ -16,105 +16,73 @@ import {
 
 export function registerAgentOwnerPolicyCases(): void {
   const mocks = getAgentTestMocks();
-  it.each<{
-    name: string;
-    admin: boolean;
+  type OriginOptions = {
     authenticatedProfile?: true;
     requesterOrigin?: RequesterOrigin;
     ownerAllowFrom?: string[];
-    expectedOwner: boolean;
     expectedSenderRestriction?: true;
-  }>([
-    { name: "direct admin", admin: true, expectedOwner: true },
-    { name: "direct write", admin: false, expectedOwner: false },
-    {
-      name: "authenticated operator admin",
-      admin: true,
+  };
+  const origin = (fields: Omit<RequesterOrigin, "sessionKey"> = {}): RequesterOrigin => ({
+    sessionKey: "agent:main:source",
+    ...fields,
+  });
+  const operator = origin({ operatorProfileId: "operator-alice" });
+  const inputProvenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: "agent:main:source",
+    sourceTool: "sessions_send",
+  };
+  const principal = (kind: string, ref: string) => ({
+    state: "present",
+    kind,
+    rawPrincipalRef: ref,
+  });
+  const row = (
+    name: string,
+    admin: boolean,
+    expectedOwner: boolean,
+    options: OriginOptions = {},
+  ) => ({ name, admin, expectedOwner, ...options });
+  it.each([
+    row("direct admin", true, true),
+    row("direct write", false, false),
+    row("authenticated operator admin", true, true, { authenticatedProfile: true }),
+    row("authenticated operator write", false, false, { authenticatedProfile: true }),
+    row("authenticated operator continuation", true, true, {
       authenticatedProfile: true,
-      expectedOwner: true,
-    },
-    {
-      name: "authenticated operator write",
-      admin: false,
-      authenticatedProfile: true,
-      expectedOwner: false,
-    },
-    {
-      name: "authenticated operator continuation",
-      admin: true,
-      authenticatedProfile: true,
-      requesterOrigin: { sessionKey: "agent:main:source" },
-      expectedOwner: true,
-    },
-    {
-      name: "operator admin continuation",
-      admin: true,
-      requesterOrigin: { sessionKey: "agent:main:source", operatorProfileId: "operator-alice" },
-      expectedOwner: true,
-    },
-    {
-      name: "operator write continuation",
-      admin: false,
-      requesterOrigin: { sessionKey: "agent:main:source", operatorProfileId: "operator-alice" },
-      expectedOwner: false,
-    },
-    {
-      name: "operator admin carrying external origin",
-      admin: true,
-      requesterOrigin: {
-        sessionKey: "agent:main:source",
-        operatorProfileId: "operator-alice",
-        messageProvider: "telegram",
-        senderId: "alice",
-      },
-      expectedOwner: true,
+      requesterOrigin: origin(),
+    }),
+    row("operator admin continuation", true, true, { requesterOrigin: operator }),
+    row("operator write continuation", false, false, { requesterOrigin: operator }),
+    row("operator admin carrying external origin", true, true, {
+      requesterOrigin: { ...operator, messageProvider: "telegram", senderId: "alice" },
       expectedSenderRestriction: true,
-    },
-    {
-      name: "configured external owner by preserved E164",
-      admin: false,
-      requesterOrigin: {
-        sessionKey: "agent:main:source",
+    }),
+    row("configured external owner by preserved E164", false, true, {
+      requesterOrigin: origin({
         messageProvider: "whatsapp",
         senderId: "123456789@lid",
         senderE164: "+15555550123",
-      },
+      }),
       ownerAllowFrom: ["whatsapp:+15555550123"],
-      expectedOwner: true,
       expectedSenderRestriction: true,
-    },
-    {
-      name: "System admin with session-only origin",
-      admin: true,
-      requesterOrigin: { sessionKey: "agent:main:source" },
-      expectedOwner: true,
-    },
-    {
-      name: "System admin with internal origin",
-      admin: true,
-      requesterOrigin: { sessionKey: "agent:main:source", messageProvider: "webchat" },
-      expectedOwner: true,
-    },
-    {
-      name: "System admin carrying incomplete external origin",
-      admin: true,
-      requesterOrigin: { sessionKey: "agent:main:source", messageProvider: "telegram" },
-      expectedOwner: false,
-    },
-    {
-      name: "System write with session-only origin",
-      admin: false,
-      requesterOrigin: { sessionKey: "agent:main:source" },
-      expectedOwner: false,
-    },
+    }),
+    row("System admin with session-only origin", true, true, { requesterOrigin: origin() }),
+    row("System admin with internal origin", true, true, {
+      requesterOrigin: origin({ messageProvider: "webchat" }),
+    }),
+    row("System admin carrying incomplete external origin", true, false, {
+      requesterOrigin: origin({ messageProvider: "telegram" }),
+    }),
+    row("System write with session-only origin", false, false, { requesterOrigin: origin() }),
   ])(
     "resolves admitted ownership for $name",
     async ({
       admin,
+      expectedOwner,
       authenticatedProfile,
       requesterOrigin: providedOrigin,
       ownerAllowFrom,
-      expectedOwner,
       expectedSenderRestriction,
     }) => {
       const cfg = {
@@ -157,12 +125,8 @@ export function registerAgentOwnerPolicyCases(): void {
           })
         : operatorWriteCliClient(scopes);
       if (profile) {
-        client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        const { id: profileId, displayName, updatedAt } = profile;
+        client.authenticatedUserProfile = { profileId, displayName, hasAvatar: false, updatedAt };
       }
       await invokeAgent(
         {
@@ -171,38 +135,22 @@ export function registerAgentOwnerPolicyCases(): void {
           agentId: "main",
           sessionKey: "agent:main:main",
           idempotencyKey: "test-sender-owner",
-          ...(requesterOrigin
-            ? {
-                inputProvenance: {
-                  kind: "inter_session" as const,
-                  sourceSessionKey: "agent:main:source",
-                  sourceTool: "sessions_send",
-                },
-              }
-            : {}),
+          ...(requesterOrigin ? { inputProvenance } : {}),
         },
         { reqId: "sender-owner", client },
       );
       const callArgs = await waitForAgentCommandCall();
       expect(callArgs).toMatchObject({
         senderIsOwner: expectedOwner,
+        ...(requesterOrigin ? { requesterOrigin } : {}),
         userTurnTranscriptRecorder: {
           message: { __openclaw: { senderIsOwner: requesterOrigin ? false : expectedOwner } },
         },
       });
       if (requesterOrigin) {
-        expect(callArgs).toMatchObject({ requesterOrigin });
         expect(admissionFacts).toMatchObject({
-          invoker: { state: "present", kind: "agent", rawPrincipalRef: "main" },
-          ...(profile
-            ? {
-                representedSubject: {
-                  state: "present",
-                  kind: "person",
-                  rawPrincipalRef: profile.id,
-                },
-              }
-            : {}),
+          invoker: principal("agent", "main"),
+          ...(profile ? { representedSubject: principal("person", profile.id) } : {}),
         });
         if (!profile) {
           expect(admissionFacts?.representedSubject).toBeUndefined();

@@ -14,7 +14,6 @@ import type {
   DiffRenderTarget,
   DiffViewerOptions,
   DiffViewerPayload,
-  RenderedDiffDocument,
 } from "./types.js";
 
 const DEFAULT_FILE_NAME = "diff.txt";
@@ -269,86 +268,75 @@ async function renderSection(
   };
 }
 
-async function renderBeforeAfterDiff(
-  input: Extract<DiffInput, { kind: "before_after" }>,
-  options: DiffRenderOptions,
-  target: DiffRenderTarget,
-) {
-  const languagePackAvailable = options.languagePackAvailable === true;
-  const lang = await normalizeSupportedLanguageHint(input.lang, { languagePackAvailable });
-  const fileName =
-    input.path?.trim() ||
-    (lang && lang !== "text" ? `diff.${lang.replace(/^\.+/, "")}` : DEFAULT_FILE_NAME);
-  const oldFile: FileContents = {
-    name: fileName,
-    contents: input.before,
-    ...(lang ? { lang } : {}),
-  };
-  const newFile: FileContents = {
-    name: fileName,
-    contents: input.after,
-    ...(lang ? { lang } : {}),
-  };
-  const section = await renderSection(
-    { oldFile, newFile },
-    buildRenderVariants(options, target),
-    languagePackAvailable,
-  );
-
-  return { sections: [section], leadingHtml: undefined };
-}
-
-async function renderPatchDiff(
-  input: Extract<DiffInput, { kind: "patch" }>,
-  options: DiffRenderOptions,
-  target: DiffRenderTarget,
-) {
-  const languagePackAvailable = options.languagePackAvailable === true;
-  const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
-  if (files.length === 0) {
-    throw new DiffInputError("Patch input did not contain any file diffs.");
-  }
-  if (files.length > MAX_PATCH_FILE_COUNT) {
-    throw new DiffInputError(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
-  }
-  const totalLines = files.reduce((sum, fileDiff) => {
-    const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
-    const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount) ? fileDiff.unifiedLineCount : 0;
-    return sum + Math.max(splitLines, unifiedLines, 0);
-  }, 0);
-  if (totalLines > MAX_PATCH_TOTAL_LINES) {
-    throw new DiffInputError(
-      `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
-    );
-  }
-
-  const variants = buildRenderVariants(options, target);
-  const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
-    anchorId: `oc-diff-file-${index + 1}`,
-    fileDiff,
-    stats: computeFileDiffStats(fileDiff),
-  }));
-  const sections = await Promise.all(
-    files.map((fileDiff, index) =>
-      renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
-    ),
-  );
-  // Single-file patches skip the summary card; one file needs no navigation.
-  const navHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
-
-  return { sections, leadingHtml: navHtml };
-}
-
 export async function renderDiffDocument(
   input: DiffInput,
   options: DiffRenderOptions,
   target: DiffRenderTarget = "both",
-): Promise<RenderedDiffDocument> {
+) {
   const title = buildDiffTitle(input);
-  const { sections, leadingHtml } =
-    input.kind === "before_after"
-      ? await renderBeforeAfterDiff(input, options, target)
-      : await renderPatchDiff(input, options, target);
+  let sections: Array<Awaited<ReturnType<typeof renderSection>>>;
+  let leadingHtml: string | undefined;
+  if (input.kind === "before_after") {
+    const languagePackAvailable = options.languagePackAvailable === true;
+    const lang = await normalizeSupportedLanguageHint(input.lang, { languagePackAvailable });
+    const fileName =
+      input.path?.trim() ||
+      (lang && lang !== "text" ? `diff.${lang.replace(/^\.+/, "")}` : DEFAULT_FILE_NAME);
+    const oldFile: FileContents = {
+      name: fileName,
+      contents: input.before,
+      ...(lang ? { lang } : {}),
+    };
+    const newFile: FileContents = {
+      name: fileName,
+      contents: input.after,
+      ...(lang ? { lang } : {}),
+    };
+    const section = await renderSection(
+      { oldFile, newFile },
+      buildRenderVariants(options, target),
+      languagePackAvailable,
+    );
+
+    sections = [section];
+  } else {
+    const languagePackAvailable = options.languagePackAvailable === true;
+    const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
+    if (files.length === 0) {
+      throw new DiffInputError("Patch input did not contain any file diffs.");
+    }
+    if (files.length > MAX_PATCH_FILE_COUNT) {
+      throw new DiffInputError(
+        `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
+      );
+    }
+    const totalLines = files.reduce((sum, fileDiff) => {
+      const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
+      const unifiedLines = Number.isFinite(fileDiff.unifiedLineCount)
+        ? fileDiff.unifiedLineCount
+        : 0;
+      return sum + Math.max(splitLines, unifiedLines, 0);
+    }, 0);
+    if (totalLines > MAX_PATCH_TOTAL_LINES) {
+      throw new DiffInputError(
+        `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
+      );
+    }
+
+    const variants = buildRenderVariants(options, target);
+    const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
+      anchorId: `oc-diff-file-${index + 1}`,
+      fileDiff,
+      stats: computeFileDiffStats(fileDiff),
+    }));
+    sections = await Promise.all(
+      files.map((fileDiff, index) =>
+        renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
+      ),
+    );
+    // Single-file patches skip the summary card; one file needs no navigation.
+    leadingHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
+  }
   const lead = leadingHtml ? [leadingHtml] : [];
   const viewerSections = sections.flatMap((section) => (section.viewer ? [section.viewer] : []));
   const imageSections = sections.flatMap((section) => (section.image ? [section.image] : []));
@@ -572,7 +560,6 @@ ${imageTypographyCss}
     title,
     fileCount: sections.length,
     inputKind: input.kind,
-    viewerRuntime,
   };
 }
 

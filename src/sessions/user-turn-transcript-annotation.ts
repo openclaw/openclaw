@@ -10,6 +10,7 @@ import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
+import { snapshotTranscriptTurnAdmission } from "../config/sessions/transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
@@ -37,7 +38,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   if (!owner || !receipt || !message || owner.blocked() || message.excludeFromContext === true) {
     return undefined;
   }
-  let admission = structuredClone(receipt);
+  let admission = snapshotTranscriptTurnAdmission(receipt);
   let admittedMessage = structuredClone(message);
   const target = { ...params.target };
   const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });

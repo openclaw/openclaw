@@ -46,7 +46,10 @@ export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
 type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
   authProfileId?: string;
   replayResponsesItemIds?: boolean;
-};
+} & Pick<
+    BaseOpenAIStreamOptions,
+    "openclawCodeModeToolSurface" | "openclawCodeModeAllowedHostedToolTypes"
+  >;
 
 export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIResponsesOptions> = (
   model,
@@ -60,6 +63,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
     stream,
     model,
     output,
+    context,
     options,
     createClient: () => {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -100,7 +104,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const compat = getCompat(model);
-      const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
+      // The API supports 12h before the pinned SDK exposes that TTL. Keep other SDK fields strict.
+      const params: Omit<ResponseCreateParamsStreaming, "prompt_cache_options"> &
+        OpenAIResponsesRequestParams = {
         model: model.id,
         input: messages,
         stream: true,
@@ -108,7 +114,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
           cacheRetention === "none" || !compat.supportsPromptCacheKey
             ? undefined
             : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
         store: false,
       };
 
@@ -144,6 +150,8 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     authProfileId: replayOptions?.authProfileId,
+    openclawCodeModeToolSurface: replayOptions?.openclawCodeModeToolSurface,
+    openclawCodeModeAllowedHostedToolTypes: replayOptions?.openclawCodeModeAllowedHostedToolTypes,
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
     replayResponsesItemIds: replayOptions?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);

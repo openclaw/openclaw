@@ -1,5 +1,4 @@
 import type { Buffer } from "node:buffer";
-import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
@@ -7,44 +6,34 @@ import type {
 import type { AgentsListResult, PresenceEntry } from "../api/types.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import {
   createTeamScaleSessionEvents,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
   createTeamScaleSessionInventory,
+  TEAM_SCALE_COUNTS,
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
+  TEAM_SCALE_AVATAR_ASSET,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
+import {
+  dashboardMcpAppHtml,
+  dashboardPaintMarkerHtml,
+  dashboardWidgetHtml,
+  widgetHtml,
+} from "./control-ui-team-scale-widget-html.ts";
 
 export { TEAM_SCALE_SELF_INSTANCE_ID };
-
-const TEAM_SCALE_COUNTS = {
-  sessions: 300,
-  firstPage: 200,
-  pinned: 30,
-  owners: 34,
-  people: 120,
-  agents: 6,
-  plugins: 7,
-  cronJobs: 120,
-  childSessions: 54,
-  cronSessions: 24,
-  systemSessions: 12,
-  transcriptMessages: 240,
-  inlineWidgets: 12,
-  catalogHosts: 6,
-  catalogSessionsPerHost: 20,
-  presenceEvents: 12,
-} as const;
 
 const TEAM_SCALE_CATALOG_PROGRESS_ID = "team-scale-progress";
 const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
@@ -68,49 +57,23 @@ type FixtureOptions = {
   liveRun?: boolean;
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
+  sidebarAvatars?: boolean;
+  transcriptAvatars?: boolean;
+  sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
   sessionEventAncestorRefs?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
+  /** Opt into a scripted HTML dashboard with an independently fetched web font. */
+  dashboardWidgetFontUrl?: string;
+  historyStateReceipt?: boolean;
+  dashboardPaintMarker?: boolean;
 };
-
-function dashboardMcpAppHtml(stylesheetUrl: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Team dashboard</title>
-<link rel="stylesheet" href="${stylesheetUrl}"></head><body>
-<h2>Team metric 1</h2><p>Synthetic dashboard activity</p><main aria-label="Metric charts"></main>
-<script>
-const send = (message) => parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
-addEventListener("message", ({ source, data }) => {
-  if (source !== parent) return;
-  if (data.id === 1 && data.result) send({ method: "ui/notifications/initialized" });
-  if (data.method === "ui/resource-teardown") send({ id: data.id, result: {} });
-});
-send({ id: 1, method: "ui/initialize", params: {
-  appInfo: { name: "Synthetic team dashboard", version: "1.0.0" }, appCapabilities: {},
-  protocolVersion: ${JSON.stringify(LATEST_PROTOCOL_VERSION)}
-} });
-const charts = document.querySelector("main");
-for (let index = 0; index < 4; index++) {
-  const chart = document.createElement("section");
-  const values = Array.from({ length: 12 }, (_, point) => 20 + (point * 17 + index * 23) % 75);
-  chart.innerHTML = '<h3>Metric ' + (index + 1) + '</h3><svg role="img" aria-label="Synthetic chart ' +
-    (index + 1) + '" viewBox="0 0 240 100"><polyline fill="none" stroke="currentColor" stroke-width="3" points="' +
-    values.map((value, point) => (point * 20) + ',' + (100 - value)).join(' ') + '"/></svg>';
-  charts.append(chart);
-}
-</script></body></html>`;
-}
-
-function widgetHtml(index: number) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Team metric ${index + 1}</title>
-<style>:root{color-scheme:dark light;font-family:system-ui}body{margin:0;padding:20px}h2{font-size:18px}progress{width:100%}</style></head>
-<body><h2>Team metric ${index + 1}</h2><p>Synthetic completed work: ${60 + index}%</p>
-<progress value="${60 + index}" max="100"></progress><p>All fixture systems are available.</p></body></html>`;
-}
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
@@ -137,25 +100,36 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     counts.people,
     now,
     {
-      avatars: options.sidebarLiveChurn,
+      avatars: options.sidebarLiveChurn || options.sidebarAvatars,
       sharing: options.closedMenuMembers,
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
-  const { sessions, pinnedRows, pinnedKeys, selectedSessionKey } = createTeamScaleSessionInventory({
-    now,
-    people,
-    counts,
-  });
+  const transcriptSender = people[4]!;
+  if (options.transcriptAvatars) {
+    transcriptSender.avatarUrl = `/api/users/${transcriptSender.id}/avatar?v=${now}`;
+    profiles[4]!.hasAvatar = true;
+    profiles[4]!.avatarMime = "image/png";
+    assets.set(`/api/users/${transcriptSender.id}/avatar`, {
+      ...TEAM_SCALE_AVATAR_ASSET,
+      headers: { "Cache-Control": "private, max-age=31536000, immutable" },
+    });
+  }
+  const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
+    createTeamScaleSessionInventory({
+      now,
+      people,
+      counts,
+      offRosterSession: options.offRosterSession,
+      sidebarPersistentChildren: options.sidebarPersistentChildren,
+    });
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;
-  if (duplicateReads) {
-    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
-  }
   pinnedRows[0]!.sharingRole = "admin";
   pinnedRows[0]!.visibility = "shared";
   if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
     pinnedRows[0]!.worktree = duplicateReads.worktree;
   }
   if (options.liveRun) {
@@ -175,7 +149,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         pinnedRows[(index - 8) % pinnedRows.length]!.key,
       ];
     }
-    if (options.sidebarLiveChurn) {
+    if (options.sidebarLiveChurn || options.sidebarAvatars) {
       assets.set(`/api/users/${person.id}/avatar`, {
         contentType: "image/svg+xml",
         body:
@@ -204,23 +178,27 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     now,
     selectedSessionKey,
   );
-  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+  const { messageIds, historyMessages, configuredHistory } = createTeamScaleHistoryFixture({
     messageCount: counts.transcriptMessages,
     inlineWidgets: counts.inlineWidgets,
     now,
     largeSnapshot: options.largeSnapshot,
     attachments: duplicateReads?.attachments,
+    sender: options.transcriptAvatars ? transcriptSender : undefined,
+    historyStateReceipt: options.historyStateReceipt,
+    sessionInfo: pinnedRows[0]!,
   });
-  const largeHistory = options.largeSnapshot
-    ? {
-        messages: historyMessages,
-        sessionId: pinnedRows[0]!.sessionId,
-        sessionInfo: pinnedRows[0]!,
-        hasMore: false,
-        totalMessages: counts.transcriptMessages,
-        metadata: { models: [] },
-      }
-    : undefined;
+  const historySnapshot = () => ({
+    sessionId: pinnedRows[0]!.sessionId,
+    sessionInfo: pinnedRows[0]!,
+    messages: historyMessages,
+  });
+  const inFlightRun = () => ({
+    runId: TEAM_SCALE_LIVE_RUN_ID,
+    text: "Synthetic streaming progress 0",
+    startedAt: now,
+    events: [],
+  });
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -309,8 +287,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     };
   });
   const boardPath = `/__openclaw__/board/${encodeURIComponent(selectedSessionKey)}/team-overview/index.html`;
+  const dashboardHtml = (html: string) =>
+    options.dashboardPaintMarker ? dashboardPaintMarkerHtml(html) : html;
   if (!options.dashboardMcpApp) {
-    assets.set(boardPath, { contentType: "text/html", body: widgetHtml(0) });
+    assets.set(boardPath, {
+      contentType: "text/html",
+      body: dashboardHtml(
+        options.dashboardWidgetFontUrl
+          ? dashboardWidgetHtml(options.dashboardWidgetFontUrl)
+          : widgetHtml(0),
+      ),
+    });
   }
   const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
   const dashboardAssetPath = "/__openclaw__/fixture-dashboard";
@@ -339,15 +326,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "team-overview",
-        tabId: "main",
         title: "Team overview",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
-        grantState: "none",
-        revision: 1,
         ...(options.dashboardMcpApp
           ? { contentKind: "mcp-app", instanceId: "team-overview-instance" }
           : {
@@ -358,18 +341,21 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               viewGeneration: "0123456789abcdef0123456789abcdef",
               ...sandbox,
             }),
-      },
+      }),
     ],
   };
   const sidebarEntries = [
-    "route:agents-home",
+    "route:sessions",
     ...pinnedKeys.map((key) => `session:${key}`),
     ...plugins.map((plugin) => `plugin:${plugin.pluginId}/overview`),
   ];
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario = withTeamScaleConfig({
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
+    ...(options.transcriptAvatars
+      ? { deviceToken: null, hasMultipleSessionSharingIdentities: true }
+      : {}),
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
@@ -385,16 +371,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ]),
       ),
     },
-    ...(options.liveRun
-      ? {
-          inFlightRun: {
-            runId: TEAM_SCALE_LIVE_RUN_ID,
-            text: "Synthetic streaming progress 0",
-            startedAt: now,
-            events: [],
-          },
-        }
-      : {}),
+    ...(options.liveRun ? { inFlightRun: inFlightRun() } : {}),
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.list",
@@ -413,6 +390,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "cron.list",
       "cron.status",
       ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
+      ...(options.dashboardWidgetFontUrl ? ["mcp.app.discover"] : []),
       ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
@@ -420,7 +398,10 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
-      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
+      ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
+      ...(configuredHistory
+        ? { "chat.startup": configuredHistory, "chat.history": configuredHistory }
+        : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
@@ -437,9 +418,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "users.list": { profiles },
       "users.prefs.get": {
         status: "ok",
-        entries: {
-          "ui.railShortcuts": sidebarEntries,
-        },
+        entries: { "ui.railShortcuts": sidebarEntries },
       },
       "users.prefs.set": { status: "ok" },
       "cron.status": {
@@ -468,7 +447,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
             },
             "mcp.app.view": {
               ...sandbox,
-              html: dashboardMcpAppHtml(dashboardStylesheetUrl),
+              html: dashboardHtml(dashboardMcpAppHtml(dashboardStylesheetUrl)),
               csp: { resourceDomains: [dashboardAssetOrigin] },
               toolInput: {},
               toolResult: { content: [{ type: "text", text: "Synthetic dashboard ready" }] },
@@ -484,20 +463,28 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         })),
       },
       "progressCard.get": {
-        card: {
-          sessionKey: selectedSessionKey,
-          revision: 1,
-          updatedAt: now,
-          markdown: "Synthetic project verification is in progress.",
-          steps: [
-            { step: "Review fixture inventory", status: "completed" },
-            { step: "Validate cold-load rendering", status: "in_progress" },
-            { step: "Record performance evidence", status: "pending" },
-          ],
-        },
+        cases: [
+          {
+            match: { sessionKey: selectedSessionKey },
+            response: {
+              card: {
+                sessionKey: selectedSessionKey,
+                revision: 1,
+                updatedAt: now,
+                markdown: "Synthetic project verification is in progress.",
+                steps: [
+                  { step: "Review fixture inventory", status: "completed" },
+                  { step: "Validate cold-load rendering", status: "in_progress" },
+                  { step: "Record performance evidence", status: "pending" },
+                ],
+              },
+            },
+          },
+          { response: { card: null } },
+        ],
       },
     },
-  };
+  });
   // 125 frames over 20 seconds: streaming is mixed with unrelated Team activity.
   const liveKinds = [
     ...Array<string>(5).fill("presence.offscreen"),
@@ -512,6 +499,24 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     ...Array<string>(2).fill("run-state.unrelated"),
   ];
   const livePresence = presenceEntries.map((entry) => Object.assign({}, entry));
+  const sessionChanged = (
+    row: (typeof sessions)[number],
+    ts: number,
+    reason: string,
+    patch: Partial<(typeof sessions)[number]>,
+  ) => ({
+    sessionKey: row.key,
+    agentId: "main",
+    reason,
+    ts,
+    updatedAt: row.updatedAt,
+    sessionId: row.sessionId,
+    ...(patch.lastMessagePreview === undefined
+      ? {}
+      : { lastMessagePreview: patch.lastMessagePreview }),
+    session: { ...row, snapshotAt: ts, ...patch },
+    ancestorSessions: [],
+  });
   const liveEvents: TeamScaleLiveEvent[] = Array.from({ length: 125 }, (_, index) => {
     const kind = liveKinds[index % liveKinds.length]!;
     const ts = now + (index + 1) * 160;
@@ -543,22 +548,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               ? 160
               : 240
         ]!;
-      payload = {
-        sessionKey: row.key,
-        agentId: "main",
-        reason: kind === "run-state.unrelated" ? "agent.run.started" : "patch",
+      payload = sessionChanged(
+        row,
         ts,
-        updatedAt: row.updatedAt,
-        sessionId: row.sessionId,
-        lastMessagePreview: `Synthetic live activity ${index + 1}`,
-        session: {
-          ...row,
-          snapshotAt: ts,
+        kind === "run-state.unrelated" ? "agent.run.started" : "patch",
+        {
           ...(kind === "run-state.unrelated" ? { hasActiveRun: index % 2 === 0 } : {}),
           lastMessagePreview: `Synthetic live activity ${index + 1}`,
         },
-        ancestorSessions: [],
-      };
+      );
     } else if (kind === "session.message.open") {
       event = "session.message";
       const message = {
@@ -651,21 +649,10 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           atMs,
           kind: genuineChange ? "run-state.visible-change" : "run-state.equivalent",
           event: "sessions.changed",
-          payload: {
-            sessionKey: row.key,
-            agentId: "main",
-            reason: "agent.run.started",
-            ts,
-            updatedAt: row.updatedAt,
-            sessionId: row.sessionId,
-            session: {
-              ...row,
-              snapshotAt: ts,
-              hasActiveRun: !genuineChange || index % 2 === 0,
-              status: genuineChange && index % 2 ? "done" : "running",
-            },
-            ancestorSessions: [],
-          },
+          payload: sessionChanged(row, ts, "agent.run.started", {
+            hasActiveRun: !genuineChange || index % 2 === 0,
+            status: genuineChange && index % 2 ? "done" : "running",
+          }),
         });
       }
     }
@@ -682,7 +669,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   }
   return {
     scenario,
+    board,
     selectedSessionKey,
+    sidebarPersistentChildren,
     pinnedKeys,
     sidebarEntries,
     events,
@@ -693,20 +682,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     sidebarLiveChurn: options.sidebarLiveChurn
       ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
       : undefined,
-    liveHistory: options.liveRun
-      ? {
-          sessionId: pinnedRows[0]!.sessionId,
-          sessionInfo: pinnedRows[0]!,
-          messages: historyMessages,
-          inFlightRun: {
-            runId: TEAM_SCALE_LIVE_RUN_ID,
-            text: "Synthetic streaming progress 0",
-            startedAt: now,
-            events: [],
-          },
-        }
-      : undefined,
-    counts: { ...counts, sessions: sessions.length },
+    liveHistory: options.liveRun ? { ...historySnapshot(), inFlightRun: inFlightRun() } : undefined,
+    counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
   };
 }

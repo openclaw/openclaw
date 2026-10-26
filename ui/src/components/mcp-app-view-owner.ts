@@ -1,5 +1,5 @@
 import { PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
@@ -11,6 +11,7 @@ import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { observeResize } from "../lib/reactive/observers.ts";
 import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
@@ -356,7 +357,7 @@ export function createMcpAppView(
 
   /** Restarts a torn-down view only when its parent kept the element connected. */
   function restartAfterTeardown() {
-    if (!host.isConnected || activeResources || teardownPromise) {
+    if (!retired || !host.isConnected || activeResources || teardownPromise) {
       return;
     }
     requestAbort = new AbortController();
@@ -400,31 +401,7 @@ export function createMcpAppView(
     );
   }
 
-  function bindOpenLinkHandler(
-    bridge: OpenClawAppBridge,
-    binding: McpAppBinding,
-    resources: McpAppResources,
-    signal: AbortSignal,
-  ) {
-    bridge.onopenlink = ({ url }) => {
-      // Both external and plugin navigation require the current, focused App.
-      if (
-        !isCurrentBinding(binding, resources, signal) ||
-        !isWidgetFrameInteractable(resources.iframe)
-      ) {
-        return Promise.resolve({ isError: true });
-      }
-      if (!parseMcpAppLink(url)) {
-        return Promise.resolve(openExternalUrlSafe(url) ? {} : { isError: true });
-      }
-      return Promise.resolve(navigateMcpAppLink(context, url) ? {} : { isError: true });
-    };
-  }
-
-  async function setupResources(
-    binding: McpAppBinding,
-    signal: AbortSignal,
-  ): Promise<McpAppResources> {
+  async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
@@ -642,7 +619,19 @@ export function createMcpAppView(
         bridge.setHostContext(buildHostContext());
         return Promise.resolve({ mode });
       };
-      bindOpenLinkHandler(bridge, binding, createdResources, signal);
+      bridge.onopenlink = ({ url }) => {
+        // Both external and plugin navigation require the current, focused App.
+        if (
+          !isCurrentBinding(binding, createdResources, signal) ||
+          !isWidgetFrameInteractable(createdResources.iframe)
+        ) {
+          return Promise.resolve({ isError: true });
+        }
+        if (!parseMcpAppLink(url)) {
+          return Promise.resolve(openExternalUrlSafe(url) ? {} : { isError: true });
+        }
+        return Promise.resolve(navigateMcpAppLink(context, url) ? {} : { isError: true });
+      };
       bridge.onsizechange = ({ height }) => {
         if (
           height !== undefined &&
@@ -696,9 +685,7 @@ export function createMcpAppView(
       // Theme receipts update the remote app's host context through its live bridge.
       addResourceCleanup(createdResources, context.theme.subscribe(updateHostContext));
       if (typeof ResizeObserver !== "undefined") {
-        const hostResizeObserver = new ResizeObserver(updateHostContext);
-        hostResizeObserver.observe(mount);
-        addResourceCleanup(createdResources, () => hostResizeObserver.disconnect());
+        addResourceCleanup(createdResources, observeResize([mount], updateHostContext));
       }
       await waitForMcpAppHandlerRegistration();
       signal.throwIfAborted();
@@ -707,7 +694,6 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
-      return createdResources;
     } catch (error) {
       await teardownResources(resources);
       throw error;

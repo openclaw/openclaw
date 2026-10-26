@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
@@ -32,6 +34,27 @@ export type PreparedAgentRunTerminalReply = {
   text: string;
   terminalReply: AgentRunTerminalReplySnapshot;
 };
+
+/** Projects payloads through the shared message-presentation acknowledgement rule. */
+export function filterAgentRunTerminalPayloadsForPresentation(params: {
+  payloads: ReplyPayload[] | undefined;
+}): ReplyPayload[] | undefined {
+  if (!params.payloads) {
+    return params.payloads;
+  }
+  return params.payloads.filter((payload) => {
+    const text = payload.text;
+    if (!text) {
+      return true;
+    }
+    const presentation = stripHeartbeatToken(text, { mode: "message" });
+    // Keep this wrapper-extracted terminal helper independent of the outbound delivery graph.
+    const hasMedia =
+      payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim()) === true ||
+      Boolean(payload.mediaUrl?.trim());
+    return !(presentation.shouldSkip && !hasMedia);
+  });
+}
 
 /** Returns full prepared text, or undefined for an explicitly silent reply. */
 export function prepareAgentRunReplyText(rawText: string): string | undefined {

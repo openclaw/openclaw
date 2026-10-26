@@ -1,11 +1,6 @@
-type Varint = {
-  nextOffset: number;
-  value: number;
-};
-
 const utf8Decoder = new TextDecoder();
 
-function readVarint(buf: Uint8Array, start: number): Varint | null {
+function readVarint(buf: Uint8Array, start: number) {
   let offset = start;
   let value = 0;
   let shift = 0;

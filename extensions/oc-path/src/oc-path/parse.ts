@@ -93,7 +93,7 @@ function unquote(value: string): string {
   if (value.length >= 2) {
     const f = value.charCodeAt(0);
     const l = value.charCodeAt(value.length - 1);
-    if (f === l && (f === 34 || f === 39)) {
+    if (f === 34 || f === 39) {
       const doc = parseDocument(value, { prettyErrors: false });
       if (
         doc.errors.length === 0 &&
@@ -103,7 +103,7 @@ function unquote(value: string): string {
         return doc.contents.value;
       }
       // Preserve the tolerant handling of malformed, hand-authored quoted values.
-      return value.slice(1, -1);
+      return f === l ? value.slice(1, -1) : value;
     }
   }
   return value;
@@ -144,49 +144,45 @@ function walkBlocks(
     const tokenStart = heading.tokenIdx + 3;
     const tokenEnd = nextHeading?.tokenIdx ?? tokens.length;
     const blockTokens = tokens.slice(tokenStart, tokenEnd);
+    // Every list_item_open becomes an item (bullets, numbered, nested
+    // sub-bullets); lint rules flag depth / duplicate-slug collisions.
+    const items: AstItem[] = [];
+    for (const [i, t] of blockTokens.entries()) {
+      if (t.type !== "list_item_open" || t.map === null) {
+        continue;
+      }
+      // First inline at the item's own depth is the item text.
+      let nestedDepth = 0;
+      let text = "";
+      for (let j = i + 1; j < blockTokens.length; j++) {
+        const x = expectDefined(blockTokens[j], "item scan index is in bounds");
+        if (x.type === "list_item_close" && nestedDepth === 0) {
+          break;
+        }
+        if (x.type === "bullet_list_open" || x.type === "ordered_list_open") {
+          nestedDepth++;
+        } else if (x.type === "bullet_list_close" || x.type === "ordered_list_close") {
+          nestedDepth--;
+        } else if (x.type === "inline" && nestedDepth === 0 && text === "") {
+          text = x.content;
+        }
+      }
+      const kv = parseMdItemKeyValue(text);
+      items.push({
+        text,
+        slug: slugify(kv?.key ?? text),
+        line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
+        ...(kv === undefined ? {} : { kv }),
+      });
+    }
     blocks.push({
       heading: heading.text,
       slug: slugify(heading.text),
       line: bodyFileLine + start,
       bodyText: bodyLines.slice(start + 1, end).join("\n"),
-      items: extractItems(blockTokens, bodyFileLine),
+      items,
     });
   }
 
   return { preamble, blocks };
-}
-
-// Every list_item_open becomes an item (bullets, numbered, nested
-// sub-bullets); lint rules flag depth / duplicate-slug collisions.
-function extractItems(tokens: readonly Token[], bodyFileLine: number): AstItem[] {
-  const items: AstItem[] = [];
-  for (const [i, t] of tokens.entries()) {
-    if (t.type !== "list_item_open" || t.map === null) {
-      continue;
-    }
-    // First inline at the item's own depth is the item text.
-    let nestedDepth = 0;
-    let text = "";
-    for (let j = i + 1; j < tokens.length; j++) {
-      const x = expectDefined(tokens[j], "item scan index is in bounds");
-      if (x.type === "list_item_close" && nestedDepth === 0) {
-        break;
-      }
-      if (x.type === "bullet_list_open" || x.type === "ordered_list_open") {
-        nestedDepth++;
-      } else if (x.type === "bullet_list_close" || x.type === "ordered_list_close") {
-        nestedDepth--;
-      } else if (x.type === "inline" && nestedDepth === 0 && text === "") {
-        text = x.content;
-      }
-    }
-    const kv = parseMdItemKeyValue(text);
-    items.push({
-      text,
-      slug: slugify(kv?.key ?? text),
-      line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
-      ...(kv === undefined ? {} : { kv }),
-    });
-  }
-  return items;
 }

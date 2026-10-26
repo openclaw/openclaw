@@ -116,7 +116,7 @@ it("maps the default voice to Chinese for CJK input", async () => {
   await provider.synthesize({
     text,
     cfg: {},
-    providerConfig: { outputFormatConfigured: true },
+    providerConfig: {},
     providerOverrides: {},
     timeoutMs: 1000,
     target: "audio-file",

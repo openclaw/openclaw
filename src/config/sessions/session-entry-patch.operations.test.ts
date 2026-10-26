@@ -3,8 +3,11 @@ import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as transfer from "../../infra/sqlite-worker-transfer.js";
+import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import { readConversation, registerConversationAddresses } from "./conversation-registry.js";
@@ -16,6 +19,7 @@ import {
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
+import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import type { SessionEntry } from "./types.js";
@@ -23,6 +27,46 @@ import type { SessionEntry } from "./types.js";
 const { getSessionEntryPatchDelivery } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
+const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it("keeps resident SQL metadata out of callback patch preparation and commit bytes", async () => {
+  await withActor(async (f) => {
+    const prompt = "synthetic tool instructions ".repeat(400);
+    const label = "synthetic session title ".repeat(400);
+    f.writeEntry({ ...f.nativeEntry()!, label, skillsSnapshot: { prompt, skills: [] } });
+    f.read();
+    const context: AgentWorkerOperationContext = {
+      options: { agentId: f.database.agentId, path: f.database.path },
+      open: () => f.database,
+      admit() {},
+      writeTransaction: (_operation, _owner, write) =>
+        runSqliteImmediateTransactionSync(f.database.db, () => write(f.database)),
+    };
+    const operations = await createAgentWorkerTestLoaders(context)["session.entry.patch.prepare"]();
+    const selection = { kind: "entry" as const, sessionKey: f.target.sessionKey, exact: true };
+    const prepared = structuredClone(operations["session.entry.patch.prepare"](selection, context));
+    const writeBase = prepared[0]!.entry;
+    const input = {
+      selection,
+      prepared,
+      sessionKey: f.target.sessionKey,
+      writeBase,
+      next: { ...writeBase, label: "small patch" },
+      operationLabel: "session-entry.patch" as const,
+      validateCanonicalKeys: true,
+    };
+    // The logical preimage is required for CAS; its duplicate SQL JSON is not.
+    const logicalEntryBudget = Buffer.byteLength(prompt) + Buffer.byteLength(label) + 4_096;
+    expect(serialize(prepared).byteLength).toBeLessThan(logicalEntryBudget);
+    expect(serialize(input).byteLength).toBeLessThan(logicalEntryBudget);
+    f.patchEntry(structuredClone(input));
+    expect(f.nativeEntry()).toMatchObject({
+      label: "small patch",
+      skillsSnapshot: { prompt, skills: [] },
+    });
+  });
+});
 
 async function conversationGuard(f: ReturnType<typeof fixture>, peerId: string) {
   const identity = buildConversationIdentity({
@@ -57,8 +101,7 @@ function replaceRouteBeforeCommit(f: ReturnType<typeof fixture>, conversationRef
 it.each(["inbound", "route"] as const)(
   "merges %s metadata with an in-process write without a detached comparison read",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const original = f.read()!;
       delivery.beforeCommit = () => {
         delivery.beforeCommit = undefined;
@@ -99,8 +142,7 @@ it.each(["inbound", "route"] as const)(
 );
 
 it("reduces a fixed patch against the current row in one worker request without losing foreign metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const original = f.read()!;
     delivery.beforeCommit = () => {
       delivery.beforeCommit = undefined;
@@ -144,8 +186,7 @@ it("reduces a fixed patch against the current row in one worker request without 
 });
 
 it("acknowledges no-result patches without transferring the entry and keeps final authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const prompt = "synthetic instructions ".repeat(4096);
     replaceSessionEntrySync(f.scope, {
       ...f.read()!,
@@ -223,9 +264,66 @@ it("acknowledges no-result patches without transferring the entry and keeps fina
   });
 });
 
+it("reuses unchanged resident entry fields across patches without losing result isolation or newer writes", async () => {
+  await withFixture(async (f) => {
+    const prompt = "synthetic retained instructions ".repeat(4096);
+    const skills = [{ name: "synthetic-skill", requiredEnv: ["SYNTHETIC_REQUIRED"] }];
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills },
+      pinnedAt: 20,
+    });
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "warm" } },
+      { result: "none", skipMaintenance: true },
+    );
+    const deliveredBytes: number[] = [];
+    const collect = transfer.createSqliteWorkerTransferCollector;
+    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
+      collect(kind, (value) => {
+        deliveredBytes.push(serialize(value).byteLength);
+        consume(value);
+      }),
+    );
+    const result = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "changed", pinnedAt: undefined } },
+      { skipMaintenance: true },
+    );
+    expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
+    expect(result?.pinnedAt).toBeUndefined();
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    result!.skillsSnapshot!.prompt = "caller-owned";
+    result!.skillsSnapshot!.skills[0]!.name = "caller-mutated";
+    result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED");
+    result!.skillsSnapshot!.skills.push({ name: "caller-added" });
+    const next = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "next" } },
+      { skipMaintenance: true },
+    );
+    expect(next?.skillsSnapshot).toMatchObject({ prompt, skills });
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt: "newer persisted instructions", skills: [] },
+      });
+    };
+    const latest = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "after concurrent write" } },
+      { skipMaintenance: true },
+    );
+    expect(latest?.skillsSnapshot?.prompt).toBe("newer persisted instructions");
+    expect(f.read()).toEqual(latest);
+  });
+});
+
 it("commits cron state in one request while preserving concurrent metadata and cleared policy", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const initial: SessionEntry = {
       ...f.read()!,
       lifecycleRevision: "admitted",
@@ -274,8 +372,7 @@ it("commits cron state in one request while preserving concurrent metadata and c
 });
 
 it("creates the full initial cron session in one owner command", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const scope = {
       ...f.scope,
       sessionKey: "agent:main:cron:created",
@@ -301,13 +398,7 @@ it("creates the full initial cron session in one owner command", async () => {
       { fallbackEntry: next, replaceEntry: true, skipMaintenance: true },
     );
     expect(result).toMatchObject({
-      sessionId: "cron-created",
-      updatedAt: 20,
-      label: "Cron: initial state",
-      lifecycleRevision: "admitted",
-      thinkingLevel: "high",
-      modelProvider: "openai",
-      model: "gpt-5.4",
+      ...next,
       createdVia: "cron",
       createdActor: { type: "system" },
       createdAt: 10,
@@ -318,8 +409,7 @@ it("creates the full initial cron session in one owner command", async () => {
 });
 
 it("rechecks conversation authority before a fixed patch commits", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const conversation = await conversationGuard(f, "patch-peer");
     const workerGuard = { conversation };
     const onCommitted = vi.fn();
@@ -350,8 +440,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
 });
 
 it("retains typed source and conversation authority when updating the last route", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const conversation = await conversationGuard(f, "route-peer");
     let sourceCurrent = true;
     const refusal = new Error("route source was revoked");

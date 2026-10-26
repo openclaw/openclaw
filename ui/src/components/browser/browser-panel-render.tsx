@@ -1,17 +1,22 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
-import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
+import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
+import { BrowserToolbar } from "./browser-panel-toolbar.tsx";
+import "../../styles/session-panel-rail.css";
 
 registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
@@ -63,170 +68,22 @@ function HeaderActions(
   );
 }
 
-function Toolbar(props: ControllerProps & { embedded: boolean }) {
-  onSettled(() => {
-    const controller = props.controller;
-    return () => {
-      controller.addressInput = undefined;
-    };
-  });
-  const nativeTab = createMemo(() => props.controller.native.activeTab);
-  const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
-  return (
-    <div class="bp-toolbar">
-      {!nativeTab() &&
-      !props.controller.host.fixedTab &&
-      !props.controller.host.dashboardTarget?.sessionScoped &&
-      props.controller.operations.route ? (
-        <span
-          class="bp-profile"
-          title={t("browser.profile", { profile: props.controller.operations.route!.profile })}
-        >
-          {props.controller.operations.route!.profile}
-        </span>
-      ) : null}
-      {props.embedded && !props.controller.host.fixedTab ? (
-        <PanelIconButton
-          class="bp-icon"
-          label={t("browser.newTab")}
-          icon={<Icon name="plus" />}
-          newTab
-          onClick={() => props.controller.beginNewTab()}
-        />
-      ) : null}
-      <PanelIconButton
-        class="bp-icon"
-        label={t("browser.back")}
-        icon={<Icon name="chevronLeft" />}
-        disabled={
-          nativeTab() ? !nativeTab()!.canGoBack : !hasView() || props.controller.evaluateUnavailable
-        }
-        onClick={() => props.controller.goHistory(-1)}
-      />
-      <PanelIconButton
-        class="bp-icon"
-        label={t("browser.forward")}
-        icon={<Icon name="chevronRight" />}
-        disabled={
-          nativeTab()
-            ? !nativeTab()!.canGoForward
-            : !hasView() || props.controller.evaluateUnavailable
-        }
-        onClick={() => props.controller.goHistory(1)}
-      />
-      <PanelIconButton
-        class="bp-icon"
-        label={t(nativeTab()?.loading ? "browser.stop" : "browser.reload")}
-        icon={<Icon name={nativeTab()?.loading ? "x" : "refresh"} />}
-        busy={!nativeTab() && props.controller.loading}
-        disabled={!props.controller.activeTargetId}
-        onClick={() => props.controller.reloadPage()}
-      />
-      <input
-        class="bp-url"
-        ref={(element) => (props.controller.addressInput = element)}
-        type="text"
-        spellcheck="false"
-        autocomplete="off"
-        disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
-        placeholder={t("browser.urlPlaceholder")}
-        value={props.controller.urlDraft}
-        onFocus={(event) => {
-          props.controller.urlDraftEditing = true;
-          event.currentTarget.select();
-        }}
-        onBlur={() => {
-          props.controller.urlDraftEditing = false;
-        }}
-        onInput={(event) => props.controller.setState("urlDraft", event.currentTarget.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            props.controller.commitUrlDraft();
-            event.currentTarget.blur();
-          } else if (event.key === "Escape") {
-            props.controller.resetUrlDraftFromView();
-            event.currentTarget.blur();
-          }
-        }}
-      />
-      {props.embedded ? (
-        <PanelIconButton
-          class="bp-icon"
-          label={t("browser.openExternal")}
-          icon={<Icon name="externalLink" />}
-          newTab
-          disabled={!hasView()}
-          onClick={() => props.controller.openExternal()}
-        />
-      ) : null}
-      {!props.controller.host.dashboardTarget?.sessionScoped ? (
-        <PanelIconButton
-          class="bp-icon"
-          label={t(
-            props.controller.download.pending ? "browser.downloading" : "browser.downloadFile",
-          )}
-          icon={<Icon name={props.controller.download.pending ? "loader" : "download"} />}
-          busy={props.controller.download.pending}
-          disabled={!props.controller.download.available}
-          onClick={() => void props.controller.download.save()}
-        />
-      ) : null}
-      <PanelIconButton
-        class={["bp-icon", { "is-active": props.controller.mode === "annotate" }]}
-        label={t("browser.annotate")}
-        icon={<Icon name="penLine" />}
-        disabled={!hasView()}
-        onClick={() => props.controller.setMode("annotate")}
-      />
-      <PanelIconButton
-        class={["bp-icon", { "is-active": props.controller.mode === "inspect" }]}
-        label={t("browser.inspect")}
-        title={t(
-          !nativeTab() && props.controller.evaluateUnavailable
-            ? "browser.inspectUnavailable"
-            : "browser.inspect",
-        )}
-        icon={
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
-          </svg>
-        }
-        disabled={!hasView() || (!nativeTab() && props.controller.evaluateUnavailable)}
-        onClick={() => props.controller.setMode("inspect")}
-      />
-    </div>
-  );
-}
-
 function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.undoStroke()}
-      >
-        {t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.clearStrokes()}
-      >
-        {t("browser.annotateClear")}
-      </button>
+      <For each={["undoStroke", "clearStrokes"] as const}>
+        {(action) => (
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={props.controller.strokes.length === 0}
+            onClick={() => props.controller.input[action]()}
+          >
+            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
+          </button>
+        )}
+      </For>
       <button
         class="bp-btn"
         type="button"
@@ -313,7 +170,9 @@ function NativeViewport(props: ControllerProps) {
   );
 }
 
-function ViewportContent(props: ControllerProps) {
+function ViewportContent(
+  props: ControllerProps & { mobilePresentation?: boolean; emptyError: boolean },
+) {
   const remoteInput = () =>
     props.controller.native.activeTab ? undefined : props.controller.input;
   onSettled(() => {
@@ -327,6 +186,31 @@ function ViewportContent(props: ControllerProps) {
       >
         <NativeViewport controller={props.controller} />
       </Match>
+      <Match when={props.emptyError}>
+        <PanelEmptyState
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
+          icon={<Icon name="globe" />}
+          heading={t("browser.loadFailed")}
+          description={props.controller.errorText!}
+          action={
+            <button
+              class="btn"
+              type="button"
+              disabled={props.controller.loading}
+              onClick={() => void props.controller.retryEmptyError()}
+            >
+              <Icon name="refresh" />
+              {t(
+                props.controller.errorRetry
+                  ? "common.retry"
+                  : props.controller.running === false && !props.controller.host.fixedTab
+                    ? "browser.start"
+                    : "common.refresh",
+              )}
+            </button>
+          }
+        />
+      </Match>
       <Match
         when={
           !props.controller.native.activeTab &&
@@ -335,13 +219,14 @@ function ViewportContent(props: ControllerProps) {
         }
       >
         <PanelEmptyState
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("browser.notRunning")}
           action={
             props.controller.host.fixedTab ? undefined : (
               <button
-                class="bp-btn"
+                class="btn"
                 type="button"
                 onClick={() => void props.controller.startBrowserNow()}
               >
@@ -352,15 +237,25 @@ function ViewportContent(props: ControllerProps) {
         />
       </Match>
       <Match when={!props.controller.view && Boolean(props.controller.unavailableTabText)}>
-        <div class="bp-status" role="status">
-          {props.controller.unavailableTabText}
-        </div>
+        {props.mobilePresentation ? (
+          <div class="bp-status" role="status">
+            {props.controller.unavailableTabText}
+          </div>
+        ) : (
+          <PanelEmptyState
+            presentation={props.mobilePresentation ? "mobile" : "desktop"}
+            icon={<Icon name="globe" />}
+            heading={t("chat.sidePanel.browser")}
+            description={props.controller.unavailableTabText!}
+          />
+        )}
       </Match>
       <Match when={!props.controller.view && props.controller.loading}>
-        <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
+        <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
       <Match when={!props.controller.view}>
         <PanelEmptyState
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("chat.sidePanel.browserEmpty")}
@@ -428,6 +323,8 @@ export function BrowserPanelChrome(
     resizer?: JSX.Element;
     embedded: boolean;
     tabsInHeader: boolean;
+    mobilePresentation?: boolean;
+    fetchFavicon?: LinkFaviconFetcher;
   },
 ) {
   const remoteInput = () =>
@@ -435,20 +332,19 @@ export function BrowserPanelChrome(
   onSettled(() => {
     const controller = props.controller;
     const viewport = controller.input.elements.viewport!;
-    const observer =
+    const stopResize =
       typeof ResizeObserver === "function"
-        ? new ResizeObserver(([entry]) => {
+        ? observeResize([viewport], ([entry]) => {
             if (entry) {
               controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
             }
           })
         : undefined;
-    observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
-      observer?.disconnect();
+      stopResize?.();
       stopWheel();
     };
   });
@@ -459,6 +355,45 @@ export function BrowserPanelChrome(
       !props.controller.host.fixedTab &&
       (!props.embedded || (!props.tabsInHeader && props.controller.tabs.length > 0)),
   );
+  function BrowserTabs() {
+    const sourceTabs = createMemo(() => props.controller.tabs);
+    const tabs = createMemo(() =>
+      browserPanelHostedTabs(sourceTabs(), document).map((tab, index) => ({
+        id: tab.id,
+        domId: `${panelId}-tab-${tab.id}`,
+        label: tab.label,
+        title: `${t(sourceTabs()[index]?.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+        icon: tab.favicon ? (
+          <img class="tabstrip-tab__favicon" src={tab.favicon} alt="" />
+        ) : (
+          tab.icon
+        ),
+        closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+      })),
+    );
+    return (
+      <PanelTabStrip
+        focusOwner={tabFocus}
+        tabs={tabs()}
+        activeId={props.controller.activeTargetId}
+        ariaControls={panelId}
+        onSelect={(id) => void props.controller.selectTab(id)}
+        onClose={(id) => props.controller.closeTab(id)}
+        onNew={() => props.controller.beginNewTab()}
+        newLabel={t("browser.newTab")}
+        newTabAction
+        newControl={props.embedded ? null : undefined}
+      />
+    );
+  }
+
+  // Keep a usable page visible when an action fails. Only an empty desktop
+  // viewport replaces its placeholder with the owner's actual failure.
+  const emptyError = () =>
+    !props.mobilePresentation &&
+    !props.controller.native.activeTab &&
+    !props.controller.view &&
+    Boolean(props.controller.errorText);
   return (
     <section
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
@@ -474,16 +409,7 @@ export function BrowserPanelChrome(
       {!props.embedded ? props.resizer : null}
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
-          <BrowserPanelTabs
-            focusOwner={tabFocus}
-            panelId={panelId}
-            tabs={props.controller.tabs}
-            activeTargetId={props.controller.activeTargetId}
-            onSelect={(id) => void props.controller.selectTab(id)}
-            onClose={(id) => props.controller.closeTab(id)}
-            onNew={() => props.controller.beginNewTab()}
-            hideNewControl={props.embedded}
-          />
+          <BrowserTabs />
           {!props.embedded ? (
             <HeaderActions
               controller={props.controller}
@@ -494,12 +420,18 @@ export function BrowserPanelChrome(
           ) : null}
         </header>
       ) : null}
-      <Toolbar controller={props.controller} embedded={props.embedded} />
+      <BrowserToolbar
+        controller={props.controller}
+        mobilePresentation={props.mobilePresentation}
+        fetchFavicon={props.fetchFavicon}
+      />
       {props.controller.mode === "annotate" ? <AnnotateBar controller={props.controller} /> : null}
       {props.controller.errorText ? (
-        <div class="bp-note bp-note--error" role="alert">
-          {props.controller.errorText}
-        </div>
+        emptyError() ? null : (
+          <div class="bp-note bp-note--error" role="alert">
+            {props.controller.errorText}
+          </div>
+        )
       ) : props.controller.noticeText ? (
         <div class="bp-note" role="status">
           {props.controller.noticeText}
@@ -521,7 +453,11 @@ export function BrowserPanelChrome(
         onPaste={(event: ClipboardEvent) => remoteInput()?.handleViewportPaste(event)}
         aria-busy={props.controller.loading ? "true" : "false"}
       >
-        <ViewportContent controller={props.controller} />
+        <ViewportContent
+          controller={props.controller}
+          mobilePresentation={props.mobilePresentation}
+          emptyError={emptyError()}
+        />
       </div>
     </section>
   );

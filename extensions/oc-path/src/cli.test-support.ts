@@ -89,16 +89,19 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   }
 }
 
-export async function pathResolveCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["resolve", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
+function unaryCommand(command: string) {
+  return async (path: string | undefined, options: PathCommandOptions, runtime: TestRuntime) => {
+    await invokePathCli(
+      [command, ...(path === undefined ? [] : [path]), ...optionArgs(options)],
+      runtime,
+    );
+  };
 }
+
+export const pathResolveCommand = unaryCommand("resolve");
+export const pathFindCommand = unaryCommand("find");
+export const pathValidateCommand = unaryCommand("validate");
+export const pathEmitCommand = unaryCommand("emit");
 
 export async function pathSetCommand(
   path: string | undefined,
@@ -113,39 +116,6 @@ export async function pathSetCommand(
       ...(value === undefined ? [] : [value]),
       ...optionArgs(options),
     ],
-    runtime,
-  );
-}
-
-export async function pathFindCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["find", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-export async function pathValidateCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["validate", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-export async function pathEmitCommand(
-  file: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["emit", ...(file === undefined ? [] : [file]), ...optionArgs(options)],
     runtime,
   );
 }

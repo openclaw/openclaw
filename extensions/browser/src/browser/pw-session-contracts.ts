@@ -91,7 +91,6 @@ export type ActionDownloadCapture = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
   lastEventAtMs?: number;
   pending: Array<Promise<BrowserDownloadResult>>;
-  validations: Array<Promise<void>>;
   waiters: Array<() => void>;
 };
 

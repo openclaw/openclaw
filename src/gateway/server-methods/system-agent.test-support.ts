@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as configModule from "../../config/config.js";
+import { createSnapshot } from "../../config/mutate.test-support.js";
 import {
   getRuntimeConfigAppliedHash,
   setRuntimeConfigAppliedHash,
@@ -87,27 +89,19 @@ export function useSystemAgentGatewayTestFixture() {
     | undefined;
   const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
   let previousAppliedHash: string | null = null;
-  const requireFixture = () =>
-    expectDefined(fixture, "verified inference fixture was not initialized");
-  const requireVerifiedInferenceFixture = () => requireFixture().binding;
-  const requireVerifiedInferenceDeps = () => ({
-    readConfigFileSnapshot: async () =>
-      ({
-        exists: true,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        hash: "verified-config",
-        config: verifiedConfig,
-        runtimeConfig: verifiedConfig,
-        sourceConfig: verifiedConfig,
-        issues: [],
-      }) as never,
-  });
+  const requireVerifiedInferenceFixture = () =>
+    expectDefined(fixture, "verified inference fixture was not initialized").binding;
+  const installVerifiedConfigReader = () => {
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue({
+      ...createSnapshot({ sourceConfig: verifiedConfig, hash: "verified-config", raw: null }),
+      includedPaths: [],
+    });
+  };
 
   function makeVerifiedEngine(): SystemAgentChatEngine {
+    installVerifiedConfigReader();
     return new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
     });
   }
 
@@ -174,7 +168,7 @@ export function useSystemAgentGatewayTestFixture() {
   return {
     systemAgentTempDirs,
     requireVerifiedInferenceFixture,
-    requireVerifiedInferenceDeps,
+    installVerifiedConfigReader,
     makeVerifiedEngine,
     seededSession,
   };

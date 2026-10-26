@@ -33,9 +33,9 @@
   width: calc(var(--settings-toggle-height) + 2 * var(--settings-toggle-travel));
   height: var(--settings-toggle-height);
   box-sizing: border-box;
-  border: 1px solid var(--muted);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
   pointer-events: none;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -74,7 +74,7 @@
   outline-offset: 1px;
 }
 
-.settings-row--toggle:has(.settings-toggle__input:disabled) {
+.settings-row--toggle:has(.settings-toggle__input:is(:disabled, [aria-disabled="true"])) {
   cursor: not-allowed;
 }
 

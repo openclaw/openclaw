@@ -26,7 +26,7 @@ scenario:
     - docs/plugins/plugin-permission-requests.md
   codeRefs:
     - src/plugins/loader.ts
-    - src/plugins/registry-registrars-tools-hooks.ts
+    - src/plugins/registry-registrars.ts
     - src/plugins/hooks.ts
     - src/plugins/hook-runner-global.ts
     - src/agents/agent-tools.before-tool-call.ts

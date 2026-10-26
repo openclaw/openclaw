@@ -69,12 +69,14 @@ export function reportSkillPrecedenceCollisions(
     reportedGroupsBySource.delete(sourceKey);
   }
   for (const [key, group] of groups) {
-    const digest = sha256Hex(JSON.stringify([...group.contents].toSorted()));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+    const digest = sha256Hex(JSON.stringify([...group.contents].sort()));
     if (reportedSkillCollisions.get(key) === digest) {
       continue;
     }
     reportedSkillCollisions.set(key, digest);
-    const names = [...group.names].toSorted();
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+    const names = [...group.names].sort();
     const sample = names.slice(0, 3).map((name) => name.slice(0, 128));
     if (names.length > sample.length) {
       sample.push(`+${names.length - sample.length} more`);
@@ -122,7 +124,8 @@ export function mergeSkillRecords<T extends { skill: Skill }>(
   if (!collisions) {
     reportSkillPrecedenceCollisions(discoveredCollisions, sourceKey);
   }
-  return [...merged.values()].toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is a private array.
+  return [...merged.values()].sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"));
 }
 
 /** Append lower-precedence names without changing the order of either tier. */

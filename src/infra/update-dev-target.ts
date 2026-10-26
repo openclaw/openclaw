@@ -16,11 +16,6 @@ export function isFullGitObjectId(value: string): boolean {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value);
 }
 
-type DevUpdateTargetEnvParseResult =
-  | { status: "absent" }
-  | { status: "valid"; target: DevUpdateTarget }
-  | { status: "invalid" };
-
 function isValidTargetPart(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -76,7 +71,9 @@ export function devUpdateTargetFromGitTarget(
   };
 }
 
-function parseDevUpdateTargetEnv(env: NodeJS.ProcessEnv): DevUpdateTargetEnvParseResult {
+function parseDevUpdateTargetEnv(
+  env: NodeJS.ProcessEnv,
+): { status: "absent" } | { status: "valid"; target: DevUpdateTarget } | { status: "invalid" } {
   const value = env[UPDATE_DEV_TARGET_REF_ENV]?.trim();
   if (!value) {
     return { status: "absent" };

@@ -23,6 +23,20 @@ import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.
 type PolicyExec = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
 
 type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
+type PolicyOptions = Pick<Parameters<typeof runInstallPolicy>[0], "env" | "logger">;
+const makeFinding = (ruleId: string, message: string, fields: Record<string, unknown> = {}) => ({
+  ruleId,
+  severity: "warn",
+  message,
+  ...fields,
+});
+const expectFailed = (result: Awaited<ReturnType<typeof runInstallPolicy>>, reason: string) => {
+  expect(result?.blocked?.code).toBe("security_scan_failed");
+  expect(result?.blocked?.reason).toContain(reason);
+};
+const blocked = (reason: string) => ({
+  blocked: { code: "security_scan_blocked", reason: `blocked by install policy: ${reason}` },
+});
 
 async function writePolicyScript(
   dir: string,
@@ -114,17 +128,11 @@ describe("runInstallPolicy", () => {
     return { writableDir, writableScriptPath: await writePolicyScript(writableDir) };
   }
 
-  function runPolicy(
-    config: OpenClawConfig,
-    options: Pick<Parameters<typeof runInstallPolicy>[0], "env" | "logger"> = {},
-  ) {
+  function runPolicy(config: OpenClawConfig, options: PolicyOptions = {}) {
     return runInstallPolicy({ config, request: baseRequest(sourceDir), ...options });
   }
 
-  function runResponse(
-    response: unknown,
-    options: Pick<Parameters<typeof runInstallPolicy>[0], "logger"> = {},
-  ) {
+  function runResponse(response: unknown, options: Pick<PolicyOptions, "logger"> = {}) {
     return runPolicy(
       configWithPolicy(scriptPath, { POLICY_RESPONSE: JSON.stringify(response) }),
       options,
@@ -134,7 +142,7 @@ describe("runInstallPolicy", () => {
   function runDecision(
     decision: "allow" | "warn" | "block",
     fields: Record<string, unknown>,
-    options: Pick<Parameters<typeof runInstallPolicy>[0], "logger"> = {},
+    options: Pick<PolicyOptions, "logger"> = {},
   ) {
     return runResponse({ protocolVersion: 1, decision, ...fields }, options);
   }
@@ -151,11 +159,10 @@ describe("runInstallPolicy", () => {
       sourceDir,
       '#!/usr/bin/env node\nprocess.stdout.write(process.env.POLICY_RESPONSE || "");\n',
     );
-    const response = JSON.stringify({ protocolVersion: 1, decision: "allow" });
     const result = await runPolicy(
       configWithExec({
         command: envNodeScriptPath,
-        env: { POLICY_RESPONSE: response },
+        env: { POLICY_RESPONSE: JSON.stringify({ protocolVersion: 1, decision: "allow" }) },
         passEnv: ["PATH"],
         trustedDirs: [path.dirname(envNodeScriptPath)],
       }),
@@ -269,41 +276,41 @@ describe("runInstallPolicy", () => {
     await expect(runPolicy(config)).resolves.toBeUndefined();
   });
 
-  it("keeps truncated operator block reasons UTF-16 safe", async () => {
-    const reasonPrefix = "r".repeat(999);
-    const result = await runDecision("block", {
-      reason: `${reasonPrefix}🎉tail`,
-    });
-    expect(result?.blocked).toEqual({
-      code: "security_scan_blocked",
-      reason: `blocked by install policy: ${reasonPrefix.slice(0, 997)}...`,
-    });
+  const reasonPrefix = "r".repeat(999);
+  const criticalFinding = makeFinding("review", "Registry is not approved.", {
+    severity: "critical",
   });
-
-  it("keeps valid findings while dropping malformed fields through schema parsing", async () => {
-    const result = await runDecision("allow", {
-      findings: [
-        {
-          ruleId: "  review  ",
-          severity: "warn",
-          message: "  Review.  ",
-          file: 42,
-          line: "7",
-          evidence: false,
-        },
-        { ruleId: 42, severity: "warn", message: "invalid required field" },
-      ],
-    });
-    expect(result).toStrictEqual({
-      findings: [{ ruleId: "review", severity: "warn", message: "Review." }],
-    });
+  it.each([
+    [
+      "UTF-16 block truncation",
+      "block",
+      { reason: `${reasonPrefix}🎉tail` },
+      blocked(`${reasonPrefix.slice(0, 997)}...`),
+    ],
+    [
+      "malformed fields and findings",
+      "allow",
+      {
+        findings: [
+          makeFinding("  review  ", "  Review.  ", { file: 42, line: "7", evidence: false }),
+          { ruleId: 42, severity: "warn", message: "invalid required field" },
+        ],
+      },
+      { findings: [makeFinding("review", "Review.")] },
+    ],
+    [
+      "block findings without file or line",
+      "block",
+      { reason: "unapproved registry", findings: [criticalFinding] },
+      { ...blocked("unapproved registry"), findings: [criticalFinding] },
+    ],
+  ] as const)("%s", async (_name, decision, fields, expected) => {
+    expect(await runDecision(decision, fields)).toStrictEqual(expected);
   });
 
   it("returns warnings with their reason and findings", async () => {
     const debugLogs: string[] = [];
-    const findings = [
-      { ruleId: "manual-review", severity: "warn", message: "Suspicious install script." },
-    ];
+    const findings = [makeFinding("manual-review", "Suspicious install script.")];
     const result = await runDecision(
       "warn",
       { reason: "review this source", findings },
@@ -322,12 +329,9 @@ describe("runInstallPolicy", () => {
   it("normalizes warning finding lines to positive safe integers", async () => {
     const result = await runDecision("warn", {
       reason: "review line normalization",
-      findings: [-2, 12.9, 1e100].map((line, index) => ({
-        ruleId: `line-${String(index)}`,
-        severity: "warn",
-        message: "Review line",
-        line,
-      })),
+      findings: [-2, 12.9, 1e100].map((line, index) =>
+        makeFinding(`line-${index}`, "Review line", { line }),
+      ),
     });
     const lines = result?.findings?.map((finding) => finding.line);
     expect(lines).toEqual([1, 12, Number.MAX_SAFE_INTEGER]);
@@ -337,15 +341,7 @@ describe("runInstallPolicy", () => {
     const longText = `${"x".repeat(996)}😀${"y".repeat(100)}`;
     const result = await runDecision("warn", {
       reason: longText,
-      findings: [
-        {
-          ruleId: longText,
-          severity: "warn",
-          message: longText,
-          file: longText,
-          evidence: longText,
-        },
-      ],
+      findings: [makeFinding(longText, longText, { file: longText, evidence: longText })],
     });
     const boundedText = [
       result?.warning?.reason,
@@ -371,62 +367,39 @@ describe("runInstallPolicy", () => {
   });
 
   it("fails closed when a warning has more valid findings than can be reviewed", async () => {
-    const findings = Array.from({ length: 101 }, (_, index) => ({
-      ruleId: `finding-${String(index)}`,
-      severity: "warn",
-      message: `Finding ${String(index)}`,
-    }));
+    const findings = Array.from({ length: 101 }, (_, index) =>
+      makeFinding(`finding-${index}`, `Finding ${index}`),
+    );
     const runWarning = async (warningFindings: typeof findings) =>
       await runDecision("warn", { reason: "review all findings", findings: warningFindings });
     const boundary = await runWarning(findings.slice(0, 100));
     const result = await runWarning(findings);
     expect(boundary?.warning).toBeDefined();
     expect(boundary?.findings).toHaveLength(100);
-    expect(result?.blocked?.code).toBe("security_scan_failed");
-    expect(result?.blocked?.reason).toContain("more than 100 valid findings");
+    expectFailed(result, "more than 100 valid findings");
     expect(result?.warning).toBeUndefined();
     expect(result?.findings).toBeUndefined();
   });
 
-  it("fails closed when a warning has a missing reason", async () => {
-    const result = await runDecision("warn", { reason: undefined });
-    expect(result?.blocked?.code).toBe("security_scan_failed");
-    expect(result?.blocked?.reason).toContain('decision "warn" requires a non-empty reason');
-  });
-
-  it("preserves block findings without file or line", async () => {
-    const findings = [
-      { ruleId: "review", severity: "critical", message: "Registry is not approved." },
-    ];
-    const result = await runDecision("block", {
-      reason: "unapproved registry",
-      findings,
-    });
-    expect(result).toEqual({
-      blocked: {
-        code: "security_scan_blocked",
-        reason: "blocked by install policy: unapproved registry",
-      },
-      findings,
-    });
-  });
-
   it.each([
-    { label: "non-object", response: [], expected: "must be a JSON object" },
-    {
-      label: "unsupported protocol version",
-      response: { protocolVersion: 2, decision: "allow" },
-      expected: "protocolVersion must be 1",
-    },
-    {
-      label: "unknown decision",
-      response: { protocolVersion: 1, decision: "review" },
-      expected: 'decision must be "allow", "warn", or "block"',
-    },
-  ])("fails closed for a $label response", async ({ response, expected }) => {
-    const result = await runResponse(response);
-    expect(result?.blocked?.code).toBe("security_scan_failed");
-    expect(result?.blocked?.reason).toContain(expected);
+    [
+      "missing warning reason",
+      { protocolVersion: 1, decision: "warn" },
+      'decision "warn" requires a non-empty reason',
+    ],
+    ["non-object", [], "must be a JSON object"],
+    [
+      "unsupported protocol version",
+      { protocolVersion: 2, decision: "allow" },
+      "protocolVersion must be 1",
+    ],
+    [
+      "unknown decision",
+      { protocolVersion: 1, decision: "review" },
+      'decision must be "allow", "warn", or "block"',
+    ],
+  ])("fails closed for a %s response", async (_label, response, expected) => {
+    expectFailed(await runResponse(response), expected);
   });
 
   async function runLoggedPolicy(env: Record<string, string>) {
@@ -457,10 +430,7 @@ describe("runInstallPolicy", () => {
 
   it("rejects relative policy command paths before resolving cwd", async () => {
     const result = await runPolicy(configWithExec({ command: "policy.cjs", args: [] }));
-    expect(result?.blocked?.code).toBe("security_scan_failed");
-    expect(result?.blocked?.reason).toContain(
-      "security.installPolicy.exec.command must be an absolute path",
-    );
+    expectFailed(result, "security.installPolicy.exec.command must be an absolute path");
   });
 
   it("reports static validation issues without running policy command", async () => {

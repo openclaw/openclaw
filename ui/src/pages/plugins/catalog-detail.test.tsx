@@ -1,71 +1,53 @@
-import { flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import { createMemo, createSignal, flush } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   renderPluginCatalogDetail as PluginCatalogDetail,
-  type PluginCatalogDetailProps,
+  type PluginCatalogDetailProps as Props,
 } from "./catalog-detail.tsx";
 import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-});
+afterEach(cleanupSolid);
 
-function mount(
-  result: PluginDiscoveryDetailResult,
-  overrides: Partial<PluginCatalogDetailProps> = {},
-) {
-  const view = mountSolid(() => (
-    <PluginCatalogDetail
-      {...{
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: vi.fn(),
-        onRetry: vi.fn(),
-        canInstall: true,
-        installBlockedReason: null,
-        onInstall: vi.fn(),
-        iconUrls: {},
-        ...overrides,
-      }}
-    />
-  ));
+function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {}) {
+  const props: Props = {
+    connected: true,
+    result,
+    read: { receipt: () => null, value: () => null },
+    backHref: "/plugins",
+    onBack: vi.fn(),
+    onRetry: vi.fn(),
+    canInstall: true,
+    installBlockedReason: null,
+    onInstall: vi.fn(),
+    iconUrls: {},
+    ...overrides,
+  };
+  const view = mountSolid(() => <PluginCatalogDetail {...props} />);
   flush();
-  return view.container;
+  return { container: view.container, ...domProbe(view.container) };
 }
 
-describe("catalog README", () => {
-  it("keeps long README tails and wires fenced-code controls", () => {
-    const tail = "README_TAIL";
-    const result = createDiscoveryDetail(
-      createPlugin({ id: "demo", name: "Demo", installed: false, state: "not-installed" }),
-    );
-    result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
-    const container = mount(result);
+it("keeps long README tails and wires fenced-code controls", () => {
+  const tail = "README_TAIL";
+  const result = createDiscoveryDetail();
+  result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
+  const { container, query, text } = mount(result);
 
-    expect(container.querySelector(".code-block-copy")).not.toBeNull();
-    expect(container.textContent).toContain(tail);
-    expect(
-      container.querySelector(".plugin-catalog-detail__readme-section > h2")?.textContent,
-    ).toBe("README");
-  });
+  expect(query(".code-block-copy")).not.toBeNull();
+  expect(container.textContent).toContain(tail);
+  expect(text(".plugin-catalog-detail__readme-section > h2")).toBe("README");
 });
 
-describe("renderPluginCatalogDetail", () => {
-  it("uses a white tile for an official package icon", () => {
-    const imageUrl = "https://example.com/icon.png";
-    const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
-    result.plugin.catalog.imageUrl = imageUrl;
-    const container = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
+it("uses a white tile for an official package icon", () => {
+  const imageUrl = "https://example.com/icon.png";
+  const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
+  result.plugin.catalog.imageUrl = imageUrl;
+  const { query } = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
 
-    expect(
-      container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
-    ).not.toBeNull();
-  });
+  expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
 });
 
 it.each([
@@ -73,66 +55,92 @@ it.each([
   { installed: false, canInstall: false, busy: false, primary: "Install" },
   { installed: false, canInstall: true, busy: true, primary: "Installing" },
   { installed: true, canInstall: false, busy: false, primary: "Ask OpenClaw" },
-])(
-  "prioritizes $primary with installed=$installed, canInstall=$canInstall, busy=$busy",
-  ({ installed, canInstall, busy, primary }) => {
-    const result = createDiscoveryDetail();
-    result.plugin.local.installed = installed;
-    result.plugin.local.action = installed ? "manage" : "install";
-    const onInstall = vi.fn();
-    const onAskPlugin = vi.fn();
-    const container = mount(result, { canInstall, busy, onInstall, onAskPlugin });
-    document.body.append(container);
-    flush();
-    const actions = container.querySelector(".plugin-catalog-detail__actions")!;
-    const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
-    expect(primaryButton.textContent?.trim()).toBe(primary);
-    expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
-    expect(actions.querySelector("button")).toBe(primaryButton);
-    primaryButton.click();
-    expect(onInstall).toHaveBeenCalledTimes(canInstall && !busy ? 1 : 0);
-    expect(primaryButton.querySelector(".btn__spinner") !== null).toBe(busy);
-    expect(primaryButton.getAttribute("aria-busy")).toBe(busy ? "true" : null);
-    const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Ask OpenClaw",
-    )!;
-    ask.click();
-    expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);
-  },
-);
+])("$primary ($canInstall/$busy)", ({ installed, canInstall, busy, primary }) => {
+  const result = createDiscoveryDetail(createPlugin({ installed }));
+  const onInstall = vi.fn();
+  const onAskPlugin = vi.fn();
+  const { query } = mount(result, { canInstall, busy, onInstall, onAskPlugin });
+  const actions = query(".plugin-catalog-detail__actions")!;
+  const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
+  expect(primaryButton.textContent?.trim()).toBe(primary);
+  expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
+  expect(actions.querySelector("button")).toBe(primaryButton);
+  primaryButton.click();
+  expect(onInstall).toHaveBeenCalledTimes(canInstall && !busy ? 1 : 0);
+  expect(primaryButton.querySelector(".btn__spinner") !== null).toBe(busy);
+  expect(primaryButton.getAttribute("aria-busy")).toBe(busy ? "true" : null);
+  const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Ask OpenClaw",
+  )!;
+  ask.click();
+  expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);
+});
 
-it.each([false, true])(
-  "renders user capabilities before tools without redundant provider or channel lists (mixed=%s)",
-  (mixed) => {
-    const result = createDiscoveryDetail();
-    result.detail.contracts = {
-      videoGenerationProviders: ["heygen", "heygen-alias"],
-      gatewayMethodDispatch: ["internal-dispatch"],
-      ...(mixed ? { tools: ["render_status"] } : {}),
+it.each([false, true])("orders capabilities before tools (mixed=%s)", (mixed) => {
+  const result = createDiscoveryDetail();
+  result.detail.contracts = {
+    videoGenerationProviders: ["heygen", "heygen-alias"],
+    gatewayMethodDispatch: ["internal-dispatch"],
+    ...(mixed ? { tools: ["render_status"] } : {}),
+  };
+  result.detail.uiCapabilities = ["link-reader", "widget"];
+  result.detail.providers = ["model-provider"];
+  result.detail.channels = ["messaging-channel"];
+  result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
+  result.detail.mcpServers = mixed ? ["media-server"] : [];
+  const { query, all, container } = mount(result);
+  expect(query(".plugin-capabilities button")).toBeNull();
+  expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
+    "Capabilities3",
+    ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
+  ]);
+  expect([...all(".plugin-capabilities strong")].map((item) => item.textContent)).toEqual([
+    "Video generation",
+    "Dashboard widgets",
+    "Link previews",
+    ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
+  ]);
+  expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
+});
+
+it("retains catalog controls while refreshing the same accepted plugin", async () => {
+  const pending = Promise.withResolvers<void>();
+  onTestFinished(() => pending.resolve());
+  let refresh = () => {};
+  const initialResult = createDiscoveryDetail(createPlugin({ installed: false }));
+  const onInstall = vi.fn();
+  const view = mountSolid(() => {
+    const [result, setResult] = createSignal(initialResult);
+    const [receipt, setReceipt] = createSignal({ result: Promise.resolve() });
+    const value = createMemo(async () => {
+      await receipt().result;
+      return null;
+    });
+    refresh = () => {
+      setResult({ ...initialResult });
+      setReceipt({ result: pending.promise });
     };
-    result.detail.uiCapabilities = ["link-reader", "widget"];
-    result.detail.providers = ["model-provider"];
-    result.detail.channels = ["messaging-channel"];
-    result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
-    result.detail.mcpServers = mixed ? ["media-server"] : [];
-    const container = mount(result);
-    const sections = [...container.querySelectorAll(".plugin-capabilities")];
-    expect(container.querySelector(".plugin-capabilities button")).toBeNull();
-    expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
-      "Capabilities3",
-      ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
-    ]);
-    expect(
-      sections.flatMap((section) =>
-        [...section.querySelectorAll("strong")].map((item) => item.textContent),
-      ),
-    ).toEqual([
-      "Video generation",
-      "Dashboard widgets",
-      "Link previews",
-      ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
-    ]);
-    expect(container.textContent).not.toContain("internal-dispatch");
-    expect(container.textContent).not.toContain("heygen-alias");
-  },
-);
+    return (
+      <PluginCatalogDetail
+        connected
+        result={result()}
+        read={{ receipt, value }}
+        backHref="/plugins"
+        onBack={() => {}}
+        onRetry={() => {}}
+        canInstall
+        installBlockedReason={null}
+        onInstall={onInstall}
+        iconUrls={{}}
+      />
+    );
+  });
+  await waitForSolid(() => expect(view.container.querySelector("button.primary")).not.toBeNull());
+  const button = view.container.querySelector<HTMLButtonElement>("button.primary")!;
+  refresh();
+  flush();
+  expect(view.container.querySelector(".plugin-catalog-detail--loading")).toBeNull();
+  expect(view.container.querySelector("button.primary")).toBe(button);
+  button.click();
+  expect(onInstall).toHaveBeenCalledOnce();
+});

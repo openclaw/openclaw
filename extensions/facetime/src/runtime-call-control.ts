@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
-import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
 import {
   FaceTimeHelperAmbiguousError,
@@ -16,11 +15,11 @@ import {
 import type { FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { terminateExactCarrierProcesses } from "./runtime-carrier-process.js";
 import { retainHelperResultPeers } from "./runtime-helper-results.js";
-import type { ActiveFaceTimeCall } from "./runtime-state.js";
+import type { ActiveFaceTimeCall, FaceTimeCallRegistry } from "./runtime-state.js";
 import { startFaceTimeTalkDriver } from "./talk-driver.js";
 
 export function createFaceTimeCallControl(params: {
-  calls: FaceTimeCallRegistry<ActiveFaceTimeCall>;
+  calls: FaceTimeCallRegistry;
   helper: FaceTimeHelperSocketServer;
   config: FaceTimeConfig;
   fullConfig: OpenClawConfig;
@@ -84,7 +83,6 @@ export function createFaceTimeCallControl(params: {
             feedDevice: FACETIME_FEED_DEVICE_NAME,
             microphoneDevice: FACETIME_MIC_DEVICE_NAME,
             processInputVerified: false,
-            processOutputSuppressed: false,
           };
           call.lastRoutingError = undefined;
         })();
@@ -106,7 +104,7 @@ export function createFaceTimeCallControl(params: {
     }
   };
   const enableCallAudio = async (call: ActiveFaceTimeCall) => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     const mutedResult = await call.runCarrierCommand({
       generation,
       action: async () => await params.helper.setMuted(call.carrierCallUUID, false),
@@ -124,7 +122,6 @@ export function createFaceTimeCallControl(params: {
     call.markCarrierActive(generation);
     if (call.audioTransport) {
       call.audioTransport.processInputVerified = true;
-      call.audioTransport.processOutputSuppressed = call.talk?.processOutputSuppressed() === true;
     }
   };
   const closeCall = async (call: ActiveFaceTimeCall, reason: string) => {
@@ -280,7 +277,7 @@ export function createFaceTimeCallControl(params: {
     ]);
   };
   const terminateCarrierProcesses = async (call: ActiveFaceTimeCall): Promise<void> => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     await terminateExactCarrierProcesses({
       runtime: params.runtime,
       peers: call.carrierPeers,
@@ -319,7 +316,6 @@ export function createFaceTimeCallControl(params: {
           logger: params.logger,
           callUUID,
           senderId: call.senderId,
-          senderIsOwner: call.senderIsOwner,
           captureBinary: params.captureBinary,
           signal: call.lifecycleAbort.signal,
           async onHangupRequested() {
@@ -345,9 +341,6 @@ export function createFaceTimeCallControl(params: {
           return;
         }
         call.talk = talk;
-        if (call.audioTransport) {
-          call.audioTransport.processOutputSuppressed = true;
-        }
         params.logger.info("[facetime] realtime talk suppression ready");
       })();
     }
@@ -361,7 +354,7 @@ export function createFaceTimeCallControl(params: {
     }
   };
   const activateCallTalk = async (call: ActiveFaceTimeCall) => {
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();

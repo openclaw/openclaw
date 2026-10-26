@@ -35,6 +35,34 @@ describe("session row field deltas", () => {
     });
   });
 
+  it("compares primitive JSON values without confusing numeric normalization or strings", () => {
+    const previous = {
+      zero: -0,
+      notANumber: Number.NaN,
+      positiveInfinity: Infinity,
+      negativeInfinity: -Infinity,
+      nil: null,
+      count: 1,
+      enabled: true,
+    };
+    const current = {
+      zero: 0,
+      notANumber: null,
+      positiveInfinity: null,
+      negativeInfinity: null,
+      nil: Number.NaN,
+      count: "1",
+      enabled: "true",
+    };
+    expect(
+      createSessionRowDeltaDiffer()(
+        prepareSessionRowDeltaFields(previous),
+        prepareSessionRowDeltaFields(current),
+        current,
+      ),
+    ).toEqual({ set: { count: "1", enabled: "true" }, remove: [] });
+  });
+
   it("compares nested JSON semantically and replaces a changed nested field whole", () => {
     const previous = {
       activity: { b: [null, { done: false }], a: 1 },
@@ -50,6 +78,16 @@ describe("session row field deltas", () => {
         prepareSessionRowDeltaFields(current),
         current,
       ),
+    ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
+  });
+
+  it("recomputes mutable children shared by distinct shallow-frozen row snapshots", () => {
+    const usage = { input: 4, output: 3 };
+    const previous = prepareSessionRowDeltaFields(Object.freeze({ usage }));
+    usage.output = 5;
+    const current = Object.freeze({ usage });
+    expect(
+      createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
     ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
   });
 

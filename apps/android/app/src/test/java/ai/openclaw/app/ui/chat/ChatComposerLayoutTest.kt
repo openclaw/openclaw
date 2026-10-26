@@ -3498,7 +3498,7 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortCommandsRecheckAdminAndFastRunEligibility() =
+  fun effortCommandsRecheckWriteAndFastRunEligibility() =
     withEffortRequests { model, requests, _ ->
       openEffortSheet()
       val select = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
@@ -3524,18 +3524,16 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals("A saved Switch callback must respect a newly active run", 0, requests.size)
       composeRule.runOnIdle {
-        @Suppress("UNCHECKED_CAST")
-        val scopes =
-          NodeRuntime::class.java
-            .getDeclaredField("_operatorScopes")
-            .apply { isAccessible = true }
-            .get(runtime) as MutableStateFlow<List<String>>
-        scopes.value = listOf("operator.read", "operator.write")
+        controllerFlow<Int>("_pendingRunCount").value = 0
+        runtimeScopes().value = listOf("operator.read")
       }
-      composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
-      composeRule.runOnUiThread { select(2f) }
+      composeRule.waitUntil { model.pendingRunCount.value == 0 && "operator.write" !in model.operatorScopes.value }
+      composeRule.runOnUiThread {
+        select(2f)
+        fast()
+      }
       composeRule.waitForIdle()
-      assertEquals("Thinking must recheck admin instead of using the old enabled value", 0, requests.size)
+      assertEquals("Effort callbacks must recheck write access", 0, requests.size)
     }
 
   @Test
@@ -3632,7 +3630,11 @@ class ChatComposerLayoutTest {
         """{"session":{"key":"${controller.sessionKey.value}","thinkingLevel":"low","thinkingLevels":[{"id":"off","label":"off"},{"id":"low","label":"low"},{"id":"high","label":"high"}],"fastMode":false}}""",
       )
     }
-    composeRule.waitUntil { model.pendingRunCount.value == 0 && model.chatThinkingLevelSelection.value.options.size == 3 }
+    composeRule.runOnIdle { runtimeScopes().value = listOf("operator.read", "operator.write") }
+    composeRule.waitUntil {
+      model.pendingRunCount.value == 0 && model.chatThinkingLevelSelection.value.options.size == 3 &&
+        "operator.write" in model.operatorScopes.value && "operator.admin" !in model.operatorScopes.value
+    }
     withSessionPatchRequests { requests, release -> assertions(model, requests, release) }
   }
 
@@ -4580,15 +4582,17 @@ class ChatComposerLayoutTest {
     val originalSession = controller.sessionKey.value
     composeRule.runOnIdle { controllerFlow<String?>("_defaultModelRef").value = "openai/gpt-5.2" }
     val unavailableReason = AtomicReference<GatewayModelUnavailableReason?>(null)
+    val catalogRequests = ConcurrentLinkedQueue<Pair<GatewayModelUnavailableReason?, Job>>()
     val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
     val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
     val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      val reason = unavailableReason.get()
+      if (method == "models.list") catalogRequests.add(reason to currentCoroutineContext().job)
       val response = originalRequest(gatewayId, method, params)
       if (method == "models.list") {
         val catalog = Json.parseToJsonElement(response).jsonObject
-        val reason = unavailableReason.get()
         val models =
           catalog.getValue("models").jsonArray.map { item ->
             val model = item.jsonObject
@@ -4625,12 +4629,31 @@ class ChatComposerLayoutTest {
             availableCatalog.map {
               if (it.providerQualifiedRef() == "openai/gpt-5.2") it.copy(available = reason == null, unavailableReason = reason) else it
             }
+          val previousRequests = catalogRequests.size
           composeRule.runOnIdle {
             // Retire startup reads and publish through the owner instead of racing its catalog writes.
             unavailableReason.set(reason)
             controller.refreshCommands()
           }
-          composeRule.waitUntil { composeRule.runOnIdle { model.chatModelCatalog.value == expectedCatalog } }
+          val catalogRefresh =
+            object : IdlingResource {
+              override val isIdleNow: Boolean
+                get() {
+                  val requests = catalogRequests.drop(previousRequests).filter { it.first == reason }
+                  return requests.isNotEmpty() && requests.all { it.second.isCompleted } &&
+                    model.chatModelCatalog.value == expectedCatalog
+                }
+
+              override fun getDiagnosticMessageIfBusy(): String =
+                "Catalog availability=$reason requests=${catalogRequests.size - previousRequests} " +
+                  "published=${model.chatModelCatalog.value.map { it.unavailableReason }}"
+            }
+          composeRule.registerIdlingResource(catalogRefresh)
+          try {
+            composeRule.waitForIdle()
+          } finally {
+            composeRule.unregisterIdlingResource(catalogRefresh)
+          }
           composeRule.runOnIdle {
             assertEquals(
               reason,
@@ -6115,8 +6138,15 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
+        // Confirmed attachments have their own wider envelope; the 78% budget belongs to text.
+        val textSurface = checkNotNull(composeRule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().parent)
+        assertTrue("Measure the visible text surface, not the merged message host", SemanticsProperties.Shape in textSurface.config)
+        val textBounds = textSurface.boundsInRoot
+        if (textBounds.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - textBounds.right) > 1f) {
+          geometryFailures += "$label: user text surface exceeds text budget or differs from confirmed trailing edge: $textBounds vs $reference"
+        }
+        if (actual.width > transcriptWidth + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: user message exceeds transcript width or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =

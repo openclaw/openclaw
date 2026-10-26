@@ -101,6 +101,13 @@
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
           - "docs/plugins/reference/logbook.md"
+"plugin: knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/knowledge/**"
+          - "docs/plugins/knowledge.md"
+          - "docs/plugins/knowledge/**"
+          - "docs/plugins/reference/knowledge.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -555,6 +562,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:
@@ -681,6 +693,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: bifrost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bifrost/**"
+          - "docs/providers/bifrost.md"
 "extensions: agentsapi":
   - changed-files:
       - any-glob-to-any-file:
@@ -760,6 +777,12 @@
           - "extensions/radius/**"
           - "docs/providers/radius.md"
           - "docs/plugins/reference/radius.md"
+"extensions: requesty":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/requesty/**"
+          - "docs/providers/requesty.md"
+          - "docs/plugins/reference/requesty.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:

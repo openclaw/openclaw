@@ -1,3 +1,7 @@
+import {
+  isSubagentSessionRow,
+  isSystemCreatedSessionRow,
+} from "../../../../src/shared/session-list-visibility.ts";
 import type { AgentIdentityResult, AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { resolveAgentAvatarUrl } from "../avatar.ts";
 import { isSessionRunStateActive } from "../session-run-state.ts";
@@ -43,6 +47,8 @@ export function agentRosterCards(
     const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
       (latest, row) =>
         row.lastAssistantMessage &&
+        !isSubagentSessionRow(row.key, row) &&
+        !isSystemCreatedSessionRow(row) &&
         (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
           ? row.lastAssistantMessage
           : latest,

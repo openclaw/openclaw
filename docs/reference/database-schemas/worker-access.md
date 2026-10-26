@@ -13,12 +13,36 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Recovered operator runs retain validated profile facts until the bound catalog's
+profile row changes. Each policy check still verifies the original catalog's
+lifetime, mutation settlement, canonical identity, and required email bindings,
+including after access-policy callbacks. An unchanged row avoids rebuilding the
+same facts; pending or uncertain mutations and retired owners still refuse use.
+
+Transcript reads capture scalar anchor and turn-admission fields before yielding,
+including whether an optional idempotency key is present. These private copies
+keep later caller mutations out of the read. Message payloads retain separate
+deep-copy isolation, and captured identities never replace the live owner checks
+before accepting a result or committing a write. Queued transcript context and
+recorders remain non-enumerable symbol properties, consumed before serialization.
+
 ## Rules for code changes
 
 - Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, justified primitives. Write transactions synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
 - Database access: worker threads (read-only worker scope, SQLite writer broker), never Gateway main thread; main thread only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access = legacy: never add more; migrate what you touch.
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
 - Gateway owns every DB/state; writer receipts invalidate caches, uncovered reads stay direct. No foreign-commit probes; remove when touched. Outside writers use Gateway or exclusive offline custody. Keep live authority/snapshots; [contract](/reference/database-schemas/integrity-and-recovery#gateway-database-ownership).
+
+Released session sharing, entry-predicate, and generation authorities drop their
+decoded rows even when a caller retains the inactive handle. Predicate comparison
+baselines last only until release; a late acknowledgement cannot restore them.
+Active authorities retain their existing publication and final-effect checks.
+
+Idle session reclamation workers retain their admitted connection, not completed
+deletion plans or the caller's async context. Retirement callbacks capture only
+the worker's registry key. Transport startup and idle timers run outside request
+context while preserving the selected database engine. Each reclamation request
+keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
 
@@ -38,16 +62,34 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Refused ordered session reads include the conflicting admission's shortened,
+bounded database path, operation, thread, age, and any recorded caller or worker
+operation labels in the error itself. They never include request payloads.
+
 SQLite admission delivery follows each worker's ordered cursor. The first snapshot
 includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
 directly, so changing one fact does not resend every session's shared buffer.
 A new worker or database generation receives a complete snapshot.
+Worker exit republishes only databases that held that worker's reference; an
+unrelated exit does not rescan retained session scopes. Interrupted-write
+settlement and shared reference revocation still precede publication.
+Reference and fact publications reuse the last complete scope sweep while its
+shared revision remains current. Importing scope cells publishes only the imported
+keys and carries a completed sweep through the host's own revision increment.
+Peer retirement and capacity pruning still invalidate that sweep; an imported key
+never certifies that unrelated remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Agent creation and workspace mutations keep their recovery-hold recheck inside
+the existing synchronous engine admission; filesystem effects remain outside it.
+PostgreSQL cron-owner and schema inspection use the existing cron read worker,
+including when agent creation or Doctor requests those facts.
+
 Agent provenance presentation and managed outgoing media inventory/lookups use
 that read-only scope, so reconnect reads do not reserve the shared writer queue.
 Missing provenance storage stays absent until an agent is created. Media inserts,
@@ -55,6 +97,10 @@ attachment promotion, and cleanup claims/deletions retain their writer ordering
 and current-row checks. Scheduled media maintenance waits until after the first
 two minutes of startup, then keeps its hourly maintenance cadence; explicit media
 cleanup and retention rules are unchanged.
+Managed media retention selects the message IDs already recorded on attachment
+metadata through the transcript owner's identity index. Unrelated indexed
+transcript payloads stay in storage. Off-path branches, reset archives, and
+legacy messages without indexed IDs remain eligible to retain their attachments.
 The shared implementations are
 [`sqlite-readonly-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-readonly-worker.ts),
 [`openclaw-state-read-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-read-worker.ts),
@@ -63,6 +109,33 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+Session-entry and transcript readers resolve read scopes without loading synchronous
+writer admission. A passive process-local borrower owner shares already admitted
+handles, failure visibility, pins, and idle activity with the writable lifecycle.
+The writable lifecycle alone opens and publishes those handles and owns leases,
+migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
+can still close the connection and invalidate its claims immediately. Maintenance
+closes cached handles before migrating or replacing their storage.
+
+If PostgreSQL schema publication invalidates admission, connection opening,
+shared-state reads before their callback, and standalone feature-schema ensures
+share a brief backoff retry for at most one second, bounded by the caller's
+deadline and cancellation. Transaction retries require a completed rollback;
+feature-schema ensures only replay their own schema work. Each retry asks the
+owner for current facts, even if physical facts arrived before version facts;
+ordinary reads do not poll. A longer publication gap
+still fails visibly. Readers never replay caller work or refresh an imported
+snapshot, and fragment checks inside a caller's transaction do not retry.
+Schema validation and live ownership checks remain in force.
+
+Startup client credential preparation uses the existing credential worker and
+its native custody admission. The admission's receipt postimage also decides
+whether legacy metadata needs upgrading, without a second receipt read. An app
+that owns the credentials remains authoritative through its existing IPC route.
+Required migrations still finish under maintenance ownership before startup
+continues; native schema, integrity, file-permission, and source-binding checks
+remain with credential admission.
 
 On Node 26.8 and later, the synchronous query owner explicitly disposes private
 statements after execution or iterator completion, and cached statements on
@@ -105,6 +178,12 @@ without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
+Session row projections borrow the replica's immutable nested entry facts while
+owning their mutable outer rows. Commit receipts carry pending final delivery in
+the canonical entry postimage, without a second copy.
+Session-entry patch preparation sends only logical entries and their keys. SQL row,
+window, and side-table facts stay with the worker; callback commits retain the same
+entry comparison, admission ordering, and persisted bytes.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -130,8 +209,10 @@ transaction. Placement and journal reads retain their multi-statement snapshots.
 
 Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
-New observers capture those resources when admitting a directory. File scans
-publish through the current binding, including scans spanning a restart.
+New observers reuse that binding even when a temporary request admits their
+directory later. Without a Gateway binding, observers capture their caller's
+resources. File scans publish through the current binding, including scans
+spanning a restart.
 Filesystem notifications retire physical replacements and changed legacy sources;
 ordinary database and WAL contents changes do not reload auth rows. Scope retirement
 stops change publications, and the next Gateway generation rebinds retained observers
@@ -196,8 +277,16 @@ are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
-scope. The CLI entry records an immutable process role before state access;
+scope. Native lease verification, renewal, and release use this scope only for their
+storage primitive. Lifecycle callbacks remain outside it, and ownership checks
+still read the current owner and expiry before permitting an effect.
+The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
+Connections share four I/O services per process; inherited worker endpoints
+connect directly to those services. A bridge deadline resets the entire assigned
+service with an unknown outcome, rather than only the caller's connection. See
+[PostgreSQL topology](/gateway/postgresql#when-to-use-postgresql) and
+[timeout and recovery behavior](/gateway/postgresql#updates-and-schema-migrations).
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
 local setup console. Any Gateway they start runs in a separate process with
@@ -361,11 +450,10 @@ facts; unknown write coverage invalidates conservatively. The shared mechanism i
 
 Memory publication retains index facts under its own write scope, so session
 activity and embedding-cache writes do not trigger another facts query. The
-publication worker also retains the embedding-cache size, updates it only after
-committed inserts/deletes, and reloads after unscoped writes or schema changes.
-Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
-writes may overestimate this disposable cache and evict entries early; bounded
-writes still reserve space before insertion.
+publication worker also retains the embedding-cache size and its precision,
+updates it only after committed writes, and reloads after unscoped writes or
+schema changes. Pruning reuses an exact count or refreshes an upper bound before
+bounded oldest-row deletion. Bounded writes still reserve space before insertion.
 
 Memory managers receive schema, table-presence, and index facts from worker
 admission without opening a host reader. Bundled status callers await the same
@@ -435,6 +523,20 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Inside the durable worker, hot state and its stored entry row share one owned
+decoded entry. Mutations replace that entry instead of editing it in place;
+transaction forks retain the previous entry for rollback. Incoming postimages
+and outgoing public reads remain detached from the resident state.
+Internal hot-state projections also retain the actor's replace-only target,
+version, participants, and members. Read replies and committed receipt capture
+own detachment before those facts leave the worker.
+
+Actor commands retain their immutable replica preimage for admission transport.
+The worker sends a reference only after matching its authoritative write token,
+and only while the entry object remains unchanged. Cold or mismatched revisions
+and replaced entries carry the complete entry. Main resolves references within
+that command; live policy and revocation checks still run at every admission.
+
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
 uses the admitted namespace and store ID. Symlinked and canonical paths therefore
@@ -499,6 +601,12 @@ drain still owns the complete backfill, and a failed or cancelled refresh reject
 its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
+
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
 
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
@@ -1369,6 +1477,9 @@ Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
 Registry receipts and physical replacement invalidate reusable target facts.
+The discovery memo adopts each decoded result once and shares a deeply readonly,
+frozen snapshot on warm reads. Inventory preparation captures its selection facts
+once; repeated reads still check registry, physical-file, and applicable row revisions.
 Session-row writes invalidate fixed-store inventories, whose agent visibility
 can depend on those rows. Per-agent inventories retain their path and registry
 facts across ordinary turns, avoiding another discovery and
@@ -1627,6 +1738,16 @@ metadata, and worker-owned heartbeat outcome writes use this path; compound
 writes retain their transactions. Heartbeat claims remain one conditional update,
 so competing runs cannot claim the same outcome.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
+Resident session run adoption without a turn can also use one SQLite node write.
+The entry writer certifies that the prepared update has no window, snapshot,
+conversation, cleanup, or identity effects. Inside native write custody, the
+existing receipt owner prepares the exact pending token, publication, serialized
+reply, and final admission before the statement executes. Native success installs
+them through the same postcommit owner; rejected preparation and definite statement
+failure preserve the prior resident state. An uncertain outcome invalidates it
+and uses normal recovery. Cold, compound, nested, oversized-reply, and PostgreSQL
+adoptions retain their managed transactions.
 
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,
@@ -2079,6 +2200,9 @@ entry, header, and first event commit together. Cancellation after commit report
 the committed-error contract, and an unknown outcome fences fallback instead of
 repeating the append. Attempt teardown releases the actor only after accepted
 and nested writes actually drain, including when the consumer's bounded wait ends.
+Worker loss before actor admission fails that command without fencing the actor;
+later commands use the replacement worker. Loss after admission still requires
+confirmed settlement or reconciliation before another command can proceed.
 Released synchronous SDK methods and explicit compaction maintenance keep their
 named compatibility adapters and publish through the existing receipt owners.
 
@@ -2087,8 +2211,9 @@ facts from the actor's replica. Message payload hydration, admitted-user role
 validation, and cold or off-path history retain bounded reads; transcript metadata
 does not stand in for message contents.
 
-Host admission carries the session entry and physical/version identity rather
-than transcript indexes, retry keys, or context membership. Mutable policy callbacks
+Worker admission carries the session entry and physical/session target. Expected-version
+checks stay in commands; replica versions, write tokens, and dependency IDs remain in
+read results and committed receipts. Mutable policy callbacks
 receive their own copy; full snapshots stay in read results and committed receipts.
 An append shares the actor's transaction admission and final commit grant. Explicit
 fresh-message and pending-input checks retain their effect boundaries; the final
@@ -2365,16 +2490,17 @@ expired key, including expired keys outside the bounded cleanup batch. A rejecte
 capacity check rolls back both the insert and its staged receipt. The same kernel
 serves worker operations and the deprecated synchronous compatibility adapter.
 
-The Gateway retains bounded plugin-state observation rows from these receipts.
-Repeated observations reuse the stored JSON image without a worker request;
-expiry still turns a row into absence, and callers receive freshly decoded values.
-Pending writes suspend cache reads, and unknown settlement drops cached facts.
-Comparisons reread the authoritative row inside the write transaction, including
-no-op comparisons. Native binding settlement invalidates its affected observation
-keys because its compound receipt does not carry plugin-state postimages. A changed
-row returns a conflict; insertion checks current absence and capacity in the write
-transaction. Same-value sets retain their age and TTL refresh behavior. This
-changes no stored format, schema version, update migration, or SDK signature.
+The Gateway retains bounded complete plugin-state namespaces from one cold load
+and committed postimages or tombstones. Observations and ordinary reads reuse
+those raw rows without a worker request; expiry is checked on every read and
+returned JSON is freshly decoded. Pending writes suspend descriptive reads from
+the view. Unknown settlement retires it, so the next access reloads through the
+owner. Native binding settlement carries its actual plugin-state facts through
+the same publication path. Comparisons still read the authoritative row inside
+the write transaction, including no-op comparisons. A changed row returns a
+conflict; insertion checks current absence and capacity in that transaction.
+Same-value sets retain their age and TTL refresh behavior. The stored format,
+schema version, and SDK signatures are unchanged.
 
 Conversation catalogue receipts transport only the identity and kind needed by
 binding authority; large descriptive metadata stays in its store. Current-binding
@@ -2482,7 +2608,7 @@ retention, stored bytes, or update behavior changes.
 Ordinary turn preparation retains workspace snapshots, conversation bindings,
 skill-library queries, workshop changes, GitHub attribution, node catalogs, and
 exec policy in bounded process-local caches. Their existing owning writers
-invalidate the retained facts on commit or uncertain settlement. Binding expiry
+update or invalidate retained facts on commit; uncertain settlement invalidates them. Binding expiry
 still invokes its pruning owner; workspace recovery predicates and explicit
 snapshot reads retain their existing database paths. Unchanged workspace
 preparation does not dispatch another registration transaction. Workshop reads
@@ -2504,10 +2630,16 @@ existing authority owner. Committed facts install when native commit evidence
 arrives, before the ordinary reply; the writer queue still owns accepted work
 until settlement. A lost reply never triggers mutation replay.
 
-Workspace setup, aliases, attestation sets, local and repository workspaces, and
-node prepared-workspace lifecycle operations publish through their existing
-native or worker kernels. Deletion remains a tombstone, and newer native changes
-supersede delayed worker postimages. All domains in a compound receipt install
+Workspace setup and attestation writers publish the complete snapshot they just
+committed, so the next preparation reuses those facts without another registration
+read. Unchanged hashes refresh the durable attestation timestamp only after an
+hour; first attestations and changed hashes write immediately. The persisted
+24-hour disappearance guard therefore protects at least 23 hours after the last
+unchanged preparation, including across a restart. Alias changes invalidate
+cached resolutions. Local and repository workspaces and node prepared-workspace
+lifecycle operations publish through their existing native or worker kernels.
+Deletion remains a tombstone, and newer native changes supersede delayed worker
+postimages. All domains in a compound receipt install
 before public observers. Nested rollback discards tentative facts; a confirmed
 rollback preserves the previous committed projection. Missing accepted receipts,
 unknown settlement, or failed installation invalidate the affected domain.
@@ -2716,6 +2848,13 @@ SQLite fingerprints without constructing a scratch database or transferring
 contracts between processes. Version facts stay within their unchanged
 snapshot. Each request rereads stored facts. Schemas, stored bytes, and update
 behavior are unchanged.
+
+PostgreSQL startup starts its isolated agent-schema reader while shared-state
+inspection runs, then transfers that reader to the first agent-inspection slot.
+Only process loading overlaps: database inspection still follows shared-state
+discovery and retains its fresh read, admission boundary, and full request timeout.
+Cancellation and early returns close an unused reader; SQLite keeps its existing
+clean-close fast path without starting a child.
 
 `pnpm db:postgres:gen` also generates the SQLite catalogs for declared shared-state
 and agent schema fragments, including supported historical migration definitions.
@@ -3085,6 +3224,12 @@ watermark while retaining dirty notifications and fresh subsequent reads.
 Cold metadata joins initialization and turn preparation; restoration stays with
 the cold-storage owner, outside the writer FIFO and before message hooks run.
 
+Cache-TTL prefix reads sort marker identities before loading their payloads.
+The same read snapshot supplies each consumed marker by its exact sequence,
+stopping at the newest applicable checkpoint or reset. Obsolete checkpoint
+payloads are not decompressed into the sorter, so their total size does not
+determine the bounded history read's working set.
+
 Ordinary reply initialization reuses its writer-locked snapshot when accepted
 activity is already recorded and neither the entry nor conversation routing
 changes. It does not run lifecycle recovery, count sessions, or schedule
@@ -3390,6 +3535,12 @@ missing store; idle agents still have no durable database until their first writ
 Session event capture retains the physical source reported by the worker after
 cold admission. A first writer that finishes before the read can supply that
 source; a file created after an absent read or replaced after capture is refused.
+Retained generation checks consume published session facts and the physical identity
+captured at admission. Existing files need one identity probe without rediscovering
+their canonical path; this still fences external tool effects after file replacement.
+Same-generation settings keep their published identity until permission mode or tool
+overrides change, so event guards compare policy once per settings revision. Every
+check still observes pending publications and current execution authority.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
@@ -3597,7 +3748,10 @@ Session generation and transcript-index trackers declare their fixed connection-
 tables, indexes, and triggers to the schema owner, which checks existing TEMP names
 and shapes once at installation. That snapshot also skips drops for absent
 triggers on a fresh connection. Installing those declared TEMP tracking objects
-does not cause another validation of the physical database. The migration or repair owner publishes
+does not cause another validation of the physical database. When transcript-index
+maintenance resets its pending queue, it uses the entries it just classified for
+that transaction's result instead of querying the rebuilt queue again.
+The migration or repair owner publishes
 replacement facts for committed local DDL; rollback cannot publish uncommitted
 facts. Host-handle eviction preserves process admission and never falls back to
 schema scans on the Gateway thread. Ordinary execution reuses completed
@@ -4432,19 +4586,24 @@ dimensions invalidate the generation
 before the operation returns, even when clearing fails or loses its reply;
 the error still propagates without replay. Worker-owned staging preserves cache
 binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
-host. Cache pruning uses that same worker for its live count and oldest-row deletion,
-with a transaction recheck before each batch of at most 100 rows. The host releases
-admission and yields between batches; only definite pre-entry lock failures retry.
+host. Cache pruning uses the same publication worker and retained cache size.
+Capacity reservations and bounded prune batches preserve an exact count from
+their affected-row results; ordinary replacements retain an upper bound, which is
+counted once when needed. Existing write receipts invalidate the retained size
+after another writer changes the cache. The host releases admission and yields
+between batches of at most 100 rows. Publications retain the connection owner's
+busy timeout and return native failures without a separate host retry loop.
 Published source hashes, chunks, embedding-cache rows, session tombstones, and
 index/source snapshots use the existing retrieval worker's read-only connection.
 They retain their physical source and caller lifetime without reserving the agent
 writer FIFO. Private shadow databases keep their publication worker and private
-queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
-its current tombstone predicate in the original published worker while retaining
-the workspace lock through commit. Ordinary publication checks that predicate only
-inside its committing transaction. The shadow's empty tombstone table never grants
-publication authority. Cold opening remains separate work. Schemas, cache retention,
-and stored formats are unchanged.
+queue for read-your-writes. Both adapters use the same read kernels. Full rebuilds
+capture the published revision before fresh session discovery, which excludes
+existing tombstones. A newly recorded forget advances that revision, and final
+live publication rejects a shadow built before it. Direct source and generated-cache
+writes retain their tombstone checks inside the committing transaction. The shadow's
+empty tombstone table never grants publication authority. Cold opening remains
+separate work. Schemas, cache retention, and stored formats are unchanged.
 
 Session-only lexical searches return hits and recall metadata in one retrieval
 request. An in-process reader/writer queue orders retrieval and publication, and
@@ -4798,7 +4957,12 @@ cache updates and delivery acknowledgments compare the current payload inside
 the worker transaction. Only definite comparison conflicts retry, at most four
 times; failed reads never advance the audit cursor and uncertain writes never
 replay. Config observation captures its audit writer before filesystem reads and
-rechecks its health owner at transaction and commit admission. Cold synchronous
+rechecks its health owner at transaction and commit admission. Accepted config writes
+and rollback consume the health worker's conditional-write outcome without rereading
+their own writes. Only definite comparison conflicts refresh and reconsider, at
+most four times; unavailable reads and uncertain writes stop best-effort health
+bookkeeping without replay. Newer baselines and anomaly markers retain their
+existing compensation guards. This adds no schema or stored fields. Cold synchronous
 config loading retains native audit registration; Doctor and update inspection
 retain native tail reads. Schemas, audit collection and retention, stored payloads,
 prompt bytes, and update behavior are unchanged.
@@ -5688,12 +5852,19 @@ its native handles before handoff; the new scope supplies its own authority.
 Released scopes refuse further work, and the idle worker does not keep the process
 alive. Failures, database shutdown, different state directories, and retiring
 workers still require native exit before replacement. Schema and update behavior are unchanged.
+Cold-storage maintenance preparation uses this same idle worker, including empty
+sweeps. Each preparation closes its scoped read-only handles before replying;
+selection, configuration checks, and commit authority remain per request.
+Preparation loads its read-only selection and archive encoding helpers without
+initializing the writable database lifecycle or transcript restoration machinery.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
 per-transcript queue, then recheck the live session before publishing. Message
-lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
-their projection-readiness retry. Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
+lookup keeps its current-only, byte-limit, and reset-archive behavior. Projection
+waiters read status once, then await the reconcile owner's per-session completion;
+committed ready receipts can release a session before unrelated rebuilds finish.
+Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
 
 Exact transcript-event matching also uses the history worker for disk discovery,
 payload decoding, and selection. Callers supply a serializable selection for the
@@ -5810,6 +5981,13 @@ cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
 SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
+Bounded SQLite context hydration also decodes one payload row at a time, so the
+encoded window does not remain resident alongside its decoded result. Its byte
+selection, event order, and snapshot authority are unchanged. Before a transcript
+worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
+decoded history and memory-export caches through the isolate-local memory-pressure
+channel. Subsequent reads repopulate those caches through their existing owners;
+database handles and stored transcript bytes remain under their original lifecycle.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry
@@ -6552,11 +6730,18 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript rewrite preparation and publication copy mutable view containers while
+Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot
 semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+
+Initial model-context snapshots also reuse equal string values from the loaded
+SessionManager. The context reader still owns selection and admission; its projected
+fields, property order, and mutable containers remain authoritative. Resident SDK
+edits and accessors cannot change the returned context, and frozen resident payloads
+do not make the initial model view immutable. Fresh reader-owned message containers
+are reused in place; an admitted cohort still detaches the manager's mutable view.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
@@ -6964,24 +7149,25 @@ ACP replay recording and replay reads run through the shared-state worker. An
 append updates sequence, metadata, and byte accounting together before inserting
 the event in the same transaction; a failed insert rolls that bookkeeping back.
 Replay eligibility and events share one statement, including complete empty
-replays. Plugin-state keyed lookup and lookupMany reuse the same bounded receipt
-postimages and tombstones as observe when every key is resident. Cold batches
-still read through the worker; expiry and committed native or worker writes
-invalidate or replace cached values. Publication identities use SQLite's text-key
-normalization, so accepted lone UTF-16 surrogates and their replacement-character
-aliases share invalidation. Public comparison-token scopes remain unchanged.
-Returned JSON remains caller-owned.
+replays. Plugin-state lookup, lookupMany, observe, count, and namespace enumeration
+share one complete-namespace owner. It retains at most 64 namespaces and 16 MiB
+of accounted data, with an 8 MiB and 10,000-row admission limit per namespace.
+A cold load is bounded before admission. Committed writes update resident maps;
+unknown outcomes retire affected views. Eviction only drops memory, and a later
+read reloads SQL. Publication identities use SQLite's text-key normalization, so
+accepted lone UTF-16 surrogates and their replacement-character aliases share
+invalidation. Public comparison-token scopes remain unchanged. Returned JSON
+remains caller-owned.
 
-Namespace lists share that cache owner with a 64-namespace, 8 MiB bound. A
-committed write invalidates its namespace, unknown settlement invalidates the
-database's lists, and each read filters expired entries without another worker
-request. Returned lists and values are detached from the retained snapshot.
+Read-only plugin operations carry one coherent set of raw namespace views to
+the existing worker handler. Cold, oversized, or unknown cases retain the whole
+SQL snapshot path. Write-capable operations keep their transaction-local SQL
+view. Synchronous compatibility writes publish committed facts to the same owner;
+transaction-local synchronous reads never use a committed resident view.
 
-Runtime-health cleanup retains acknowledged empty selections in that same bounded
-namespace cache, scoped by store identity, process, and engine or tool selection.
-Repeated clears skip the worker request until a namespace write receipt or unknown
-settlement invalidates them. Initial observations and positive clears retain the
-existing ordered worker operation and deletion authority.
+Runtime-health cleanup selects from that same complete view. An empty selection
+skips the worker request; positive clears retain their ordered worker operation
+and deletion authority. There is no separate successful-clear cache.
 
 Agent dispatch reads ACP metadata only after finding a completed subagent run
 eligible for reactivation. Ordinary turns without such a run skip that worker

@@ -1,5 +1,4 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   CHROMIUM_FULL_VERSION,
@@ -41,10 +40,7 @@ function inferEdgeExtension(outputFormat: string): string {
 function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.microsoft) ?? {};
-  return readMicrosoftProviderConfig({
-    ...raw,
-    outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),
-  });
+  return readMicrosoftProviderConfig(raw);
 }
 
 function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
@@ -53,7 +49,6 @@ function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
     voice: trimToUndefined(config.voice) ?? DEFAULT_EDGE_VOICE,
     lang: trimToUndefined(config.lang) ?? DEFAULT_EDGE_LANG,
     outputFormat: trimToUndefined(config.outputFormat) ?? DEFAULT_EDGE_OUTPUT_FORMAT,
-    outputFormatConfigured: asBoolean(config.outputFormatConfigured) ?? false,
     pitch: trimToUndefined(config.pitch),
     rate: trimToUndefined(config.rate),
     volume: trimToUndefined(config.volume),
@@ -249,7 +244,6 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             volume: config.volume,
             timeout: config.timeoutMs ?? req.timeoutMs,
           });
-          await mkdir(path.dirname(outputPath), { recursive: true });
           for (let attempt = 0; attempt < 2; attempt += 1) {
             let outputSize = 0;
             await writeExternalFileWithinRoot({

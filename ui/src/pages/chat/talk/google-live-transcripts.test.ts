@@ -1,33 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import {
   createClient,
   createSession,
-  createTransport,
-  encodeJsonFrame,
   flushMicrotasks,
   installGoogleLiveTestFixture,
   startTransport,
 } from "./google-live.test-support.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
-import type { RealtimeTalkTransportContext } from "./shared.ts";
 
 const GOOGLE_LIVE_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 
-async function createModelTransport(
-  model: string | undefined,
-  callbacks: RealtimeTalkTransportContext["callbacks"],
-) {
-  return new GoogleLiveRealtimeTalkTransport(
+async function startModel(model?: string) {
+  const onTranscript = vi.fn();
+  const onStatus = vi.fn();
+  const transport = new GoogleLiveRealtimeTalkTransport(
     { ...createSession(GOOGLE_LIVE_URL), ...(model ? { model } : {}) },
     {
       input: await prepareRealtimeTalkTestInput(),
-      callbacks,
+      callbacks: { onTranscript, onStatus },
       client: createClient(),
       sessionKey: "main",
     },
   );
+  return { transport, ws: await startTransport(transport), onTranscript, onStatus };
 }
 
 describe("Google Live browser transcript finality", () => {
@@ -39,9 +37,7 @@ describe("Google Live browser transcript finality", () => {
     { name: "3.8 Extended Thinking", model: "gemini-3.8-live-extended-thinking" },
     { name: "prefixed 3.8", model: "models/gemini-3.8-live" },
   ])("finalizes both live $name spoken turns before the session closes", async ({ model }) => {
-    const onTranscript = vi.fn();
-    const transport = await createModelTransport(model, { onTranscript });
-    const ws = await startTransport(transport);
+    const { transport, ws, onTranscript } = await startModel(model);
     for (const [input, output] of [
       ["Please reply with the single word glacier.", "Glacier."],
       ["Now reply with the single word crystal.", "Crystal."],
@@ -52,7 +48,7 @@ describe("Google Live browser transcript finality", () => {
         { generationComplete: true },
         { turnComplete: true },
       ]) {
-        ws.emitMessage(encodeJsonFrame({ serverContent }));
+        ws.emitContent(serverContent);
         await flushMicrotasks();
       }
     }
@@ -67,20 +63,18 @@ describe("Google Live browser transcript finality", () => {
         .filter(([entry]) => entry.role === "user")
         .map(([entry]) => entry.final),
     ).toEqual([true, true]);
-    ws.emitMessage(encodeJsonFrame({ serverContent: { inputTranscription: { finished: true } } }));
+    ws.emitContent({ inputTranscription: { finished: true } });
     await flushMicrotasks();
     transport.stop();
     expect(onTranscript.mock.calls.filter(([entry]) => entry.final)).toHaveLength(4);
   });
 
   it("accumulates 2.5 fragments and honors a finish-only message", async () => {
-    const onTranscript = vi.fn();
-    const transport = await createModelTransport("gemini-2.5-flash-native-audio-preview-12-2025", {
-      onTranscript,
-    });
-    const ws = await startTransport(transport);
+    const { transport, ws, onTranscript } = await startModel(
+      "gemini-2.5-flash-native-audio-preview-12-2025",
+    );
     for (const transcription of [{ text: "Last " }, { text: "words" }, { finished: true }]) {
-      ws.emitMessage(encodeJsonFrame({ serverContent: { inputTranscription: transcription } }));
+      ws.emitContent({ inputTranscription: transcription });
       await flushMicrotasks();
     }
     expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
@@ -91,36 +85,17 @@ describe("Google Live browser transcript finality", () => {
     transport.stop();
   });
 
+  const interrupted = { interrupted: true };
+  const complete = { turnComplete: true };
+  const nextInput = { inputTranscription: { text: "New question" } };
   it.each([
-    {
-      name: "before the next input transcript",
-      boundary: [
-        { interrupted: true },
-        { turnComplete: true },
-        { inputTranscription: { text: "New question" } },
-      ],
-    },
-    {
-      name: "after an independently ordered input transcript",
-      boundary: [
-        { interrupted: true },
-        { inputTranscription: { text: "New question" } },
-        { turnComplete: true },
-      ],
-    },
-    {
-      name: "in the interruption frame",
-      boundary: [
-        { interrupted: true, turnComplete: true },
-        { inputTranscription: { text: "New question" } },
-      ],
-    },
-  ])(
-    "preserves interrupted speech and the next utterance when completion arrives $name",
-    async ({ boundary }) => {
-      const onTranscript = vi.fn();
-      const transport = await createTransport({ onTranscript });
-      const ws = await startTransport(transport);
+    ["before next input", [interrupted, complete, nextInput]],
+    ["after next input", [interrupted, nextInput, complete]],
+    ["in interruption frame", [{ ...interrupted, ...complete }, nextInput]],
+  ] as const)(
+    "preserves interrupted speech and the next utterance when completion arrives %s",
+    async (_name, boundary) => {
+      const { transport, ws, onTranscript } = await startModel();
       for (const serverContent of [
         { outputTranscription: { text: "Interrupted " } },
         { outputTranscription: { text: "response" } },
@@ -128,7 +103,7 @@ describe("Google Live browser transcript finality", () => {
         { outputTranscription: { text: "Next response", finished: true } },
         { turnComplete: true },
       ]) {
-        ws.emitMessage(encodeJsonFrame({ serverContent }));
+        ws.emitContent(serverContent);
         await flushMicrotasks();
       }
       expect(
@@ -140,10 +115,7 @@ describe("Google Live browser transcript finality", () => {
   );
 
   it("releases the UTF-8 transcript budget on finality and closes on overflow without persisting a partial", async () => {
-    const onTranscript = vi.fn();
-    const onStatus = vi.fn();
-    const transport = await createTransport({ onTranscript, onStatus });
-    const ws = await startTransport(transport);
+    const { ws, onTranscript, onStatus } = await startModel();
     const atLimit = "é".repeat(128 * 1024);
     for (const outputTranscription of [
       { text: atLimit },
@@ -152,7 +124,7 @@ describe("Google Live browser transcript finality", () => {
       { text: "é" },
       { finished: true },
     ]) {
-      ws.emitMessage(encodeJsonFrame({ serverContent: { outputTranscription } }));
+      ws.emitContent({ outputTranscription });
       await flushMicrotasks();
     }
     expect(
@@ -164,5 +136,53 @@ describe("Google Live browser transcript finality", () => {
       "Google Live transcript exceeded the 256 KiB UTF-8 pending buffer limit",
     );
     expect(ws.readyState).toBe(3);
+  });
+
+  it("stays active across a filler utterance and tool call", async () => {
+    const { transport, ws, onTranscript } = await startModel("gemini-3.8-live-extended-thinking");
+
+    ws.emitContent({
+      outputTranscription: { text: "Checking now." },
+      turnComplete: true,
+      interactionStatus: "IN_PROGRESS",
+    });
+    await waitForFast(() =>
+      expect(onTranscript).toHaveBeenLastCalledWith({
+        role: "assistant",
+        text: "Checking now.",
+        final: true,
+      }),
+    );
+
+    ws.emitCalls({ id: "call-unknown", name: "unknown_tool", args: {} });
+    await waitForFast(() =>
+      expect(ws.messages).toContainEqual({
+        toolResponse: {
+          functionResponses: [
+            {
+              id: "call-unknown",
+              name: "unknown_tool",
+              response: { error: 'Tool "unknown_tool" is not available in browser Talk' },
+            },
+          ],
+        },
+      }),
+    );
+    expect(ws.readyState).toBe(1);
+
+    ws.emitContent({
+      outputTranscription: { text: "The answer is 42." },
+      turnComplete: true,
+      interactionStatus: "IDLE",
+    });
+    await waitForFast(() =>
+      expect(onTranscript).toHaveBeenLastCalledWith({
+        role: "assistant",
+        text: "The answer is 42.",
+        final: true,
+      }),
+    );
+    expect(ws.readyState).toBe(1);
+    transport.stop();
   });
 });

@@ -1,6 +1,7 @@
 // Verifies sandbox tool-policy resolution and blocked-tool explanation text.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ToolAllowDenyPolicyConfig } from "../config/types.tools.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
@@ -19,26 +20,36 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
+function sandboxConfig(
+  tools: ToolAllowDenyPolicyConfig | undefined,
+  agentTools?: ToolAllowDenyPolicyConfig,
+  mode: "all" | "non-main" = "all",
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { sandbox: { mode, scope: "agent" } },
+      ...(agentTools === undefined
+        ? {}
+        : {
+            entries: {
+              work: {
+                workspace: "~/openclaw-work",
+                tools: { sandbox: { tools: agentTools } },
+              },
+            },
+          }),
+    },
+    ...(tools === undefined ? {} : { tools: { sandbox: { tools } } }),
+  };
+}
+
 describe("sandbox explain helpers", () => {
   beforeEach(() => {
     toolPolicyAuditInfo.mockClear();
   });
 
   it("prefers agent overrides > global > defaults (sandbox tool policy)", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        entries: {
-          work: {
-            workspace: "~/openclaw-work",
-            tools: { sandbox: { tools: { allow: ["write"] } } },
-          },
-        },
-      },
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["browser"] } } },
-    };
+    const cfg = sandboxConfig({ allow: ["read"], deny: ["browser"] }, { allow: ["write"] });
 
     const resolved = resolveSandboxConfigForAgent(cfg, "work");
     expect(resolved.tools.allow).toEqual(["write", "view_image"]);
@@ -52,21 +63,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("expands group tool shorthands inside sandbox tool policy", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        entries: {
-          work: {
-            workspace: "~/openclaw-work",
-            tools: {
-              sandbox: { tools: { allow: ["group:memory", "group:fs"] } },
-            },
-          },
-        },
-      },
-    };
+    const cfg = sandboxConfig(undefined, { allow: ["group:memory", "group:fs"] });
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
     expect(policy.allow).toEqual([
@@ -83,21 +80,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("denies still win after group expansion", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["group:memory"],
-            deny: ["memory_get"],
-          },
-        },
-      },
-    };
+    const cfg = sandboxConfig({ allow: ["group:memory"], deny: ["memory_get"] });
 
     const policy = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(policy.allow).toContain("memory_search");
@@ -106,20 +89,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("includes config key paths + main-session hint for non-main mode", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = sandboxConfig({ deny: ["browser"] }, undefined, "non-main");
 
     const msg = formatSandboxToolPolicyBlockedMessage({
       cfg,
@@ -151,20 +121,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("does not audit sandbox tool-policy formatting unless requested", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = sandboxConfig({ deny: ["browser"] }, undefined, "non-main");
 
     const msg = formatSandboxToolPolicyBlockedMessage({
       cfg,

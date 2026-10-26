@@ -4,6 +4,8 @@ import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
   formatErrorMessage,
+  formatErrorStackWithMessage,
+  mapErrorCauseChain,
   ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
@@ -20,6 +22,27 @@ const withGetter = <T extends object>(value: T, key: PropertyKey, get: () => unk
   Object.defineProperty(value, key, { enumerable: true, get });
 const withCause = (message: string, cause: unknown) => new Error(message, { cause });
 const redactSecrets = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+it("maps only the root and eight ordered causes, including repeated cyclic frames", () => {
+  let error = new Error("beyond limit");
+  for (let index = 8; index >= 0; index -= 1) {
+    error = new Error(String(index), { cause: error });
+  }
+  expect(mapErrorCauseChain(error, (entry) => entry.message)).toEqual([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+  ]);
+  const cycle = new Error("loop");
+  cycle.cause = cycle;
+  expect(mapErrorCauseChain(cycle, (entry) => entry.message)).toEqual(Array(9).fill("loop"));
+});
 
 describe("formatErrorMessage", () => {
   it("preserves error content when no diagnostic redaction policy is supplied", () => {
@@ -280,4 +303,42 @@ it.each([
   [() => {}, "[object Function]"],
 ])("stringifyNonErrorCause renders %s", (value, expected) => {
   expect(stringifyNonErrorCause(value)).toBe(expected);
+});
+
+describe("formatErrorStackWithMessage", () => {
+  it("restores the message on a bare-header stack like Bun materializes", () => {
+    const error = new Error("version resolution failed");
+    error.stack = "Error\n    at resolveCommitHash (git-commit.js:1:1)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "Error: version resolution failed\n    at resolveCommitHash (git-commit.js:1:1)",
+    );
+  });
+
+  it("keeps a V8-style stack that already embeds the message unchanged", () => {
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at <anonymous> (source.js:1:1)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "Error: boom\n    at <anonymous> (source.js:1:1)",
+    );
+  });
+
+  it("restores a bare header that carries a custom error name", () => {
+    const error = new Error("denied");
+    error.name = "PermissionError";
+    error.stack = "PermissionError\n    at f (source.js:2)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "PermissionError: denied\n    at f (source.js:2)",
+    );
+  });
+
+  it("prepends the header when the stack has no leading name line", () => {
+    const error = new Error("multi");
+    error.stack = "    at q (source.js:3)";
+    expect(formatErrorStackWithMessage(error)).toBe("Error: multi\n    at q (source.js:3)");
+  });
+
+  it("falls back to the message when there is no stack", () => {
+    const error = Object.assign(new Error("solo"), { stack: "" });
+    expect(formatErrorStackWithMessage(error)).toBe("solo");
+  });
 });

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   awaitGateBeforeSettlement,
@@ -25,6 +25,7 @@ import { resetConfigOverrides } from "../config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -65,6 +66,15 @@ export type ProofCase = {
   bootstrap?: boolean;
   targetKey?: string;
 };
+export const requesterCase = (
+  id: string,
+  name: string,
+  overrides: Partial<ProofCase> = {},
+): ProofCase => ({ id, name, sender: "trusted", agent: "main", denied: false, ...overrides });
+export const FOLLOWUP_REPLY =
+  "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.";
+export const STEERING_REFUSED_REPLY =
+  "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
 type Outbound = { to: string; text: string; accountId?: string };
 export type RunResult = { runId?: string; status?: string; error?: unknown };
 type ModelRequest = { tools: string[]; output: unknown };
@@ -72,7 +82,7 @@ export type ProofModelRequest = ModelRequest & {
   prompt: string;
   result?: Record<string, unknown>;
 };
-type ProofModelReply = { tool?: { name: string; args: unknown }; text?: string };
+export type ProofModelReply = { tool?: { name: string; args: unknown }; text?: string };
 const modelScripts: Array<{
   marker: string;
   respond: (request: ProofModelRequest) => Promise<ProofModelReply> | ProofModelReply;
@@ -149,8 +159,41 @@ let gatewayKernel: Awaited<ReturnType<typeof import("./server-kernel.js").create
 export let gatewayContext: GatewayRequestContext;
 let workspace: string;
 
+export function waitForProofGate(
+  gate: Promise<unknown>,
+  work: Promise<unknown>,
+  signal: AbortSignal,
+  message: string,
+) {
+  return withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+}
+
+export const proofDeliveries = (to: string) => outbound.filter((entry) => entry.to === to);
+const proofToolReply = (name: string, args: unknown) => ({ tool: { name, args } });
+export const proofSend = (sessionKey: unknown, message: string, mode: "steer" | "followup") =>
+  proofToolReply("sessions_send", { sessionKey, message, mode, timeoutSeconds: 0 });
+export const proofSpawn = (
+  task: string,
+  options: { collect?: boolean; groupId?: string; expectsCompletionMessage?: boolean } = {},
+) => proofToolReply("sessions_spawn", { task, cleanup: "keep", ...options });
+
+export async function settleProofScenario(
+  scenario: Scenario,
+  work: readonly (Promise<unknown> | undefined)[],
+) {
+  scenario.releaseIncumbent.resolve();
+  scenario.releaseTarget.resolve();
+  await Promise.allSettled(work.filter((pending) => pending !== undefined));
+  await waitForGatewayActiveWork(30_000);
+}
+
 export function waitForProofRun(runId: unknown): Promise<RunResult> {
   return gateway.client.request<RunResult>("agent.wait", { runId, timeoutMs: 30_000 });
+}
+
+export async function expectProofIdle() {
+  await waitForGatewayActiveWork(30_000);
+  expect(providerErrors).toEqual([]);
 }
 
 function resetGatewayState() {
@@ -163,6 +206,15 @@ function resetGatewayState() {
 
 async function startProviderAndSink() {
   const server = createServer((request, response) => {
+    const sendTool = (name: string, args: unknown) => respond(response, { name, args });
+    const sendMessage = (target: string, message: string, final?: true) =>
+      sendTool("message", {
+        action: "send",
+        channel: "telegram",
+        target,
+        message,
+        ...(final ? { final } : {}),
+      });
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
         respondJson(response, { data: [{ id: "proof-model", object: "model" }] });
@@ -246,90 +298,47 @@ async function startProviderAndSink() {
       if (!scenario) {
         throw new Error(`Unexpected proof prompt ${prompt.slice(0, 300)}`);
       }
-      if (prompt.includes(scenario.targetPrompt)) {
-        scenario.targetRequests.push(modelRequest);
-        if (scenario.targetRequests.length === 1) {
-          scenario.targetStarted.resolve();
-          await scenario.releaseTarget.promise;
-          // Even a forbidden call is requested, so empty delivery proves enforcement,
-          // rather than relying on the scripted provider to obey tool discovery.
-          respond(response, {
-            name: "message",
-            args: {
-              action: "send",
-              channel: "telegram",
-              target: scenario.recipient,
-              message: scenario.marker,
-              final: true,
-            },
-          });
-        } else if (scenario.spec.bootstrap && scenario.targetRequests.length === 2) {
-          respond(response, {
-            name: "message",
-            args: {
-              action: "send",
-              channel: "telegram",
-              target: `${scenario.recipient}-incumbent`,
-              message: `${scenario.marker}_INCUMBENT_2`,
-            },
-          });
-        } else {
-          respond(response, undefined, `TARGET_COMPLETE_${scenario.spec.id}`);
-        }
+      const phase = (["target", "bootstrap", "incumbent", "source"] as const).find((candidate) =>
+        prompt.includes(scenario[`${candidate}Prompt`]),
+      )!;
+      const count =
+        phase === "bootstrap"
+          ? ++scenario.bootstrapRequestCount
+          : scenario[`${phase}Requests`].push(modelRequest);
+      if (phase === "target" && count === 1) {
+        scenario.targetStarted.resolve();
+        await scenario.releaseTarget.promise;
+        // Request even forbidden calls: empty delivery must prove enforcement, not model obedience.
+        sendMessage(scenario.recipient, scenario.marker, true);
         return;
       }
-      if (prompt.includes(scenario.bootstrapPrompt)) {
-        scenario.bootstrapRequestCount++;
-        if (scenario.bootstrapRequestCount === 1) {
-          respond(response, {
-            name: "sessions_send",
-            args: {
-              sessionKey: scenario.targetKey,
-              mode: "followup",
-              message: scenario.incumbentPrompt,
-              timeoutSeconds: 0,
-            },
-          });
-        } else {
-          scenario.bootstrapAccepted = toolResult(body);
-          respond(response, undefined, `BOOTSTRAP_COMPLETE_${scenario.spec.id}`);
-        }
+      if (
+        (phase === "target" && scenario.spec.bootstrap && count === 2) ||
+        (phase === "incumbent" && count <= 2)
+      ) {
+        sendMessage(`${scenario.recipient}-incumbent`, `${scenario.marker}_INCUMBENT_${count}`);
         return;
       }
-      if (prompt.includes(scenario.incumbentPrompt)) {
-        scenario.incumbentRequests.push(modelRequest);
-        if (scenario.incumbentRequests.length <= 2) {
-          respond(response, {
-            name: "message",
-            args: {
-              action: "send",
-              channel: "telegram",
-              target: `${scenario.recipient}-incumbent`,
-              message: `${scenario.marker}_INCUMBENT_${scenario.incumbentRequests.length}`,
-            },
-          });
-        } else {
-          respond(response, undefined, `INCUMBENT_COMPLETE_${scenario.spec.id}`);
-        }
-        return;
-      }
-      scenario.sourceRequests.push(modelRequest);
-      if (scenario.sourceRequests.length === 1) {
-        respond(response, {
-          name: "sessions_send",
-          args: {
-            ...(scenario.spec.id === "delegate"
-              ? { agentId: "deployment" }
-              : { sessionKey: scenario.targetKey }),
-            ...(scenario.spec.busy ? { mode: scenario.spec.mode ?? "followup" } : {}),
-            message: scenario.targetPrompt,
-            timeoutSeconds: 0,
-          },
+      if ((phase === "source" || phase === "bootstrap") && count === 1) {
+        const bootstrap = phase === "bootstrap";
+        sendTool("sessions_send", {
+          ...(!bootstrap && scenario.spec.id === "delegate"
+            ? { agentId: "deployment" }
+            : { sessionKey: scenario.targetKey }),
+          ...(bootstrap || scenario.spec.busy
+            ? { mode: bootstrap ? "followup" : (scenario.spec.mode ?? "followup") }
+            : {}),
+          message: bootstrap ? scenario.incumbentPrompt : scenario.targetPrompt,
+          timeoutSeconds: 0,
         });
-      } else {
-        scenario.accepted = toolResult(body);
-        respond(response, undefined, `SOURCE_COMPLETE_${scenario.spec.id}`);
+        return;
       }
+      if (phase === "bootstrap") {
+        scenario.bootstrapAccepted = toolResult(body);
+      } else if (phase === "source") {
+        scenario.accepted = toolResult(body);
+      }
+      respond(response, undefined, `${phase.toUpperCase()}_COMPLETE_${scenario.spec.id}`);
     })().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       providerErrors.push(message);
@@ -513,6 +522,17 @@ async function cleanupProof() {
   }
 }
 
+function withProofRequestScope<T>(run: () => T): T {
+  return withPluginRuntimeGatewayRequestScope(
+    {
+      resolveGatewayContext: gatewayContext.resolveGatewayContext,
+      pluginRegistry: gatewayKernel.pluginRuntime.registry,
+      isWebchatConnect: () => false,
+    },
+    run,
+  );
+}
+
 export function runProofIngress(params: {
   abortSignal: AbortSignal;
   agentId: string;
@@ -523,34 +543,28 @@ export function runProofIngress(params: {
   groupId?: string;
 }) {
   // Identity comes from the trusted host/channel boundary, never model text.
-  return withPluginRuntimeGatewayRequestScope(
-    {
-      resolveGatewayContext: gatewayContext.resolveGatewayContext,
-      pluginRegistry: gatewayKernel.pluginRuntime.registry,
-      isWebchatConnect: () => false,
-    },
-    () =>
-      agentCommandFromIngress({
-        abortSignal: params.abortSignal,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        runId: randomUUID(),
-        message: params.message,
-        allowModelOverride: false,
-        deliver: false,
-        channel: "telegram",
+  return withProofRequestScope(() =>
+    agentCommandFromIngress({
+      abortSignal: params.abortSignal,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      runId: randomUUID(),
+      message: params.message,
+      allowModelOverride: false,
+      deliver: false,
+      channel: "telegram",
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      accountId: "default",
+      to: params.to,
+      runContext: {
+        senderId: params.senderId,
         messageChannel: "telegram",
-        messageProvider: "telegram",
         accountId: "default",
-        to: params.to,
-        runContext: {
-          senderId: params.senderId,
-          messageChannel: "telegram",
-          accountId: "default",
-          groupId: params.groupId,
-          chatId: params.to,
-        },
-      }),
+        groupId: params.groupId,
+        chatId: params.to,
+      },
+    }),
   );
 }
 
@@ -605,30 +619,43 @@ export async function updateSenderPolicies(policies: Record<string, { deny: stri
   );
 }
 
+export function configureProofCollaboration(allow: boolean | undefined, bobDenied = false) {
+  return patchProofConfig(
+    {
+      messages: { queue: { allowCollaborativeSteering: allow ?? null } },
+      tools: {
+        toolsBySender: {
+          "id:alice": { deny: null },
+          "id:bob": { deny: bobDenied ? ["message"] : null },
+        },
+      },
+    },
+    [
+      "messages.queue.allowCollaborativeSteering",
+      "tools.toolsBySender.id:alice.deny",
+      ...(!bobDenied ? ["tools.toolsBySender.id:bob.deny"] : []),
+    ],
+  );
+}
+
 export function dispatchProofHuman(
   ctx: MsgContext,
   sender: string,
   mode: "steer" | "followup",
   signal: AbortSignal,
 ) {
-  return withPluginRuntimeGatewayRequestScope(
-    {
-      resolveGatewayContext: gatewayContext.resolveGatewayContext,
-      pluginRegistry: gatewayKernel.pluginRuntime.registry,
-      isWebchatConnect: () => false,
-    },
-    () =>
-      dispatchInboundMessageWithBufferedDispatcher({
-        ctx,
-        cfg: getRuntimeConfig(),
-        dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
-        dispatcherOptions: {
-          deliver: async (payload) => {
-            humanReplies.push({ sender, text: payload.text });
-          },
+  return withProofRequestScope(() =>
+    dispatchInboundMessageWithBufferedDispatcher({
+      ctx,
+      cfg: getRuntimeConfig(),
+      dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
+      dispatcherOptions: {
+        deliver: async (payload) => {
+          humanReplies.push({ sender, text: payload.text });
         },
-        replyOptions: { queueModeOverride: mode, disableBlockStreaming: true, abortSignal: signal },
-      }),
+      },
+      replyOptions: { queueModeOverride: mode, disableBlockStreaming: true, abortSignal: signal },
+    }),
   );
 }
 

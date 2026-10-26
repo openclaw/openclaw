@@ -84,9 +84,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
-  if (attempt.operation === "settled-tool-finalization") {
-    // Finalization resumes the settled transcript with only the host prompt.
-    // Do not invoke provider/plugin contributors or assemble ambient context.
+  if (
+    attempt.operation === "settled-tool-finalization" ||
+    (params.isRawModelRun &&
+      attempt.sessionPersistence === "detached" &&
+      attempt.disableTools === true)
+  ) {
+    // These requests send only the caller's prompt. Preparing an ambient prompt
+    // for discarded diagnostics would still read workspace, node, and plugin state.
     params.setup.prepStages?.mark("system-prompt");
     return {
       runtimeChannel: undefined,
@@ -204,6 +209,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       },
       chatType: attempt.chatType,
       requesterProfileId: readAdmittedRunOperatorAuthority(attempt.admittedRunContext)?.profileId,
+      blind: attempt.blindPrompt,
     },
   );
   const promptMode =
@@ -359,7 +365,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       }),
       toolSchemaDirectoryPrompt,
       sandboxInfo,
-      capabilityToolNames: [...params.capabilityToolNames].toSorted(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+      capabilityToolNames: [...params.capabilityToolNames].sort(),
       tools: params.effectiveTools,
       contextFiles: params.bootstrap.contextFiles,
       bootstrapMode: params.bootstrap.bootstrapMode,
@@ -389,7 +396,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     bootstrapTotalMaxChars: params.bootstrap.bootstrapTotalMaxChars,
     bootstrapTruncation: buildBootstrapTruncationReportMeta({
       analysis: params.bootstrap.bootstrapAnalysis,
-      warningMode: params.bootstrap.bootstrapPromptWarningMode,
       warning: params.bootstrap.bootstrapPromptWarning,
     }),
     sandbox: params.setup.sandboxReport,
@@ -405,7 +411,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const readToolPromptInputs = (tools: PromptTools, permissionChanged = false) => ({
     mode: attempt.permissionMode,
     tools,
-    capabilities: [...params.capabilityToolNames].toSorted(),
+    // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+    capabilities: [...params.capabilityToolNames].sort(),
     catalogEntries: params.toolSearchCatalogRef?.current?.entries,
     permissionChanged,
   });

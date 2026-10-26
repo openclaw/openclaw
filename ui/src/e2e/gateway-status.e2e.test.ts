@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -25,17 +21,6 @@ const withPage = (
     { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 }, ...options },
     run,
   );
-
-async function captureStatus(page: Page, name: string, surface: Locator, content: Locator[]) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
-    elements: content,
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  for (const [index, element] of frame.elements.entries()) {
-    await writeFile(path.join(suite.artifactDir, `${name}-${index + 1}.png`), element.png);
-  }
-}
 
 suite.define(() => {
   it("keeps shared chat usable without polling operator-only surfaces", async () => {
@@ -76,7 +61,9 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
-        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
+        expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
+          true,
+        );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
           .getByText(
@@ -133,11 +120,11 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await page.getByText("Recovery frame 4", { exact: true }).waitFor({ state: "visible" });
-        const header = page.locator(".chat-pane__header").first();
+        const header = page.locator(".agent-chat__header--mobile");
         const initialHeaderY = await header.evaluate(
           (element) => element.getBoundingClientRect().y,
         );
-        const connectionStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const connectionStatus = page.locator(".mobile-header__notices:visible");
         const content = page.locator("main.content");
         const initialContentBounds = await content.boundingBox();
         expect(initialContentBounds).not.toBeNull();
@@ -157,7 +144,6 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         await waitForGatewayRecoveryScope(page, false);
         await connectionStatus
-          .locator(".gateway-status__label")
           .getByText("Restoring…", { exact: true })
           .waitFor({ state: "visible" });
         expect(await content.boundingBox()).toEqual(initialContentBounds);
@@ -211,37 +197,34 @@ suite.define(() => {
       const identityTooltip = page
         .getByRole("tooltip")
         .filter({ hasText: "Identity and app menu for Owner:" });
-      const retry = flag.getByRole("button", {
-        name: "Reconnecting… — Retry now",
-        exact: true,
-      });
-      await retry.waitFor({ state: "visible" });
+      const recovery = flag.locator(".gateway-status");
+      await recovery.waitFor({ state: "visible" });
       expect(await retainedStatus.getAttribute("title")).toBe("");
       await page.clock.runFor(4_001);
       await flag.waitFor({ state: "hidden" });
       await page.clock.resume();
       await retainedStatus.hover();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.clock.runFor(200);
       expect(await identityTooltip.count()).toBe(0);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
       expect(
-        await retry.evaluate((button) => {
+        await recovery.evaluate((button) => {
           const bounds = button.getBoundingClientRect();
           return button.contains(
             document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
           );
         }),
       ).toBe(true);
-      await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
       await pauseVirtualClock(page);
       await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
-      await retry.waitFor({ state: "visible" });
+      await recovery.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
-      expect(await retry.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await recovery.evaluate((element) => element === document.activeElement)).toBe(true);
+      await page.clock.resume();
 
       await composer.locator("textarea").focus();
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -253,7 +236,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
       await identityTooltip.waitFor({ state: "visible" });
-      await captureStatus(page, "collapsed-avatar-overlap", composer, [retainedStatus, composer]);
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
@@ -312,9 +294,8 @@ suite.define(() => {
         const footer = page.locator(".sidebar-footer-bar");
         const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
-        await connectionStatus
-          .getByRole("button", { name: "Reconnecting… · 2 queued — Retry now", exact: true })
-          .waitFor();
+        await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
+        expect(await connectionStatus.getByRole("button").count()).toBe(0);
         expect(await connectionStatus.count()).toBe(1);
         expect(await connectionStatus.locator(".gateway-status__label").textContent()).toBe(
           "Reconnecting… · 2 queued",
@@ -337,40 +318,30 @@ suite.define(() => {
         expect(await connectionStatus.getAttribute("role")).toBeNull();
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await captureStatus(page, "desktop-footer-queued", connectionStatus, [
-          identityStatus,
-          connectionStatus,
-        ]);
 
         await page.setViewportSize({ width: 390, height: 844 });
-        const mobileStatus = page.locator(".mobile-connection-status .gateway-status:visible");
+        const mobileStatus = page.locator(".mobile-header__notices:visible");
         await mobileStatus.waitFor({ state: "visible" });
         // The drawer stays mounted for its slide; Playwright visibility ignores off-screen placement.
         await expect
           .poll(() => connectionStatus.evaluate((element) => element.getBoundingClientRect().right))
           .toBeLessThanOrEqual(0);
         expect(
-          await connectionStatus.locator("button").evaluate((button) => {
-            button.focus();
+          await connectionStatus.evaluate((element) => {
+            element.focus();
             return {
-              inert: button.closest("[inert]") !== null,
-              focused: document.activeElement === button,
+              inert: element.closest("[inert]") !== null,
+              focused: document.activeElement === element,
             };
           }),
         ).toEqual({ inert: true, focused: false });
         expect(await page.locator(".sidebar-connection-flag").isVisible()).toBe(false);
-        expect(await mobileStatus.locator(".gateway-status__label").textContent()).toBe(
-          "Reconnecting… · 2 queued",
-        );
-        expect(
-          await page
-            .getByRole("button", { name: "Expand sidebar" })
-            .getAttribute("data-connection-status"),
-        ).toBe("reconnecting");
-        await captureStatus(page, "mobile-header-queued", mobileStatus, [
-          page.getByRole("button", { name: "Expand sidebar" }),
-          mobileStatus,
-        ]);
+        expect(await mobileStatus.textContent()).toBe("Reconnecting…");
+        expect(await page.locator(".chat-queue__item").count()).toBe(2);
+        expect(await announcement.textContent()).toBe("Reconnecting… · 2 queued");
+        // The shell owns the single live announcement, including queued messages.
+        expect(await mobileStatus.getAttribute("role")).toBeNull();
+        expect(await mobileStatus.getAttribute("aria-live")).toBeNull();
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 
@@ -390,18 +361,10 @@ suite.define(() => {
         expect(await mobileStatus.isVisible()).toBe(false);
         await identityStatus.click();
         await menu.getByText("Alex", { exact: true }).waitFor();
-        const retry = menu.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
+        expect(await menu.locator('[data-value="command:retry-connect"]').count()).toBe(0);
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
-        const bounds = await retry.boundingBox();
-        expect(bounds).not.toBeNull();
-        expect(bounds!.x).toBeGreaterThanOrEqual(0);
-        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
-        const socketCount = await gateway.getSocketCount();
-        await gateway.closeLatest(1006, "synthetic failed attempt");
-        await retry.click();
-        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+        await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
         await connectionStatus.waitFor({ state: "detached" });

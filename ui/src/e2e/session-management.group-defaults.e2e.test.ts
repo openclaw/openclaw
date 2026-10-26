@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Locator, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
-import { readRepositoryBranches } from "../../../src/agents/worktrees/branches.runtime.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
+import type { ManagedWorktreeBranchesResult } from "../../../src/agents/worktrees/types.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
@@ -19,9 +16,9 @@ import {
   withSessionPage,
 } from "./session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const gitRepository = {
   branches: [{ kind: "local", name: "main" }],
   defaultBranch: "main",
@@ -93,6 +90,8 @@ async function withGroupGateway(
 }
 
 async function openDefaults(page: Page) {
+  await chooseSidebarMenuOption(page, "Status", "All");
+  await closeSidebarMenu(page);
   const group = page.locator(groupSelector);
   await group.waitFor({ state: "visible", timeout: 10_000 });
   await group.locator(".sidebar-recent-sessions__head").hover();
@@ -105,14 +104,15 @@ async function openDefaults(page: Page) {
 
 suite.define(() => {
   it("saves current-checkout group defaults for an agent workspace without a commit", async () => {
-    const workspace = tempDirs.make("openclaw-group-unborn-");
-    await promisify(execFile)("git", ["init", "-b", "main", "--template=", workspace]);
-    const repository = await readRepositoryBranches(workspace, { includeRepositoryStatus: true });
+    const workspace = "/home/peter/unborn-workspace";
     await withGroupGateway(
       {
         methodResponses: {
           "sessions.create": { key: "agent:main:unborn-group", runStarted: true },
-          "worktrees.branches": repository,
+          "worktrees.branches": {
+            branches: [],
+            repositoryStatus: "not_git",
+          } satisfies ManagedWorktreeBranchesResult,
         },
         workspace,
       },
@@ -506,6 +506,8 @@ suite.define(() => {
       savedGitGroup({ deferredMethods: ["sessions.groups.defaults"] }),
       async (page, gateway) => {
         await page.goto(`${suite.server.baseUrl}chat`);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
         const group = page.locator(groupSelector);
         await group.waitFor({ state: "visible", timeout: 10_000 });
         await gateway.waitForRequest("sessions.groups.list");

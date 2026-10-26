@@ -1,7 +1,12 @@
 // Owns CLI plugin installation and the shipped local/npm hook-pack fallback.
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { readInstallPolicyWarningErrorDetails } from "../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
+import type {
+  PluginsInstallParams,
+  PluginsInstallResult,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +24,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import {
   loadConfigForInstall,
@@ -28,6 +34,7 @@ import {
   type ConfigSnapshotForInstallExecution,
 } from "../plugins/install-config.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
+import { PluginInstallPersistedError } from "../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
 import {
@@ -39,13 +46,11 @@ import { shortenHomePath } from "../utils.js";
 import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { confirmNonClawHubInstall } from "./non-clawhub-install-acknowledgement.js";
-import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import {
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
-import { createGatewayPluginInstaller } from "./plugins-install-gateway.js";
 import {
   resolvePluginInstallPreflight,
   type RunPluginInstallCommandParams,
@@ -116,7 +121,92 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       beforePersistentApply: params.beforePersistentApply,
       invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
       install: gateway
-        ? createGatewayPluginInstaller(gateway)
+        ? async (installParams) => {
+            if (
+              installParams.request.source === "clawhub" &&
+              installParams.request.mode !== "update" &&
+              installParams.confirmInstall &&
+              !(await installParams.confirmInstall())
+            ) {
+              throw new ManagedPluginLifecycleError("Install cancelled.", {
+                installRejected: true,
+              });
+            }
+            installParams.signal?.throwIfAborted();
+            installParams.beforePersistentApply?.();
+            let gatewayResult: PluginsInstallResult;
+            try {
+              try {
+                gatewayResult = await gateway<PluginsInstallResult>(
+                  "plugins.install",
+                  installParams.request,
+                  installParams.onCapabilityConsent,
+                );
+              } catch (error) {
+                const details = readInstallPolicyWarningErrorDetails(
+                  error instanceof Error && "details" in error ? error.details : undefined,
+                );
+                if (
+                  !details ||
+                  !installParams.safetyOverrides?.onInstallPolicyWarning ||
+                  (await installParams.safetyOverrides.onInstallPolicyWarning(details)).status !==
+                    "approved"
+                ) {
+                  throw error;
+                }
+                gatewayResult = await gateway<PluginsInstallResult>(
+                  "plugins.install",
+                  { ...installParams.request, acknowledgeInstallPolicyWarning: true },
+                  installParams.onCapabilityConsent,
+                );
+              }
+            } catch (error) {
+              const details =
+                error instanceof Error && "details" in error ? error.details : undefined;
+              const saved = isRecord(details) ? details.persistence : undefined;
+              if (
+                isRecord(saved) &&
+                saved.operation === "install" &&
+                typeof saved.pluginId === "string"
+              ) {
+                throw new PluginInstallPersistedError(saved.pluginId, error);
+              }
+              // Only an explicit install-owner refusal permits hook fallback. A lost reply
+              // or runtime-apply failure can follow a committed plugin mutation.
+              if (isRecord(details) && details.pluginInstallRejected === true) {
+                const source = details.pluginInstallSource;
+                const installSource: ManagedPluginLifecycleError["installSource"] =
+                  isRecord(source) &&
+                  (source.source === "npm" || source.source === "clawhub") &&
+                  typeof source.spec === "string"
+                    ? {
+                        source: source.source,
+                        spec: source.spec,
+                        ...(typeof source.expectedIntegrity === "string"
+                          ? { expectedIntegrity: source.expectedIntegrity }
+                          : {}),
+                      }
+                    : undefined;
+                throw new ManagedPluginLifecycleError(
+                  error instanceof Error ? error.message : String(error),
+                  {
+                    installRejected: true,
+                    installSource,
+                    ...(typeof details.pluginInstallCode === "string"
+                      ? { code: details.pluginInstallCode }
+                      : {}),
+                    cause: error,
+                  },
+                );
+              }
+              throw error;
+            }
+            return {
+              plugin: gatewayResult.plugin,
+              warnings: gatewayResult.warnings,
+              application: gatewayResult.runtime,
+            };
+          }
         : (installParams) =>
             runWithLocalPluginState("install", (assertCurrent) =>
               installManagedPlugin({
@@ -278,7 +368,7 @@ async function installHookPackLocal(
       source,
       { ...params, snapshot },
       { expectedPackageKind, beforePersistentApply },
-      lease.assertOwned.bind(lease),
+      lease.assertOwned,
     );
     if (!result.ok) {
       return result;
@@ -307,6 +397,14 @@ async function installHookPackLocal(
           },
         }
       : snapshot;
+    const resolvedSpec = result.npmResolution?.resolvedSpec;
+    if (source.source === "npm" && source.pin) {
+      pinMessages.push(
+        resolvedSpec
+          ? `Pinned npm install record to ${resolvedSpec}.`
+          : theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
+      );
+    }
     const installRecord: Omit<HookInstallUpdate, "hookId" | "hooks"> =
       source.source === "local"
         ? {
@@ -315,15 +413,13 @@ async function installHookPackLocal(
             installPath: linked ? source.path : result.targetDir,
             version: result.version,
           }
-        : resolvePinnedNpmInstallRecordForCli(
-            source.spec,
-            Boolean(source.pin),
-            result.targetDir,
-            result.version,
-            result.npmResolution,
-            (message) => pinMessages.push(message),
-            theme.warn,
-          );
+        : {
+            source: "npm",
+            spec: source.pin && resolvedSpec ? resolvedSpec : source.spec,
+            installPath: result.targetDir,
+            version: result.version,
+            ...buildNpmResolutionFields(result.npmResolution),
+          };
     await withPluginLifecycleLease({}, async (persistenceLease) => {
       const assertPersistentApply = () => {
         persistenceLease.assertOwned();

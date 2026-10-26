@@ -39,12 +39,9 @@ vi.mock("../plugins/setup-registry.js", () => ({
 }));
 
 // mock-isolation: Synthetic auth and SecretRef fixtures supply provider hooks; external discovery would alter credential precedence.
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../plugins/provider-runtime.js", () => {
   const providerRuntime = {
@@ -272,7 +269,7 @@ function expectAuthFields(
   }
 }
 
-function expectSecret(value: string | undefined, expected: string) {
+function expectSecret(value: string | null | undefined, expected: string) {
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(expected);
 }
@@ -826,6 +823,12 @@ describe("applyLocalNoAuthHeaderOverride", () => {
   });
 
   it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
+    const headers = Object.freeze({
+      "X-Test": "1",
+      Authorization: "synthetic",
+      authorization: "synthetic",
+      AUTHORIZATION: "synthetic",
+    });
     const model = applyLocalNoAuthHeaderOverride(
       {
         id: "local-llm",
@@ -834,15 +837,20 @@ describe("applyLocalNoAuthHeaderOverride", () => {
         provider: "custom",
         baseUrl: "http://127.0.0.1:8080/v1",
         ...modelDefaults,
-        headers: { "X-Test": "1" },
+        headers,
       } as Model<"openai-completions">,
       {
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       },
     );
 
-    expect(model.headers?.Authorization).toBeNull();
-    expect(model.headers?.["X-Test"]).toBe("1");
+    expect(model.headers).toEqual({
+      "X-Test": "1",
+      Authorization: null,
+      authorization: null,
+      AUTHORIZATION: null,
+    });
+    expect(headers.Authorization).toBe("synthetic");
   });
 });
 

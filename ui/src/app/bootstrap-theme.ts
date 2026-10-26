@@ -2,7 +2,7 @@ import {
   BUILTIN_THEMES,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -97,7 +97,7 @@ export function createApplicationTheme(
   let settings: UiPreferences = initialPreferences;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
 
   let presentationGeneration = 0;
   let catalog: ReturnType<typeof createThemeCatalog> | undefined;
@@ -126,9 +126,7 @@ export function createApplicationTheme(
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
       if (preferencesPublished) {
-        for (const listener of listeners) {
-          listener();
-        }
+        listeners.publish();
       }
       if (
         typeof document !== "undefined" &&
@@ -149,9 +147,7 @@ export function createApplicationTheme(
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
     preferencesPublished = true;
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
 
   const loadCatalog = async () => {
@@ -168,7 +164,7 @@ export function createApplicationTheme(
     try {
       const { createThemeCatalog } = await import("./theme-catalog.ts");
       if (!disposed) {
-        catalog = createThemeCatalog(gateway, publish);
+        catalog = createThemeCatalog(gateway, publish, listeners.publish);
         catalogLoadError = undefined;
       }
     } catch (error) {
@@ -281,7 +277,7 @@ export function createApplicationTheme(
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
     },
-    subscribe: (listener) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
       catalog?.dispose();

@@ -1,5 +1,5 @@
 import { Routes } from "discord-api-types/v10";
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -73,9 +73,6 @@ export function resolveDiscordAutoThreadContext(params: {
 export async function resolveDiscordAutoThreadReplyPlan(
   params: MaybeCreateDiscordAutoThreadParams & {
     replyToMode: ReplyToMode;
-    agentId: string;
-    channel: string;
-    cfg: OpenClawConfig;
     parentSessionKey: string;
     groupScope?: "main" | "per-group";
     threadParentInheritanceEnabled?: boolean;
@@ -170,44 +167,25 @@ export async function maybeCreateDiscordAutoThread(
       params.message.id,
     );
     const createdId = created?.id || "";
-    if (
-      createdId &&
-      params.channelConfig?.autoThreadName === "generated" &&
-      params.cfg &&
-      params.agentId
-    ) {
-      const modelRef = (() => {
-        const {
-          cfg: modelConfig,
-          channel: rawChannel,
-          agentId: modelAgentId,
-          channelName: modelChannelName,
-        } = params;
-        const channel = rawChannel?.trim();
-        if (!channel) {
-          return undefined;
-        }
-        const parentSessionKey = buildAgentSessionKey({
-          agentId: modelAgentId,
-          channel,
-          peer: { kind: "channel", id: messageChannelId },
-        });
-        const channelLabel = modelChannelName?.trim();
-        const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
-        const channelOverride = resolveChannelModelOverride({
-          cfg: modelConfig,
-          channel,
-          groupId: createdId,
-          groupChatType: "channel",
-          groupChannel,
-          groupSubject: groupChannel,
-          parentSessionKey,
-        });
-        return channelOverride?.model;
-      })();
-      const { client } = params;
+    if (createdId && params.channelConfig?.autoThreadName === "generated") {
+      const { client, channelName, channelDescription, cfg, agentId, channel } = params;
+      const parentSessionKey = buildAgentSessionKey({
+        agentId,
+        channel,
+        peer: { kind: "channel", id: messageChannelId },
+      });
+      const channelLabel = channelName?.trim();
+      const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
+      const modelRef = resolveChannelModelOverride({
+        cfg,
+        channel,
+        groupId: createdId,
+        groupChatType: "channel",
+        groupChannel,
+        groupSubject: groupChannel,
+        parentSessionKey,
+      })?.model;
       const fallbackId = params.message.id;
-      const { channelName, channelDescription, cfg, agentId } = params;
       void (async (): Promise<void> => {
         try {
           const fallbackName = sanitizeDiscordThreadName("", fallbackId);

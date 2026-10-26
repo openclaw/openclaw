@@ -43,7 +43,6 @@
 .sw-layout {
   display: grid;
   grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
-  align-items: start;
   gap: var(--space-5);
 }
 
@@ -51,6 +50,11 @@
 .sw-detail {
   min-width: 0;
   overflow: hidden;
+}
+
+.sw-layout > .sw-detail {
+  display: flex;
+  flex-direction: column;
 }
 
 .sw-list__head {
@@ -301,11 +305,15 @@
 }
 
 .sw-detail__body {
+  flex: auto;
+  /* Bound intrinsic document height while flex fills the list-sized panel. */
+  height: 70vh;
+  overflow: auto;
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.sw-markdown {
-  max-height: 70vh;
+.sw-markdown,
+.sw-file {
   overflow: auto;
   overflow-wrap: anywhere;
 }
@@ -367,8 +375,6 @@
 .sw-diff__lines,
 .sw-file {
   margin: 0;
-  max-height: 70vh;
-  overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-family: var(--mono);
@@ -470,7 +476,6 @@
 .sw-file {
   padding: var(--space-3) var(--space-4);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .sw-timeline {
@@ -560,5 +565,10 @@
   .sw-layout,
   .sw-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-detail__body {
+    height: auto;
+    max-height: 70vh;
   }
 }

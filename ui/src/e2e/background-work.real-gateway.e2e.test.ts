@@ -34,6 +34,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 let instance: OpenClawTestInstance;
 let provider: Awaited<ReturnType<typeof startBackgroundWorkProvider>>;
 let artifactDir: string;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const screenshots: string[] = [];
 const proof: Record<string, unknown> = {
   provider: "loopback OpenAI Responses fixture; no external live API",
@@ -128,8 +129,10 @@ async function capture(page: Page, name: string, focus: Locator) {
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  await page.screenshot({ path: path.join(artifactDir, name + ".png") });
-  screenshots.push(name + ".png");
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(artifactDir, name + ".png") });
+    screenshots.push(name + ".png");
+  }
   await saveProof();
 }
 
@@ -233,7 +236,9 @@ suite.define(() => {
         proof.stage = "independent subagent list and transcript";
         await openChatSidePanelType(page, "Subagents");
         const subagents = parent.locator("openclaw-chat-subagents-panel");
-        const childOpen = subagents.getByRole("button", { name: fixture.childLabel, exact: true });
+        const childOpen = subagents
+          .locator(".subagents-desktop__open")
+          .filter({ has: page.getByText(fixture.childLabel, { exact: true }) });
         proof.stage = "wait for child row";
         await childOpen.waitFor();
         const childKey = await childOpen
@@ -304,7 +309,7 @@ suite.define(() => {
         expect(processRow).toMatchObject({ status: "running", canStop: true, truncated: false });
         const processOpen = processes.getByRole("button", { name: processRow.name, exact: true });
         await processOpen.click();
-        await processes.getByRole("heading", { name: "Recent output", exact: true }).waitFor();
+        await processes.getByLabel("Recent output", { exact: true }).waitFor();
         expect(await processes.locator("pre").textContent()).toContain(fixture.output);
         const processStop = processes.getByRole("button", {
           name: "Stop " + processRow.name,
@@ -328,10 +333,18 @@ suite.define(() => {
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
         await switchTab("Subagents");
-        await childStop.waitFor();
-        await capture(page, "mobile-subagent-transcript", childStop);
+        const mobileChildStop = detail.getByRole("button", {
+          name: `Stop ${fixture.childLabel}`,
+          exact: true,
+        });
+        await mobileChildStop.waitFor();
+        await capture(page, "mobile-subagent-transcript", mobileChildStop);
         const beforeChildStop = wire.completed.length;
-        await childStop.click();
+        await mobileChildStop.click();
+        await page
+          .getByRole("dialog", { name: "Stop subagent?", exact: true })
+          .getByRole("button", { name: "Stop subagent", exact: true })
+          .click();
         const stoppedChild = await wire.waitFor(
           (rpc) => ["chat.abort", "sessions.abort"].includes(rpc.request.method),
           beforeChildStop,
@@ -366,7 +379,7 @@ suite.define(() => {
         }
         proof.stage = "settle child provider cancellation";
         await provider.wait(provider.childClosed, signal);
-        await childStop.waitFor({ state: "hidden" });
+        await mobileChildStop.waitFor({ state: "hidden" });
         expect(provider.processIsOpen(), "child Stop must not stop parent exec").toBe(true);
         await assertParent();
         proof.childStop = {
@@ -377,8 +390,9 @@ suite.define(() => {
         };
         await detail.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await subagents
-          .locator(".chat-subagents__finished")
-          .getByRole("button", { name: fixture.childLabel, exact: true })
+          .getByRole("list", { name: "Finished", exact: true })
+          .locator(".chat-subagents-mobile__open")
+          .filter({ has: page.getByText(fixture.childLabel, { exact: true }) })
           .waitFor();
 
         proof.stage = "mobile exact process Stop and retained terminal output";
@@ -431,7 +445,7 @@ suite.define(() => {
         await processes.getByText("Stopped", { exact: true }).waitFor();
         await processStop.waitFor({ state: "hidden" });
         await processes.getByRole("button", { name: "Back to Processes", exact: true }).click();
-        const finishedToggle = processes.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = processes.getByRole("button", { name: "Finished 1", exact: true });
         await finishedToggle.waitFor();
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await processOpen.count()).toBe(0);

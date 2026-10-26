@@ -4,7 +4,6 @@ import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
   inspectTailscaleBackendStateWithRunner,
   inspectTailscaleServeGatewayUrlsWithRunner,
-  type TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
 
 /** A prerequisite finding, not authority to enable Tailscale or change exposure. */
@@ -42,7 +41,6 @@ export async function inspectDoctorTailscalePrerequisite(
 export async function collectTailscaleConfigWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  runCommandWithTimeout?: TailscaleStatusCommandRunner;
 }): Promise<string[]> {
   const config = params.cfg;
   const gateway = config.gateway;
@@ -55,16 +53,13 @@ export async function collectTailscaleConfigWarnings(params: {
   }
 
   const gatewayPort = resolveGatewayPort(config, params.env ?? process.env);
-  const runCommandWithTimeout: TailscaleStatusCommandRunner =
-    params.runCommandWithTimeout ??
-    ((argv, options) =>
+  const inspection = await inspectTailscaleServeGatewayUrlsWithRunner(
+    gatewayPort,
+    (argv, options) =>
       runUtf8CommandWithTimeout(argv, {
         ...options,
         maxOutputBytes: 400_000,
-      }));
-  const inspection = await inspectTailscaleServeGatewayUrlsWithRunner(
-    gatewayPort,
-    runCommandWithTimeout,
+      }),
     managed,
   );
   if (inspection.status === "unavailable") {

@@ -10,6 +10,7 @@ import { pathForSession } from "../app-session-path-builder.ts";
 import type { SessionPathTarget } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -55,18 +56,6 @@ type ReferenceEntry = {
   promise: Promise<SessionTitleTarget | null>;
   value?: SessionTitleTarget | null;
 };
-
-function titleFromPreview(value: ControlUiSessionPreview): SessionTitle {
-  if (value.status !== "ok") {
-    throw new Error("Session title unavailable");
-  }
-  return {
-    sessionKey: value.sessionKey,
-    agentId: value.agentId,
-    namespace: "chat",
-    title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
-  };
-}
 
 export class SessionLinkTitler {
   private currentClient: GatewayBrowserClient | null = null;
@@ -142,7 +131,7 @@ export class SessionLinkTitler {
     // A code link can acquire an anchor, changing its registration key below.
     const registrations = [...this.registered.values()];
     for (const entry of registrations) {
-      void this.decorate(entry.element, true, targets);
+      void this.decorate(entry.element, targets);
     }
   }
 
@@ -154,7 +143,6 @@ export class SessionLinkTitler {
 
   async decorate(
     element: HTMLElement,
-    load = false,
     targets?: Map<string, SessionTitleTarget | SessionReference | null>,
   ): Promise<void> {
     const entry = this.registered.get(element);
@@ -189,9 +177,6 @@ export class SessionLinkTitler {
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
-      if (!load) {
-        return;
-      }
       try {
         target = await this.resolveReference(target, scope);
       } catch {
@@ -207,7 +192,7 @@ export class SessionLinkTitler {
     }
     const cached = this.cachedOrSeededEntry(target);
     this.stampAnchor(entry, target, cached?.value);
-    if (!load || cached?.value) {
+    if (cached?.value) {
       return;
     }
     try {
@@ -414,16 +399,29 @@ export class SessionLinkTitler {
       return cached.promise;
     }
     const client = this.client;
+    if (
+      !client ||
+      !canCallGatewayMethod(
+        this.context && { ...this.context.gateway.snapshot, client },
+        "controlUi.sessionPreview",
+        "operator.read",
+      )
+    ) {
+      return Promise.resolve(target);
+    }
     const load = async () => {
-      if (!client) {
-        throw new Error("Session title requires a connected Gateway");
+      const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
+        sessionKey: target.sessionKey,
+      });
+      if (value.status !== "ok") {
+        throw new Error("Session title unavailable");
       }
-      const title = titleFromPreview(
-        await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
-          sessionKey: target.sessionKey,
-        }),
-      );
-      return { ...title, namespace: target.namespace };
+      return {
+        sessionKey: value.sessionKey,
+        agentId: value.agentId,
+        namespace: target.namespace,
+        title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
+      };
     };
     const entry: CacheEntry = {
       expiresAt: Date.now() + SUCCESS_CACHE_MS,

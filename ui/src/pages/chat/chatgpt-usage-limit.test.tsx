@@ -18,7 +18,12 @@ afterEach(() => {
 });
 
 it("copies the partner-guideline admin request only when clicked and offers a manual fallback", async () => {
-  const writeText = vi.fn().mockResolvedValue(undefined);
+  const firstWrite = Promise.withResolvers<void>();
+  const retryWrite = Promise.withResolvers<void>();
+  const writeText = vi
+    .fn()
+    .mockReturnValueOnce(firstWrite.promise)
+    .mockReturnValueOnce(retryWrite.promise);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const view = mountSolid(() => <ChatGPTUsageLimit kind="business" presented />);
   flush();
@@ -28,20 +33,26 @@ it("copies the partner-guideline admin request only when clicked and offers a ma
     "I’ve reached the limit for using my ChatGPT plan in OpenClaw. Could you increase our workspace’s usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!";
   expect(view.queryByRole("link", { name: "Manage usage" })).toBeNull();
   copy.click();
+  await vi.waitFor(() => expect(copy.hasAttribute("disabled")).toBe(true));
+  firstWrite.resolve();
   await vi.waitFor(() =>
     expect(view.container.textContent).toContain(
       "Request copied. Send it to your workspace admin.",
     ),
   );
   expect(writeText).toHaveBeenCalledExactlyOnceWith(request);
+  expect(copy.hasAttribute("disabled")).toBe(false);
 
-  writeText.mockRejectedValue(new Error("Clipboard denied"));
   copy.click();
+  await vi.waitFor(() => expect(copy.hasAttribute("disabled")).toBe(true));
+  expect(view.container.textContent).not.toContain("Request copied.");
+  retryWrite.reject(new Error("Clipboard denied"));
   await vi.waitFor(() =>
     expect(view.getByRole("alert").textContent).toContain("Couldn't copy the request."),
   );
   expect(view.container.textContent).not.toContain("Request copied.");
   expect(view.container.querySelector("blockquote")?.textContent).toBe(request);
+  expect(copy.hasAttribute("disabled")).toBe(false);
 });
 
 it("directs consumers to ChatGPT usage settings without an admin request", () => {

@@ -13,7 +13,7 @@ import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recom
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { IconName } from "../../components/icon-data.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -123,7 +123,7 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 export type ChatGoalRecovery = {
   pending: boolean;
   goalId?: string;
-  action?: ChatGoalAction | "edit" | "complete" | "block";
+  action?: ChatGoalAction | "edit" | "replace" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -199,7 +199,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
@@ -224,7 +223,7 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
-      icon?: keyof typeof toolIcons;
+      icon?: IconName;
       label?: string;
       startsTurn?: true;
       boundaryId?: string;
@@ -239,7 +238,11 @@ export type ChatItem =
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
+      /** Total identical failures represented by the latest display notice. */
+      repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
+      /** Retained input that ended interrupted or cancelled and may be dismissed. */
+      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
     }
   | {
       kind: "divider";
@@ -248,7 +251,7 @@ export type ChatItem =
       compactionId?: string;
       systemEvent?: "info";
       label: string;
-      icon?: keyof typeof toolIcons;
+      icon?: IconName;
       metric?: string;
       description?: string;
       timestamp: number;
@@ -392,6 +395,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | ClawHubRecommendation
   | {
       type: "image";
@@ -491,6 +495,8 @@ export type ToolCard = {
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
+  /** Bounded external preview; does not authorize full-message recovery. */
+  catalogTruncated?: boolean;
   toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
@@ -522,3 +528,9 @@ export type ToolCardOutcome =
   | "blocked"
   | "skipped"
   | "unknown";
+
+export type ChatGoalMutationAction = { goalId: string } & (
+  | { action: ChatGoalAction }
+  | { action: "edit"; objective: string }
+  | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
+);

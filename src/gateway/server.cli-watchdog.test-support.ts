@@ -2,83 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createClaudeCliGatewayConfig,
+  createClaudeCliGatewayEnv,
+} from "./server.chat-cli-auth.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
-
-const FREEZE_CONTROLLER = String.raw`const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const root = Number(process.argv[2]);
-const receipt = process.argv[3];
-const cliPid = Number(process.argv[4]);
-const identity = (pid) => {
-  try {
-    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim();
-  } catch {
-    return undefined;
-  }
-};
-if (root !== process.ppid || root <= 1) throw new Error("Controller must own its parent test process");
-const rows = execFileSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
-  .trim().split("\n").map((line) => {
-    const [pid, parent] = line.trim().split(/\s+/).map(Number);
-    return { pid, parent };
-  });
-const descendants = (root, resolve) => {
-  const tree = [resolve(root)];
-  for (let index = 0; index < tree.length; index++) {
-    tree.push(...rows.filter((row) => row.parent === tree[index].pid && row.pid !== process.pid)
-      .map((row) => resolve(row.pid)));
-  }
-  return tree;
-};
-const owned = descendants(root, (pid) => ({ pid, identity: identity(pid) }));
-if (!owned.some((entry) => entry.pid === cliPid)) throw new Error("CLI is not in the owned tree");
-const cliTree = descendants(cliPid, (pid) => owned.find((entry) => entry.pid === pid));
-const stopped = [];
-let finished = false;
-const record = { root, controller: process.pid, owned, armedAt: Date.now() };
-const signal = (entry, name) => {
-  if (entry.identity && identity(entry.pid) === entry.identity) process.kill(entry.pid, name);
-};
-const resume = () => {
-  if (finished) return;
-  finished = true;
-  for (const entry of stopped.slice().reverse()) signal(entry, "SIGCONT");
-  record.resumedAt = Date.now();
-  fs.writeFileSync(receipt, JSON.stringify(record));
-};
-process.on("SIGTERM", () => { resume(); process.exit(143); });
-process.on("SIGINT", () => { resume(); process.exit(130); });
-process.on("exit", resume);
-process.on("disconnect", () => { resume(); process.exit(0); });
-process.on("message", (message) => {
-  if (message === "resume") { resume(); process.exit(0); }
-});
-fs.writeFileSync(receipt, JSON.stringify(record));
-// The test drives the Gateway's clock; its verified CLI tree stops in the OS.
-for (const entry of cliTree.slice().reverse()) {
-  signal(entry, "SIGSTOP");
-  stopped.push(entry);
-}
-const confirmStopped = () => {
-  if (finished) return;
-  for (const entry of stopped) {
-    const state = execFileSync("/bin/ps", ["-p", String(entry.pid), "-o", "state="], { encoding: "utf8" });
-    if (!state.includes("T")) {
-      if (state.includes("Z")) throw new Error("Owned CLI exited before stopping");
-      setImmediate(confirmStopped);
-      return;
-    }
-  }
-  record.stoppedAt = Date.now();
-  fs.writeFileSync(receipt, JSON.stringify(record));
-  process.send("stopped");
-};
-confirmStopped();
-`;
 
 export function createWatchdogClock() {
   let now = 0;
@@ -216,28 +147,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 export async function createWatchdogFixture() {
   const state = await createOpenClawTestState({
     label: "cli-freeze",
-    env: {
-      PATH: undefined,
-      OPENCLAW_PATH_BOOTSTRAPPED: "1",
-      CLAUDE_CONFIG_DIR: undefined,
-      ANTHROPIC_API_KEY: undefined,
-      ANTHROPIC_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
-      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: createClaudeCliGatewayEnv(),
   });
   let gateway: Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>> | undefined;
   const cleanup = () =>
@@ -253,8 +163,6 @@ export async function createWatchdogFixture() {
       () => state.cleanup(),
     );
   try {
-    const controllerScript = state.path("freeze-tree.cjs");
-    await fs.writeFile(controllerScript, FREEZE_CONTROLLER);
     const binDir = state.path("bin");
     const nativeRoot = state.path("native");
     await Promise.all([fs.mkdir(binDir), fs.mkdir(nativeRoot)]);
@@ -273,30 +181,12 @@ export async function createWatchdogFixture() {
         },
       },
     });
-    const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "freeze-fixture";
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          utilityModel: "",
-          heartbeat: { every: "0m" },
-          model: { primary: modelRef },
-          models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-      plugins: {
-        enabled: true,
-        allow: ["anthropic"],
-        entries: {
-          anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } },
-        },
-        slots: { memory: "none" },
-      },
-      tools: { profile: "minimal" },
-      gateway: { auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
+    const cfg = createClaudeCliGatewayConfig(
+      state.workspaceDir,
+      "anthropic/claude-sonnet-4-6",
+      token,
+    );
     gateway = await gatewayFixture.startGatewayWithClient({
       cfg,
       configPath: state.configPath,
@@ -306,7 +196,7 @@ export async function createWatchdogFixture() {
     await gateway.server.startupSettled;
     const backends = resolveRuntimeCliBackends();
     expect(backends.some((backend) => backend.id === "claude-cli")).toBe(true);
-    return { state, gateway, backends, token, controllerScript, cleanup };
+    return { state, gateway, backends, token, cleanup };
   } catch (error) {
     return await runQaGatewayFixture(async () => {
       throw error;

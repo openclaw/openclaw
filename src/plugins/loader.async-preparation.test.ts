@@ -1,4 +1,6 @@
+import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
@@ -9,7 +11,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import * as preparation from "./plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
@@ -21,14 +23,13 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 function fixture() {
   useNoBundledPlugins();
-  const first = writePlugin({
-    id: "first-external",
-    registration: 'api.registerProvider({ id: "first", label: "First", auth: [] });',
-  });
-  const second = writePlugin({
-    id: "second-external",
-    registration: 'api.registerProvider({ id: "second", label: "Second", auth: [] });',
-  });
+  const provider = (id: string, label: string) =>
+    writePlugin({
+      id: `${id}-external`,
+      registration: `api.registerProvider({ id: "${id}", label: "${label}", auth: [] });`,
+    });
+  const first = provider("first", "First");
+  const second = provider("second", "Second");
   return {
     first,
     second,
@@ -45,35 +46,30 @@ function fixture() {
   };
 }
 
-async function isolated<T>(run: () => Promise<T>) {
-  const cache = createPluginCache();
-  try {
-    return await withPluginSourceCaptureStorage(
-      { stateDir: makePluginLoaderTempDir(), placement: "state" },
-      () => withPluginCache(cache, run),
-    );
-  } finally {
-    await retirePluginCache(cache);
-  }
+async function isolated<T>(run: (input: ReturnType<typeof fixture>) => Promise<T>) {
+  await using cache = createPluginCache();
+  return await withPluginSourceCaptureStorage(
+    { stateDir: makePluginLoaderTempDir(), placement: "state" },
+    () => withPluginCache(cache, () => run(fixture())),
+  );
 }
 
-it("waits for selected external source acquisition before publishing registrations", async () => {
-  const { options } = fixture();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const prepare = preparation.preparePluginGenerationArtifact;
-  const detail = vi.fn();
-  const now = performance.now.bind(performance);
-  let preparationDelay = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now() + preparationDelay);
-  let published = false;
-  vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
-    entered.resolve();
-    await release.promise;
-    preparationDelay += 1_000;
-    return prepare(params);
-  });
-  await isolated(async () => {
+it("waits for selected external source acquisition before publishing registrations", () =>
+  isolated(async ({ options }) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const prepare = preparation.preparePluginGenerationArtifact;
+    const detail = vi.fn();
+    const now = performance.now.bind(performance);
+    let preparationDelay = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now() + preparationDelay);
+    let published = false;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      entered.resolve();
+      await release.promise;
+      preparationDelay += 1_000;
+      return prepare(params);
+    });
     const loading = loadOpenClawPluginsAsync({ ...options, startupTrace: { detail } }).then(
       (registry) => {
         published = true;
@@ -101,46 +97,78 @@ it("waits for selected external source acquisition before publishing registratio
       expect(metrics.modulePreparationMs).toBeGreaterThanOrEqual(1_000);
       expect(metrics.modulePreparationMs).toBeLessThanOrEqual(metrics.loadMs);
     }
-  });
-});
+  }));
 
-it("records acquisition failure for one plugin and still loads its sibling", async () => {
-  const { first, second, options } = fixture();
-  const prepare = preparation.preparePluginGenerationArtifact;
-  vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
-    if (params.rootDir === first.dir) {
-      throw new Error("source acquisition failed");
-    }
-    return prepare(params);
-  });
-  await isolated(async () => {
+it("records acquisition failure for one plugin and still loads its sibling", () =>
+  isolated(async ({ first, second, options }) => {
+    const prepare = preparation.preparePluginGenerationArtifact;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      if (params.rootDir === first.dir) {
+        throw new Error("source acquisition failed");
+      }
+      return prepare(params);
+    });
+    const invalid = writePlugin({
+      id: "invalid-external",
+      registration: "throw new Error('invalid config must not execute');",
+      configSchema: { type: "object", required: ["missing"] },
+    });
+    options.config.plugins.allow.push(invalid.id);
+    options.config.plugins.load.paths.splice(1, 0, invalid.file);
     const registry = await loadOpenClawPluginsAsync(options);
+    expect(
+      registry.diagnostics.filter(({ level }) => level === "error").map(({ pluginId }) => pluginId),
+    ).toEqual([first.id, invalid.id]);
+    expect(registry.plugins.map(({ id }) => id)).toEqual([first.id, invalid.id, second.id]);
     expect(registry.plugins.find((plugin) => plugin.id === first.id)?.status).toBe("error");
     expect(registry.plugins.find((plugin) => plugin.id === second.id)?.status).toBe("loaded");
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["Second"]);
-  });
-});
+  }));
 
-it("keeps synchronous CLI loading independent of worker acquisition", async () => {
-  const { options } = fixture();
-  vi.spyOn(preparation, "preparePluginGenerationArtifact").mockRejectedValue(
-    new Error("worker unavailable"),
-  );
-  await isolated(async () => {
-    const registry = loadOpenClawPlugins(options);
-    expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
-  });
-});
-
-it("reuses a loaded registry without reacquiring its external sources", async () => {
-  const { options } = fixture();
-  await isolated(async () => {
-    const first = await loadOpenClawPluginsAsync(options);
+it.each(["synchronous CLI", "cached async"])("loads %s without worker acquisition", (mode) =>
+  isolated(async ({ options }) => {
+    const first = mode === "cached async" ? await loadOpenClawPluginsAsync(options) : undefined;
     vi.spyOn(preparation, "preparePluginGenerationArtifact").mockRejectedValue(
-      new Error("new acquisition unavailable"),
+      new Error("worker unavailable"),
     );
-    const second = await loadOpenClawPluginsAsync(options);
-    expect(second).toBe(first);
-    expect(second.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
-  });
-});
+    const registry =
+      mode === "cached async"
+        ? await loadOpenClawPluginsAsync(options)
+        : loadOpenClawPlugins(options);
+    if (first) {
+      expect(registry).toBe(first);
+    }
+    expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
+  }),
+);
+
+it("bounds overlapping external captures and preserves registration order", () =>
+  isolated(async ({ options }) => {
+    const more = Array.from({ length: 4 }, (_, index) =>
+      writePlugin({ id: `extra-${index}`, registration: "" }),
+    );
+    options.config.plugins.allow.push(...more.map(({ id }) => id));
+    options.config.plugins.load.paths.push(...more.map(({ file }) => file));
+    const prepare = preparation.preparePluginGenerationArtifact;
+    let active = 0;
+    let peak = 0;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await nextTurn();
+        return await prepare(params);
+      } finally {
+        active--;
+      }
+    });
+    const registry = await loadOpenClawPluginsAsync(options);
+    expect(peak).toBe(Math.min(4, availableParallelism()));
+    expect(registry.plugins.map(({ id, status }) => [id, status])).toEqual([
+      ["first-external", "loaded"],
+      ["second-external", "loaded"],
+      ...more.map(({ id }) => [id, "loaded"]),
+    ]);
+    expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
+    expect(registry.diagnostics.filter(({ level }) => level === "error")).toEqual([]);
+  }));

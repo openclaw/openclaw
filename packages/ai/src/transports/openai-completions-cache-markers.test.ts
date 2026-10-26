@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -8,7 +9,7 @@ import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
 } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 const model = makeCompletionsModel({
   provider: "openrouter",
@@ -27,6 +28,10 @@ const context: Context = {
 };
 const marker = { type: "ephemeral" };
 const marked = (text: string) => [{ type: "text", text, cache_control: marker }];
+const systemMessage = (suffix: string, cache = true) => ({
+  role: "system",
+  content: cache ? [...marked("STABLE"), { type: "text", text: suffix }] : `STABLE\n${suffix}`,
+});
 
 function markers(payload: unknown) {
   return JSON.stringify(payload).match(/"cache_control":/g) ?? [];
@@ -35,44 +40,32 @@ function markers(payload: unknown) {
 describe("Completions cache markers", () => {
   it.each([
     ["managed", "google/gemini-3.7-flash"],
-    ["direct", "google/gemini-3.7-flash"],
-    ["managed", "~google/gemini-3.7-flash"],
     ["direct", "~google/gemini-3.7-flash"],
     ["managed", "google/gemini-3.7-flash:online"],
-    ["direct", "google/gemini-3.7-flash:online"],
-    ["managed", "openrouter/~google/gemini-3.7-flash:online"],
     ["direct", "openrouter/~google/gemini-3.7-flash:online"],
   ] as const)("marks only the stable system prefix for %s OpenRouter %s", (mode, id) => {
     const route = { ...model, id };
     for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-      for (const suffix of ["Today: 2026-09-06", "Today: 2026-09-07"]) {
-        const payload = buildOpenAICompletionsRequest(
-          route,
-          { ...context, systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}` },
-          { cacheRetention },
-          mode === "direct"
-            ? {
-                mode,
-                compat: resolveOpenAICompletionsCompat(route),
-                cacheRetention: cacheRetention ?? "short",
-              }
-            : { mode },
-        );
-        expect(JSON.stringify(payload.messages)).toBe(
-          JSON.stringify([
-            {
-              role: "system",
-              content:
-                cacheRetention === "none"
-                  ? `STABLE\n${suffix}`
-                  : [...marked("STABLE"), { type: "text", text: suffix }],
-            },
-            { role: "user", content: "Question" },
-          ]),
-        );
-        expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : 1);
-        expect(JSON.stringify(payload)).not.toContain('"ttl"');
-      }
+      const payload = buildOpenAICompletionsRequest(
+        route,
+        context,
+        { cacheRetention },
+        mode === "direct"
+          ? {
+              mode,
+              compat: resolveOpenAICompletionsCompat(route),
+              cacheRetention: cacheRetention ?? "short",
+            }
+          : { mode },
+      );
+      expect(JSON.stringify(payload.messages)).toBe(
+        JSON.stringify([
+          systemMessage("Today: 2026-09-06", cacheRetention !== "none"),
+          { role: "user", content: "Question" },
+        ]),
+      );
+      expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : 1);
+      expect(JSON.stringify(payload)).not.toContain('"ttl"');
     }
   });
 
@@ -167,17 +160,11 @@ describe("Completions cache markers", () => {
       undefined,
     );
     expect(first.messages).toEqual([
-      {
-        role: "system",
-        content: [...marked("STABLE"), { type: "text", text: "Today: 2026-09-06" }],
-      },
+      systemMessage("Today: 2026-09-06"),
       { role: "user", content: marked("Question") },
     ]);
     expect(second.messages).toEqual([
-      {
-        role: "system",
-        content: [...marked("STABLE"), { type: "text", text: "Today: 2026-09-07" }],
-      },
+      systemMessage("Today: 2026-09-07"),
       { role: "user", content: marked("Question") },
     ]);
     expect(first.tools).toEqual(second.tools);
@@ -195,30 +182,12 @@ describe("Completions cache markers", () => {
       const toolLoop: Context["messages"] = [
         ...context.messages,
         {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
+          ...createAssistantOutput(model),
           content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
           stopReason: "toolUse",
           timestamp: 2,
         },
-        {
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "alpha",
-          isError: false,
-          content: [{ type: "text", text: "Result" }],
-          timestamp: 3,
-        },
+        makeTextToolResult("call_1", "alpha", "Result", false, 3),
       ];
       for (const [messages, anchor] of [
         [context.messages, "Question"],

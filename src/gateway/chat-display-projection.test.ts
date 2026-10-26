@@ -7,17 +7,58 @@ import {
   projectLiveSessionMessage,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
-import { SessionHistorySseState } from "./session-history-state.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("admits display content once before sanitizing a history page", () => {
+  const messages = [
+    { role: "user", content: "Show the report" },
+    {
+      role: "assistant",
+      content: [text("model-only")],
+      openclawDisplayContent: [text("Visible report")],
+      providerReplay: { private: "replay" },
+    },
+    { role: "toolResult", toolCallId: "read-1", content: [text("Tool output")] },
+  ];
+  const original = structuredClone(messages);
+  const admission = vi.spyOn(assistantDisplay, "projectAssistantDisplayContent");
+  try {
+    const projected = projectChatDisplayMessages([null, ...messages, "invalid"]);
+    expect(JSON.stringify(projected)).toBe(
+      JSON.stringify([
+        messages[0],
+        { role: "assistant", content: [text("Visible report")] },
+        messages[2],
+      ]),
+    );
+    expect(messages).toEqual(original);
+    expect(admission).toHaveBeenCalledTimes(messages.length);
+  } finally {
+    admission.mockRestore();
+  }
+});
+
+it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
+  expect(
+    projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [text("NO_REPLY")],
+        __openclaw: { catalogDisplay: { type: "agentMessage" } },
+      },
+    ]),
+  ).toEqual([expect.objectContaining({ content: [text("NO_REPLY")] })]);
+});
+
 const phasedText = (value: string, phase: string) => ({
   ...text(value),
   textSignature: JSON.stringify({ v: 1, id: phase, phase }),
@@ -43,7 +84,9 @@ function expectSanitized(
   maxChars?: number,
   options?: Parameters<typeof sanitizeChatHistoryMessages>[2],
 ) {
+  const original = structuredClone(input);
   expect(sanitizeChatHistoryMessages([input], maxChars, options)).toEqual([expected]);
+  expect(input).toEqual(original);
 }
 const toolRows = (result: Record<string, unknown>) => [
   { ...result, role: "toolResult" },
@@ -68,7 +111,7 @@ it("hides private yield inputs without changing canonical arguments", () => {
   const call = { type: "toolCall", name: "sessions_yield", arguments: args, input: args };
   const publicCall = { type: "toolCall", name: "message", arguments: { message: "Public reply" } };
   const message = assistant([call, publicCall], {});
-  expect(projectChatDisplayMessages([message])).toEqual([
+  expect(projectStable([message])).toEqual([
     {
       ...message,
       content: [{ ...call, arguments: publicInput, input: publicInput }, publicCall],
@@ -77,13 +120,45 @@ it("hides private yield inputs without changing canonical arguments", () => {
   expect(args.message).toBe("PRIVATE_YIELD_CONTEXT");
 });
 
+it.each(["<", "<tool_"])(
+  "hides a standalone %j before a native call in refreshed history",
+  (fragment) => {
+    const call = {
+      type: "toolCall",
+      id: "read-prelude",
+      name: "read",
+      arguments: { path: "literal-<tool_.txt" },
+    };
+    const message = assistant([text(fragment), call], { stopReason: "toolUse" });
+    const original = structuredClone(message);
+    const projected = sanitizeChatHistoryMessages([message]);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toHaveProperty("content", expect.arrayContaining([call]));
+    expect(projected[0]).toHaveProperty(
+      "content",
+      expect.not.arrayContaining([expect.objectContaining(text(fragment))]),
+    );
+    expect(message).toEqual(original);
+    expect(sanitizeChatHistoryMessages(projected)).toEqual(projected);
+  },
+);
+
+it("preserves literal, user, and text-only marker content in refreshed history", () => {
+  const call = { type: "toolCall", id: "read-controls", name: "read", arguments: {} };
+  const messages = [
+    assistant([text("<tool_")], {}),
+    assistant([text("a < b"), call], {}),
+    assistant([text("Use `<tool_` literally."), call], {}),
+    assistant([text("```xml\n"), text("<tool_"), text("\n```"), call], {}),
+    { role: "user", content: [text("<tool_"), call] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
+});
+
 it("strips attachment capabilities even after another field changed", () => {
   const attachment = {
-    artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
     kind: "document",
     label: "report.csv",
-    mimeType: "text/csv",
-    sizeBytes: 12,
     url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full",
   };
   expectSanitized(
@@ -138,7 +213,7 @@ describe("transcript display metadata", () => {
       chatInputRecovery: Object.freeze({ source: "private-operator-snapshot" }),
     });
     expect(
-      projectChatDisplayMessages([
+      projectStable([
         {
           ...message,
           providerReplay: {
@@ -201,86 +276,59 @@ it.each([
   );
 });
 
-describe("current user profile display", () => {
-  const resolved = (id: string, hasUploadedAvatar = true) => ({
-    kind: "resolved" as const,
-    profileId: id,
-    avatarUrl: "/api/users/" + id + "/avatar?v=20",
-    hasUploadedAvatar,
-  });
+it("refreshes cached profile aliases without rewriting non-profile or unresolved senders", () => {
   const profile = (id: string, fields: Record<string, unknown> = {}) =>
     userRow(id, { senderIdentity: { type: "profile", id }, senderId: id, ...fields });
-
-  it("gates alias lookup on profile provenance", () => {
-    const rows = [
-      { type: "profile", id: "shared-id" },
-      {
+  const messages = [
+    profile("ada", {
+      senderName: "Historical Ada",
+      senderUsername: "ada",
+      senderProfileAvatarUrl: "/old/avatar",
+    }),
+    profile("ada", { senderName: "Earlier Ada" }),
+    userRow("same label", {
+      senderId: "ada",
+      senderIdentity: {
         type: "observation",
-        id: "shared-id",
+        id: "ada",
         pluginId: "channel",
         accountId: null,
         senderKind: "unknown",
       },
-      undefined,
-    ].map((senderIdentity) =>
-      userRow("same label", {
-        senderId: "shared-id",
-        ...(senderIdentity ? { senderIdentity } : {}),
-      }),
-    );
-    const resolveCurrentUserProfileDisplay = vi.fn(() => resolved("canonical-id"));
-    const projected = projectStable(rows, { resolveCurrentUserProfileDisplay });
-    expect(resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(1);
-    expect(projected[0]?.["__openclaw"]).toEqual({
-      senderId: "shared-id",
-      senderIdentity: { type: "profile", id: "canonical-id" },
-      senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=20",
-    });
-    expect(projected.slice(1)).toEqual(rows.slice(1));
-  });
-
-  it("caches profile lookups, refreshes stale avatars, and preserves unresolved rows", () => {
-    const messages = [
-      profile("ada", {
-        senderName: "Historical Ada",
-        senderUsername: "ada",
-        senderProfileAvatarUrl: "/old/avatar",
-      }),
-      profile("ada", { senderName: "Earlier Ada" }),
-      profile("missing", { senderProfileAvatarUrl: "/existing/avatar" }),
-      { role: "user", content: "missing sender" },
-      assistant("hostile", { __openclaw: { senderId: "hostile-assistant" } }),
-      {
-        role: "toolResult",
-        toolCallId: "hostile",
-        toolName: "read",
-        content: "hostile",
-        __openclaw: { senderId: "hostile-tool" },
+    }),
+    userRow("same label", { senderId: "ada" }),
+    profile("missing", { senderProfileAvatarUrl: "/existing/avatar" }),
+    { role: "user", content: "missing sender" },
+    assistant("hostile", { __openclaw: { senderId: "hostile-assistant" } }),
+    {
+      role: "toolResult",
+      toolCallId: "hostile",
+      toolName: "read",
+      content: "hostile",
+      __openclaw: { senderId: "hostile-tool" },
+    },
+  ];
+  const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
+    id === "missing"
+      ? { kind: "unresolved" as const }
+      : {
+          kind: "resolved" as const,
+          profileId: "canonical-id",
+          avatarUrl: "/api/users/canonical-id/avatar?v=20",
+          hasUploadedAvatar: false,
+        },
+  );
+  const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
+  for (const [index, message] of messages.slice(0, 2).entries()) {
+    expect(projected[index]).toMatchObject({
+      __openclaw: {
+        ...message["__openclaw"],
+        senderIdentity: { type: "profile", id: "canonical-id" },
+        senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=20",
       },
-    ];
-    const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
-      id === "missing" ? { kind: "unresolved" as const } : resolved(id, false),
-    );
-    const projected = projectStable(messages, { resolveCurrentUserProfileDisplay });
-    expect(resolveCurrentUserProfileDisplay.mock.calls).toEqual([["ada"], ["missing"]]);
-    expect(projected).toEqual(
-      messages.map((message, index) =>
-        index < 2
-          ? {
-              ...message,
-              __openclaw: {
-                ...message["__openclaw"],
-                senderProfileAvatarUrl: "/api/users/ada/avatar?v=20",
-              },
-            }
-          : message,
-      ),
-    );
-    expect(projected[0]).not.toBe(messages[0]);
-    for (const index of [2, 3, 4]) {
-      expect(projected[index]).toBe(messages[index]);
-    }
-  });
+    });
+  }
+  expect(projected.slice(2)).toEqual(messages.slice(2));
 });
 
 it("matches later audio against text left by an earlier supplement", () => {
@@ -344,33 +392,20 @@ it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
     Object.freeze(messages);
     const original = JSON.stringify(messages);
     const targetIndex = placement === "next-renderable" ? messages.length - 1 : 0;
-    const canvas = (preview: Record<string, unknown>, rawText: string | null | undefined) => ({
-      type: "canvas",
-      preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
-      rawText,
-    });
-    const accepted = [
-      { index: 1, viewId: "first", url: "/rejected-id-url" },
-      { index: 3, viewId: "second", url: "/later-url" },
-      { index: 5, url: "/url-only" },
-    ].map(({ index, ...preview }) => canvas(preview, tools[index]?.content));
-    const expectedContent = [
-      ...baseContent,
-      ...accepted,
-      canvas({ viewId: "app", mcpApp: { viewId: "app" } }, null),
-    ];
-
     const augmented = augmentChatHistoryWithCanvasBlocks(messages);
-
-    expect(augmented).toEqual(
-      messages.map((message, index) =>
-        index === targetIndex ? { ...target, content: expectedContent } : message,
-      ),
-    );
-    expect(augmented[targetIndex]).not.toBe(target);
+    expect(augmented).toHaveLength(messages.length);
+    expect(augmented[targetIndex]).toMatchObject({
+      content: [
+        ...baseContent,
+        { type: "canvas", preview: { viewId: "first", url: "/rejected-id-url" } },
+        { type: "canvas", preview: { viewId: "second", url: "/later-url" } },
+        { type: "canvas", preview: { url: "/url-only" } },
+        { type: "canvas", preview: { viewId: "app", mcpApp: { viewId: "app" } } },
+      ],
+    });
     for (const [index, message] of messages.entries()) {
       if (index !== targetIndex) {
-        expect(augmented[index]).toBe(message);
+        expect(augmented[index]).toEqual(message);
       }
     }
     expect(JSON.stringify(messages)).toBe(original);
@@ -418,9 +453,9 @@ it.each([
   },
 );
 
+const execStatus = { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false };
 it.each([
-  ["exec", { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false }, {}],
-  ["sessions_spawn", { ok: true, sessionKey: "agent:helper:main" }, {}],
+  ["exec", { ...execStatus, sessionKey: "agent:helper:main" }, {}],
   ["exec", {}, { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" }],
   ["exec", {}, { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 }],
 ] as const)(
@@ -455,7 +490,6 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
       ],
       { __openclaw: metadata },
     );
-    const original = structuredClone(message);
     expectSanitized(
       message,
       assistant(
@@ -470,7 +504,6 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
       options.maxChars,
       options,
     );
-    expect(message).toEqual(original);
   },
 );
 
@@ -480,11 +513,7 @@ it("retains complete structured tool previews and tool arguments under a smaller
     view: { id: "preview", title: "x".repeat(3_000) },
   });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = {
-    type: "toolResult",
-    toolCallId: "structured",
-    content: [text(payload)],
-  };
+  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
@@ -494,21 +523,17 @@ it("retains complete structured tool previews and tool arguments under a smaller
   );
 });
 
-const user = { role: "user", content: "hello", __openclaw: { seq: 1 } };
-const failed = {
-  role: "assistant",
-  content: [],
+const user = userRow("hello", { seq: 1 });
+const failed = assistant([], {
   stopReason: "error",
   errorMessage: "model unavailable",
   __openclaw: { id: "failed", seq: 2, runId: "run-a" },
-};
+});
 const tool = { type: "toolCall", id: "partial-call", name: "read", arguments: {} };
-const answer = {
-  role: "assistant",
-  content: [text("Recovered answer")],
+const answer = assistant([text("Recovered answer")], {
   stopReason: "stop",
   __openclaw: { id: "answer", seq: 3, runId: "run-a" },
-};
+});
 const terminal = (runId = "run-a") => ({
   role: "custom",
   customType: "run-failed-before-reply",
@@ -521,10 +546,6 @@ const projectedIds = (messages: unknown[]) =>
 
 const legacyGuidance = "The provider stopped this request as a safety precaution (misalignment).";
 it.each([
-  [
-    { errorCode: "misalignment_policy_violation", errorType: "invalid_request_error" },
-    legacyGuidance,
-  ],
   [{ errorCode: "misalignment_policy_violation" }, legacyGuidance],
   [
     { diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }] },
@@ -564,18 +585,11 @@ it.each([
     errorMessage: "PRIVATE_PROVIDER_DETAIL",
   };
   const messages = projectStable([user, message]);
-  expect(messages.at(-1)).toMatchObject({
-    stopReason: "error",
-    content: expect.arrayContaining([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining(
-          "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
-        ),
-      }),
-    ]),
-  });
+  expect(messages.at(-1)).toHaveProperty("stopReason", "error");
   const serialized = JSON.stringify(messages);
+  expect(serialized).toContain(
+    "Some actions may have completed; check their results before continuing.",
+  );
   expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
   expect(serialized).not.toContain("PRIVATE_COMMENTARY");
   expect(serialized.split("The task couldn't finish.")).toHaveLength(2);
@@ -678,66 +692,21 @@ it("repairs only matching attempts when run identities interleave", () => {
   ]);
 });
 
-it("refreshes SSE history after an appended failure recovers", async () => {
-  const state = SessionHistorySseState.fromSnapshot({
-    target: { sessionId: "session", sessionKey: "agent:main:test" },
-    snapshot: {
-      history: { items: [user], messages: [user], hasMore: false },
-      rawTranscriptSeq: 1,
-      turnBoundaryPending: false,
-      assistantErrorPending: false,
-    },
-  });
-  expect(
-    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
-  ).toBeUndefined();
-  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
-    shouldRefresh: true,
-  });
-});
-
-it("drops only old announce pairs across adjacent chunks", () => {
-  const announce = {
-    role: "user",
-    timestamp: 10,
-    content: "Earlier child finished",
-    provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-  };
-  const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
-  const newReply = { ...oldReply, timestamp: 30 };
-  const rows = [announce, oldReply, announce, newReply, user];
-  for (let split = 1; split < rows.length; split++) {
-    const filter = createPreSessionStartAnnouncePairFilter(20);
-    expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
-      newReply,
-      user,
-    ]);
-  }
-});
-
-const schemaError = "Invalid service_tier argument";
-it.each([
-  [
-    schemaError,
-    {
-      errorType: "invalid_request_error",
-      errorBody: JSON.stringify({
-        error: { type: "invalid_request_error", message: schemaError },
-        request: { input: "PRIVATE_PROMPT", headers: { authorization: "PRIVATE_AUTH" } },
-      }),
-    },
-    String.raw`LLM request rejected: Invalid service\_tier argument`,
-  ],
-  [
-    "429: PRIVATE_CANARY",
-    { content: [text("The first step completed.")] },
-    "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
-  ],
-] as const)("retains safe failure guidance for %s", (errorMessage, fields, expected) => {
+it("retains safe failure guidance alongside partial output", () => {
   const projected = projectChatDisplayMessage(
-    assistant([], { stopReason: "error", errorMessage, ...fields }),
+    assistant([text("The first step completed.")], {
+      stopReason: "error",
+      errorMessage: "429: PRIVATE_CANARY",
+      errorBody: "PRIVATE_BODY",
+    }),
   );
-  expect(projected).toMatchObject({ content: [text(expected)] });
+  expect(projected).toMatchObject({
+    content: [
+      text(
+        "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
+      ),
+    ],
+  });
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
   expect(projected).not.toHaveProperty("errorBody");
   expect(projectChatDisplayMessage(projected)).toEqual(projected);

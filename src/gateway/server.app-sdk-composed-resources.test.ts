@@ -1,13 +1,12 @@
 // Scenario-owned proof for composed preview App SDK Gateway contracts.
 import fs from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import type { WebSocket } from "ws";
 import {
   AgentParamsSchema,
   ArtifactsListParamsSchema,
@@ -22,16 +21,18 @@ import {
   ArtifactsGetResultSchema,
   ArtifactsListResultSchema,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import { collectUntil } from "../../packages/sdk/src/client.test-support.js";
 import {
   GatewayClientTransport,
   OpenClaw,
   type OpenClawEvent,
 } from "../../packages/sdk/src/index.js";
+import { startSdkWebSocketServer } from "../../packages/sdk/src/transport.websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { isSessionHistoryWorkerCold } from "../config/sessions/session-transcript-worker-runtime.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../infra/fs-safe.js";
@@ -79,7 +80,7 @@ type FakeGateway = {
   close: () => Promise<void>;
 };
 
-const fakeServers: WebSocketServer[] = [];
+const fakeServers: Awaited<ReturnType<typeof startSdkWebSocketServer>>[] = [];
 
 function sendJson(socket: WebSocket, payload: JsonObject): void {
   socket.send(JSON.stringify(payload));
@@ -96,15 +97,6 @@ function assertSchema(schema: TSchema, value: unknown, label: string): void {
   if (!Value.Check(schema, value)) {
     throw new Error(`${label} failed Gateway schema validation`);
   }
-}
-
-async function closeFakeServer(server: WebSocketServer): Promise<void> {
-  for (const socket of server.clients) {
-    socket.terminate();
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }
 
 function workerRecord(): WorkerEnvironmentServiceRecord {
@@ -127,11 +119,9 @@ function workerRecord(): WorkerEnvironmentServiceRecord {
 }
 
 async function createFakeGateway(): Promise<FakeGateway> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  fakeServers.push(server);
-  await new Promise<void>((resolve) => {
-    server.once("listening", resolve);
-  });
+  const fixture = await startSdkWebSocketServer();
+  const { server } = fixture;
+  fakeServers.push(fixture);
   let seq = 1;
   const environmentContext = {
     workerEnvironmentService: {
@@ -298,28 +288,16 @@ async function createFakeGateway(): Promise<FakeGateway> {
     });
   });
 
-  const address = server.address() as AddressInfo;
   return {
-    url: `ws://127.0.0.1:${address.port}`,
+    url: fixture.url,
     close: async () => {
-      const index = fakeServers.indexOf(server);
+      const index = fakeServers.indexOf(fixture);
       if (index >= 0) {
         fakeServers.splice(index, 1);
       }
-      await closeFakeServer(server);
+      await fixture.close();
     },
   };
-}
-
-async function collectUntilCompleted(events: AsyncIterable<OpenClawEvent>) {
-  const collected: OpenClawEvent[] = [];
-  for await (const event of events) {
-    collected.push(event);
-    if (event.type === "run.completed") {
-      break;
-    }
-  }
-  return collected;
 }
 
 async function proveDeterministicGatewayContracts(): Promise<void> {
@@ -340,12 +318,20 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       idempotencyKey: "sdk-a2-run",
     });
     const [appEvents, runEvents, result] = await Promise.all([
-      withTimeout(collectUntilCompleted(oc.events()), 2_000, {
-        message: "timed out waiting for app-wide SDK events",
-      }),
-      withTimeout(collectUntilCompleted(run.events()), 2_000, {
-        message: "timed out waiting for per-run SDK events",
-      }),
+      withTimeout(
+        collectUntil(oc.events(), (event) => event.type === "run.completed"),
+        2_000,
+        {
+          message: "timed out waiting for app-wide SDK events",
+        },
+      ),
+      withTimeout(
+        collectUntil(run.events(), (event) => event.type === "run.completed"),
+        2_000,
+        {
+          message: "timed out waiting for per-run SDK events",
+        },
+      ),
       run.wait({ timeoutMs: 2_000 }),
     ]);
     const expectedEvents = (
@@ -434,7 +420,6 @@ async function proveRealGatewayContracts(): Promise<void> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-a2-gateway-"));
   const sessionKey = "agent:main:sdk-real-gateway";
   const sessionId = "sdk-real-gateway-session";
-  const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
   const previousSessionStorePath = testState.sessionStorePath;
   const runId = "sdk-real-gateway-run";
   const timeoutRunId = "sdk-real-gateway-timeout";
@@ -470,38 +455,25 @@ async function proveRealGatewayContracts(): Promise<void> {
   testState.sessionStorePath = path.join(tempDir, "sessions.json");
 
   try {
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: sessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "sdk-artifact-message",
-          parentId: null,
-          timestamp: "2026-08-03T00:00:00.000Z",
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "file",
-                data: "aGVsbG8=",
-                mimeType: "text/plain",
-                title: "sdk-result.txt",
-              },
-            ],
-            __openclaw: { seq: 2, runId: "sdk-artifact-run" },
-          },
-        },
-      )}\n`,
-    );
     await writeSessionStore({
-      entries: {
-        [sessionKey]: {
-          sessionId,
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-      },
+      entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } },
     });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionKey, sessionId, storePath: testState.sessionStorePath },
+      {
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: [
+                { type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "sdk-result.txt" },
+              ],
+            },
+          },
+        ],
+        updateMode: "none",
+      },
+    );
 
     const token = "sdk-real-gateway-token";
     started = await startServer(token, { controlUiEnabled: false });
@@ -526,7 +498,7 @@ async function proveRealGatewayContracts(): Promise<void> {
       runId,
       status: "accepted",
     });
-    const eventsPromise = collectUntilCompleted(run.events());
+    const eventsPromise = collectUntil(run.events(), (event) => event.type === "run.completed");
     emitAgentEvent({
       runId,
       stream: "lifecycle",
@@ -675,7 +647,7 @@ describe("composed preview App SDK Gateway contracts", () => {
   installGatewayTestHooks({ scope: "test" });
 
   afterEach(async () => {
-    await Promise.all(fakeServers.splice(0).map(closeFakeServer));
+    await Promise.all(fakeServers.splice(0).map((fixture) => fixture.close()));
   });
 
   it("proves event, run, artifact, environment, and schema contracts", async () => {

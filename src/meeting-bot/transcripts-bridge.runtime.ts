@@ -2,6 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
@@ -57,7 +58,6 @@ export function createMeetingDurableTranscriptBridge<
   options: MeetingDurableTranscriptsOptions;
 }): MeetingDurableTranscriptBridge<TSession> {
   const config = resolveTranscriptsConfig(params.options.config);
-  const runInBackground = params.options.runInBackground ?? (<T>(run: () => T) => run());
   const isEnabled = params.isEnabled ?? (() => config.enabled);
   const stateDir = params.options.stateDir ?? resolveStateDir();
   const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -90,6 +90,9 @@ export function createMeetingDurableTranscriptBridge<
       return isEnabled();
     },
     async start(session, capture) {
+      const runInBackground =
+        pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
+        (<T>(run: () => T) => run());
       await lifecycleTasks.enqueue(session.id, async () => {
         if (!isEnabled() || captures.has(session.id)) {
           return;
@@ -158,9 +161,8 @@ export function createMeetingDurableTranscriptBridge<
             }
           }
         };
-        // The join request that starts capture ends long before capture does. Install the
-        // timer and deliver each tick in the plugin's background context, so captures run
-        // with the plugin instance's authority instead of that request's.
+        // Capture belongs to this plugin instance, not the request that joined.
+        // Enter again per tick so retirement rejects new work before dispatch.
         const timer = runInBackground(() =>
           setInterval(() => {
             // polling covers both initialize() and capture, so session writes are
@@ -169,24 +171,18 @@ export function createMeetingDurableTranscriptBridge<
               return;
             }
             active.polling = true;
-            let tick: Promise<void>;
-            try {
-              tick = runInBackground(() =>
-                lifecycleTasks.enqueue(session.id, async () => {
-                  if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
-                    return;
-                  }
-                  await initialize();
-                  await capture();
-                }),
-              );
-            } catch (error) {
-              // The runner refuses new work synchronously once the plugin stops admitting it.
-              reportCaptureError(session.id, error);
-              active.polling = false;
-              return;
-            }
-            void tick
+            void Promise.resolve()
+              .then(() =>
+                runInBackground(() =>
+                  lifecycleTasks.enqueue(session.id, async () => {
+                    if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
+                      return;
+                    }
+                    await initialize();
+                    await capture();
+                  }),
+                ),
+              )
               .catch((error: unknown) => reportCaptureError(session.id, error))
               .finally(() => {
                 active.polling = false;
@@ -272,10 +268,8 @@ export function createMeetingDurableTranscriptBridge<
           return false;
         }
         active.closing = true;
-        if (active.timer) {
-          clearInterval(active.timer);
-          delete active.timer;
-        }
+        clearInterval(active.timer);
+        delete active.timer;
         const summariesStopped = active.summaryUpdates?.stop();
         try {
           let initializationError: Error | undefined;

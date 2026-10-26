@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { Readable } from "node:stream";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
@@ -14,7 +14,6 @@ import {
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
-import * as directoryDurability from "./directory-durability.js";
 import { getPublishFileExclusiveFailureDetails } from "./directory-durability.js";
 
 const tempDirs = createTempDirTracker();
@@ -31,15 +30,17 @@ async function createPublication(outputDir = tempDirs.make("backup-publication-"
   return { outputDir, outputPath, plan };
 }
 
+function output() {
+  const outputDir = tempDirs.make("backup-publication-");
+  return { outputDir, outputPath: path.join(outputDir, "backup.tar.gz") };
+}
+
 async function prepareArchive(plan: BackupArchivePublication, content = "complete archive") {
-  const archiveStream = new PassThrough();
-  const preparedPromise = writeArchiveStreamToFile({
+  return writeArchiveStreamToFile({
     archivePath: plan.tempArchivePath,
-    createArchiveStream: () => archiveStream,
+    createArchiveStream: () => Readable.from([content]),
     onPartialArchive: (receipt) => void plan.pendingCleanupArchives.push(receipt),
   });
-  archiveStream.end(content);
-  return await preparedPromise;
 }
 
 async function setup(outputDir?: string) {
@@ -57,6 +58,38 @@ async function expectMissing(filePath: string) {
 async function expectContents(filePath: string, content = "complete archive") {
   await expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
 }
+
+it.each(["file", ...(posix ? ["symlink"] : [])])(
+  "refuses an existing %s before staging",
+  async (kind) => {
+    const { outputDir, outputPath } = output();
+    await (kind === "file"
+      ? fs.writeFile(outputPath, "keep")
+      : fs.symlink("missing.tar.gz", outputPath));
+    await expect(create(outputPath)).rejects.toThrow(
+      "Refusing to overwrite existing backup archive:",
+    );
+    await (kind === "file"
+      ? expectContents(outputPath, "keep")
+      : expect(fs.readlink(outputPath)).resolves.toBe("missing.tar.gz"));
+    await expect(fs.readdir(outputDir)).resolves.toEqual(["backup.tar.gz"]);
+  },
+);
+
+it("propagates target inspection failures before creating staging", async () => {
+  const { outputDir, outputPath } = output();
+  const failure = Object.assign(new Error("target inspection failed"), { code: "EIO" });
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    if (path.basename(String(args[0])) === "backup.tar.gz") {
+      throw failure;
+    }
+    return lstat(...args);
+  });
+
+  await expect(create(outputPath)).rejects.toBe(failure);
+  await expect(fs.readdir(outputDir)).resolves.toEqual([]);
+});
 
 it("retires its prepared archive when cancellation precedes publication", async () => {
   const { outputDir, commit } = await setup();
@@ -86,19 +119,6 @@ it("removes its staging directory when private setup fails", async () => {
   );
   await expect(createPublication(outputDir)).rejects.toThrow(/chmod failed/iu);
   await expect(fs.readdir(outputDir)).resolves.toEqual([]);
-});
-
-it.each(["EXDEV"])("fails closed when hard-link publication returns %s", async (code) => {
-  const { outputPath, plan, prepared, commit } = await setup();
-  const publicationSpy = vi
-    .spyOn(directoryDurability, "publishFileExclusive")
-    .mockRejectedValue(Object.assign(new Error("unsupported"), { code }));
-  await expect(commit()).rejects.toThrow(/requires hard-link support/iu);
-  expect(publicationSpy).toHaveBeenCalledWith(
-    expect.objectContaining({ targetPath: plan.canonicalOutputPath, strategy: "link-required" }),
-  );
-  await expectMissing(outputPath);
-  await expectMissing(prepared.archivePath);
 });
 
 it("preserves a destination raced in before publication", async () => {

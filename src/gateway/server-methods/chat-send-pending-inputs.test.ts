@@ -3,11 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -33,10 +32,7 @@ import {
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -86,6 +82,14 @@ function expectNotStarted(respond: RespondFn) {
 async function expectUncommitted(fixture: FollowupFixture) {
   expect(await pending(fixture)).toEqual({ items: [], total: 0 });
   expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+}
+function expectInFlight(respond: RespondFn, runId: string) {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ runId, status: "in_flight" }),
+    undefined,
+    expect.objectContaining({ cached: true }),
+  );
 }
 function expectNoPlacementQueries(queries: string[]) {
   expect(queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual([]);
@@ -252,8 +256,7 @@ describe("ordinary chat input admission", () => {
         message: "One or more mentioned people are unavailable. Select the recipients again.",
       }),
     );
-    expect(await pending(fixture)).toEqual({ items: [], total: 0 });
-    expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+    await expectUncommitted(fixture);
     setUserProfileRole(fixture.bobClient.authenticatedUserProfile.profileId, "administrator");
     fixture.client.invalidated = true;
     rejected(await fixture.request("users.mentionable", { sessionKey: fixture.scope.sessionKey }));
@@ -289,8 +292,7 @@ describe("ordinary chat input admission", () => {
           undefined,
           expect.objectContaining({ code: "FORBIDDEN" }),
         );
-        expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
-        expect(await pending(fixture)).toEqual({ items: [], total: 0 });
+        await expectUncommitted(fixture);
         expect(await fixture.read()).toEqual([]);
       } finally {
         release.resolve();
@@ -427,12 +429,7 @@ describe("ordinary chat input admission", () => {
     await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
     const accepted = await pending(fixture);
     const reconnect = await fixture.send();
-    expect(reconnect).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
-      undefined,
-      expect.objectContaining({ cached: true }),
-    );
+    expectInFlight(reconnect, fixture.params.idempotencyKey);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(await pending(fixture)).toMatchObject({
       total: 1,
@@ -527,20 +524,6 @@ describe("ordinary chat input admission", () => {
       }
     },
   );
-
-  it("keeps internal system inputs outside ordinary pending-message custody", async () => {
-    await using fixture = await createBrowserFollowupFixture();
-    fixture.client.connect.client = { id: "cli", mode: "cli", version: "test", platform: "test" };
-    fixture.params.systemInputProvenance = {
-      kind: "internal_system",
-      sourceTool: "system_fixture",
-    };
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[0]).toBe(true);
-    expect(await pending(fixture)).toEqual({ items: [], total: 0 });
-    const recorder = await fixture.dispatchedRecorder;
-    expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
-  });
 
   it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
     "keeps idle input custody with its runtime (%j)",
@@ -676,8 +659,7 @@ describe("ordinary chat input admission", () => {
         expect.anything(),
       );
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      await expectUncommitted(fixture);
       expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
       if (!rejectedInput) {
         throw new Error("Expected the rejected RPC source input");
@@ -685,13 +667,7 @@ describe("ordinary chat input admission", () => {
       await rejectedInput.settlement.promise;
 
       refusal.mockRestore();
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "started" }),
-        undefined,
-        expect.anything(),
-      );
+      expectStarted(await fixture.send(), { runId: fixture.params.idempotencyKey });
       expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
         total: 1,
         items: [{ state: "queued", message: { content: fixture.approvedContent } }],
@@ -859,10 +835,14 @@ describe("ordinary chat input admission", () => {
       }
 
       const retried = await fixture.send();
-      if (disposition === "consumed") {
+      if (disposition !== "changed-payload") {
         expect(retried).toHaveBeenCalledWith(
           true,
-          { runId: fixture.params.idempotencyKey, status: "ok" },
+          {
+            runId: fixture.params.idempotencyKey,
+            status: "ok",
+            ...(disposition === "consumed" ? { messageSeq: 2 } : {}),
+          },
           undefined,
           expect.objectContaining({ cached: true }),
         );
@@ -876,15 +856,17 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it.for([false, true])(
-    "re-admits an unconsumed browser input after restart with fresh custody (attachment: %s)",
-    async (attachment, { signal }) => {
+  it.for([
+    { restart: true, attachment: false },
+    { restart: true, attachment: true },
+    { restart: false, attachment: false },
+  ])(
+    "acknowledges interrupted recorded input without dispatching again (%j)",
+    async ({ restart, attachment }) => {
       await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
-      const resumedRelease = createDeferred();
-      const resumedRecorder = createDeferred<UserTurnTranscriptRecorder>();
       const profile = ensureProfileForEmail("restart-input@example.test");
       setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Input author");
-      if (!attachment) {
+      if (restart && !attachment) {
         delete fixture.params.sessionId;
       }
       if (attachment) {
@@ -899,95 +881,47 @@ describe("ordinary chat input admission", () => {
       }
       try {
         const { recorder: originalRecorder, original } = await admitPending(fixture);
-        rotateAgentEventLifecycleGeneration();
+        if (restart) {
+          rotateAgentEventLifecycleGeneration();
+        } else {
+          originalRecorder.finishPendingInput?.("interrupted");
+          await originalRecorder.waitForPendingInputSettlement?.();
+        }
         await fixture.finishDispatch();
         expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
         expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
         fixture.context.dedupe.clear();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-        dispatchInboundMessageMock.mockImplementation(async (options: unknown) => {
-          const { replyOptions } = options as Parameters<typeof dispatchInboundMessage>[0];
-          if (replyOptions?.userTurnTranscriptRecorder) {
-            resumedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
-          }
-          await resumedRelease.promise;
-          return {};
-        });
-
-        // Exercise the actual browser reconnect envelope through request normalization.
-        Object.assign(fixture.params, {
-          sessionId: fixture.scope.sessionId,
-          __controlUiReconnectResume: true,
-        });
+        if (restart) {
+          // Exercise the browser reconnect envelope through request normalization.
+          Object.assign(fixture.params, {
+            sessionId: fixture.scope.sessionId,
+            __controlUiReconnectResume: true,
+          });
+        }
+        dispatchInboundMessageMock.mockClear();
         const ack = await fixture.send();
-        expectStarted(ack, { runId: fixture.params.idempotencyKey });
-        const resumed = await withinTest(resumedRecorder.promise, signal);
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "queued" }]);
-        expect(() => originalRecorder.withPendingInput?.(() => {})).toThrow("ownership ended");
-        const committed = await resumed.persistApproved();
-        expect(committed).toMatchObject({ appended: true, messageId: original?.id });
-        expect(committed?.message).toEqual(original?.message);
+        expect(ack).toHaveBeenCalledWith(
+          true,
+          { runId: fixture.params.idempotencyKey, status: "ok" },
+          undefined,
+          expect.objectContaining({ cached: true }),
+        );
+        expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
+        if (restart) {
+          expect(() => originalRecorder.withPendingInput?.(() => {})).toThrow("ownership ended");
+        }
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
         expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-        expect((await pending(fixture)).items).toEqual([]);
       } finally {
-        resumedRelease.resolve();
+        await fixture.finishDispatch();
       }
     },
   );
 
-  it("retries an interrupted chat input in the same lifecycle once under its original identity", async ({
-    signal,
-  }) => {
-    await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
-    const resumedRecorder = createDeferred<UserTurnTranscriptRecorder>();
-    const resumedRelease = createDeferred();
-    const profile = ensureProfileForEmail("retry-input@example.test");
-    setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Input author");
-    try {
-      const { recorder, original } = await admitPending(fixture);
-      recorder.finishPendingInput?.("interrupted");
-      await recorder.waitForPendingInputSettlement?.();
-      await fixture.finishDispatch();
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
-      expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
-      fixture.context.dedupe.clear();
-      await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-      dispatchInboundMessageMock.mockReset().mockImplementation(async (options: unknown) => {
-        const { replyOptions } = options as Parameters<typeof dispatchInboundMessage>[0];
-        if (replyOptions?.userTurnTranscriptRecorder) {
-          resumedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
-        }
-        await resumedRelease.promise;
-        return {};
-      });
-
-      expectStarted(await fixture.send(), { runId: fixture.params.idempotencyKey });
-      const resumed = await withinTest(resumedRecorder.promise, signal);
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "queued" }]);
-      const duplicate = await fixture.send();
-      expect(duplicate).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(await resumed.persistApproved()).toMatchObject({
-        appended: true,
-        messageId: original?.id,
-        message: original?.message,
-      });
-      await resumed.persistApproved();
-      expect(fixture.readTranscript()).toHaveLength(fixture.activeTranscript.length + 1);
-      expect((await pending(fixture)).items).toEqual([]);
-    } finally {
-      resumedRelease.resolve();
-    }
-  });
-
   it.each(["sender", "payload", "cancelled"] as const)(
-    "does not recover pending input when its %s prevents fresh admission",
+    "never re-adopts recorded input when its %s changes",
     async (change) => {
       await using fixture = await createMentionFixture({ preserveContent: true });
       const { recorder, original } = await admitPending(fixture);
@@ -1004,8 +938,24 @@ describe("ordinary chat input admission", () => {
       } else if (change === "payload") {
         fixture.params.message += " Changed request.";
       }
-      const rejected = await fixture.send();
-      expect(rejected.mock.calls[0]?.[0]).toBe(false);
+      const response = await fixture.send();
+      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      if (change === "sender") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: "One or more mentioned people are unavailable. Select the recipients again.",
+          }),
+        );
+      } else if (change === "payload") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
+        );
+      }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect((await pending(fixture)).items).toEqual([
         { ...original, state: change === "cancelled" ? "cancelled" : "interrupted" },

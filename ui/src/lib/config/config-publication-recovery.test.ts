@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { expectCalls, loadedConfig } from "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  createConfigCapabilityHarness,
   createConfigServerMock,
 } from "./config-test-harness.ts";
 
@@ -20,24 +20,18 @@ it.each(["Settings", "external"])(
       if (method === "config.set" && !recovered) {
         return firstWrite.promise;
       }
-      if (method === "config.get") {
-        if (readState === "failed") {
-          throw new Error("read unavailable");
-        }
-        return readState === "missing"
-          ? { exists: false, valid: true, config: {}, raw: null, hash: "missing" }
-          : { ...(await server.request(method, params)), exists: true };
+      if (method === "config.schema" || (method === "config.get" && readState === "failed")) {
+        throw new Error("read unavailable");
       }
-      if (method === "config.schema") {
-        throw new Error("schema unavailable");
+      if (method === "config.get") {
+        return readState === "missing"
+          ? { exists: false, valid: true }
+          : { ...(await server.request(method, params)), exists: true };
       }
       return server.request(method, params);
     });
-    const { runtimeConfig, publish } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-    const original = runtimeConfig.state.configRaw;
+    const { runtimeConfig, publish, state } = await loadedConfig(request);
+    const original = state.configRaw;
     if (origin === "Settings") {
       runtimeConfig.patchForm(["count"], 2);
     }
@@ -60,19 +54,18 @@ it.each(["Settings", "external"])(
       }),
     );
     await failedWrite;
-    const recovery = runtimeConfig.state.configRecoveryError;
+    const recovery = state.configRecoveryError;
     expect(recovery).toContain("/settings/openclaw.json.bak");
     await expect(queuedWrite).resolves.toMatchObject({ ok: false, error: recovery });
     await expect(externalWrite()).resolves.toMatchObject({ ok: false, error: recovery });
 
-    runtimeConfig.setRaw('{"count":42}');
+    const draft = { configRaw: '{"count":42}', configFormDirty: true };
+    runtimeConfig.setRaw(draft.configRaw);
     const discard = runtimeConfig.discardDraft();
     publish(false);
     await discard;
     await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configRaw).toBe('{"count":42}');
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
-    expect(runtimeConfig.state.configRecoveryError).toBe(recovery);
+    expect(state).toMatchObject({ ...draft, configRecoveryError: recovery });
     await expect(externalWrite()).resolves.toMatchObject({
       ok: false,
       error: "Connection changed before the configuration update started.",
@@ -81,14 +74,12 @@ it.each(["Settings", "external"])(
     await vi.advanceTimersByTimeAsync(0);
     readState = "failed";
     await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configRaw).toBe('{"count":42}');
-    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(state).toMatchObject(draft);
 
     runtimeConfig.setRaw("{");
     runtimeConfig.patchForm(["count"], 4);
     runtimeConfig.setRaw(original);
     await runtimeConfig.refresh();
-    readState = "failed";
     publish(false);
     publish(true);
     await vi.advanceTimersByTimeAsync(0);
@@ -96,8 +87,7 @@ it.each(["Settings", "external"])(
     await runtimeConfig.openFile();
     readState = "missing";
     await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configRecoveryError).toBe(recovery);
-    expect(runtimeConfig.state.configRaw).toBe(original);
+    expect(state).toMatchObject({ configRecoveryError: recovery, configRaw: original });
 
     runtimeConfig.patchForm(["count"], 4);
     await runtimeConfig.save();
@@ -105,19 +95,16 @@ it.each(["Settings", "external"])(
     await runtimeConfig.patch({ raw: { count: 4 }, note: "test" });
     await expect(externalWrite()).resolves.toMatchObject({ ok: false, error: recovery });
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(1);
-    expect(
-      request.mock.calls.some(([method]) => method === "config.patch" || method === "config.apply"),
-    ).toBe(false);
+    expectCalls(request, "config.set", 1);
+    expectCalls(request, "config.patch", 0);
+    expectCalls(request, "config.apply", 0);
 
     readState = "valid";
     recovered = true;
     await runtimeConfig.discardDraft();
-    expect(runtimeConfig.state.configRecoveryError).toBeNull();
+    expect(state.configRecoveryError).toBeNull();
     runtimeConfig.patchForm(["count"], 5);
     await expect(runtimeConfig.save()).resolves.toBe(true);
-    expect(server.submissions).toHaveLength(1);
     expect(server.submissions.map(({ raw }) => JSON.parse(raw))).toEqual([{ count: 5 }]);
-    runtimeConfig.dispose();
   },
 );

@@ -1,7 +1,6 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseUpdateRecoveryBackupManifest,
@@ -40,12 +39,12 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
-import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
@@ -55,7 +54,6 @@ declare const SEALED_RUNTIME_BUILD: boolean;
 
 type Entry = UpdateRecoveryBackupManifest["entries"][number];
 type ResourceKind = "file" | "directory" | "sqlite";
-type CapturedPath = { stat?: BigIntStats; names?: string[]; target?: string };
 
 function matchesCapturedStat(
   pathname: string,
@@ -109,8 +107,7 @@ async function markPrivateCapture(directory: string): Promise<void> {
   requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
 }
 
-/** Capture for manual recovery under the original invocation's live custody.
- * Sources may remain active; final revalidation is not authority to restore them. */
+/** Capture chosen originals for manual recovery, not authority to restore active sources. */
 export function captureUpdateRecoveryBaseline(params: {
   runId: string;
   installRoot: string;
@@ -230,7 +227,7 @@ export function captureUpdateRecoveryBaseline(params: {
     await configCapture.revalidate();
     assertCurrent();
 
-    const observed = new Map<string, CapturedPath>();
+    const observed = new Set<string>();
     const entries = new Map<string, Entry>();
     const files = new Map<string, BigIntStats>();
     const capacityWarnings = new Set<string>();
@@ -241,8 +238,9 @@ export function captureUpdateRecoveryBaseline(params: {
       );
       const space = tryReadDiskSpace(store);
       if (space && space.availableBytes < requiredBytes) {
-        throw new Error(
+        throw new UpdateCaptureSpaceError(
           `Original update capture needs ${formatDiskSpaceBytes(requiredBytes)} near ${store}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free space on this volume, then retry; original state has not been changed.`,
+          { requiredBytes, availableBytes: space.availableBytes },
         );
       }
       if (!space) {
@@ -264,7 +262,7 @@ export function captureUpdateRecoveryBaseline(params: {
       assertCurrent();
       const stat = await statOrMissing(pathname);
       assertCurrent();
-      observed.set(pathname, { stat });
+      observed.add(pathname);
       if (!stat) {
         if (kind === "sqlite") {
           forcedSqlite.add(pathname);
@@ -279,7 +277,6 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(pathname);
-        observed.set(pathname, { stat, target });
         const entry: Extract<Entry, { kind: "symlink" }> = {
           kind: "symlink",
           sourcePath: pathname,
@@ -314,7 +311,6 @@ export function captureUpdateRecoveryBaseline(params: {
           throw new Error(`Original update resource is unexpectedly a directory: ${pathname}`);
         }
         const names = (await fs.readdir(pathname)).toSorted();
-        observed.set(pathname, { stat, names });
         entries.set(pathname, {
           kind: "directory",
           sourcePath: pathname,
@@ -368,6 +364,13 @@ export function captureUpdateRecoveryBaseline(params: {
         ...databases.databases.map((file) => file.path),
         ...databases.missingPaths,
       ]);
+      for (const pathname of databases.missingPaths) {
+        for (const suffix of ["-wal", "-journal"]) {
+          if (await statOrMissing(pathname + suffix)) {
+            throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
+          }
+        }
+      }
       const databaseSpellings = new Set([
         ...databasePaths,
         ...databases.sourcePaths.map(canonicalEntryPath),
@@ -477,67 +480,7 @@ export function captureUpdateRecoveryBaseline(params: {
         });
       }
       await configCapture.revalidate();
-      if (!isDeepStrictEqual(await collectResources(), declared)) {
-        throw new Error("Original update migration resource inventory changed during capture.");
-      }
       assertCurrent();
-      const originalCaptureSources = new Set(databases.originalCaptureSourcePaths);
-      const generationPaths = [...databasePaths].filter(
-        (pathname) => !originalCaptureSources.has(pathname),
-      );
-      const generations =
-        generationPaths.length === 0
-          ? {}
-          : await readUpdateDatabaseGenerationsIsolated(generationPaths, {
-              env,
-              pluginOwners: databases.pluginOwners,
-              signal: params.signal,
-              timeoutMs: params.timeoutMs,
-              acquisition: params.acquisition,
-              retryAdvice: false,
-            });
-      const unverified = generationPaths.flatMap((pathname): [string, string][] =>
-        !Object.hasOwn(databases.sourceGenerations, pathname)
-          ? [[pathname, "no stable generation was recorded during its snapshot."]]
-          : databases.sourceGenerations[pathname] !== generations[pathname]
-            ? [[pathname, "generation changed after its snapshot."]]
-            : [],
-      );
-      if (unverified.length) {
-        throw new Error(
-          [
-            "Original database generation changed or could not be verified; capture is unsealed.",
-            ...unverified.map(([pathname, reason]) => `${pathname}: ${reason}`),
-            ...databases.warnings.filter((warning) =>
-              unverified.some(([pathname]) => warning.includes(pathname)),
-            ),
-          ].join("\n"),
-        );
-      }
-      for (const [pathname, before] of observed) {
-        if (databaseSpellings.has(pathname) || sidecars.has(pathname)) {
-          continue;
-        }
-        const current = await statOrMissing(pathname);
-        const entry = entries.get(pathname);
-        const sha256 = entry?.kind === "file" && !entry.sqlite ? entry.sha256 : undefined;
-        if (
-          before.stat
-            ? !current || !matchesCapturedStat(pathname, before.stat, current, sha256)
-            : current !== undefined
-        ) {
-          throw new Error(`Original update resource changed during capture: ${pathname}`);
-        }
-        if (
-          before.names &&
-          !isDeepStrictEqual((await fs.readdir(pathname)).toSorted(), before.names)
-        ) {
-          throw new Error(`Original update directory changed during capture: ${pathname}`);
-        }
-        if (before.target !== undefined && (await fs.readlink(pathname)) !== before.target) {
-          throw new Error(`Original update resource link changed during capture: ${pathname}`);
-        }
-      }
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
         kind: warning.kind,
         pluginId: warning.pluginId,

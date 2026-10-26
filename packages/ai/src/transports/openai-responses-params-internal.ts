@@ -152,7 +152,7 @@ export function buildOpenAIResponsesParams(
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -186,7 +186,12 @@ export function buildOpenAIResponsesParams(
       transport: "stream",
       supportsStrictMode: compat.supportsStrictMode,
     });
-    const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
+    const { projection, tools: converted } = prepareResponsesTools(
+      tools,
+      strict,
+      model,
+      Boolean(options?.onPayload),
+    );
     if (
       converted.length > 0 ||
       (projection.inputToolCount === 0 && projection.diagnostics.length === 0)

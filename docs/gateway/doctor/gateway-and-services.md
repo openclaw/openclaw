@@ -39,6 +39,10 @@ restoration failure; slow startup does not undo a completed repair.
 
     Permission or I/O errors while inspecting systemd units or legacy backups are not treated as missing services. Doctor reports incomplete inspection or skipped cleanup; restore access to the reported path and rerun Doctor before retrying cleanup. The service audit also reports backups it cannot inspect without exposing their contents.
 
+    On Linux, Doctor and update status recognize standard systemd `[Unit]`, `[Service]`, and `[Install]` directives, including execution and resource controls. Custom settings are reported as unchanged; unknown keys and keys in the wrong section still produce an unrecognized-setting warning. Recognition does not validate directive values or authorize replacing customized units or drop-ins.
+
+    Options and sections prefixed with `X-` are recognized as application metadata and reported as unchanged, without unrecognized-setting warnings. They do not affect fallback health checks, matching systemd's behavior, but still protect operator-owned metadata from service rewrites.
+
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
   </Accordion>
@@ -72,6 +76,10 @@ restoration failure; slow startup does not undo a completed repair.
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
 
+    Config repairs retain the source of unchanged credentials: environment-backed
+    values are not reported as plaintext. Literal values, including escaped
+    environment templates, still produce plaintext warnings.
+
     Missing multi-agent DM routing ownership is reported as a finding. It does
     not stop the remaining channel security checks or pending state migrations.
     Configure the reported account binding before expecting that route to work.
@@ -81,6 +89,9 @@ restoration failure; slow startup does not undo a completed repair.
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor enables lingering if needed so the gateway stays alive after logout.
+
+    Doctor also warns when the enclosing user manager has a host-shutdown timeout below 90 seconds. This host policy needs an operator decision; reinstalling the Gateway cannot change it. See [Linux](/platforms/linux#gateway-service-systemd).
+
   </Accordion>
   <a id="11-workspace-status-skills-plugins-and-taskflows" />
   <Accordion title="11. Workspace status (skills and plugins)">
@@ -94,7 +105,7 @@ restoration failure; slow startup does not undo a completed repair.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
-    Doctor checks workspace bootstrap candidates (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`) against the configured character budget after runtime filtering. Root `BOOTSTRAP.md` is excluded after workspace setup completes. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`. `USER.md` is the exception: it has a fixed 4,000-character cap that these settings cannot raise, so doctor names the cap and recommends compacting the file instead. See [User model](/concepts/user-model).
+    Doctor checks workspace bootstrap candidates (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, and `MEMORY.md`) against the configured character budget after runtime filtering. Root `BOOTSTRAP.md` is excluded after workspace setup completes. It reports per-file raw vs. injected character counts, truncation percentage, truncation cause (`max/file` or `max/total`), and total injected characters as a fraction of the total budget. Truncation warnings explain that the model receives start/end excerpts as space permits, with a bounded policy digest for `AGENTS.md` when available; other middle text is omitted. Files dropped by the total budget are identified as contributing no content. When files are truncated or near the limit, doctor prints tips for tuning `agents.defaults.bootstrapMaxChars` and `agents.defaults.bootstrapTotalMaxChars`. `USER.md` is the exception: it has a fixed 4,000-character cap that these settings cannot raise, so doctor names the cap and recommends compacting the file instead. See [User model](/concepts/user-model).
 
     This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it, provided each matched basename is one of those six (for example, `packages/core/AGENTS.md`). Other basenames are ignored. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 

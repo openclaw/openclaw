@@ -27,7 +27,7 @@ async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   return JSON.parse(result.stdout.toString("utf8"));
 }
 
-it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
+it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
   "%s worker replies preserve local capture independently of schema visibility",
   async (caller) => {
     const root = await fs.realpath(dirs.make("update-local-schemas-"));
@@ -81,25 +81,39 @@ it.each(["legacy", "local-aware", "legacy-alias", "local-aware-alias"] as const)
       candidateRoot: root,
       config: {},
       env,
-      ...(caller.startsWith("local-aware") ? { includeLocalStoreVersions: true } : {}),
+      ...(caller !== "legacy" && caller !== "legacy-alias"
+        ? { includeLocalStoreVersions: true }
+        : {}),
+      ...(caller.startsWith("local-aware") ? { includeClientCredentialStoreVersion: true } : {}),
     };
-    const admitted = await inventoryUpdateCandidateStateWorker(input);
-    expect(admitted.databaseInventory).toContain(local);
-    expect(admitted.databaseInventory).toContain(client);
-    const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
-      await runWorker({ ...input, mode: "versions" }),
-    );
-    const snapshot = UpdateCandidateStateSnapshotSchema.parse(
-      await runWorker({ ...input, ...admitted, mode: "snapshot" }),
-    );
+    // Both entrypoints use the same publisher; exercise capture on three callers
+    // without repeating a full snapshot for every version-only response.
+    const capture = caller !== "local-aware" && caller !== "legacy-alias";
+    const admitted = capture ? await inventoryUpdateCandidateStateWorker(input) : undefined;
+    if (admitted) {
+      expect(admitted.databaseInventory).toContain(local);
+      expect(admitted.databaseInventory).toContain(client);
+    }
+    const response = await runWorker({
+      ...input,
+      ...admitted,
+      mode: capture ? "snapshot" : "versions",
+    });
+    const versions = capture
+      ? UpdateCandidateStateSnapshotSchema.parse(response).versions
+      : UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
     const expected = [
       { path: agent, userVersion: 3 },
       ...(caller.startsWith("local-aware") ? [{ path: client, userVersion: 1 }] : []),
-      ...(caller.startsWith("local-aware") ? [{ path: local, userVersion: 1 }] : []),
+      ...(caller !== "legacy" && caller !== "legacy-alias"
+        ? [{ path: local, userVersion: 1 }]
+        : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
     ];
     expect(versions).toEqual(expected);
-    expect(snapshot.versions).toEqual(expected);
+    if (!capture) {
+      return;
+    }
     using copied = openNodeSqliteDatabase(path.join(targetStateDir, "control", "services.sqlite"), {
       readOnly: true,
     });

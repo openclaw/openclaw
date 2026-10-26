@@ -36,6 +36,11 @@ it.each(["same-store", "cross-store"])(
       f.read();
       f.participant({ identity: { type: "agent", id: "shared" }, promptedAt: 20 });
       f.participant({ identity: { type: "agent", id: "destination-only" }, promptedAt: 15 });
+      f.writeEntry({
+        ...f.read().entry!,
+        category: "work",
+        owner: { actor: { type: "human", id: "alice" } },
+      });
       const before = f.read();
       const postimages: SessionEntryWritePostimages = new Map();
       const repair = () => {
@@ -79,16 +84,34 @@ it.each(["same-store", "cross-store"])(
         ),
       ).toEqual(expected);
       expect(
-        readSessionMembershipFactsInDatabase(f.database, [f.target.sessionKey]).facts[0]?.[3],
-      ).toEqual({
-        participants: expected.map(({ identity }) => ({ identity })),
-        participantCount: 3,
-      });
+        readSessionMembershipFactsInDatabase(f.database, [f.target.sessionKey]).facts[0],
+      ).toEqual([
+        f.target.sessionKey,
+        "work",
+        [],
+        {
+          participants: expected.map(({ identity }) => ({ identity })),
+          participantCount: 3,
+        },
+        before.entry!.sessionId,
+      ]);
       f.participant({ identity: { type: "agent", id: "shared" }, promptedAt: 40 });
       expect(f.read().participants[1]).toMatchObject({
         contributionCount: kind === "same-store" ? 5 : 3,
         lastPromptedAt: 40,
       });
+      f.writeEntry({
+        ...f.read().entry!,
+        category: "personal",
+        owner: { actor: { type: "human", id: "bob" } },
+      });
+      expect(readSessionMembershipFactsInDatabase(f.database).facts).toContainEqual([
+        f.target.sessionKey,
+        "personal",
+        [],
+        expect.objectContaining({ participantCount: 3 }),
+        before.entry!.sessionId,
+      ]);
       f.restartActor();
       expect(f.read().participants[1]).toMatchObject({
         contributionCount: kind === "same-store" ? 5 : 3,

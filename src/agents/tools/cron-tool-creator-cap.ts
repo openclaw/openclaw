@@ -224,6 +224,15 @@ export function hasCronCreatorGatewayExecTool(
   );
 }
 
+/** A native or Gateway-pinned shell cannot grant execution inside an OpenClaw sandbox. */
+export function hasCronCreatorSandboxExecTool(
+  entries: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): boolean {
+  return normalizeCronCreatorToolsAllow(entries ?? []).some(
+    (tool) => tool.name === "exec" && tool.execOrigin === "openclaw" && !tool.execTarget,
+  );
+}
+
 function hasCronTriggerScript(value: unknown): boolean {
   return isRecord(value) && typeof value.script === "string" && value.script.trim().length > 0;
 }

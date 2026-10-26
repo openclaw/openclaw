@@ -80,6 +80,11 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     raw: TRaw,
     context: ChannelIngressMonitorInspectionContext,
   ) => Promise<ChannelIngressMonitorFacts | null>;
+  /** Await a provider-validated replacement before serialization; policy errors refuse intake. */
+  prepareAdmission?: (
+    raw: TRaw,
+    context: { facts: ChannelIngressMonitorFacts; receivedAt: number; signal: AbortSignal },
+  ) => Promise<{ raw: TRaw; assertCurrent: () => void } | undefined>;
   payload: ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata>;
   /**
    * Reuse admission identity when this monitor appends and claims a fresh event.
@@ -95,6 +100,12 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     | Promise<ChannelIngressMonitorDeliveryResult | void>
     | ChannelIngressMonitorDeliveryResult
     | void;
+  /**
+   * Recovery sweep interval (minimum five minutes); admissions and retries wake directly.
+   * External queue writes, including CLI resubmission, do not wake this monitor.
+   * Eligible rows wait up to the effective interval; an unrefreshed live-process claim first
+   * expires its lease (30 minutes by default). Startup recovery runs immediately.
+   */
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];

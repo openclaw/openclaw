@@ -137,67 +137,6 @@ function resolveLocalGatewayCredentials(params: {
   return localResolved;
 }
 
-function resolveRemoteGatewayCredentials(params: {
-  plan: GatewayCredentialPlan;
-  remoteTokenPrecedence: GatewayRemoteCredentialPrecedence;
-  remotePasswordPrecedence: GatewayRemoteCredentialPrecedence;
-  remoteTokenFallback: GatewayRemoteCredentialFallback;
-  remotePasswordFallback: GatewayRemoteCredentialFallback;
-}): ExplicitGatewayAuth {
-  const resolveCredential = (kind: "Token" | "Password") => {
-    const remote = params.plan[`remote${kind}`].value;
-    if (params[`remote${kind}Fallback`] === "remote-only") {
-      return remote;
-    }
-    const env = params.plan[`env${kind}`];
-    const local = params.plan[`local${kind}`].value;
-    return params[`remote${kind}Precedence`] === "env-first"
-      ? env || remote || local
-      : remote || env || local;
-  };
-  const token = resolveCredential("Token");
-  const password = resolveCredential("Password");
-  const localTokenFallbackEnabled = params.remoteTokenFallback !== "remote-only";
-  const localTokenFallback =
-    params.remoteTokenFallback === "remote-only" ? undefined : params.plan.localToken.value;
-  const localPasswordFallback =
-    params.remotePasswordFallback === "remote-only" ? undefined : params.plan.localPassword.value; // pragma: allowlist secret
-
-  // Remote-only probe paths intentionally ignore local fallback credentials;
-  // normal remote clients keep them as a last resort for older local config.
-  if (
-    params.plan.remoteToken.refPath &&
-    !token &&
-    !params.plan.envToken &&
-    !localTokenFallback &&
-    !password
-  ) {
-    throw new GatewaySecretRefUnavailableError(params.plan.remoteToken.refPath);
-  }
-  if (
-    params.plan.remotePassword.refPath &&
-    !password &&
-    !params.plan.envPassword &&
-    !localPasswordFallback &&
-    !token
-  ) {
-    throw new GatewaySecretRefUnavailableError(params.plan.remotePassword.refPath);
-  }
-  if (
-    params.plan.localToken.refPath &&
-    localTokenFallbackEnabled &&
-    !token &&
-    !password &&
-    !params.plan.envToken &&
-    !params.plan.remoteToken.value &&
-    params.plan.localTokenCanWin
-  ) {
-    throw new GatewaySecretRefUnavailableError(params.plan.localToken.refPath);
-  }
-
-  return { token, password };
-}
-
 export function resolveGatewayCredentialsFromConfig(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -240,13 +179,52 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const remoteTokenPrecedence = params.remoteTokenPrecedence ?? "remote-first";
   const remotePasswordPrecedence = params.remotePasswordPrecedence ?? "env-first";
 
-  return resolveRemoteGatewayCredentials({
-    plan,
-    remoteTokenPrecedence,
-    remotePasswordPrecedence,
-    remoteTokenFallback,
-    remotePasswordFallback,
-  });
+  const resolveCredential = (kind: "Token" | "Password") => {
+    const remote = plan[`remote${kind}`].value;
+    if ((kind === "Token" ? remoteTokenFallback : remotePasswordFallback) === "remote-only") {
+      return remote;
+    }
+    const envCredential = plan[`env${kind}`];
+    const local = plan[`local${kind}`].value;
+    return (kind === "Token" ? remoteTokenPrecedence : remotePasswordPrecedence) === "env-first"
+      ? envCredential || remote || local
+      : remote || envCredential || local;
+  };
+  const token = resolveCredential("Token");
+  const password = resolveCredential("Password");
+  const localTokenFallbackEnabled = remoteTokenFallback !== "remote-only";
+  const localTokenFallback =
+    remoteTokenFallback === "remote-only" ? undefined : plan.localToken.value;
+  const localPasswordFallback =
+    remotePasswordFallback === "remote-only" ? undefined : plan.localPassword.value; // pragma: allowlist secret
+
+  // Remote-only probe paths intentionally ignore local fallback credentials;
+  // normal remote clients keep them as a last resort for older local config.
+  if (plan.remoteToken.refPath && !token && !plan.envToken && !localTokenFallback && !password) {
+    throw new GatewaySecretRefUnavailableError(plan.remoteToken.refPath);
+  }
+  if (
+    plan.remotePassword.refPath &&
+    !password &&
+    !plan.envPassword &&
+    !localPasswordFallback &&
+    !token
+  ) {
+    throw new GatewaySecretRefUnavailableError(plan.remotePassword.refPath);
+  }
+  if (
+    plan.localToken.refPath &&
+    localTokenFallbackEnabled &&
+    !token &&
+    !password &&
+    !plan.envToken &&
+    !plan.remoteToken.value &&
+    plan.localTokenCanWin
+  ) {
+    throw new GatewaySecretRefUnavailableError(plan.localToken.refPath);
+  }
+
+  return { token, password };
 }
 
 /** Resolve the stricter credential view used by Gateway probe paths. */

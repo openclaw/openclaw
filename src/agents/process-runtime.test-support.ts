@@ -35,11 +35,6 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "prepared-model-runtime-generation.retention.test-support",
     distWorkerPath: "agents/prepared-model-runtime-generation.retention.test-support.js",
   },
-  settingsStorage: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sessions/settings-storage",
-    distWorkerPath: "agents/sessions/settings-storage.js",
-  },
   readRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sessions/tools/read.retention.test-support",

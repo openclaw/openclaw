@@ -3,6 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -17,6 +18,10 @@ import {
   sidebarSnapshotScopeKey,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -58,22 +63,10 @@ const model: SidebarSnapshotModel = {
 function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
   let selectedAgentId = initialAgentId;
   let pageScopeId = initialPageScopeId;
-  let snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "connecting",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
+  const publication = createApplicationGateway(
+    createApplicationGatewaySnapshot({ phase: "connecting" }),
+  );
+  const gateway = Object.assign(publication.gateway, {
     connection: { gatewayUrl: scope.gatewayScope, token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
@@ -83,23 +76,21 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     setSessionKey() {},
     start() {},
     stop() {},
-    subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     subscribeEventLog: () => () => {},
     subscribeEvents: () => () => {},
     loadSelfProfile: async () => null,
-  } satisfies ApplicationGateway;
+  }) satisfies ApplicationGateway;
   const restored = createDeferred();
   let saved = createDeferred();
   let settled = false;
   let captured = model;
   const capture = vi.fn(() => captured);
+  const foreground = { foregroundReady: true };
   const host: Parameters<typeof createSidebarSnapshot>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: {
       gateway,
+      connectionBootstrap: foreground,
       agentSelection: {
         get state() {
           return { scopeId: pageScopeId };
@@ -128,6 +119,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   });
   return {
     gateway,
+    foreground,
     capture,
     host,
     snapshotOwner,
@@ -147,8 +139,8 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
       return saved.promise;
     },
     publish(patch: Partial<ApplicationGatewaySnapshot> = {}) {
-      snapshot = {
-        ...snapshot,
+      publication.publish({
+        ...gateway.snapshot,
         phase: "connected",
         hello: {
           ...gatewayHelloForMethods([]),
@@ -156,10 +148,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
         },
         selfUser: { id: scope.profileId },
         ...patch,
-      };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      });
     },
   };
 }
@@ -235,12 +224,7 @@ describe("sidebar snapshot lifecycle", () => {
           scope: scope.gatewayScope,
           recoveryScope: scope.recoveryScope,
           profileId: scope.profileId,
-          agents: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main" }],
-          },
+          agents: makeBootRoster(),
           groups: [],
           sectionOrder: [],
         },
@@ -400,6 +384,79 @@ describe("sidebar snapshot lifecycle", () => {
     ).toEqual(live);
   });
 
+  it("keeps admitted rows through unresolved hello and saves only after identity resolves", async () => {
+    const test = await warmFixture();
+    test.publish({ selfUser: undefined });
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    const saved = test.settle();
+    test.snapshotOwner.synchronize();
+    expect(test.host.sidebarSnapshot).toBeNull();
+    await capture(test.snapshotOwner);
+    expect(test.capture).not.toHaveBeenCalled();
+    test.publish();
+    await capture(test.snapshotOwner);
+    await saved;
+    expect(test.capture).toHaveBeenCalledOnce();
+  });
+
+  it("hands off the complete roster at idle after the current transcript is ready", async () => {
+    const idle = vi.fn<(callback: IdleRequestCallback) => number>().mockReturnValue(1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    const cancelIdle = vi.fn();
+    vi.stubGlobal("cancelIdleCallback", cancelIdle);
+    const test = await warmFixture();
+    test.foreground.foregroundReady = false;
+    test.publish();
+    void test.settle();
+    test.snapshotOwner.synchronize();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    expect(idle).not.toHaveBeenCalled();
+    test.foreground.foregroundReady = true;
+    document.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed"));
+    await Promise.resolve();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    expect(idle).toHaveBeenCalledOnce();
+    idle.mock.calls[0]![0]({ didTimeout: false, timeRemaining: () => 10 });
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(cancelIdle).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["incomplete-roster", "transcript", "scope-change"] as const)(
+    "bounds a stalled handoff and retires it on %s",
+    async (boundary) => {
+      const test = await warmFixture();
+      test.foreground.foregroundReady = false;
+      test.publish();
+      if (boundary !== "incomplete-roster") {
+        void test.settle();
+      }
+      test.snapshotOwner.synchronize();
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(test.host.sidebarSnapshot).toEqual(model);
+      if (boundary === "scope-change") {
+        test.publish({ selfUser: { id: "profile-b" } });
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(test.host.sidebarSnapshot).toBeNull();
+      expect(test.capture).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts a new handoff deadline after reconnecting", async () => {
+    const test = await warmFixture();
+    test.publish();
+    await vi.advanceTimersByTimeAsync(2999);
+    test.publish({ phase: "reconnecting" });
+    await vi.advanceTimersByTimeAsync(3001);
+    test.publish();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(test.capture).not.toHaveBeenCalled();
+  });
+
   it.each(["idle", "pagehide", "hidden"] as const)(
     "coalesces a burst and persists its latest shape on %s for the next reload",
     async (boundary) => {
@@ -513,14 +570,20 @@ describe("sidebar snapshot lifecycle", () => {
     await saved;
   });
 
-  it.each(["profile", "connection"] as const)(
+  it.each(["profile", "profileless", "connection"] as const)(
     "clears cached display when the %s changes even with the same recovery scope",
     async (change) => {
       const test = await warmFixture();
       if (change === "connection") {
         test.gateway.connectionRevision += 1;
       }
-      test.publish(change === "profile" ? { selfUser: { id: "profile-b" } } : {});
+      test.publish(
+        change === "profile"
+          ? { selfUser: { id: "profile-b" } }
+          : change === "profileless"
+            ? { selfUser: null }
+            : {},
+      );
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
     },
@@ -591,7 +654,7 @@ describe("sidebar snapshot lifecycle", () => {
       authMethod: "trusted-proxy",
       credential: "",
       savedAt: Date.now(),
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+      agents: makeBootRoster(),
       groups: [],
       sectionOrder: [],
     };

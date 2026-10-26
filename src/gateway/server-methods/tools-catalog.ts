@@ -12,9 +12,8 @@ import {
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createPluginToolMetadataLookup, getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
@@ -113,16 +112,7 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       // was registered BY the tool's owning plugin. Without this scoping, plugin-X
       // could override the catalog label/description/risk/tags for another plugin's
       // tool by registering metadata with the same toolName.
-      const pluginToolMetadata = new Map<
-        string,
-        PluginRegistry["toolMetadata"][number]["metadata"]
-      >();
-      if (catalogRegistry) {
-        for (const entry of catalogRegistry.toolMetadata) {
-          const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
-          pluginToolMetadata.set(metadataKey, entry.metadata);
-        }
-      }
+      const metadataFor = createPluginToolMetadataLookup(catalogRegistry?.toolMetadata);
       const seenToolIds = new Set<string>();
       const appendTool = (
         pluginId: string,
@@ -144,9 +134,7 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       for (const tool of pluginTools) {
         const meta = getPluginToolMeta(tool);
         const pluginId = meta?.pluginId ?? "plugin";
-        const ownedMetadata = meta?.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
-          : undefined;
+        const ownedMetadata = meta?.pluginId ? metadataFor(meta.pluginId, tool.name) : undefined;
         const parameters = summarizeToolParameters(tool.parameters);
         const fullDescription =
           ownedMetadata?.description ??
@@ -176,9 +164,7 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
           }
           // Declared-but-unresolved plugin tools still appear so operators can see
           // optional capabilities that may need config before they bind at runtime.
-          const ownedMetadata = pluginToolMetadata.get(
-            buildPluginToolMetadataKey(entry.pluginId, name),
-          );
+          const ownedMetadata = metadataFor(entry.pluginId, name);
           appendTool(entry.pluginId, entry.pluginName ?? entry.pluginId, {
             id: name,
             label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
@@ -195,9 +181,10 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       }
       groups.push(
         ...Array.from(pluginGroups.values(), (group) => {
-          group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
+          group.tools.sort((a, b) => a.id.localeCompare(b.id));
           return group;
-        }).toSorted((a, b) => a.label.localeCompare(b.label)),
+          // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a fresh, private array.
+        }).sort((a, b) => a.label.localeCompare(b.label)),
       );
     }
     respond(

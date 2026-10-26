@@ -5,17 +5,37 @@ import type {
   DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import {
-  BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS,
-  DROPPED_OTEL_ATTRIBUTE_KEYS,
-  MAX_OTEL_LOG_ATTRIBUTE_COUNT,
-  MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS,
-  OTEL_LOG_ATTRIBUTE_KEY_RE,
-  OTEL_LOG_RAW_ATTRIBUTE_KEY_RE,
-  SECURITY_TARGET_NAME_VALUE_RE,
-} from "./service-constants.js";
+import { SECURITY_TARGET_NAME_VALUE_RE } from "./service-constants.js";
 import { normalizeOtelLogString } from "./service-content-normalization.js";
 import type { SecuritySeverityText } from "./service-types.js";
+
+const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
+  "openclaw.callId",
+  "openclaw.call_id",
+  "openclaw.chatId",
+  "openclaw.chat_id",
+  "openclaw.messageId",
+  "openclaw.message_id",
+  "openclaw.parentSpanId",
+  "openclaw.parent_span_id",
+  "openclaw.runId",
+  "openclaw.run_id",
+  "openclaw.sessionId",
+  "openclaw.session_id",
+  "openclaw.sessionKey",
+  "openclaw.session_key",
+  "openclaw.spanId",
+  "openclaw.span_id",
+  "openclaw.toolCallId",
+  "openclaw.tool_call_id",
+  "openclaw.traceId",
+  "openclaw.trace_id",
+]);
+const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
+const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
+const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
+const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
+const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export function assignOptionalNumberAttrs(
   attributes: Record<string, string | number | boolean>,

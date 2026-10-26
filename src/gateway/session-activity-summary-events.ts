@@ -43,7 +43,6 @@ export async function broadcastSessionActivitySummary(
         ...buildGatewaySessionSnapshot({
           sessionRow: row,
           agentId: target.agentId,
-          includeSession: true,
         }),
       },
       {

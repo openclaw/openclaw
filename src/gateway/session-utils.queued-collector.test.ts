@@ -22,7 +22,6 @@ import {
   releaseSwarmRun,
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -58,6 +57,8 @@ const {
   spawnCollector,
   createQueuedReservation,
   expectUnstartedChildHistory,
+  expectChanged,
+  gateRowPreparation,
 } = useQueuedCollectorFixture();
 
 async function abortCollector(
@@ -193,18 +194,13 @@ describe("queued collector session projection", () => {
         expect([stopped?.startedAt, stopped?.runtimeMs]).toEqual([undefined, undefined]);
         await expectUnstartedChildHistory(context, queued.key, []);
         await flushPendingSessionsChangedEvents(context);
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: queued.key,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            activeRunIds: [],
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        expectChanged(context, {
+          sessionKey: queued.key,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
         expect(launchedRunIds).toEqual([first.runId]);
       } finally {
         const hold = holdQueuedSwarmRun(second.runId!);
@@ -442,7 +438,15 @@ describe("queued collector session projection", () => {
       expect(isSubagentRunQueued(current)).toBe(true);
       expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
       expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
-      schedulerTesting.reset();
+      const currentReservation = expectDefined(
+        holdQueuedSwarmRun(entry.runId),
+        "current reservation",
+      );
+      try {
+        expect(currentReservation.withdraw()).toBe(true);
+      } finally {
+        await currentReservation.release();
+      }
       expect(isSubagentRunQueued(current)).toBe(false);
       expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
       expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
@@ -483,21 +487,9 @@ describe("queued collector session projection", () => {
   it("publishes current row truth when a replacement overtakes a queued Stop notice", async () => {
     const { entry, registration } = await createQueuedReservation();
     const context = requestContext();
-    const projection = expectDefined(getSessionRowProjection(context), "session projection");
-    const preparing = createDeferred();
-    const release = createDeferred();
     let holdNotices = false;
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    const preparation = vi
-      .spyOn(projection, "withPreparedExactRows")
-      .mockImplementation(async (queries, consume, options) => {
-        if (holdNotices) {
-          preparing.resolve();
-          await release.promise;
-        }
-        return prepare(queries, consume, options);
-      });
-    onTestFinished(() => preparation.mockRestore());
+    const { entered, release, spy } = gateRowPreparation(context, () => holdNotices);
+    onTestFinished(() => spy.mockRestore());
     const kill = subagentKill.killSubagentRunAdmin;
     using _ = vi.spyOn(subagentKill, "killSubagentRunAdmin").mockImplementation(async (...args) => {
       holdNotices = true;
@@ -525,7 +517,7 @@ describe("queued collector session projection", () => {
     });
     try {
       const respond = await abortCollector({ key: entry.childSessionKey }, context);
-      await preparing.promise;
+      await entered.promise;
       expectAborted(respond, entry.runId);
       const successor = subagentRuns.get(entry.runId);
       expect(successor).not.toBe(entry);
@@ -535,18 +527,13 @@ describe("queued collector session projection", () => {
       expect(launchedRunIds).toEqual([]);
       release.resolve();
       await flushPendingSessionsChangedEvents(context);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: entry.childSessionKey,
-          reason: "abort",
-          status: "queued",
-          hasActiveRun: true,
-          activeRunIds: [entry.runId],
-        }),
-        new Set(["observer"]),
-        expect.any(Object),
-      );
+      expectChanged(context, {
+        sessionKey: entry.childSessionKey,
+        reason: "abort",
+        status: "queued",
+        hasActiveRun: true,
+        activeRunIds: [entry.runId],
+      });
     } finally {
       release.resolve();
       const hold = holdQueuedSwarmRun(entry.runId);

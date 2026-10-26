@@ -34,7 +34,7 @@ function resumeToken(details: unknown, field = "requiresInput") {
 describe("lobster plugin tool", () => {
   let tool: ReturnType<typeof createLobsterTool>;
   beforeEach(() => {
-    tool = createLobsterTool(createTestPluginApi());
+    tool = createLobsterTool();
   });
   const run = async (pipeline: string) =>
     (await tool.execute("run", { action: "run", pipeline })).details;
@@ -118,7 +118,7 @@ describe("lobster plugin tool", () => {
       requiresInput: { prompt: "Which label?" },
     });
     // A new tool instance proves continuation comes from saved state, not the runner's memory.
-    const finished = await createLobsterTool(createTestPluginApi()).execute("finish", {
+    const finished = await createLobsterTool().execute("finish", {
       action: "resume",
       token: resumeToken(second),
       responseJson: '"reviewed"',
@@ -154,7 +154,7 @@ describe("lobster plugin tool", () => {
     const runner = { run: vi.fn().mockResolvedValue(result) };
 
     vi.mocked(createEmbeddedLobsterRunner).mockReturnValueOnce(runner);
-    tool = createLobsterTool(createTestPluginApi());
+    tool = createLobsterTool();
     await tool.execute("call-string-limits", {
       action: "run",
       pipeline: "noop",

@@ -7,9 +7,7 @@ import {
 } from "./update-retained-runtime-files.js";
 import * as runtimeTree from "./update-retained-runtime-tree.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("keeps a large materialized runtime's reply within the worker capture budget", async () => {
   const sourceRoot = "/opt/runtime";
@@ -79,23 +77,13 @@ it("keeps a large materialized runtime's reply within the worker capture budget"
     roots: [sourceRoot],
     retainedDependencyRoot: sourceRoot,
   });
-  const metrics = {
-    inventoryMs: 25,
-    materializationMs: 50,
-    linked: files.length - 1,
-    copied: 1,
-  };
+  const metrics = { inventoryMs: 25, materializationMs: 50, linked: files.length - 1, copied: 1 };
   // The real worker serializes this producer's result, before the parent's schema
   // can discard fields. This inventory exceeded the unchanged 64 MiB stdout cap.
   const captureLimit = 64 * 1024 * 1024;
-  const fullPlanBytes = Buffer.byteLength(JSON.stringify({ plan, ...metrics }));
   const serialized = JSON.stringify(result);
-  const replyBytes = Buffer.byteLength(serialized);
-  console.info(
-    `Retention worker reply: full plan ${fullPlanBytes} bytes; projection ${replyBytes} bytes`,
-  );
-  expect(fullPlanBytes).toBeGreaterThan(captureLimit);
-  expect(replyBytes).toBeLessThan(captureLimit);
+  expect(Buffer.byteLength(JSON.stringify({ plan, ...metrics }))).toBeGreaterThan(captureLimit);
+  expect(Buffer.byteLength(serialized)).toBeLessThan(captureLimit);
   expect(RetainedRuntimeFilesSchema.parse(JSON.parse(serialized))).toEqual({
     relocations,
     files,

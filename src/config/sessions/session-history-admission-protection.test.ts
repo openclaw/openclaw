@@ -1,11 +1,22 @@
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it } from "vitest";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 
+const json = (sessionId: string, fields: Record<string, unknown> = {}) =>
+  JSON.stringify({ sessionId, updatedAt: 1, ...fields });
+const dashboardKey = (suffix: string) => `agent:main:dashboard:${suffix}`;
+async function protect(db: DatabaseSync, storePath: string, identities: string[]) {
+  const admission = await beginSessionEffect({ scope: storePath, identities, assertAllowed() {} });
+  return {
+    release: () => admission.release(),
+    [Symbol.dispose]: () => admission.release(),
+    collect: () => collectAdmissionProtectedSessionIds({ database: { db }, storePath }),
+  };
+}
+
 it("reads only admitted entry payloads while protecting normalized keys and every generation", async () => {
-  const db = new DatabaseSync(":memory:");
-  onTestFinished(() => db.close());
+  using db = new DatabaseSync(":memory:");
   let payloadReads = 0;
   db.function("read_payload", (value) => {
     payloadReads++;
@@ -18,74 +29,50 @@ it("reads only admitted entry payloads while protecting normalized keys and ever
   `);
   const insert = db.prepare("INSERT INTO stored_nodes VALUES (?, ?, ?)");
   const addWindow = db.prepare("INSERT INTO session_windows VALUES (?, ?)");
-  const entries = [
-    { key: "agent:main:dashboard:tracked", identity: "AGENT:MAIN:DASHBOARD:TRACKED" },
-    { key: "agent:main:dashboard:İtem", identity: "agent:main:dashboard:i\u0307tem" },
-    { key: "agent:main:dashboard:zero\0tail", identity: "agent:main:dashboard:zero\0tail" },
-    { key: "agent:main:signal:group:AbC=", identity: "agent:main:signal:group:AbC=" },
-    {
-      key: "agent:main:dashboard:invalid",
-      identity: "agent:main:dashboard:invalid",
-      invalid: true,
-    },
+  const entries: Array<[string, string, boolean?]> = [
+    [dashboardKey("tracked"), "AGENT:MAIN:DASHBOARD:TRACKED"],
+    [dashboardKey("İtem"), dashboardKey("i\u0307tem")],
+    [dashboardKey("zero\0tail"), dashboardKey("zero\0tail")],
+    ["agent:main:signal:group:AbC=", "agent:main:signal:group:AbC="],
+    [dashboardKey("invalid"), dashboardKey("invalid"), true],
   ];
-  const identities = [...entries.map((entry) => entry.identity), "by-id", "orphan-owner"];
+  const identities = [...entries.map(([, identity]) => identity), "by-id", "orphan-owner"];
   const expected = new Set(identities);
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, [key, , invalid]] of entries.entries()) {
     const sessionId = `current-${index}`;
     const previousSessionId = `previous-${index}`;
-    insert.run(
-      entry.key,
-      sessionId,
-      entry.invalid ? "{" : JSON.stringify({ sessionId, previousSessionId, updatedAt: 1 }),
-    );
-    addWindow.run(`historical-${index}`, entry.key);
-    expected.add(sessionId);
-    expected.add(`historical-${index}`);
-    if (!entry.invalid) {
+    insert.run(key, sessionId, invalid ? "{" : json(sessionId, { previousSessionId }));
+    addWindow.run(`historical-${index}`, key);
+    expected.add(sessionId).add(`historical-${index}`);
+    if (!invalid) {
       expected.add(previousSessionId);
     }
   }
   addWindow.run("orphan-generation", "orphan-owner");
   expected.add("orphan-generation");
   // The lowercase Signal peer is a different conversation, not an alias.
-  insert.run(
-    "agent:main:signal:group:abc=",
-    "different-peer",
-    JSON.stringify({ sessionId: "different-peer", updatedAt: 1 }),
-  );
+  insert.run("agent:main:signal:group:abc=", "different-peer", json("different-peer"));
   for (let index = 0; index < 100; index++) {
     const sessionId = `unrelated-${index}`;
     insert.run(
-      `agent:main:dashboard:${sessionId}`,
+      dashboardKey(sessionId),
       sessionId,
-      JSON.stringify({
-        sessionId,
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "x".repeat(32_768), skills: [] },
-      }),
+      json(sessionId, { skillsSnapshot: { prompt: "x".repeat(32_768), skills: [] } }),
     );
   }
-  const storePath = "synthetic-admission-protection";
-  const admission = await beginSessionEffect({
-    scope: storePath,
-    identities,
-    assertAllowed: () => {},
-  });
-  onTestFinished(() => admission.release());
-  expect(collectAdmissionProtectedSessionIds({ database: { db }, storePath })).toEqual(expected);
+  using admission = await protect(db, "synthetic-admission-protection", identities);
+  expect(admission.collect()).toEqual(expected);
   expect(payloadReads).toBe(entries.length);
   admission.release();
   payloadReads = 0;
-  expect(collectAdmissionProtectedSessionIds({ database: { db }, storePath })).toEqual(new Set());
+  expect(admission.collect()).toEqual(new Set());
   expect(payloadReads).toBe(0);
 });
 
 it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
   "preserves admission protection through raw %s key decoding",
   async (encoding) => {
-    const db = new DatabaseSync(":memory:");
-    onTestFinished(() => db.close());
+    using db = new DatabaseSync(":memory:");
     db.exec(`
       PRAGMA encoding='${encoding}';
       CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT, entry_json TEXT);
@@ -103,7 +90,7 @@ it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
       }
       const sessionId = `current-${index}`;
       const previousSessionId = `previous-${index}`;
-      insert.run(bytes, sessionId, JSON.stringify({ sessionId, previousSessionId, updatedAt: 1 }));
+      insert.run(bytes, sessionId, json(sessionId, { previousSessionId }));
       addWindow.run(`historical-${index}`, bytes);
       expected.add(sessionId).add(previousSessionId).add(`historical-${index}`);
     }
@@ -111,17 +98,8 @@ it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
       .prepare("SELECT session_key FROM session_nodes")
       .all()
       .map((row) => String(row.session_key));
-    for (const identity of identities) {
-      expected.add(identity);
-    }
-    const storePath = `synthetic-raw-admission-${encoding}`;
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities,
-      assertAllowed: () => {},
-    });
-    onTestFinished(() => admission.release());
-
-    expect(collectAdmissionProtectedSessionIds({ database: { db }, storePath })).toEqual(expected);
+    identities.forEach((identity) => expected.add(identity));
+    using admission = await protect(db, `synthetic-raw-admission-${encoding}`, identities);
+    expect(admission.collect()).toEqual(expected);
   },
 );

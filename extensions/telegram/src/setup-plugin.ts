@@ -1,7 +1,8 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
+import { inspectTelegramAccount } from "./account-inspect.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { createTelegramPluginConfig } from "./config-adapter.js";
+import { telegramConfigAdapter } from "./config-adapter.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
@@ -54,7 +55,36 @@ export function createTelegramSetupPluginBase(params: {
       ],
     },
     configSchema: TelegramChannelConfigSchema,
-    config: createTelegramPluginConfig(),
+    config: {
+      ...telegramConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        typeof env?.TELEGRAM_BOT_TOKEN === "string" && env.TELEGRAM_BOT_TOKEN.trim().length > 0,
+      isConfigured: (account, cfg) => {
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        // Configured-unavailable credentials remain visible but cannot start the runtime.
+        return inspected.configured && Boolean(inspected.token.trim());
+      },
+      unconfiguredReason: (account, cfg) => {
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        return (
+          inspected.stateReason ??
+          (inspected.tokenStatus === "configured_unavailable"
+            ? `not configured: token ${inspected.tokenSource} is configured but unavailable`
+            : "not configured")
+        );
+      },
+      describeAccount: (account, cfg) => {
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: inspected.configured,
+          tokenSource: inspected.tokenSource,
+          tokenStatus: inspected.tokenStatus,
+        };
+      },
+    },
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,

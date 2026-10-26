@@ -82,7 +82,9 @@ already applied the exact saved source before the managed notification arrives, 
 RPC acknowledges that completed application without resolving secrets or scanning
 skills again. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
-with recovery guidance. `config.set` acknowledges persistence only.
+with recovery guidance. `config.set` acknowledges persistence only. With
+`gateway.reload.mode: "off"`, a write that needs no restart is acknowledged once
+persisted and applies at the next restart; a write that needs a restart schedules one.
 
 When a committed write cannot finish runtime application, the error's
 `details.persistedConfig` contains the redacted committed `config` and its public
@@ -116,6 +118,11 @@ use `[]`, such as `models.providers.custom.models[].input`. Parent paths and `*`
 wildcards do not authorize descendant arrays. This prevents truncated
 `config.get` snapshots from silently clobbering routing or allowlist arrays. Use
 `config.apply` when you intend to replace the full config.
+
+For keyed agent rosters, setting an existing `agents.entries.<agentId>` entry to
+`null` in a revision-checked patch authorizes removing that entry. Multiple entries
+can be removed together; omitted siblings stay unchanged.
+Arrays inside removed entries still require their exact `replacePaths` acknowledgments.
 
 Arrays of objects with stable `id` fields merge by ID unless their path appears
 in `replacePaths`. These updates preserve authored fields in untouched entries;

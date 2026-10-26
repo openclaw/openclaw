@@ -103,7 +103,11 @@
   color: var(--text);
 }
 
-.sessions-transcript-search__clear:focus-visible {
+.sessions-transcript-search__clear:focus-visible,
+.sessions-transcript-search__result:focus-visible,
+.sessions-filter-popover__clear:focus-visible,
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -183,11 +187,6 @@
   background: var(--bg-hover);
 }
 
-.sessions-transcript-search__result:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .sessions-transcript-search__result-header > strong {
   overflow: hidden;
   color: var(--text-strong);
@@ -257,11 +256,6 @@
 .sessions-filter-popover__clear:hover {
   color: var(--text);
   background: var(--bg-hover);
-}
-
-.sessions-filter-popover__clear:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .sessions-filter-popover__clear svg {
@@ -737,12 +731,6 @@
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible,
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .session-actions .icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.3;
@@ -912,6 +900,13 @@
 .session-detail-stat__value {
   font-weight: 600;
   line-height: 1.35;
+}
+
+/* The agent chooser arrives after the initial page frame. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  openclaw-sessions-page .hub-page-header__actions {
+    min-block-size: 34px;
+  }
 }
 
 @media (max-width: 768px) {

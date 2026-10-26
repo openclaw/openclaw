@@ -1,10 +1,10 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screencastParams } from "./test-support.js";
-import { clearBrowserScreencastTokens, mintBrowserScreencastToken } from "./tokens.js";
 import * as tokens from "./tokens.js";
 import { handleBrowserScreencastUpgrade } from "./upgrade.js";
 
@@ -19,28 +19,20 @@ describe("browser screencast WebSocket upgrade", () => {
   beforeEach(async () => {
     mocks.attach.mockReset();
     clients = [];
-    server = createServer();
-    server.on("upgrade", (req, socket, head) => {
+    server = createServer().on("upgrade", (req, socket, head) => {
       void handleBrowserScreencastUpgrade(req, socket, head);
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
+    await once(server.listen(0, "127.0.0.1"), "listening");
     url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/browser/screencast`;
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    for (const client of clients) {
-      client.terminate();
-    }
-    for (const [, viewer] of mocks.attach.mock.calls) {
-      (viewer as WebSocket).terminate();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    clearBrowserScreencastTokens();
+    clients.forEach((client) => client.terminate());
+    mocks.attach.mock.calls.forEach(([, viewer]) => (viewer as WebSocket).terminate());
+    await promisify(server.close.bind(server))();
+    tokens.clearBrowserScreencastTokens();
   });
 
   function connect(token: string, autoPong = true): WebSocket {
@@ -65,46 +57,43 @@ describe("browser screencast WebSocket upgrade", () => {
   it("accepts a minted token once and rejects invalid or reused tokens with HTTP 401", async () => {
     expect(await rejected("invalid")).toBe(401);
     const params = screencastParams();
-    const token = mintBrowserScreencastToken(params).token;
+    const token = tokens.mintBrowserScreencastToken(params).token;
     const ws = connect(token);
     await once(ws, "open");
     expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket), undefined);
     expect(await rejected(token)).toBe(401);
   });
 
-  it("rejects a fresh token whose requester aborts during consumption", async () => {
+  it.each(["abort", "invalidate"])("rejects a ticket on requester %s", async (mode) => {
     const requester = new AbortController();
-    const token = mintBrowserScreencastToken(
-      screencastParams({ requesterSignal: requester.signal }),
-    );
-    const consume = tokens.consumeBrowserScreencastToken;
-    vi.spyOn(tokens, "consumeBrowserScreencastToken").mockImplementationOnce((value) => {
-      const params = consume(value);
-      requester.abort();
-      return params;
-    });
-    expect(await rejected(token.token)).toBe(401);
-    expect(mocks.attach).not.toHaveBeenCalled();
-  });
-
-  it("rejects and consumes a minted ticket after requester invalidation before its close handshake finishes", async () => {
-    const requester = { invalidated: false, signal: new AbortController().signal };
-    const token = mintBrowserScreencastToken(
+    let current = true;
+    const { token } = tokens.mintBrowserScreencastToken(
       screencastParams({
         requesterSignal: requester.signal,
-        isRequesterCurrent: () => !requester.invalidated,
+        isRequesterCurrent: () => current,
       }),
     );
-    requester.invalidated = true;
-    expect(requester.signal.aborted).toBe(false);
-    expect(await rejected(token.token)).toBe(401);
-    requester.invalidated = false;
-    expect(await rejected(token.token)).toBe(401);
+    if (mode === "abort") {
+      const consume = tokens.consumeBrowserScreencastToken;
+      vi.spyOn(tokens, "consumeBrowserScreencastToken").mockImplementationOnce((value) => {
+        const params = consume(value);
+        requester.abort();
+        return params;
+      });
+    } else {
+      current = false;
+      expect(requester.signal.aborted).toBe(false);
+    }
+    expect(await rejected(token)).toBe(401);
+    if (mode === "invalidate") {
+      current = true;
+      expect(await rejected(token)).toBe(401);
+    }
     expect(mocks.attach).not.toHaveBeenCalled();
   });
 
   it("rejects binary input on the view-only socket", async () => {
-    const ws = connect(mintBrowserScreencastToken(screencastParams()).token);
+    const ws = connect(tokens.mintBrowserScreencastToken(screencastParams()).token);
     await once(ws, "open");
     const closed = once(ws, "close");
     ws.send(Buffer.from([1]));
@@ -113,7 +102,7 @@ describe("browser screencast WebSocket upgrade", () => {
 
   it("pings viewers and terminates a missed pong", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
-    const ws = connect(mintBrowserScreencastToken(screencastParams()).token, false);
+    const ws = connect(tokens.mintBrowserScreencastToken(screencastParams()).token, false);
     await once(ws, "open");
     const ping = once(ws, "ping");
     await vi.advanceTimersByTimeAsync(25_000);

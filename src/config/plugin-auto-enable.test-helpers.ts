@@ -1,12 +1,12 @@
 import path from "node:path";
+import { makePluginMetadataIndex } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-// Provides fixtures for plugin auto-enable config tests.
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -50,32 +50,20 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
   };
 }
 
-export function makeRegistry(
-  plugins: Array<{
-    id: string;
-    channels: string[];
-    activation?: { onAgentHarnesses?: string[] };
-    autoEnableWhenConfiguredProviders?: string[];
-    modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
-    contracts?: {
-      speechProviders?: string[];
-      workerProviders?: string[];
-      storageProviders?: string[];
-      decisionProviders?: string[];
-      webSearchProviders?: string[];
-      webFetchProviders?: string[];
-      tools?: string[];
-    };
-    providers?: string[];
-    cliBackends?: string[];
-    origin?: PluginOrigin;
-    configSchema?: Record<string, unknown>;
-    channelConfigs?: Record<
-      string,
-      { schema: Record<string, unknown>; label?: string; preferOver?: string[] }
-    >;
-  }>,
-): PluginManifestRegistry {
+type RegistryPlugin = Pick<
+  PluginManifestRecord,
+  | "id"
+  | "channels"
+  | "activation"
+  | "autoEnableWhenConfiguredProviders"
+  | "modelSupport"
+  | "contracts"
+  | "configSchema"
+  | "channelConfigs"
+> &
+  Partial<Pick<PluginManifestRecord, "providers" | "cliBackends" | "origin">>;
+
+export function makeRegistry(plugins: RegistryPlugin[]): PluginManifestRegistry {
   return {
     plugins: plugins.map((plugin) => ({
       id: plugin.id,
@@ -99,55 +87,42 @@ export function makeRegistry(
   };
 }
 
-export function createPluginMetadataSnapshot(params: {
+export function createPluginMetadataSnapshot({
+  config,
+  manifestRegistry,
+  workspaceDir,
+}: {
   config?: OpenClawConfig;
   manifestRegistry: PluginManifestRegistry;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  const { plugins, diagnostics } = manifestRegistry;
+  const empty = createEmptyPluginMetadataSnapshot();
   const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+    ...makePluginMetadataIndex(),
     policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
     plugins: [],
-    diagnostics: [],
   };
   return {
+    ...empty,
     policyHash,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
     index,
     registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: params.manifestRegistry,
-    plugins: params.manifestRegistry.plugins,
-    diagnostics: params.manifestRegistry.diagnostics,
-    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry.plugins),
+    manifestRegistry,
+    plugins,
+    diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: buildPluginMetadataProviderFacts(params.manifestRegistry.plugins)
-        .providerAuthContributions,
-      modelIdNormalizationPolicies: new Map(),
+      ...empty.owners,
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
     },
     metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: params.manifestRegistry.plugins.length,
+      ...empty.metrics,
+      manifestPluginCount: plugins.length,
     },
   };
 }

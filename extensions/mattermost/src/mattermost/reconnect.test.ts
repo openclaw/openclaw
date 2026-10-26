@@ -1,4 +1,3 @@
-// Mattermost tests cover reconnect plugin behavior.
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithReconnect } from "./reconnect.js";
@@ -30,20 +29,12 @@ describe("runWithReconnect", () => {
   it("resets backoff after successful connection", async () => {
     const abort = new AbortController();
     const delays: number[] = [];
-    let callCount = 0;
-    const connectFn = vi.fn(async () => {
-      callCount++;
-      if (callCount === 1) {
-        throw new Error("first failure");
-      }
-      if (callCount === 2) {
-        return;
-      }
-      if (callCount === 3) {
-        throw new Error("second failure");
-      }
-      abort.abort();
-    });
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second failure"))
+      .mockImplementation(async () => abort.abort());
 
     const run = runWithReconnect(connectFn, {
       abortSignal: abort.signal,
@@ -76,14 +67,10 @@ describe("runWithReconnect", () => {
     vi.mocked(Math.random).mockReturnValue(1);
     const abort = new AbortController();
     const delays: number[] = [];
-    let callCount = 0;
-    const connectFn = vi.fn(async () => {
-      callCount++;
-      if (callCount === 1) {
-        throw new Error("connection refused");
-      }
-      abort.abort();
-    });
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockImplementation(async () => abort.abort());
 
     const run = runWithReconnect(connectFn, {
       abortSignal: abort.signal,

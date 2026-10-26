@@ -113,27 +113,6 @@ async function withGraphMediaResponse<T>(
   }
 }
 
-async function fetchGraphCollection(
-  params: GraphMediaRequest & { url: string },
-): Promise<{ status: number; items: unknown[] }> {
-  return withGraphMediaResponse(params, params.url, "collection", async (response) => {
-    const status = response.status;
-    if (!response.ok) {
-      return { status, items: [] };
-    }
-    try {
-      const items = await readProviderJsonArrayFieldResponse(
-        response,
-        "MS Teams Graph collection",
-        "value",
-      );
-      return { status, items };
-    } catch {
-      return { status, items: [] };
-    }
-  });
-}
-
 function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachmentLike {
   let content: unknown = att.content;
   if (typeof content === "string") {
@@ -152,71 +131,6 @@ function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachment
   };
 }
 
-async function downloadGraphHostedContent(
-  params: GraphMediaRequest & {
-    messageUrl: string;
-    maxBytes: number;
-    logger?: MSTeamsAttachmentDownloadLogger;
-  },
-): Promise<{ media: MSTeamsInboundMedia[]; status?: number; count: number }> {
-  let hosted: { status: number; items: GraphHostedContent[] };
-  try {
-    hosted = (await fetchGraphCollection({
-      ...params,
-      url: `${params.messageUrl}/hostedContents`,
-    })) as { status: number; items: GraphHostedContent[] };
-  } catch (err) {
-    params.logger?.warn?.("msteams graph hostedContents fetch failed", {
-      error: coerceErrorMessage(err),
-    });
-    return { media: [], count: 0 };
-  }
-  if (hosted.items.length === 0) {
-    return { media: [], status: hosted.status, count: 0 };
-  }
-
-  const out: MSTeamsInboundMedia[] = [];
-  for (const item of hosted.items) {
-    if (!item.id) {
-      out.push(createGraphHostedContentFact(item));
-      continue;
-    }
-
-    // Graph's list API returns metadata only; hosted bytes live at `$value`.
-    // Keep the JSON cap independent from the configured binary media limit.
-    try {
-      const sourceId = item.id;
-      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(sourceId)}/$value`;
-      await withGraphMediaResponse(params, valueUrl, "hostedContent.value", async (valRes) => {
-        if (!valRes.ok) {
-          out.push(createGraphHostedContentFact(item));
-          return;
-        }
-        const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
-          sourceUrl: valueUrl,
-          maxBytes: params.maxBytes,
-          fallbackContentType: item.contentType ?? undefined,
-          subdir: "inbound",
-        });
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          kind: resolveMSTeamsMediaKind({ contentType: saved.contentType }),
-          sourceId,
-        });
-      });
-    } catch (err) {
-      out.push(createGraphHostedContentFact(item));
-      params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
-        error: coerceErrorMessage(err),
-      });
-      continue;
-    }
-  }
-
-  return { media: out, status: hosted.status, count: hosted.items.length };
-}
-
 export async function downloadMSTeamsGraphMedia(params: {
   messageUrl?: string | null;
   tokenProvider?: MSTeamsAccessTokenProvider;
@@ -224,8 +138,6 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   /** Optional logger used to surface Graph/SharePoint fetch errors. */
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<MSTeamsGraphMediaResult> {
@@ -315,14 +227,79 @@ export async function downloadMSTeamsGraphMedia(params: {
     authAllowHosts: policy.authAllowHosts,
   });
 
-  const hosted = await downloadGraphHostedContent({
-    accessToken,
-    messageUrl,
-    maxBytes: params.maxBytes,
-    ssrfPolicy,
-    logger: params.logger,
-    deadline: params.deadline,
-  });
+  const { maxBytes, logger, deadline } = params;
+  const hostedRequest = { accessToken, ssrfPolicy, deadline };
+  let hosted: { status?: number; items: GraphHostedContent[] } = { items: [] };
+  try {
+    hosted = (await withGraphMediaResponse(
+      hostedRequest,
+      `${messageUrl}/hostedContents`,
+      "collection",
+      async (response) => {
+        const status = response.status;
+        if (!response.ok) {
+          return { status, items: [] };
+        }
+        try {
+          const items = await readProviderJsonArrayFieldResponse(
+            response,
+            "MS Teams Graph collection",
+            "value",
+          );
+          return { status, items };
+        } catch {
+          return { status, items: [] };
+        }
+      },
+    )) as { status: number; items: GraphHostedContent[] };
+  } catch (err) {
+    logger?.warn?.("msteams graph hostedContents fetch failed", {
+      error: coerceErrorMessage(err),
+    });
+  }
+  const hostedMedia: MSTeamsInboundMedia[] = [];
+  for (const item of hosted.items) {
+    if (!item.id) {
+      hostedMedia.push(createGraphHostedContentFact(item));
+      continue;
+    }
+
+    // Graph's list API returns metadata only; hosted bytes live at `$value`.
+    // Keep the JSON cap independent from the configured binary media limit.
+    try {
+      const sourceId = item.id;
+      const valueUrl = `${messageUrl}/hostedContents/${encodeURIComponent(sourceId)}/$value`;
+      await withGraphMediaResponse(
+        hostedRequest,
+        valueUrl,
+        "hostedContent.value",
+        async (valRes) => {
+          if (!valRes.ok) {
+            hostedMedia.push(createGraphHostedContentFact(item));
+            return;
+          }
+          const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
+            sourceUrl: valueUrl,
+            maxBytes,
+            fallbackContentType: item.contentType ?? undefined,
+            subdir: "inbound",
+          });
+          hostedMedia.push({
+            path: saved.path,
+            contentType: saved.contentType,
+            kind: resolveMSTeamsMediaKind({ contentType: saved.contentType }),
+            sourceId,
+          });
+        },
+      );
+    } catch (err) {
+      hostedMedia.push(createGraphHostedContentFact(item));
+      logger?.warn?.("msteams graph hostedContent value fetch failed", {
+        error: coerceErrorMessage(err),
+      });
+      continue;
+    }
+  }
 
   const normalizedAttachments = messageAttachments.map(normalizeGraphAttachment);
   // References already produced a downloaded or unavailable fact above.
@@ -339,7 +316,6 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       deadline: params.deadline,
-      preserveFilenames: params.preserveFilenames,
       logger: params.logger,
     });
   } catch (err) {
@@ -350,8 +326,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   }
 
   return {
-    media: [...sharePointMedia, ...hosted.media, ...attachmentMedia],
-    hostedCount: hosted.count,
+    media: [...sharePointMedia, ...hostedMedia, ...attachmentMedia],
+    hostedCount: hosted.items.length,
     attachmentCount: filteredAttachments.length + sharePointMedia.length,
     hostedStatus: hosted.status,
     attachmentStatus: messageStatus,

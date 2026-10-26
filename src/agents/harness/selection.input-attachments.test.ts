@@ -158,7 +158,6 @@ describe("registered harness input attachment preparation", () => {
         "tool_result_persist",
         "before_compaction",
         "after_compaction",
-        "heartbeat_prompt_contribution",
       ] as const
     ).map((hook) => ({ name: hook, hook, waits: true })),
     { name: "internal bootstrap", bootstrap: true, waits: true },
@@ -188,8 +187,7 @@ describe("registered harness input attachment preparation", () => {
     const pending = runAgentHarnessAttempt({
       ...createAttemptParams(),
       agentHarnessId: "openclaw",
-      trigger:
-        scenario.hook === "heartbeat_prompt_contribution" && scenario.waits ? "heartbeat" : "user",
+      trigger: "user",
       awaitSessionDiffBaseline: awaitBaseline,
     });
     try {
