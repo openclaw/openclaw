@@ -119,12 +119,10 @@ function createSseDoneDetector() {
     lineOverflowed = false;
   };
   const observeText = (text: string) => {
-    const lines = text.split(/[\r\n]/);
-    for (let index = 0; index < lines.length; index++) {
+    for (const [index, segment] of text.split(/[\r\n]/).entries()) {
       if (index > 0) {
         finishLine();
       }
-      const segment = lines[index];
       if (!lineOverflowed && line.length + segment.length <= SSE_DONE_MAX_LINE_CHARS) {
         line += segment;
       } else {

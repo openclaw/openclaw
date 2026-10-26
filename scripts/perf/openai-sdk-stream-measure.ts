@@ -177,8 +177,8 @@ const server = createServer((req, res) => {
     requests++;
     res.writeHead(200, { "content-type": "text/event-stream" });
     void (async () => {
-      for (let i = 0; i < frames.length; i++) {
-        res.write(frames[i]);
+      for (const [i, frame] of frames.entries()) {
+        res.write(frame);
         // Keep wire chunks realistic instead of handing the SDK one prebuilt body.
         if (i % 8 === 7) {
           await setImmediate();
