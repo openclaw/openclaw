@@ -5780,7 +5780,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       PARALLEL_BUILT_VERIFIERS: "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
       PARALLEL_GATEWAY_WATCH: "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
       RUN_CHANNELS:
-        "${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true' }}",
+        "${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}",
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expectIncludes(run, [

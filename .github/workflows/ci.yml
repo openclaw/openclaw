@@ -162,6 +162,7 @@ jobs:
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
       run_proof_tier: ${{ steps.manifest.outputs.run_proof_tier }}
       run_browser_native_host: ${{ steps.manifest.outputs.run_browser_native_host }}
       run_doctor_plugin_index: ${{ steps.manifest.outputs.run_doctor_plugin_index }}
@@ -2072,12 +2073,12 @@ jobs:
           PARALLEL_BUILT_VERIFIERS: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
           # Hosted Linux has a higher RSS baseline; keep Blacksmith tighter.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
-          RUN_CHANNELS: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true' }}
+          RUN_CHANNELS: ${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           CHANNEL_NODE_OPTIONS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).NODE_OPTIONS }}
           CHANNEL_MAX_WORKERS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).OPENCLAW_VITEST_MAX_WORKERS }}
           RUN_DOCTOR_PLUGIN_INDEX: ${{ needs.preflight.outputs.run_doctor_plugin_index }}
           RUN_DISCORD_COMPONENT_PROOF: ${{ needs.preflight.outputs.run_discord_component_proof }}
-          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_gateway_watch }}
           RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
           RUN_TUI_PTY: ${{ needs.preflight.outputs.run_tui_pty }}

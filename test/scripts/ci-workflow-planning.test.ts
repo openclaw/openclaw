@@ -4070,6 +4070,62 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
+    { file: "scripts/test-built-source-verifiers.mts", selected: true },
+    { file: "scripts/run-vitest.mjs", selected: false },
+  ])("selects shared source verifier ownership for $file", ({ file, selected }) => {
+    const boundary = "test/extension-import-boundaries.test.ts";
+    const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: [file, boundary],
+      selectedTestTargets: [boundary],
+      targetFiles: [boundary, "test/vitest/vitest.boundary.config.ts"],
+      changedPlannerSource: `export {
+        createChangedNodeTestShards,
+        hasBuildArtifactAffectingChange,
+        hasSqliteSessionLifecycleAffectingChange,
+      } from ${JSON.stringify(planner)};`,
+      scopeEnv: {
+        OPENCLAW_CI_RUN_WINDOWS: "false",
+        OPENCLAW_CI_RUN_UI_TESTS: "false",
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+      },
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.run_built_source_verifiers).toBe(String(selected));
+    expect(manifest.outputs.run_build_artifacts).toBe(String(selected));
+    expect(manifest.outputs.run_proof_tier).toBe("false");
+    expect(manifest.outputs.run_checks_node_core_dist).toBe("false");
+    const rows = JSON.parse(
+      expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "source test matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual(
+      selected ? [] : ["checks-node-changed-boundary"],
+    );
+    const workflow = readCiWorkflow();
+    expect(workflow.jobs.preflight.outputs.run_built_source_verifiers).toBe(
+      "${{ steps.manifest.outputs.run_built_source_verifiers }}",
+    );
+    const verifiers = expectDefined(
+      workflow.jobs["build-artifacts"].steps.find(
+        (step: WorkflowStep) => step.name === "Run built artifact checks",
+      ),
+      "built verifier command",
+    );
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+    };
+    for (const flag of ["RUN_CHANNELS", "RUN_CORE_SUPPORT_BOUNDARY"]) {
+      expect(evaluateWorkflowExpression(verifiers.env[flag], context), flag).toBe(selected);
+    }
+  });
+
+  it.each([
     {
       file: "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
       output: "run_browser_native_host",
