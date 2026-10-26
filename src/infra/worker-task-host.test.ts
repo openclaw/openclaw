@@ -37,7 +37,7 @@ it.each(["warm", "admission", "postgres"] as const)(
       expect(transfers).toEqual(channels.map(({ port1 }) => port1));
       expect(context.postgresPool?.services.length ?? 0).toBe(kind === "postgres" ? 4 : 0);
       const delivery = once(transport.port2, "message");
-      transport.port1.postMessage(context, transfers);
+      transport.port1.postMessage(context, [...transfers]);
       [received] = await delivery;
       const ports = [
         received?.databaseAdmissionPort,
