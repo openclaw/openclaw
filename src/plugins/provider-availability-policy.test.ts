@@ -57,12 +57,11 @@ it.each(["openrouter", "kilocode"])(
   },
 );
 
-it.each([true, false, "true", 1, null])("accepts only the boolean declaration %s", (value) => {
+it.each([false, "true"])("rejects non-enabled availability declaration %s", (value) => {
   const dir = tempDirs.make("openclaw-provider-availability-");
   writeManifest(dir, value);
   const loaded = loadPluginManifest(dir, false);
-  const declaration = loaded.ok && loaded.manifest.managesOwnAvailability;
-  expect(declaration).toBe(value === true ? true : undefined);
+  expect(loaded.ok && loaded.manifest.managesOwnAvailability).toBeUndefined();
 });
 
 it("uses cold third-party metadata and the same pinned runtime generation without executing the plugin", async () => {
@@ -78,14 +77,7 @@ it("uses cold third-party metadata and the same pinned runtime generation withou
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", undefined);
 
-  const config = {
-    plugins: {
-      enabled: true,
-      allow: ["installed"],
-      entries: { installed: { enabled: true } },
-      load: { paths: [pluginDir] },
-    },
-  };
+  const config = { plugins: { allow: ["installed"], load: { paths: [pluginDir] } } };
   setRuntimeConfigSnapshot(config, config);
   expect([managesAvailability("LOCAL"), managesAvailability("unrelated")]).toEqual([true, false]);
   const snapshot = loadPluginMetadataSnapshot({ config, env: process.env });

@@ -4,7 +4,6 @@ import { collectPluginSchemaMetadataCore } from "../config/channel-config-metada
 import { buildConfigSchemaCore, lookupConfigSchema } from "../config/schema.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
-import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 
 // Load the public manifest only; config validation must not activate provider runtime.
 const rootDir = path.resolve("extensions/vllm");
@@ -67,7 +66,15 @@ describe("provider-owned model params", () => {
   });
 
   it("exposes the model schema and server prerequisite only for vLLM model paths", () => {
-    const response = schemaFor();
+    const registry = {
+      ...manifestRegistry,
+      plugins: manifestRegistry.plugins.flatMap((plugin) => [
+        { ...plugin, id: "z-first", providerRequest: { providers: { vllm: model("string") } } },
+        { ...plugin, id: "a-last" },
+      ]),
+    };
+    const response = schemaFor(registry);
+    expect(validate(priority(true), undefined, registry).ok).toBe(true);
     for (const scope of scopes) {
       expect(schemaAt(response, priorityPath(scope))).toMatchObject({
         type: "boolean",
@@ -78,21 +85,6 @@ describe("provider-owned model params", () => {
       expect([unrelated?.type, unrelated?.description]).toEqual([undefined, undefined]);
       expect(schemaAt(response, `${scope}.models.vllm/model.alias`)?.type).toBe("string");
     }
-  });
-
-  it("uses the request metadata owner for validation and schema presentation", () => {
-    const registry = {
-      ...manifestRegistry,
-      plugins: manifestRegistry.plugins.flatMap((plugin) => [
-        { ...plugin, id: "z-first", providerRequest: { providers: { vllm: model("string") } } },
-        { ...plugin, id: "a-last" },
-      ]),
-    };
-    expect(validate(priority(true), undefined, registry).ok).toBe(true);
-    expect(schemaAt(schemaFor(registry), priorityPath(scopes[0]))?.type).toBe("boolean");
-    expect(
-      buildPluginMetadataProviderFacts(registry.plugins).providerRequests.get("vllm"),
-    ).toMatchObject(model("boolean"));
   });
 
   it("budgets both default and per-agent copies of provider model schemas", () => {

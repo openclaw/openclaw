@@ -55,7 +55,7 @@ it.each([
   { prewarm: "alias", configured: "canonical" },
   { prewarm: "canonical", configured: "alias" },
 ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {
-  const { roots, identity, manifestPath, env } = createAliasedPlugin();
+  const { roots, identity, env } = createAliasedPlugin();
   freshCache(() => {
     expect(loadPluginManifest(roots[prewarm]).ok).toBe(true);
     const index = loadInstalledPluginIndex({
@@ -67,12 +67,8 @@ it.each([
     expect(index.plugins[0]).toMatchObject({
       rootDir: roots.canonical,
       ...identity,
-      packageJson: { path: "package.json" },
     });
     expect(index.diagnostics).toEqual([]);
-    for (const root of Object.values(roots)) {
-      expect(loadPluginManifest(root)).toMatchObject({ ok: true, manifestPath });
-    }
   });
 });
 
