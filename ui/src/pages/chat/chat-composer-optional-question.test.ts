@@ -10,8 +10,11 @@ import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 const question = (itemId: string, options?: string[]) => ({
-  itemId,
-  questions: [{ title: `Which ${itemId}?`, ...(options ? { options } : {}) }],
+  role: "assistant",
+  openclawAsyncDelivery: {
+    itemId,
+    questions: [{ title: `Which ${itemId}?`, ...(options ? { options } : {}) }],
+  },
 });
 type QuestionProps = ReturnType<typeof createComposerProps> & {
   onAsyncQuestionSubmit?: () => Promise<boolean>;
@@ -44,12 +47,8 @@ function optionalQuestion(draft = "Keep writing", withOptions = true) {
       draft,
       messages: [
         {
-          role: "assistant",
+          ...question("audience", withOptions ? ["Everyone", "Engineers"] : undefined),
           content: "Which audience?",
-          openclawAsyncDelivery: question(
-            "audience",
-            withOptions ? ["Everyone", "Engineers"] : undefined,
-          ),
         },
       ],
     }),
@@ -115,18 +114,12 @@ it("keeps unseen queued questions compact but expands explicit navigation", () =
   textarea.focus();
   const readPanel = questionReader(props);
   readPanel(true);
-  props.messages = [
-    ...props.messages,
-    { role: "assistant", openclawAsyncDelivery: question("format") },
-  ];
+  props.messages = [...props.messages, question("format")];
   readPanel(true, "Which audience?");
   props.messages = props.messages.slice(1);
   readPanel(true, "Which format?");
   expect(document.activeElement).toBe(textarea);
-  props.messages = [
-    ...props.messages,
-    { role: "assistant", openclawAsyncDelivery: question("tone") },
-  ];
+  props.messages = [...props.messages, question("tone")];
   readPanel()!.onNextRequest?.();
   readPanel(false, "Which tone?");
 });

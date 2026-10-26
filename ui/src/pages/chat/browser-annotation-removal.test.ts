@@ -84,7 +84,10 @@ it("preserves siblings and restores the complete package once at its original po
   expect(releasePayload).not.toHaveBeenCalled();
 });
 
-it("finalizes payload ownership once when Undo expires", () => {
+it.each(["expires", "cannot be presented"])("releases once when Undo %s", (reason) => {
+  if (reason === "cannot be presented") {
+    vi.mocked(showToast).mockReturnValue(false);
+  }
   remove();
   toasts[0]?.onDismiss?.("timeout");
   toasts[0]?.onDismiss?.("timeout");
@@ -120,10 +123,4 @@ it("releases instead of exceeding the bound when Undo follows a replacement", ()
   expect(toasts[1]?.message).toBe(
     "Undo is unavailable because the browser annotation limit has been reached.",
   );
-});
-
-it("releases immediately when no toast host can present Undo", () => {
-  vi.mocked(showToast).mockReturnValue(false);
-  remove();
-  expect(releasePayload).toHaveBeenCalledOnce();
 });

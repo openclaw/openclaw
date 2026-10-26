@@ -47,24 +47,31 @@ function edges(host: HTMLElement) {
   return [...host.querySelectorAll<HTMLElement>(".chat-mobile-host__scroll-edge")];
 }
 
+function connect(fades: ReturnType<typeof createMobileSheetScrollFades>, host: HTMLElement) {
+  const disconnect = fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, host));
+  releases.push(disconnect);
+  vi.advanceTimersToNextFrame();
+  return disconnect;
+}
+
+function scroll(element: HTMLElement, top = element.scrollTop) {
+  element.scrollTop = top;
+  element.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersToNextFrame();
+}
+
 it("paints retained and late scroll ports in document order with the existing inset and surface", () => {
   const host = shell();
   const first = port(host, 30);
   const second = port(host, 50);
   const fades = createMobileSheetScrollFades();
-  releases.push(
-    fades.register(second),
-    fades.register(first),
-    fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, host)),
-  );
-  vi.advanceTimersToNextFrame();
+  releases.push(fades.register(second), fades.register(first));
+  connect(fades, host);
 
   expect(edges(host).map((edge) => edge.style.left)).toEqual(["22px", "22px", "42px", "42px"]);
   const top = edges(host)[0]!;
   const bottom = edges(host)[1]!;
-  expect(top.style.top).toBe("33px");
-  expect(bottom.style.top).toBe("123px");
-  expect(top.style.width).toBe("180px");
+  expect([top.style.top, bottom.style.top, top.style.width]).toEqual(["33px", "123px", "180px"]);
   expect(top.style.getPropertyValue("--mobile-fade-surface")).toBe("rgb(10, 20, 30)");
   expect([top.hidden, bottom.hidden]).toEqual([false, false]);
 
@@ -82,13 +89,9 @@ it("paints retained and late scroll ports in document order with the existing in
   expect(edges(host)[0]).toBe(top);
   expect(edges(host)[1]).toBe(bottom);
 
-  first.scrollTop = 0;
-  first.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
+  scroll(first, 0);
   expect([top.hidden, bottom.hidden]).toEqual([true, false]);
-  first.scrollTop = 200;
-  first.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
+  scroll(first, 200);
   expect([top.hidden, bottom.hidden]).toEqual([false, true]);
 });
 
@@ -100,22 +103,17 @@ it("reconnects retained ports only within the current shell and releases dispose
   const fades = createMobileSheetScrollFades();
   const releaseRetained = fades.register(retained);
   releases.push(releaseRetained, fades.register(outside));
-  const disconnect = fades.connect((ports) =>
-    createMobileSheetScrollFadeConnection(ports, firstHost),
-  );
-  vi.advanceTimersToNextFrame();
+  const disconnect = connect(fades, firstHost);
   expect(edges(firstHost)).toHaveLength(2);
   expect(edges(nextHost)).toHaveLength(0);
 
   disconnect();
   expect(firstHost.querySelector(".chat-mobile-host__scroll-fades")).toBeNull();
-  retained.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
+  scroll(retained);
   expect(edges(firstHost)).toHaveLength(0);
 
   nextHost.prepend(retained);
-  releases.push(fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, nextHost)));
-  vi.advanceTimersToNextFrame();
+  connect(fades, nextHost);
   expect(edges(nextHost)).toHaveLength(4);
   releaseRetained();
   expect(edges(nextHost)).toHaveLength(2);
@@ -124,7 +122,6 @@ it("reconnects retained ports only within the current shell and releases dispose
   await Promise.resolve();
   vi.advanceTimersToNextFrame();
   expect(edges(nextHost)).toHaveLength(0);
-  retained.dispatchEvent(new Event("scroll"));
-  vi.advanceTimersToNextFrame();
+  scroll(retained);
   expect(edges(nextHost)).toHaveLength(0);
 });

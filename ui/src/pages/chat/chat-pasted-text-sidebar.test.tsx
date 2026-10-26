@@ -22,6 +22,8 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
+const restoreSelector = ".chat-attachment-text-action";
+const iconSelector = ".chat-attachment-file__icon svg";
 beforeEach(installTranscriptDomMocks);
 afterEach(() => {
   resetChatViewState();
@@ -53,41 +55,40 @@ it.each(["restore", "preview"] as const)(
   "handles the pasted file card %s action independently",
   async (action) => {
     const text = "  Preserve indentation 🦞\n" + "x".repeat(1100);
-    const f = pastedText(text);
+    const { props, attachment } = pastedText(text);
     const sidebar = action === "preview" ? createAttachmentSidebarHarness() : undefined;
-    const onOpenSidebar = sidebar?.open ?? f.props.onOpenSidebar;
-    const { onDraftChange } = f.props;
+    const onOpenSidebar = sidebar?.open ?? props.onOpenSidebar;
+    const { onDraftChange } = props;
     const container = renderChatView({
-      ...f.props,
-      attachments: f.props.getAttachments(),
+      ...props,
+      attachments: props.getAttachments(),
       getDraft: () => "Newer draft",
       onOpenSidebar,
     });
     document.body.append(container);
-    const target =
-      action === "restore" ? "openclaw-chat-pasted-text button" : ".chat-attachment-file__icon svg";
+    const target = action === "restore" ? "openclaw-chat-pasted-text button" : iconSelector;
     await waitForFast(() => expect(container.querySelector(target)).not.toBeNull());
     if (action === "restore") {
-      const restore = button(container, ".chat-attachments-preview .chat-attachment-text-action");
+      const restore = button(container, `.chat-attachments-preview ${restoreSelector}`);
       restore.click();
       restore.click();
       expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Newer draft\n\n" + text);
-      expect(f.props.getAttachments()).toEqual([]);
+      expect(props.getAttachments()).toEqual([]);
       expect(onOpenSidebar).not.toHaveBeenCalled();
     } else {
       const open = container.querySelector(".chat-attachment-file__open");
       expect(open?.closest("openclaw-tooltip")).toBeNull();
       container
-        .querySelector(".chat-attachment-file__icon svg")!
+        .querySelector(iconSelector)!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(onOpenSidebar).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
       );
-      const sidebarRestore = button(sidebar!.container, ".chat-attachment-text-action");
+      const sidebarRestore = button(sidebar!.container, restoreSelector);
       expect(sidebarRestore.textContent?.trim()).toBe("Show in text field");
       sidebar!.container.querySelector<HTMLButtonElement>("button[aria-label^='Remove']")!.click();
-      expect(f.props.getAttachments()).toEqual([]);
-      expect(getChatAttachmentDataUrl(f.attachment)).toBeNull();
+      expect(props.getAttachments()).toEqual([]);
+      expect(getChatAttachmentDataUrl(attachment)).toBeNull();
       expect(onDraftChange).not.toHaveBeenCalled();
     }
   },
@@ -96,14 +97,13 @@ it.each(["restore", "preview"] as const)(
 it.each(["disabled", "removed", "aborted"] as const)(
   "guards the in-card restore action after %s",
   async (state) => {
-    const f = pastedText("Preserve this paste " + "x".repeat(1100));
-    const { attachment } = f;
+    const { props: source, attachment } = pastedText("Preserve this paste " + "x".repeat(1100));
     const controller = new AbortController();
     const onAttachmentsChange = vi.fn();
-    const { onDraftChange, onOpenSidebar } = f.props;
+    const { onDraftChange, onOpenSidebar } = source;
     const props: ChatAttachmentControlsProps = {
-      ...f.props,
-      attachments: f.props.getAttachments(),
+      ...source,
+      attachments: source.getAttachments(),
       readSignal: controller.signal,
       disabled: state === "disabled",
       onAttachmentsChange,
@@ -111,16 +111,14 @@ it.each(["disabled", "removed", "aborted"] as const)(
     const { container } = mountSolid(() => (
       <ComposerPastedText attachment={attachment} controls={props} />
     ));
-    await waitForFast(() =>
-      expect(container.querySelector(".chat-attachment-text-action")).not.toBeNull(),
-    );
+    await waitForFast(() => expect(container.querySelector(restoreSelector)).not.toBeNull());
     if (state === "removed") {
-      f.props.onAttachmentsChange([]);
+      source.onAttachmentsChange([]);
     }
     if (state === "aborted") {
       controller.abort();
     }
-    for (const selector of [".chat-attachment-text-action", ".chat-attachment-remove"]) {
+    for (const selector of [restoreSelector, ".chat-attachment-remove"]) {
       const action = button(container, selector);
       expect(action.disabled).toBe(state === "disabled");
       action.dispatchEvent(new MouseEvent("click", { bubbles: true }));

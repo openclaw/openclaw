@@ -26,6 +26,7 @@ it("preserves threads while a same-client reconnect settles a pending answer", a
   const models: ModelCatalogEntry[] = [
     { id: "fixture-model", name: "Fixture model", provider: "test", available: true },
   ];
+  const metadata = { commands: [], models, swarmEnabled: false };
   const historyReady = createDeferred();
   onTestFinished(() => historyReady.resolve());
   const replies: Record<string, unknown> = {
@@ -34,8 +35,8 @@ it("preserves threads while a same-client reconnect settles a pending answer", a
     "sessions.messages.subscribe": { subscribed: true, key: current },
     "sessions.messages.unsubscribe": { subscribed: false, key: current },
     "models.authStatus": { ts: 1, providers: [] },
-    "models.list": { commands: [], models, swarmEnabled: false },
-    "chat.metadata": { commands: [], models, swarmEnabled: false },
+    "models.list": metadata,
+    "chat.metadata": metadata,
   };
   const request = createGatewayRequestMock(async (method) => {
     if (method === "chat.startup") {
@@ -56,6 +57,11 @@ it("preserves threads while a same-client reconnect settles a pending answer", a
   const hydrate = (...exchanges: Array<{ question: string; answer: string; ts: number }>) =>
     threads.hydrate(current, async () => ({ exchanges }), "main");
   const earlier = { question: "Earlier question", answer: "Earlier answer", ts: 1 };
+  const expectAnswer = (turn: Record<string, unknown>) =>
+    expect(view().turns).toMatchObject([
+      { ...earlier, status: "answered" },
+      { question, ...turn },
+    ]);
   await hydrate(earlier);
   const pending = threads.submit(current, question, () => answer.promise, "main");
   threads.setDraft(other, "other draft", "main");
@@ -69,29 +75,19 @@ it("preserves threads while a same-client reconnect settles a pending answer", a
     hello: null,
   });
 
-  expect(view().turns).toMatchObject([
-    { ...earlier, status: "answered" },
-    { question, status: "pending" },
-  ]);
+  expectAnswer({ status: "pending" });
   expect(view(other).draft).toBe("other draft");
   await pending;
-  expect(view().turns).toMatchObject([
-    { ...earlier, status: "answered" },
-    { question, status: "failed", hint: "unavailable", retryable: true },
-  ]);
+  expectAnswer({ status: "failed", hint: "unavailable", retryable: true });
 
   pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "connected" });
   expect(state.chatModelsLoading).toBe(true);
   expect(view(other).draft).toBe("other draft");
   await hydrate(earlier, { question, answer: "Recovered answer", ts: 2 });
-  expect(view().turns).toMatchObject([
-    { ...earlier, status: "answered" },
-    { question, status: "answered", answer: "Recovered answer", ts: 2 },
-  ]);
+  expectAnswer({ status: "answered", answer: "Recovered answer", ts: 2 });
   await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
   expect(consoleError).not.toHaveBeenCalled();
-  expect(state.chatModelCatalog).toEqual(models);
-  expect(state.chatModelCatalogError).toBeNull();
+  expect([state.chatModelCatalog, state.chatModelCatalogError]).toEqual([models, null]);
   const history = getChatHistoryLoadState(state);
   expect(history.phase).toBe("in-flight");
   historyReady.resolve();
