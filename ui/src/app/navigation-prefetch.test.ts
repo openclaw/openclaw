@@ -9,7 +9,8 @@ import {
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { connectShellIdle } from "./app-shell-idle.runtime.ts";
 
-vi.mock("./control-ui-favicon-status.runtime.ts", () => ({
+vi.mock("./control-ui-favicon-status.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-favicon-status.runtime.ts")>()),
   connectControlUiFavicon: () => () => {},
 }));
 
