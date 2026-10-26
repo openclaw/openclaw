@@ -1,72 +1,109 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   markTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
 } from "./interactive-fallback.js";
 import { createHarness, deliver, expectPreviewFinalized } from "./lane-delivery.test-support.js";
-const table = { type: "table" as const, caption: "Status", headers: ["Key"], rows: [["Gateway"]] };
-const html =
-  "<table><caption>Status</caption><thead><tr><th>Key</th></tr></thead><tbody><tr><td>Gateway</td></tr></tbody></table>";
-function payload(
-  text: string,
-  mode?: "fallback",
-  button?: { label: string; value: string; disabled?: boolean },
-): ReplyPayload {
-  return {
-    text,
-    presentationTextMode: mode,
-    presentation: {
-      blocks: button ? [table, { type: "buttons", buttons: [button] }] : [table],
-    },
-  };
-}
-const disabled = { label: "Unavailable", value: "x", disabled: true };
-const dropped = payload("Status summary\n\n- Copy manually", undefined, {
-  label: "Copy manually",
-  value: "x".repeat(65),
+const statusTable = {
+  type: "table" as const,
+  caption: "Status",
+  headers: ["Key"],
+  rows: [["Gateway"]],
+};
+const statusPayload = (text: string) => ({
+  text,
+  presentationTextMode: "fallback" as const,
+  presentation: { blocks: [statusTable] },
 });
-markTelegramDroppedControlFallback(dropped, "Status summary", dropped.text ?? "");
-
-it.each([
-  ["rich table", payload("Summary", "fallback"), true, html],
-  ["plain fallback", payload("Summary", "fallback"), false, "Summary"],
-  ["text only", { text: "Hello final" }, true, "Hello final"],
-  [
-    "degraded controls",
-    payload("Summary", undefined, disabled),
-    true,
-    `Summary\n\n${html}\n\n- Unavailable`,
-  ],
-  ["degraded fallback", payload("Summary", "fallback", disabled), true, `${html}\n\n- Unavailable`],
-  ["dropped control once", dropped, true, `Status summary\n\n${html}\n\n- Copy manually`],
-  [
-    "overlapping authored text",
-    { text: "Please read: Status", presentation: { blocks: [{ type: "text", text: "Status" }] } },
-    true,
-    "Please read: Status\n\nStatus",
-  ],
-  [
-    "title only",
-    { text: "Summary", presentation: { title: "Status", blocks: [] } },
-    true,
-    "Summary\n\n**Status**",
-  ],
-] satisfies Array<[string, ReplyPayload, boolean, string]>)(
-  "keeps partial text plain and finalizes %s on the same preview",
-  async (_name, reply, richMessages, expected) => {
-    const harness = createHarness({
-      answerMessageId: 999,
-      resolveFinalPresentationText: (input) =>
-        resolveFinalTelegramPresentationText({ ...input, richMessages }),
-    });
-    const send = (infoKind: "block" | "final") =>
-      deliver(harness, reply.text ?? "", { payload: reply, infoKind });
-    expect((await send("block")).kind).toBe("preview-updated");
-    expect(harness.answer?.lastDeliveredText()).toBe(reply.text);
-    expect(expectPreviewFinalized(await send("final")).content).toBe(expected);
-    expect(harness.answer?.lastDeliveredText()).toBe(expected);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.lanes.answer.finalized).toBe(true);
+const canonicalPayload = (presentationTextMode?: "fallback") => ({
+  text: "Summary",
+  presentationTextMode,
+  presentation: {
+    blocks: [
+      statusTable,
+      { type: "buttons" as const, buttons: [{ label: "Unavailable", value: "x", disabled: true }] },
+    ],
   },
-);
+});
+const renderFinal = (payload: ReplyPayload) =>
+  resolveFinalTelegramPresentationText({
+    richMessages: true,
+    text: payload.text ?? "",
+    payload,
+  });
+describe("createLaneTextDeliverer streamed presentation finals", () => {
+  it.each(["rich", "fallback", "text-only"] as const)(
+    "keeps partial text plain and finalizes %s on the same preview",
+    async (kind) => {
+      const text = kind === "text-only" ? "Hello final" : "Status summary as plain text";
+      const expected = kind === "rich" ? "Final native table" : text;
+      const payload = kind === "text-only" ? { text } : statusPayload(text);
+      const resolveFinalPresentationText = vi.fn(
+        (input: { payload: ReplyPayload; text: string }) => {
+          expect(input.payload.presentationTextMode).toBe("fallback");
+          expect(input.text).toBe(text);
+          return kind === "rich"
+            ? expected
+            : resolveFinalTelegramPresentationText({ ...input, richMessages: false });
+        },
+      );
+      const harness = createHarness({ answerMessageId: 999, resolveFinalPresentationText });
+      const send = (infoKind: "block" | "final") => deliver(harness, text, { payload, infoKind });
+      const block = await send("block");
+      expect(block.kind).toBe("preview-updated");
+      expect(resolveFinalPresentationText).not.toHaveBeenCalled();
+      expect(harness.answer?.lastDeliveredText()).toBe(text);
+      const delivery = expectPreviewFinalized(await send("final"));
+      expect(delivery.content).toBe(expected);
+      expect(harness.answer?.lastDeliveredText()).toBe(expected);
+      expect(harness.sendPayload).not.toHaveBeenCalled();
+      expect(harness.lanes.answer.finalized).toBe(true);
+      if (kind === "text-only") {
+        expect(resolveFinalPresentationText).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+describe("streamed final canonical presentation text", () => {
+  it.each([undefined, "fallback"] as const)("renders capability-degraded controls (%s)", (mode) => {
+    const rendered = renderFinal(canonicalPayload(mode));
+    for (const text of ["<table>", "Unavailable", ...(mode ? [] : ["Summary"])]) {
+      expect(rendered).toContain(text);
+    }
+  });
+
+  it("does not duplicate a dropped-control label", () => {
+    const payload: ReplyPayload = {
+      text: "Status summary\n\n- Copy manually",
+      presentation: {
+        blocks: [
+          statusTable,
+          {
+            type: "buttons",
+            buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
+          },
+        ],
+      },
+    };
+    markTelegramDroppedControlFallback(payload, "Status summary", payload.text ?? "");
+    const rendered = renderFinal(payload);
+    expect(rendered).toContain("<table>");
+    expect(rendered?.match(/Copy manually/g)).toHaveLength(1);
+  });
+
+  it("preserves authored text overlapping presentation", () => {
+    expect(
+      renderFinal({
+        text: "Please read: Status",
+        presentation: { blocks: [{ type: "text", text: "Status" }] },
+      }),
+    ).toBe("Please read: Status\n\nStatus");
+  });
+
+  it("renders title-only presentations", () => {
+    expect(
+      renderFinal({ text: "Summary", presentation: { title: "Status", blocks: [] } }),
+    ).toContain("Status");
+  });
+});

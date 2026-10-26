@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   getActiveRemoteModelCatalog,
@@ -8,6 +8,7 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { gatewayKernelLogs } from "./server-kernel.js";
 import { startGatewayServerCore } from "./server-start.js";
 import * as bootstrap from "./server-startup-bootstrap.js";
 import { createStartupTestState } from "./server-startup.test-support.js";
@@ -40,7 +41,7 @@ it.each([false, true])("captures catalog before bootstrap (absent=%s)", async (a
   });
   const [pending, enteredBootstrap] = [createDeferred(), createDeferred()];
   const stopped = new Error("fixture stops bootstrap");
-  using _ = vi
+  const prepare = vi
     .spyOn(bootstrap, "prepareGatewayServerBootstrap")
     .mockImplementationOnce(async () => {
       enteredBootstrap.resolve();
@@ -59,6 +60,7 @@ it.each([false, true])("captures catalog before bootstrap (absent=%s)", async (a
   } finally {
     pending.resolve();
     const outcome = await startup;
+    prepare.mockRestore();
     setRemoteModelCatalogOverlaySourcesForTest();
     expect(outcome).toBe(stopped);
   }
@@ -71,7 +73,7 @@ afterEach(() => startupFixture.cleanup());
 
 it(
   "starts with provider settings without model rows when a channel is auto-enabled",
-  () =>
+  ({ signal }) =>
     startupFixture.run(async () => {
       const token = "provider-overlay-startup-token";
       await using state = await createStartupTestState("provider-overlay-startup", {
@@ -90,6 +92,15 @@ it(
           gateway: { auth: { mode: "token", token } },
         });
         state.applyEnv();
+        const ready = createDeferred();
+        const info = gatewayKernelLogs.log.info.bind(gatewayKernelLogs.log);
+        using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+        readyLog.mockImplementation((message, meta) => {
+          info(message, meta);
+          if (message === "gateway ready") {
+            ready.resolve();
+          }
+        });
         server = await startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token },
@@ -97,6 +108,7 @@ it(
         });
         await server.startupSettled;
         expect(getRuntimeConfigSnapshot()?.channels?.telegram).toMatchObject({ enabled: true });
+        await withinTest(ready.promise, signal);
         const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(readiness.status).toBe(200);
         await expect(readiness.json()).resolves.toMatchObject({ ready: true });

@@ -1,7 +1,7 @@
 // Matrix tests cover client bootstrap plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   matrixClientResolverMocks,
@@ -41,6 +41,10 @@ describe("client bootstrap", () => {
   beforeEach(() => {
     primeMatrixClientResolverMocks();
     captureAuthority.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("publishes final state when leased client readiness setup fails", async () => {
@@ -101,6 +105,7 @@ describe("client bootstrap", () => {
   });
 
   it("rejects a completed action when final crypto persistence fails", async () => {
+    setAcquiredMatrixClient(createMockMatrixClient());
     const failure = new Error("final snapshot failed");
     sharedLeaseReleaseMock.mockRejectedValueOnce(failure);
 
@@ -127,7 +132,8 @@ describe("client bootstrap", () => {
   });
 
   it("does not borrow or stop an explicitly injected client", async () => {
-    const injected = createMockMatrixClient();
+    const start = vi.fn(async () => undefined);
+    const injected = Object.assign(createMockMatrixClient(), { start });
 
     await withResolvedRuntimeMatrixClient(
       { client: injected, readiness: "started" },
@@ -136,7 +142,7 @@ describe("client bootstrap", () => {
       },
     );
 
-    expect(injected.start).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenCalledTimes(1);
     expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
     expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
