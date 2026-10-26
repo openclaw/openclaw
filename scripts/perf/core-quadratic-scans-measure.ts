@@ -93,7 +93,7 @@ if (values.workload === "plugins") {
     }
     assert(result);
     assert.equal(result.length, 40);
-    assert.equal(result[39]?.providerRequest?.providers["provider-39"]?.family, "synthetic");
+    assert.equal(result[39]?.providerRequest?.providers?.["provider-39"]?.family, "synthetic");
   };
 } else {
   const { recordShortTermRecalls } =

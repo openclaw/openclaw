@@ -74,35 +74,40 @@ describe("short-term recall recording", () => {
         entries: Object.fromEntries(retained.map((entry) => [entry.key, entry])),
       });
       let claimHashReads = 0;
+      using mocks = new DisposableStack();
       const readStore = recallStore.readStore;
-      using read = vi.spyOn(recallStore, "readStore").mockImplementation(async (...args) => {
-        const store = await readStore(...args);
-        for (const entry of Object.values(store.entries)) {
-          const claimHash = entry.claimHash;
-          Object.defineProperty(entry, "claimHash", {
-            configurable: true,
-            enumerable: true,
-            get() {
-              claimHashReads += 1;
-              return claimHash;
-            },
-          });
-        }
-        return store;
-      });
+      mocks.use(
+        vi.spyOn(recallStore, "readStore").mockImplementation(async (...args) => {
+          const store = await readStore(...args);
+          for (const entry of Object.values(store.entries)) {
+            const claimHash = entry.claimHash;
+            Object.defineProperty(entry, "claimHash", {
+              configurable: true,
+              enumerable: true,
+              get() {
+                claimHashReads += 1;
+                return claimHash;
+              },
+            });
+          }
+          return store;
+        }),
+      );
       const writeStore = recallStore.writeStore;
-      using write = vi.spyOn(recallStore, "writeStore").mockImplementation(async (dir, store) => {
-        // Keep work-count instrumentation out of the storage serialization boundary.
-        for (const entry of Object.values(store.entries)) {
-          Object.defineProperty(entry, "claimHash", {
-            configurable: true,
-            enumerable: true,
-            writable: true,
-            value: entry.claimHash,
-          });
-        }
-        await writeStore(dir, store);
-      });
+      mocks.use(
+        vi.spyOn(recallStore, "writeStore").mockImplementation(async (dir, store) => {
+          // Keep work-count instrumentation out of the storage serialization boundary.
+          for (const entry of Object.values(store.entries)) {
+            Object.defineProperty(entry, "claimHash", {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: entry.claimHash,
+            });
+          }
+          await writeStore(dir, store);
+        }),
+      );
       await recordShortTermRecalls({
         workspaceDir,
         query: "daily archive notes",
