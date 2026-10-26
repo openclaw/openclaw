@@ -33,7 +33,7 @@ function reserveRow(view: OpenClawCanvasWidgetView) {
     sessionId: "session-1",
     widgetHeights: { [row]: 700, [key]: 600 },
   });
-  const layout = createChatWidgetLayout(cache, host, target);
+  const layout = createChatWidgetLayout()(cache, host, target);
   view.onHeightChange = (height, settled) => layout.write(key, height, "widget-row", settled);
   return { layout, row, key };
 }

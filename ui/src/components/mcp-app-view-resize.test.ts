@@ -77,7 +77,7 @@ describe("mcp-app-view localization", () => {
       sessionId: "session-1",
       widgetHeights: { [row]: 700, "mcp:view-reservation": 600 },
     });
-    const layout = createChatWidgetLayout(cache, host, target);
+    const layout = createChatWidgetLayout()(cache, host, target);
     const reports: unknown[] = [];
     bridgeMocks.earlyHeight = 160;
     try {

@@ -139,7 +139,7 @@ it("batches measured footprints after reveal and idle without publishing boot me
   const layout = new TranscriptLayoutOwner(() => {});
   layout.configureRows(
     threadProps("footprint-idle", target.sessionKey, [], {
-      widgetLayout: createChatWidgetLayout(cache, host, target),
+      widgetLayout: createChatWidgetLayout()(cache, host, target),
     }),
     "gutter",
     0,

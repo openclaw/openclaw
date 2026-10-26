@@ -38,7 +38,7 @@ function createCacheContext(
     append: (sessionKey: string, message: unknown, event?: object) =>
       appendChatMessageToCache(cache, host, target(sessionKey), message, event),
     clear: (sessionKey = "home") => clearChatMessagesFromCache(cache, host, target(sessionKey)),
-    layout: () => createChatWidgetLayout(cache, host, target()),
+    layout: () => createChatWidgetLayout()(cache, host, target()),
   };
 }
 
@@ -79,7 +79,7 @@ describe("session message cache", () => {
     const host = { assistantAgentId: "main" };
     const target = { sessionKey: "agent:main:batch" };
     cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
-    const layout = createChatWidgetLayout(cache, host, target);
+    const layout = createChatWidgetLayout()(cache, host, target);
     const write = vi.fn();
     observeChatCache(cache, { write, delete: vi.fn() });
     const heights = {
