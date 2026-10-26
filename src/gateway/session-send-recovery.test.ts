@@ -138,8 +138,13 @@ function chatInput(
     },
   };
 }
-const pendingInputs = (...items: SessionPendingInput[]) =>
+function pendingInputs(...items: SessionPendingInput[]) {
   io.pending.mockResolvedValue({ items, total: items.length });
+  io.source.mockImplementation(async (_scope, key: string) => {
+    const pending = items.find((item) => item.message.idempotencyKey === key);
+    return pending ? sourceSnapshot(pending) : undefined;
+  });
+}
 const blockedReport = () => io.report.mock.calls[0]![1].selectReport(undefined);
 const inspectionRefusal = (agentId = "main", path = "/fixture/sessions.json") =>
   createAgentDatabaseInspectionRefusal({
@@ -199,7 +204,6 @@ beforeEach(() => {
   io.discover.mockResolvedValue([{ agentId: "main", storePath: "/fixture/sessions.json" }]);
   io.entries.mockResolvedValue([{ sessionKey: delivery.target.sessionKey, entry: targetEntry }]);
   pendingInputs(input);
-  io.source.mockResolvedValue(sourceSnapshot());
   io.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
   io.report.mockResolvedValue({ ok: true });
   io.withdraw.mockResolvedValue(true);
@@ -233,7 +237,6 @@ it("recovers a logical agent's saved input from its shared physical store", asyn
   const sharedInput = peerInput({ target });
   io.entries.mockResolvedValue([{ sessionKey: target.sessionKey, entry: targetEntry }]);
   pendingInputs(sharedInput);
-  io.source.mockResolvedValue(sourceSnapshot(sharedInput));
   await recover();
   expect(dispatch).toHaveBeenCalledOnce();
   expect(dispatch.mock.calls[0]![0]).toMatchObject({
@@ -497,9 +500,6 @@ it("settles archived-target inputs durably so the second restart is silent", asy
 it("retries transient admission with the saved input and delivery identity, in order", async () => {
   const next = peerInput({ runId: "next-delivery" }, { id: "next-input" });
   pendingInputs(input, next);
-  io.source.mockImplementation(async (_scope: unknown, key: string) =>
-    sourceSnapshot(key === input.message.idempotencyKey ? input : next),
-  );
   const accepted: string[] = [];
   const startedAt = Date.now();
   const attemptTimes: number[] = [];
@@ -535,7 +535,6 @@ it("preserves returned-result semantics for an interrupted input", async () => {
   });
   pendingInputs(returnedInput);
   sourceEntry.communication = { send: "never" };
-  io.source.mockResolvedValue(sourceSnapshot(returnedInput));
   dispatch.mockImplementation(async (_request, _timeout, options) => {
     options.assertAdmissionCurrent();
     expect(acceptedMessage(delivery.runId)).toEqual(returnedInput.message);
@@ -643,7 +642,6 @@ it.each(recoveryDiagnosticCases)(
         },
       });
       pendingInputs(acceptedInput);
-      io.source.mockResolvedValue(sourceSnapshot(acceptedInput));
       io.restoreOperator.mockRejectedValue(error);
     } else {
       io.load.mockRejectedValue(error);
