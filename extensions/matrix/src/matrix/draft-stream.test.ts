@@ -149,11 +149,12 @@ describe("createMatrixDraftStream", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls + 1);
-      expect(sentContentAt(inFlightCalls)["m.new_content"]).toMatchObject({ body: "ABCD" });
-      expect(sentContentAt(inFlightCalls)["m.relates_to"]).toEqual({
-        rel_type: "m.replace",
-        event_id: "$evt1",
-      });
+      expect(sendModuleMocks.editMessageMatrix).toHaveBeenLastCalledWith(
+        "!room:test",
+        "$evt1",
+        "ABCD",
+        expect.objectContaining({ client }),
+      );
     } finally {
       pendingRequest.resolve("$evt1");
       await stream.seal();
@@ -171,7 +172,12 @@ describe("createMatrixDraftStream", () => {
 
       await expect(stream.stop()).resolves.toBe("$evt1");
       expect(sendMessageMock).toHaveBeenCalledTimes(2);
-      expect(sentContentAt(1)["m.new_content"]).toMatchObject({ body: "Final answer" });
+      expect(sendModuleMocks.editMessageMatrix).toHaveBeenLastCalledWith(
+        "!room:test",
+        "$evt1",
+        "Final answer",
+        expect.objectContaining({ client }),
+      );
 
       stream.update("Late delta");
       await vi.advanceTimersByTimeAsync(1000);
@@ -211,11 +217,12 @@ describe("createMatrixDraftStream", () => {
       await stopping;
       expect(onStopped).toHaveBeenCalledWith("$evt1");
       expect(sendMessageMock).toHaveBeenCalledTimes(inFlightCalls + 1);
-      expect(sentContentAt(inFlightCalls)["m.new_content"]).toMatchObject({ body: "Final answer" });
-      expect(sentContentAt(inFlightCalls)["m.relates_to"]).toEqual({
-        rel_type: "m.replace",
-        event_id: "$evt1",
-      });
+      expect(sendModuleMocks.editMessageMatrix).toHaveBeenLastCalledWith(
+        "!room:test",
+        "$evt1",
+        "Final answer",
+        expect.objectContaining({ client }),
+      );
 
       stream.update("Late delta");
       await vi.advanceTimersByTimeAsync(1000);
