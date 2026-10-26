@@ -7,7 +7,7 @@ import {
   resolveCronListPageNextOffset,
 } from "../../../../src/cron/service/list-page-validation.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronCompactJob, CronJobsListResult } from "../../api/types.ts";
 import { subscribeToSharedRequest } from "../shared-request-subscription.ts";
 import {
   getCronInventory,
