@@ -38,7 +38,7 @@ it("reuses the assertion callback while checking live authority inside each fres
   expect(authority.assertCurrent).toThrow("grant revoked");
   expect(source.signal.aborted).toBe(false);
   expect(run).toHaveBeenCalledTimes(2);
-  expect(run.mock.calls[1][0]).toBe(run.mock.calls[0][0]);
+  expect(new Set(run.mock.calls.map(([callback]) => callback)).size).toBe(1);
   expect(scopes).toHaveLength(2);
   expect(scopes[1]).not.toBe(scopes[0]);
   expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
