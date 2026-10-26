@@ -1042,10 +1042,8 @@ suite.define(() => {
 
   it("keeps sidebar session controls reachable on touch pointers", async () => {
     const context = await suite.browser.newContext({
+      ...createControlUiE2eContextOptions(),
       hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
     await installMockGateway(page, {

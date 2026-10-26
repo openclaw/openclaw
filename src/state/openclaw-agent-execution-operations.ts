@@ -73,7 +73,7 @@ async function loadAgentReplacementOperations() {
           captureFullFacts: true,
           postimages,
         });
-        const candidate = { ...result, publication };
+        const candidate = { maintenancePlans: result.maintenancePlans, publication };
         if (publication.source && publication.fullEntries?.size) {
           sealSessionEntryPublicationSource(publication.source);
         }

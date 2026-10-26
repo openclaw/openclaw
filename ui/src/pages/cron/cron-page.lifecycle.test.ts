@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, CronJobsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
@@ -311,12 +312,7 @@ it("refreshes model suggestions when team selection changes without changing sco
     gateway,
     {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        agentsList: makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
       },
       subscribe: () => () => undefined,
     },

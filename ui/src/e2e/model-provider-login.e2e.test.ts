@@ -15,7 +15,10 @@ import {
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -193,12 +196,7 @@ suite.define(() => {
     "opens existing provider settings from %s without starting a connection",
     async (origin) => {
       await suite.withPage(
-        {
-          locale: "en-US",
-          reducedMotion: "reduce",
-          serviceWorkers: "block",
-          viewport: { width: 1280, height: 900 },
-        },
+        { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             assistantAgentId: "main",
@@ -567,12 +565,7 @@ suite.define(() => {
   });
   it("shows a provider's accounts and every connection method before browser sign-in", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
+      { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
       async ({ page, context }) => {
         const signInUrl = "https://provider.example/sign-in";
         await context.route("https://provider.example/**", (route) =>

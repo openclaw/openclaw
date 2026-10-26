@@ -17,9 +17,10 @@ import {
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
-import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import "../debug/debug-overlay-content.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
+import { mockDocumentVisibility as mockVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -68,15 +69,6 @@ function mockClock() {
   vi.spyOn(performance, "now").mockImplementation(() => now);
   return (elapsed: number) => {
     now += elapsed;
-  };
-}
-
-function mockVisibility() {
-  let value: DocumentVisibilityState = "visible";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => value);
-  return (next: DocumentVisibilityState) => {
-    value = next;
-    document.dispatchEvent(new Event("visibilitychange"));
   };
 }
 

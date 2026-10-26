@@ -68,20 +68,29 @@ describe("wrapToolWithAbortSignal", () => {
   });
 
   it.each(["direct", "prepared"] as const)(
-    "only preserves an explicit plugin reload handoff through %s execution",
+    "only preserves explicit tool handoffs through %s execution",
     async (mode) => {
-      for (const action of ["reloadAndResume", "reload", "list"]) {
+      for (const [name, args, yields] of [
+        ["plugins", { action: "reloadAndResume" }, true],
+        ["plugins", { action: "reload" }, false],
+        ["plugins", { action: "list" }, false],
+        ["github_publish", { action: "prepare_pr" }, true],
+        ["github_publish", { workspacePath: "/task" }, true],
+        ["github_publish", { action: "publish", workspacePath: "/task" }, true],
+        ["github_publish", { action: "publish" }, false],
+        ["github_publish", { action: "edit", workspacePath: "/task" }, false],
+      ] as const) {
         const runAbort = new AbortController();
         const result = emptyResult();
         const execute = async () => {
           runAbort.abort(handoffReason);
           return result;
         };
-        const source = tool(execute, "plugins");
+        const source = tool(execute, name);
         if (mode === "prepared") {
-          attachInternalToolExecutionPreparer(source, async ({ args }) => ({
+          attachInternalToolExecutionPreparer(source, async ({ args: preparedArgs }) => ({
             kind: "ready",
-            args,
+            args: preparedArgs,
             execute,
             dispose: () => undefined,
           }));
@@ -90,15 +99,15 @@ describe("wrapToolWithAbortSignal", () => {
         let execution: Promise<unknown>;
         if (mode === "prepared") {
           const prepare = expectDefined(getInternalToolExecutionPreparer(wrapped), "preparer");
-          const prepared = await prepare({ toolCallId: "reload", args: { action } });
+          const prepared = await prepare({ toolCallId: "handoff", args });
           if (prepared.kind !== "ready") {
             throw new Error("expected ready tool execution");
           }
           execution = prepared.execute().finally(prepared.dispose);
         } else {
-          execution = wrapped.execute("reload", { action });
+          execution = wrapped.execute("handoff", args);
         }
-        if (action === "reloadAndResume") {
+        if (yields) {
           await expect(execution).resolves.toBe(result);
         } else {
           await expect(execution).rejects.toMatchObject(abortError);
