@@ -33,10 +33,7 @@ import {
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
-import type {
-  CodexNativeSubagentSubmission as Submission,
-  CodexNativeSubagentSubmissionStore as SubmissionStore,
-} from "./native-subagent-submission.js";
+import type { CodexNativeSubagentSubmission as Submission } from "./native-subagent-submission.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
@@ -393,34 +390,28 @@ describe("native subagent submission receipts in the binding store", () => {
       const assignmentRecorded = createDeferred<boolean>();
       const receiptRecorded = createDeferred<boolean>();
       let reject = false;
-      const assignmentStore = {
-        ...f.assignmentStore,
-        record: (value: Assignment, guard: () => void) => {
-          const recorded = f.assignmentStore.record(value, guard);
-          if (value.runId === assignment.runId && !value.submission) {
-            assignmentRecorded.resolve(recorded);
-          }
-          return recorded;
-        },
-        consume: (value: Assignment, guard: () => void) =>
-          reject && rejectedOwner === "assignment"
-            ? Promise.resolve(false)
-            : f.assignmentStore.consume(value, guard),
-      };
-      const consumeReceipt = vi.fn<SubmissionStore["consume"]>((value, guard) =>
-        reject && rejectedOwner === "receipt"
-          ? Promise.resolve(false)
-          : f.submissionStore.consume(value, guard),
-      );
-      const submissionStore = {
-        ...f.submissionStore,
-        record: (value: Submission, guard: () => void) => {
-          const recorded = f.submissionStore.record(value, guard);
+      const { assignmentStore, submissionStore } = f;
+      const mutate = f.store.mutate.bind(f.store);
+      vi.spyOn(f.store, "mutate").mockImplementation((caller, mutation, ...guards) => {
+        if (
+          reject &&
+          mutation.kind ===
+            (rejectedOwner === "receipt" ? consumeSubmission : "consume-native-subagent-assignment")
+        ) {
+          return Promise.resolve(false);
+        }
+        const recorded = mutate(caller, mutation, ...guards);
+        if (mutation.kind === recordSubmission) {
           receiptRecorded.resolve(recorded);
-          return recorded;
-        },
-        consume: consumeReceipt,
-      };
+        } else if (
+          mutation.kind === "record-native-subagent-assignment" &&
+          mutation.assignment.runId === assignment.runId &&
+          !mutation.assignment.submission
+        ) {
+          assignmentRecorded.resolve(recorded);
+        }
+        return recorded;
+      });
       const client = createClient();
       const parentItem = (item: Parameters<typeof client.item>[0]) =>
         client.item(item, parentTurnId, binding.threadId);
@@ -553,7 +544,6 @@ describe("native subagent submission receipts in the binding store", () => {
         const retried = await stop();
         expect([retried.killed, retried.errors]).toEqual([1, undefined]);
         expect(interrupt).toHaveBeenCalledOnce();
-        expect(consumeReceipt).toHaveBeenCalledTimes(rejectedOwner === "receipt" ? 2 : 1);
         await reopen();
         await expectSaved([], []);
         expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();

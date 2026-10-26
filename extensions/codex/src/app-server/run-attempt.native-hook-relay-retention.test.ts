@@ -532,11 +532,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   });
 
   it.each([
-    ["v1", false, true],
-    ["v2", true, false],
+    ["v1", false, true, "completed"],
+    ["v2", true, false, "completed"],
+    ["v1", true, false, "failed"],
   ] as const)(
-    "retains and fences a live %s child through sessions_yield (bound: %s, scope: %s)",
-    async (version, bindBeforeClaim, hasDeliveryScope) => {
+    "fences a live %s child through sessions_yield (bound: %s, scope: %s, parent: %s)",
+    async (version, bindBeforeClaim, hasDeliveryScope, terminal) => {
       const childThreadId = `child-${version}`;
       const childClaim = directSpawnItem(version, "thread-1", childThreadId);
       const deferredTurnStart = createDeferred<undefined>();
@@ -561,7 +562,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       );
       installToolHook(beforeToolCall);
 
-      const remote = version === "v1";
+      const remote = version === "v1" && terminal === "completed";
       const run = runCodexAppServerAttempt(params, {
         nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         ...(remote
@@ -658,6 +659,24 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
         const yieldResponse = await yieldRequest(harness, `yield-${childThreadId}`);
         expect(yieldResponse).toMatchObject({ success: true, contentItems: expect.any(Array) });
+        if (terminal === "failed") {
+          await harness.notify(
+            turnCompleted({
+              id: "turn-1",
+              status: "failed",
+              error: { message: "parent failed after yielding" },
+            }),
+          );
+          const result = await run;
+          expect(readAttemptTerminal(result).promptError).toContain("parent failed after yielding");
+          const history = await readCodexMirroredSessionHistoryMessages(params);
+          expect(history?.filter((message) => message.role === "custom")).toEqual([]);
+          expect(registration(relayId)).toBeUndefined();
+          await expect(invokeRelay(relayId, preDiscoveryPayload)).rejects.toThrow(
+            /not found|inactive/,
+          );
+          return;
+        }
 
         // The app-server response intentionally exposes only protocol content; the internal
         // terminate marker schedules the turn release on the next macrotask.
@@ -737,62 +756,4 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       }
     },
   );
-
-  it("revokes a claimed child when the parent fails after sessions_yield", async () => {
-    const childThreadId = "child-failed-parent";
-    const turnStarted = createDeferred<void>();
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        turnStarted.resolve();
-      }
-    });
-    const { params, fixture } = await yieldParams(childThreadId);
-
-    const beforeToolCall = vi.fn(async () => undefined);
-    installToolHook(beforeToolCall);
-
-    const run = runCodexAppServerAttempt(params, {
-      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-    });
-    try {
-      await turnStarted.promise;
-      const startRequest = harness.requests.find((request) => request.method === "thread/start");
-      const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-      await harness.notify(childStarted(childThreadId));
-      await harness.notify(
-        itemNotification("item/completed", directSpawnItem("v1", "thread-1", childThreadId)),
-      );
-      const childPayload = {
-        hook_event_name: "PreToolUse",
-        agent_id: childThreadId,
-        cwd: params.workspaceDir,
-        tool_name: "Bash",
-        tool_use_id: `${childThreadId}-tool`,
-        tool_input: { command: "allow-child" },
-      };
-      await expect(invokeRelay(relayId, childPayload)).resolves.toMatchObject({ exitCode: 0 });
-      expect(beforeToolCall).toHaveBeenCalledOnce();
-
-      await expect(yieldRequest(harness, "yield-before-failure")).resolves.toMatchObject({
-        success: true,
-      });
-      await harness.notify(
-        turnCompleted({
-          id: "turn-1",
-          status: "failed",
-          error: { message: "parent failed after yielding" },
-        }),
-      );
-
-      const result = await run;
-      expect(readAttemptTerminal(result).promptError).toContain("parent failed after yielding");
-      const continuationHistory = await readCodexMirroredSessionHistoryMessages(params);
-      expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([]);
-      expect(registration(relayId)).toBeUndefined();
-      await expect(invokeRelay(relayId, childPayload)).rejects.toThrow(/not found|inactive/);
-    } finally {
-      fixture.closeHost();
-      fixture.closeAdmission();
-    }
-  });
 });

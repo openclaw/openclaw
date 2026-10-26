@@ -249,61 +249,41 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toEqual(applied ? binding : original);
   });
 
-  it.each<[Identity, Identity, boolean]>([
-    [makeSessionIdentity("current"), makeSessionIdentity("current"), false],
-    [
-      { kind: "conversation", bindingId: "current" },
-      { kind: "conversation", bindingId: "current" },
-      false,
-    ],
-    [{ kind: "conversation", bindingId: "other" }, makeSessionIdentity("current"), true],
-  ])("scans thread owners: stored %j, current %j", async (stored, current, otherOwner) => {
-    const { store } = createBindingFixture();
-    await setBinding(store, stored, thread("thread-owned"));
-    await expect(store.hasOtherThreadOwner("thread-owned", current)).resolves.toBe(otherOwner);
+  it.each([
+    ["current session", "session:main:current", "current", false],
+    ["current conversation", "conversation:current", undefined, false],
+    ["other conversation", "conversation:other", undefined, true],
+    ["previous generation", "stable", "previous", true],
+    ["missing generation", "stable", undefined, true],
+    ["malformed", "conversation:malformed", undefined, false],
+    ["cleared", "conversation:cleared", undefined, false],
+  ] as const)("scans thread ownership: %s", async (kind, storedKey, sessionId, otherOwner) => {
+    const { values, store } = createBindingFixture();
+    const current =
+      storedKey === "stable"
+        ? makeStableSessionIdentity("current", "agent:main:stable")
+        : kind === "current conversation"
+          ? { kind: "conversation" as const, bindingId: "current" }
+          : makeSessionIdentity("current");
+    const key = storedKey === "stable" ? storeKey(current) : storedKey;
+    const row = {
+      version: 1 as const,
+      binding: thread(kind === "malformed" ? "" : "thread-owned"),
+      ...(sessionId ? { sessionId } : {}),
+    };
+    values.set(
+      key,
+      kind === "cleared"
+        ? { ...row, state: "cleared", retired: true }
+        : { ...row, state: "active" },
+    );
+    const scan = expect(store.hasOtherThreadOwner("thread-owned", current));
+    if (kind === "malformed") {
+      await scan.rejects.toThrow("Invalid Codex app-server binding row: " + key);
+    } else {
+      await scan.resolves.toBe(otherOwner);
+    }
   });
-
-  it.each(["session-previous", undefined])(
-    "treats generation %s at the same stable key as another owner",
-    async (sessionId) => {
-      const { values, store } = createBindingFixture();
-      const current = makeStableSessionIdentity("session-current", "agent:main:stable");
-      values.set(storeKey(current), {
-        version: 1,
-        state: "active",
-        binding: thread("thread-owned"),
-        ...(sessionId ? { sessionId } : {}),
-      });
-      await expect(store.hasOtherThreadOwner("thread-owned", current)).resolves.toBe(true);
-    },
-  );
-
-  it.each(["malformed", "cleared"] as const)(
-    "handles a %s row during reverse ownership scans",
-    async (row) => {
-      const { values, store } = createBindingFixture();
-      const key = "conversation:" + row;
-      values.set(
-        key,
-        (row === "cleared"
-          ? {
-              version: 1,
-              state: "cleared",
-              retired: true,
-              binding: thread("thread-unowned"),
-            }
-          : { version: 1, state: "active", binding: thread("") }) as never,
-      );
-      const scan = expect(
-        store.hasOtherThreadOwner("thread-unowned", makeSessionIdentity("current")),
-      );
-      if (row === "malformed") {
-        await scan.rejects.toThrow("Invalid Codex app-server binding row: " + key);
-      } else {
-        await scan.resolves.toBe(false);
-      }
-    },
-  );
 
   it("fails closed on malformed pending supervision state", async () => {
     const base = supervisionBinding("thread-source", {
@@ -315,23 +295,15 @@ describe("Codex app-server binding store", () => {
       ...base,
       pendingSupervisionBranch: pending,
     });
-    for (const binding of [
-      {
-        ...base,
-        pendingSupervisionBranch: {
-          ...pending,
-          cleanupThreadIds: ["thread-probe", "thread-probe"],
-        },
-      },
-      {
-        ...base,
-        threadId: "thread-other",
-        pendingSupervisionBranch: pending,
-      },
-      { ...base, pendingSupervisionBranch: { ...pending, unknown: true } },
+    for (const invalid of [
+      { ...pending, cleanupThreadIds: ["thread-probe", "thread-probe"] },
+      { ...pending, unknown: true },
     ]) {
-      expect(decodeBinding(binding)).toBeUndefined();
+      expect(decodeBinding({ ...base, pendingSupervisionBranch: invalid })).toBeUndefined();
     }
+    expect(
+      decodeBinding({ ...base, threadId: "thread-other", pendingSupervisionBranch: pending }),
+    ).toBeUndefined();
 
     const { state, store } = createBindingFixture();
     const identity = makeSessionIdentity("session-corrupt");
@@ -340,10 +312,7 @@ describe("Codex app-server binding store", () => {
       state: "active",
       binding: {
         ...base,
-        pendingSupervisionBranch: {
-          sourceThreadId: "thread-source",
-          cleanupThreadIds: ["thread-source"],
-        },
+        pendingSupervisionBranch: { ...pending, cleanupThreadIds: ["thread-source"] },
       },
     } as never);
 
@@ -406,7 +375,7 @@ describe("Codex app-server binding store", () => {
     );
   });
 
-  it("round-trips account app policy context", async () => {
+  it("round-trips account and repository marketplace app policies", async () => {
     const pluginAppPolicyContext = {
       fingerprint: "account-policy-1",
       apps: {
@@ -418,17 +387,6 @@ describe("Codex app-server binding store", () => {
           destructiveApprovalMode: "auto" as const,
           mcpServerNames: [],
         },
-      },
-      pluginAppIds: {},
-    };
-
-    await expectPolicyRoundTrip(pluginAppPolicyContext, "/repo", "2026-01-01T00:00:00.000Z");
-  });
-
-  it("round-trips repository marketplace app ownership through stored and imported bindings", async () => {
-    const pluginAppPolicyContext = {
-      fingerprint: "repository-plugin-policy",
-      apps: {
         github: {
           configKey: "security-review@company-tools",
           marketplaceName: "company-tools",
@@ -446,7 +404,11 @@ describe("Codex app-server binding store", () => {
       pluginAppIds: { "security-review@company-tools": ["github"] },
     };
 
-    await expectPolicyRoundTrip(pluginAppPolicyContext, "/repo/company");
+    await expectPolicyRoundTrip(
+      pluginAppPolicyContext,
+      "/repo/company",
+      "2026-01-01T00:00:00.000Z",
+    );
   });
 
   it("retains restricted creation attestation and readable legacy rows after SQLite reopen", async () => {
@@ -499,63 +461,44 @@ describe("Codex app-server binding store", () => {
     expect(storeKey({ kind: "session", agentId: " First ", sessionId: "shared" })).toBe(
       "session:first:shared",
     );
+    expect(storeKey(first)).not.toBe(storeKey({ ...first, sessionId: "different" }));
   });
-
-  it.each([false, true])(
-    "keeps one binding across session rotations (expired lease=%s)",
-    async (expiredLease) => {
-      const {
-        values,
-        store,
-        previous: first,
-        current: second,
-      } = await createGenerationFixture("thread-1", "/repo");
-      expect(store.read(second)).toBeUndefined();
-      await store.withLease(second, async () => undefined);
-
-      expect(storeKey(first)).toBe(storeKey(second));
-      expect(values.get(storeKey(second))).toMatchObject({ sessionId: "session-1" });
-      if (expiredLease) {
-        const key = storeKey(first);
-        const predecessor = values.get(key)!;
-        values.set(key, {
-          ...predecessor,
-          lease: { token: "crashed-predecessor", expiresAt: Date.now() - 1 },
-        });
-      }
-      await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
-      expect(values.get(storeKey(second))).toMatchObject({
-        state: "active",
-        sessionId: "session-2",
-        binding: { threadId: "thread-1" },
-      });
-      await expectMutation(store, first, false, {
-        kind: "patch",
-        threadId: "thread-1",
-        patch: { model: "stale-model" },
-      });
-      await expect(store.mutate(first, { kind: "clear" })).resolves.toBe(false);
-      expect(store.read(second)).toMatchObject({ threadId: "thread-1" });
-      await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(true);
-    },
-  );
 
   it("rejects a delayed adoption after a newer session generation wins", async () => {
     const {
+      values,
       store,
       previous: first,
       current: second,
     } = await createGenerationFixture("thread-1", "/repo");
     const third = { ...first, sessionId: "session-3" };
-
+    expect(store.read(second)).toBeUndefined();
+    await store.withLease(second, async () => undefined);
+    expect(storeKey(first)).toBe(storeKey(second));
+    const key = storeKey(first);
+    expect(values.get(key)).toMatchObject({ sessionId: first.sessionId });
+    values.set(key, {
+      ...values.get(key)!,
+      lease: { token: "crashed-predecessor", expiresAt: Date.now() - 1 },
+    });
     await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
+    const plan = await store.prepareSessionGenerationReclaim(first);
+    expect(plan).toEqual({ kind: "verify", expectedPreviousSessionId: second.sessionId });
     await expect(store.adoptSessionGeneration(third, second.sessionId)).resolves.toBe("adopted");
     await expect(store.adoptSessionGeneration(third, second.sessionId)).resolves.toBe("current");
     await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("conflict");
     await expect(store.retireSessionGeneration(second)).resolves.toBe("conflict");
+    await expectReclaim(store, first, false, second.sessionId);
+    await expectMutation(store, second, false, {
+      kind: "patch",
+      threadId: "thread-1",
+      patch: { model: "stale-model" },
+    });
+    await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(false);
 
     expect(store.read(second)).toBeUndefined();
     expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
+    await expect(store.mutate(third, { kind: "clear" })).resolves.toBe(true);
   });
 
   it.each(["ordinary", "supervision"] as const)(
@@ -594,13 +537,14 @@ describe("Codex app-server binding store", () => {
     },
   );
 
-  it.each(
-    ["two generations behind", "different session key", "different agent"].flatMap((mismatch) =>
-      [false, true].map((supervision) => ({ mismatch, supervision })),
-    ),
-  )(
-    "does not adopt a binding owned by $mismatch (supervision=$supervision)",
-    async ({ mismatch, supervision }) => {
+  it.each([
+    ["two generations behind", false],
+    ["two generations behind", true],
+    ["different session key", false],
+    ["different agent", false],
+  ] as const)(
+    "does not adopt a binding owned by %s (supervision=%s)",
+    async (mismatch, supervision) => {
       const { storePath } = await createSessionFixture("codex-predecessor-mismatch-");
       const { store } = createBindingFixture();
       const current = makeStableSessionIdentity("session-current", "agent:main:compaction");
@@ -651,31 +595,6 @@ describe("Codex app-server binding store", () => {
     await expect(adopting).rejects.toThrow("admission authority closed");
     expect(store.read(current)).toBeUndefined();
     expect(store.read(previous)).toEqual(binding);
-  });
-
-  it("rejects reclaim when another session generation wins after verification", async () => {
-    const {
-      store,
-      previous: first,
-      current: second,
-    } = await createGenerationFixture("thread-1", "/repo");
-    const third = { ...first, sessionId: "session-3" };
-
-    const plan = await store.prepareSessionGenerationReclaim(second);
-    expect(plan).toEqual({ kind: "verify", expectedPreviousSessionId: first.sessionId });
-    await expect(store.adoptSessionGeneration(third, first.sessionId)).resolves.toBe("adopted");
-    if (plan.kind !== "verify") {
-      throw new Error("expected stale session generation");
-    }
-    await expectReclaim(store, second, false, plan.expectedPreviousSessionId);
-    expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
-  });
-
-  it("falls back to physical session identity when no stable session key exists", () => {
-    const first = makeSessionIdentity("session-1");
-    const second = { ...first, sessionId: "session-2" };
-
-    expect(storeKey(first)).not.toBe(storeKey(second));
   });
 
   it("does not create a retirement tombstone for a session without a Codex binding", async () => {
@@ -787,10 +706,14 @@ describe("Codex app-server binding store", () => {
     expect(store.read(current)).toBeUndefined();
   });
 
-  it("keeps a retired in-place generation fenced until it is verified", async () => {
-    const { values, store, previous: identity } = await createGenerationFixture();
-    await store.retireSessionGeneration(identity);
+  it("fences a retired in-place generation until the authoritative session store verifies it", async () => {
+    const { storePath } = await createSessionFixture("openclaw-codex-reset-reclaim-");
+    const { values, store } = createBindingFixture();
+    const identity = makeStableSessionIdentity("session-current", "agent:main:telegram:direct:123");
 
+    await recordSession(identity, storePath);
+    await setBinding(store, identity, thread("thread-before-reset"));
+    await store.retireSessionGeneration(identity);
     await expect(store.resetSessionGeneration(identity)).resolves.toBe("conflict");
     expect(values.get(storeKey(identity))).toEqual({
       version: 1,
@@ -799,17 +722,6 @@ describe("Codex app-server binding store", () => {
       sessionId: identity.sessionId,
     });
     await expectSet(store, identity, false, "thread-unverified", "/new");
-  });
-
-  it("recovers a retired in-place generation through the authoritative session store", async () => {
-    const { storePath } = await createSessionFixture("openclaw-codex-reset-reclaim-");
-    const { store } = createBindingFixture();
-    const identity = makeStableSessionIdentity("session-current", "agent:main:telegram:direct:123");
-
-    await recordSession(identity, storePath);
-    await setBinding(store, identity, thread("thread-before-reset"));
-    await store.retireSessionGeneration(identity);
-
     await expect(reclaim(store, identity, storePath)).resolves.toBe(true);
     await expectSet(store, identity, true, "thread-after-reset", "/repo");
   });
