@@ -6,6 +6,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type AssistantMessageEvent,
   type AssistantMessageEventStream,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -425,12 +426,13 @@ describe("streamWithIdleTimeout", () => {
   });
 });
 
-function createNeverYieldingStream(signal?: AbortSignal): AsyncIterable<unknown> {
+function createNeverYieldingStream(signal?: AbortSignal): Awaited<ReturnType<StreamFn>> {
   return {
+    result: () => new Promise<AssistantMessage>(() => {}),
     [Symbol.asyncIterator]() {
       return {
         async next() {
-          return new Promise<IteratorResult<unknown>>((_resolve, reject) => {
+          return new Promise<IteratorResult<AssistantMessageEvent>>((_resolve, reject) => {
             signal?.addEventListener("abort", () => reject(new Error("provider abort")), {
               once: true,
             });
@@ -456,7 +458,7 @@ describe("streamWithIdleTimeout caller cancellation", () => {
       vi.useFakeTimers();
       const callerAbortController = new AbortController();
       const callerReason = new Error("caller cancelled");
-      const baseFn = vi.fn((_model, _context, options) =>
+      const baseFn = vi.fn<StreamFn>((_model, _context, options) =>
         createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
       );
       const onIdleTimeout = vi.fn();
