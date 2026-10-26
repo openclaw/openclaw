@@ -69,6 +69,14 @@ describe("completion-cli native Bash words", () => {
   it
     .skipIf(process.platform === "win32")
     .each([
+      ["--profile s", "--profile s", "s", []],
+      ["--profile 's", "--profile 's", "s", []],
+      ["--profile staging g", "--profile staging g", "g", ["gateway"]],
+      ["gateway --token st", "gateway --token st", "st", []],
+      ["gateway --token --f", "gateway --token --f", "--f", []],
+      ["gateway -vt st", "gateway -vt st", "st", []],
+      ["completion --profile --shell=fi", "completion --profile --shell = fi", "fi", []],
+      ["completion --profile -sf", "completion --profile -sf", "-sf", []],
       ["completion --shell=", "completion --shell =", "", ["zsh", "bash", "powershell", "fish"]],
       ["completion --shell=fish", "completion --shell=fish", "f", ["fish"], 29],
       ["completion --sh=fish", "completion --sh=fish", "--sh", ["--shell"], 24],

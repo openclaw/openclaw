@@ -96,24 +96,15 @@ it("rejects non-decimal --bytes forms instead of coercing them", async () => {
   expect(runtime.error).not.toHaveBeenCalled();
 });
 
-it("accepts decimal integer --bytes values", async () => {
-  const { runtime } = await fixture();
-  await backupRecordCommand(runtime, {
-    status: "ok",
-    target: "decimal",
-    bytes: "42",
-    json: true,
-  });
-  expect(await readBackupRuns(process.env)).toMatchObject([{ target: "decimal", bytes: 42 }]);
-});
-
-it("records offline under exclusive custody and leaves an absent database absent", async () => {
+it("records decimal bytes under offline custody and leaves an absent database absent", async () => {
   const { databasePath, runtime } = await fixture(false);
   await backupRecordCommand(runtime, { status: "ok", target: "missing", json: true });
   await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
   stateDb.runOpenClawStateWriteTransaction(() => undefined);
-  await backupRecordCommand(runtime, { status: "ok", target: "offline", json: true });
-  expect(await readBackupRuns(process.env)).toMatchObject([{ target: "offline", status: "ok" }]);
+  await backupRecordCommand(runtime, { status: "ok", target: "offline", bytes: "42", json: true });
+  expect(await readBackupRuns(process.env)).toMatchObject([
+    { target: "offline", status: "ok", bytes: 42 },
+  ]);
   expect(stateOwner.captureGatewayStateOwner(databasePath)).toBeUndefined();
   expect(transport.call).not.toHaveBeenCalled();
   expect(runtime.error).not.toHaveBeenCalled();

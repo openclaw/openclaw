@@ -15,6 +15,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { prepareUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 // One real Gateway owns the state root; CLI children are the shapes the Windows companion
@@ -59,18 +60,15 @@ describe("config mutations against a running Gateway", () => {
     claim = await acquireTestPortBlock({ offsets: [0] });
     env = stateOwnerEnv(root, { OPENCLAW_GATEWAY_TOKEN: token });
     await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
-    await fs.writeFile(
-      env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify({
-        gateway: {
-          mode: "local",
-          port: claim.port,
-          auth: { mode: "token", token },
-          reload: { mode: "hybrid" },
-        },
-        agents: { entries: { main: {} } },
-      }),
-    );
+    await writeFixtureJson(env.OPENCLAW_CONFIG_PATH!, {
+      gateway: {
+        mode: "local",
+        port: claim.port,
+        auth: { mode: "token", token },
+        reload: { mode: "hybrid" },
+      },
+      agents: { entries: { main: {} } },
+    });
     // Plain assignment: suite-wide stubs would be reset before each test while this Gateway runs.
     Object.assign(process.env, {
       HOME: env.HOME,
@@ -187,13 +185,10 @@ describe("config mutations against a running Gateway", () => {
 
   it("previews then applies a batch file, and unsets the written paths", async () => {
     const batchFile = path.join(env.HOME!, "local-ai.batch.json");
-    await fs.writeFile(
-      batchFile,
-      JSON.stringify([
-        { path: "models.providers.llamacpp", value: provider },
-        { path: "agents.defaults.model.primary", value: "llamacpp/local" },
-      ]),
-    );
+    await writeFixtureJson(batchFile, [
+      { path: "models.providers.llamacpp", value: provider },
+      { path: "agents.defaults.model.primary", value: "llamacpp/local" },
+    ]);
     const preview = await run(env, ["config", "set", "--batch-file", batchFile, "--dry-run"]);
     expect(preview.code, preview.stderr).toBe(0);
     expect((await readConfig()).models).toBeUndefined();

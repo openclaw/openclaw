@@ -1,5 +1,7 @@
 export type PackageDistImport = { importerPath: string; importedPath: string; kind?: "require" };
 
+export function preparePackageDistJavaScript(file: string, source: string): string;
+
 export function collectPackageDistImportErrors(
   params: { files: readonly string[]; packageJsons?: ReadonlyMap<string, string> } & (
     | {
@@ -17,4 +19,5 @@ export function collectPackageDistImports(params: {
   files: readonly string[];
   packageJsons?: ReadonlyMap<string, string>;
   readText: (relativePath: string) => string;
+  includeTypeScript?: boolean;
 }): PackageDistImport[];

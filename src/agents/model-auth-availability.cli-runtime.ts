@@ -24,6 +24,7 @@ import {
   resolveCliRuntimeExecutionProvider,
   type CliRuntimeAuthDirectories,
 } from "./model-runtime-aliases.js";
+import type { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectPreparedModelRuntimeProviderIds,
@@ -47,6 +48,7 @@ export function createCliRuntimeModelAuthEvaluator(
     provider: string,
     ref: ModelAuthAvailabilityRef,
     evaluation: ModelAuthAvailabilityEvaluation,
+    configuredRuntimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>,
   ): ModelAuthAvailabilityEvaluation | undefined => {
     if (ref.runtimeId === "openclaw" || evaluation.routeResolution !== null) {
       return undefined;
@@ -60,15 +62,18 @@ export function createCliRuntimeModelAuthEvaluator(
     const runtimeProvider =
       ref.runtimeId && ref.runtimeId !== "auto"
         ? ref.runtimeId
-        : (resolveCliRuntimeExecutionProvider({
-            provider,
-            cfg: params.cfg,
-            agentId: params.agentId,
-            modelId: ref.modelId,
-            authProfileId: selectedProfileId,
-            metadataSnapshot: params.metadataSnapshot,
-            preparedAuthDirectories: params.preparedCliRuntimeAuthDirectories,
-          }) ?? normalizedProvider);
+        : (resolveCliRuntimeExecutionProvider(
+            {
+              provider,
+              cfg: params.cfg,
+              agentId: params.agentId,
+              modelId: ref.modelId,
+              authProfileId: selectedProfileId,
+              metadataSnapshot: params.metadataSnapshot,
+              preparedAuthDirectories: params.preparedCliRuntimeAuthDirectories,
+            },
+            configuredRuntimePolicy,
+          ) ?? normalizedProvider);
     const normalizedRuntimeProvider = normalizeProviderId(runtimeProvider);
     const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
     const runtimeOwners =

@@ -2,6 +2,9 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
+import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
@@ -36,9 +39,10 @@ import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
-import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
+import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
+import { projectTrajectorySessionTarget } from "./shared-run-context.js";
 import type {
   EmbeddedAttemptExternalAbortController,
   EmbeddedRunAttemptParams,
@@ -364,15 +368,112 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   };
   const cacheTrace = createCacheTrace({ cfg: attempt.config, ...traceContext });
   const anthropicPayloadLogger = createAnthropicPayloadLogger(traceContext);
-  const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
-    ...sessionPreparation,
-    activeSession,
-    transcriptOwner: sessionLock.ownedTranscriptWriteContext,
-    clientToolCount: preparedAgentSession.clientToolDefs.length,
-    effectiveToolCount,
-    localModelLeanEnabled,
-    ...(systemPromptReport ? { systemPromptReport } : {}),
-  });
+  let trajectoryRecorder: Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>> = null;
+  {
+    const clientToolCount = preparedAgentSession.clientToolDefs.length;
+    const candidate = sessionLock.ownedTranscriptWriteContext?.sessionTarget;
+    const sessionKey = candidate?.sessionKey;
+    const assertCommitAllowed = sessionLock.ownedTranscriptWriteContext?.assertCommitAllowed;
+    const initialWriter = sessionLock.ownedTranscriptWriteContext?.initialWriter;
+    // Reuse only the lock owner's descriptive key; recorder persistence retains its own authority.
+    const retained =
+      candidate &&
+      sessionKey &&
+      assertCommitAllowed &&
+      candidate.agentId === sessionAgentId &&
+      candidate.sessionId === activeSession.sessionId &&
+      sessionKey === attempt.sessionKey &&
+      candidate.storePath &&
+      candidate.storePath === attempt.sessionTarget?.storePath
+        ? {
+            sessionKey,
+            assertCurrent() {
+              assertCommitAllowed();
+              initialWriter?.assertActive();
+            },
+          }
+        : undefined;
+    retained?.assertCurrent();
+    const trajectorySessionFile = retained
+      ? retained.sessionKey
+      : await resolveAttemptTrajectorySessionFile({
+          agentId: sessionAgentId,
+          config: attempt.config,
+          sessionFile: attempt.sessionFile,
+          sessionId: activeSession.sessionId,
+          sessionKey: attempt.sessionKey,
+          sessionTarget: attempt.sessionTarget,
+        });
+    if (!attempt.disableTrajectory && attempt.sessionPersistence !== "detached") {
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        attempt.abortSignal,
+      );
+      if (!assertActive) {
+        throw new Error("trajectory preparation requires an active admitted run");
+      }
+      assertActive();
+      retained?.assertCurrent();
+      const { sessionTarget } = projectTrajectorySessionTarget(attempt.sessionTarget);
+      const recorder = await createTrajectoryRuntimeRecorder({
+        cfg: attempt.config,
+        env: process.env,
+        runId: attempt.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: attempt.sessionKey,
+        sessionFile: trajectorySessionFile,
+        sessionTarget,
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+        modelApi: attempt.model.api,
+        workspaceDir: attempt.workspaceDir,
+      });
+      assertActive();
+      retained?.assertCurrent();
+      recorder?.recordEvent("session.started", {
+        trigger: attempt.trigger,
+        sessionFile: attempt.sessionFile,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
+        messageProvider: attempt.messageProvider,
+        messageChannel: attempt.messageChannel,
+        localModelLean: localModelLeanEnabled,
+        toolCount: effectiveToolCount,
+        clientToolCount,
+      });
+      const fastMode = typeof attempt.fastMode === "boolean" ? attempt.fastMode : undefined;
+      recorder?.recordEvent(
+        "trace.metadata",
+        buildTrajectoryRunMetadata({
+          env: process.env,
+          config: attempt.config,
+          ...(attempt.preparedModelRuntime?.metadataSnapshot
+            ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+            : {}),
+          workspaceDir: effectiveWorkspace,
+          sessionFile: attempt.sessionFile,
+          sessionKey: attempt.sessionKey,
+          agentId: sessionAgentId,
+          trigger: attempt.trigger,
+          messageProvider: attempt.messageProvider,
+          messageChannel: attempt.messageChannel,
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+          modelApi: attempt.model.api,
+          timeoutMs: attempt.timeoutMs,
+          fastMode,
+          thinkLevel: attempt.thinkLevel,
+          reasoningLevel: attempt.reasoningLevel,
+          toolResultFormat: attempt.toolResultFormat,
+          disableTools: attempt.disableTools,
+          toolsAllow: attempt.toolsAllow,
+          skillsSnapshot: attempt.skillsSnapshot,
+          systemPromptReport,
+        }),
+      );
+      trajectoryRecorder = recorder;
+    }
+  }
   resources.trajectoryRecorder = trajectoryRecorder;
 
   const transport = await prepareEmbeddedAttemptTransport({

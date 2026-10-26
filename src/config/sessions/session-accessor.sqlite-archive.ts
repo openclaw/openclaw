@@ -29,6 +29,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SessionColdBatchInput,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -351,6 +352,25 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
   }, params.signal);
+}
+
+export function prepareSqliteColdArchiveBatch(
+  input: SessionColdBatchInput,
+  assertCurrent: () => void,
+  signal: AbortSignal,
+) {
+  return withSqliteTranscriptArchiveSession(input.databaseOptions, async () => {
+    const result = await runScopedSqliteArchiveOperation(
+      { operation: "cold-prepare", input },
+      createSqliteTranscriptArchiveWorker,
+      (run) =>
+        runExclusiveSqliteTranscriptArchiveWorker(() => {
+          assertCurrent();
+          return run();
+        }, signal),
+    );
+    return result!.results;
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(

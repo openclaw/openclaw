@@ -152,7 +152,8 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     const selections = vi.spyOn(projection, "selectEntries");
     try {
       expect(await read()).toBe(target);
-      expect(selections).toHaveBeenCalledTimes(2);
+      // The qualified leaf has no children; only the parent needs a selection.
+      expect(selections).toHaveBeenCalledTimes(1);
       selections.mockClear();
       for (let index = 0; index < 20; index++) {
         expect(await read()).toBe(target);

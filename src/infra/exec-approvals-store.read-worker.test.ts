@@ -37,6 +37,7 @@ import {
   updateExecApprovals,
 } from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 const loggerWarn = vi.hoisted(() => vi.fn());
@@ -307,10 +308,30 @@ it("reuses prepared policy until a native or worker policy write", async () => {
 
 it("shares immutable current policy while refusing pending writes and replacing committed facts", async () => {
   const { env } = fixture(true);
+  await updateExecApprovals({
+    update: {
+      kind: "replace",
+      file: {
+        version: 1,
+        agents: {
+          main: { mcpTools: [grant], allowlist: [{ id: "tool", pattern: "/synthetic/bin/r?" }] },
+        },
+      },
+    },
+  });
   const readCurrent = await prepareExecApprovalsCurrentRead(
     captureOpenClawStateWorkerContext({ env }),
   );
   const initial = readCurrent();
+  const matchCurrent = () =>
+    matchAllowlist(readCurrent().agents?.main?.allowlist ?? [], {
+      kind: "executable",
+      rawExecutable: "rg",
+      executableName: "rg",
+      resolvedPath: "/synthetic/bin/rg",
+    });
+  expect(matchCurrent()?.id).toBe("tool");
+  expect(matchCurrent()?.id).toBe("tool");
   expect(readCurrent()).toBe(initial);
   expect(() => {
     initial.agents!.main!.mcpTools![0]!.tool = "changed";
@@ -319,7 +340,7 @@ it("shares immutable current policy while refusing pending writes and replacing 
   const release = execApprovalsPublication.subscribeFacts((change) => {
     if (change.kind === "pending") {
       pendingChecked = true;
-      expect(readCurrent).toThrow("changing before execution");
+      expect(matchCurrent).toThrow("changing before execution");
     }
   });
   try {
@@ -334,6 +355,7 @@ it("shares immutable current policy while refusing pending writes and replacing 
   expect(denied).not.toBe(initial);
   expect(readCurrent()).toBe(denied);
   expect(denied.defaults?.security).toBe("deny");
+  expect(matchCurrent()).toBeNull();
   expect(() => {
     denied.defaults!.security = "full";
   }).toThrow(TypeError);

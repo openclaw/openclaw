@@ -81,7 +81,16 @@ if (!isMainThread) {
   };
   const observer = new PerformanceObserver((list) => record(list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
+  const importCpu = process.threadCpuUsage();
+  const importAllocation = getHeapStatistics().total_allocated_bytes;
+  const importStarted = performance.now();
   await import(workerData.entry);
+  const startupCpu = process.threadCpuUsage(importCpu);
+  const startup = {
+    elapsedMs: performance.now() - importStarted,
+    cpuMs: (startupCpu.user + startupCpu.system) / 1000,
+    allocatedBytes: getHeapStatistics().total_allocated_bytes - importAllocation,
+  };
   port.on("message", async ({ id, operation, snapshot }) => {
     try {
       let value;
@@ -173,6 +182,7 @@ if (!isMainThread) {
           ...new Set([...scripts.values()].filter((url) => url.startsWith("file:"))),
         ];
         value = {
+          startup,
           heap,
           code,
           memory,

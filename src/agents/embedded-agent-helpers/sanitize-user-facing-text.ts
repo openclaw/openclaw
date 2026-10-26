@@ -5,7 +5,7 @@ import {
   RECENT_HISTORY_CONTEXT_MARKER,
 } from "../../auto-reply/reply/history.js";
 import {
-  INBOUND_METADATA_MARKERS,
+  createInboundMetadataProbe,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
@@ -26,6 +26,7 @@ import {
 import { finalTagTextFilter } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
@@ -415,7 +416,11 @@ export function userFacingTextFilters(
             RUNTIME_CONTEXT_HEADER,
           ],
         },
-    { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
+    {
+      transform: stripInboundMetadata,
+      create: () =>
+        createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
+    },
     minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {

@@ -431,6 +431,12 @@ it("resolves runtime aliases and import/require conditions without following dec
 
 it.each([
   {
+    name: "local avatar worker",
+    entrypoints: ["src/agents/identity-avatar-file.worker.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/agent-scope.ts", "src/agents/agent-scope-config.ts"],
+  },
+  {
     name: "native update authority",
     dynamic: false,
     entrypoints: [
@@ -458,6 +464,15 @@ it.each([
     deferredOwners: [
       "src/agents/worktrees/service-preparation.ts",
       "src/agents/worktrees/allocation.ts",
+    ],
+  },
+  {
+    name: "persisted model catalog reader",
+    entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "src/state/openclaw-agent-db-borrower.ts",
     ],
   },
   {

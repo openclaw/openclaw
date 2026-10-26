@@ -174,20 +174,19 @@ it("refreshes health from the cron partition currently published by the kernel",
       reads.mock.calls.flatMap(([, command]) =>
         command.type === "automationProactive.jobs" ? [command.input.storePath] : [],
       );
-
-    await kernel.gatewayRequestContext.refreshHealthSnapshot({
-      probe: false,
-      includeSensitive: true,
-    });
+    const { gatewayRequestContext } = kernel;
+    const refresh = () =>
+      gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+    await refresh();
     expect(partitions()).toEqual([previous.storePath]);
 
     await previous.cron.start();
     reads.mockClear();
     for (let index = 0; index < 2; index += 1) {
-      await kernel.gatewayRequestContext.refreshHealthSnapshot({
-        probe: false,
-        includeSensitive: true,
-      });
+      await refresh();
     }
     expect(partitions()).toEqual([]);
 
@@ -198,10 +197,7 @@ it("refreshes health from the cron partition currently published by the kernel",
       readHeartbeatSummary: undefined,
     });
     try {
-      await kernel.gatewayRequestContext.refreshHealthSnapshot({
-        probe: false,
-        includeSensitive: true,
-      });
+      await refresh();
       expect(partitions()).toEqual([secondPartition]);
     } finally {
       kernel.kernel.swapCronState(previous);

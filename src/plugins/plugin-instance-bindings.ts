@@ -151,7 +151,7 @@ function createPluginBindings(
           current?.lookup(bindings.instance);
         }
       },
-      run: <T>(run: () => T): T => resource.runInAsyncScope(run),
+      resource,
       close: () => {
         held.registry = undefined;
         resource.emitDestroy();
@@ -635,7 +635,7 @@ function createPluginBindings(
           state = "done";
           throw error;
         }
-        return invocation.run(() => {
+        return invocation.resource.runInAsyncScope(() => {
           const result = run();
           const completion = resolvePluginReturnPromise(result);
           if (completion) {
@@ -661,6 +661,33 @@ function createPluginBindings(
         throw error;
       }
     };
+    const call = async (key: PropertyKey, method: Function | undefined, args: unknown[]) => {
+      pending += 1;
+      try {
+        if (!method) {
+          if (key === "return") {
+            state = "done";
+            return { done: true, value: await args[0] };
+          }
+          throw new TypeError("Plugin iterator method must be callable");
+        }
+        const next: unknown = await Reflect.apply(method, iterator, args);
+        if (next === null || (typeof next !== "object" && typeof next !== "function")) {
+          throw new TypeError("Plugin async iterator result must be an object");
+        }
+        assertActive();
+        state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
+        return next;
+      } catch (error) {
+        state = "done";
+        throw error;
+      } finally {
+        const completion = releaseOperation();
+        if (completion) {
+          await completion;
+        }
+      }
+    };
     const admission: PluginIteratorAdmission = {
       origin: invocation.origin,
       reenter: (run) => {
@@ -668,8 +695,7 @@ function createPluginBindings(
           invocation.assertCurrent();
           return invocation.reenter(run);
         } catch (error) {
-          state = "done";
-          void settle();
+          admission.close();
           throw error;
         }
       },
@@ -703,33 +729,7 @@ function createPluginBindings(
         try {
           assertActive();
           invocation.assertCurrent();
-          return invocation.run(async () => {
-            pending += 1;
-            try {
-              if (!method) {
-                if (key === "return") {
-                  state = "done";
-                  return { done: true, value: await args[0] };
-                }
-                throw new TypeError("Plugin iterator method must be callable");
-              }
-              const next: unknown = await Reflect.apply(method, iterator, args);
-              if (next === null || (typeof next !== "object" && typeof next !== "function")) {
-                throw new TypeError("Plugin async iterator result must be an object");
-              }
-              assertActive();
-              state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
-              return next;
-            } catch (error) {
-              state = "done";
-              throw error;
-            } finally {
-              const completion = releaseOperation();
-              if (completion) {
-                await completion;
-              }
-            }
-          });
+          return invocation.resource.runInAsyncScope(call, undefined, key, method, args);
         } catch (error) {
           state = "done";
           const reject = () => {

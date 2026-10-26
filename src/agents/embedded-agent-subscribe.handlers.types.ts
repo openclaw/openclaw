@@ -28,12 +28,6 @@ export type {
   ToolCallSummary,
 } from "./embedded-agent-subscribe.run-state.js";
 
-type EmbeddedSubscribeLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
 /** User-visible assistant stream payload emitted to subscribers. */
 export type AssistantStreamData = {
   text: string;
@@ -48,7 +42,11 @@ export type AssistantStreamData = {
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
-  log: EmbeddedSubscribeLogger;
+  log: {
+    debug: (message: string, meta?: Record<string, unknown>) => void;
+    info: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
   blockChunking?: BlockReplyChunking;
   blockChunker: EmbeddedBlockChunker;
   hookRunner?: HookRunner;

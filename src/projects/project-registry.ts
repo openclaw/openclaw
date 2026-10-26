@@ -118,6 +118,7 @@ type ProjectRegistrySelection = {
       assertCheckoutCurrent: () => void;
       signal: AbortSignal;
     }) => T | Promise<T>,
+    acquisition?: { waitMs?: number },
   ) => Promise<T>;
   withRollback: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
@@ -155,7 +156,7 @@ export async function selectStoredProjectRegistry(
           );
         },
       ),
-    withCurrent: async (run) => {
+    withCurrent: async (run, acquisitionOptions) => {
       const acquisition = new AbortController();
       const abortAcquisition = () => acquisition.abort(signal?.reason);
       signal?.addEventListener("abort", abortAcquisition, { once: true });
@@ -165,7 +166,12 @@ export async function selectStoredProjectRegistry(
       try {
         return await withProjectCheckoutLifecycle(
           repoRoot,
-          { path: context.admission.databasePath, env, signal: acquisition.signal },
+          {
+            path: context.admission.databasePath,
+            env,
+            signal: acquisition.signal,
+            waitMs: acquisitionOptions?.waitMs,
+          },
           async (lease) => {
             // Cancellation stops new effects; checkout custody also owns their rollback.
             signal?.removeEventListener("abort", abortAcquisition);

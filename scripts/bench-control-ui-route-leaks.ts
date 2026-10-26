@@ -32,13 +32,30 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
   prepareControlUiMockGatewayScenario,
+  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { summarizeScriptCoverage } from "./lib/control-ui-cold-load-trace.ts";
 import { createInteractionFixture } from "./lib/control-ui-interaction-scenarios.ts";
+import {
+  appsGatewayInitScript,
+  appsNetworkPhase,
+  appsPilotFixture,
+  appsPilotTarget,
+  appsProbeSnapshot,
+  clickFirstAppAndWait,
+  isAppsOpenId,
+  isAppsPilotId,
+  qualifyAppsClock,
+  startAppsPilotSandbox,
+  verifyFirstAppAndClose,
+  waitForAppsCatalog,
+  type AppsPilotId,
+} from "./route-leaks-apps-pilot.ts";
 
-type ProbeRoute = RouteId | "sharing" | "desktop-document" | "portal-embedded";
+type ProbeRoute = RouteId | "sharing" | AppsPilotId | "desktop-document" | "portal-embedded";
+let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
 const { values } = parseArgs({
   options: {
@@ -56,7 +73,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
   );
   process.exit(0);
 }
@@ -99,12 +116,14 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
     id !== "sharing" &&
     id !== "desktop-document" &&
     id !== "portal-embedded" &&
+    !isAppsPilotId(id) &&
     !APP_ROUTE_IDS.some((route) => route === id)
   ) {
     throw new Error(`Unknown route: ${id}`);
   }
   return id as ProbeRoute;
 });
+const appsProbesEnabled = routes.some(isAppsPilotId);
 const interactionIds = values.interactions?.split(",") ?? [];
 const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
 const knownInteractions = [
@@ -131,7 +150,19 @@ const output = createControlUiE2eArtifactDir("route-leaks", values.output);
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 const fields =
   ':is(input:not(:disabled),textarea:not(:disabled),select:not(:disabled),button[role="combobox"]:not(:disabled),[role="switch"]:not([aria-disabled="true"]))';
-function routeTarget(id: ProbeRoute, sessionKey: string) {
+function routeTarget(
+  id: ProbeRoute,
+  sessionKey: string,
+): {
+  route: RouteId | "desktop-document";
+  pathname: string;
+  search: string;
+  selector: string | undefined;
+  requiredMethods?: string[];
+} {
+  if (isAppsPilotId(id)) {
+    return appsPilotTarget();
+  }
   const route =
     id === "sharing" || id === "settings" || id === "portal-embedded"
       ? "chat"
@@ -219,7 +250,17 @@ function routeTarget(id: ProbeRoute, sessionKey: string) {
   };
 }
 
-function fixtureFor(build: { buildId: string; version: string }, id: ProbeRoute, baseUrl: string) {
+function fixtureFor(
+  build: { buildId: string; version: string },
+  id: ProbeRoute,
+  baseUrl: string,
+): ControlUiMockGatewayScenario {
+  if (isAppsPilotId(id)) {
+    if (!appsSandbox) {
+      throw new Error("Apps sandbox was not prepared");
+    }
+    return appsPilotFixture(fixtureFor(build, "apps", baseUrl), appsSandbox.descriptor);
+  }
   const fixture = createInteractionFixture(build.buildId, build.version);
   const workboard = id === "workboard" ? parityWorkboardScenario : {};
   return {
@@ -500,6 +541,8 @@ type AssetRequest = {
   type: string;
   initiator: unknown;
   wireBytes?: number;
+  timestampSeconds?: number;
+  finishedTimestampSeconds?: number;
   status?: number;
   failed?: string;
 };
@@ -574,9 +617,9 @@ async function save() {
     JSON.stringify(
       {
         workload:
-          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; interaction routes receive a fixed minimum 2,000 ms post-ready think time on every variant",
+          "cold direct navigation; real production HTTP assets, synthetic in-document WebSocket Gateway; portal-embedded includes Chat navigation and native Portal panel activation; Agents/Cron interactions use a minimum2,000ms think time, Apps immediate has no intentional wait and Apps idle has a minimum2,000ms wait without manual preloading",
         instrumentation:
-          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
+          "Timing uses renderer-main-frame threadTicks without coverage. Optional interaction wallMs/CPU are automation-to-ready intervals after cold capture, not INP; evaluatedScriptUrls uses positive top-level V8 ranges. Parsed scripts without execution are reported separately. Import references are regex-extracted chunk references, not a complete source import graph. V8 coverage also belongs to the page target; workerUrls records any dedicated-worker coverage/network-emulation gap. Coverage is a separate pass bounded by usable route readiness and includes requested preloads absent from V8 as unexecuted. requestedRawBytes counts the full source of requested files; loadedBytes includes only completed/evaluated files. pendingJsRequests identifies incomplete transfer accounting, and jsResources contains completed Resource Timing entries. Remote emulates 100ms HTTP latency and 10Mbps; synthetic WS has no simulated RTT. Workboard plugin fixture is built from the current checkout and held identical across bundle variants; its bytes are reported separately from UI-bundle code. Ready requires route success and a visible enabled page control, then one animation frame. Security navigation additionally requires the checked/enabled Browser control and all four enabled tool profiles, with no fixture override selected; config/schema receipt counts must stay unchanged. Security before/after observations have their own timestamps, and no hover/focus/import or artificial preload precedes its native click. Its readinessToActionMs records observation overhead; coverage and screenshots are written after its action. Sharing includes opening the menu after the chat becomes usable. Apps first-open cells trigger before cold summarization/screenshot/file work; immediate has no intentional delay, idle has a native minimum2000ms from cold readiness without manual warming. Each cell starts a fresh context, with base eager imports observed naturally. Phase network data retains raw CDP MonotonicTime timestamps and the actual NavigationStart metric; RPC method counts use direct same-document performance.now. Native counter/Close assertions happen after first-open CPU cutoff. Cold-plus-first-open elapsed includes the idle interval and automation gap and does not waive any individual regression. Page-target V8/CPU excludes inner App and worker execution; frame URLs retain that scope gap. Matching Agents/Cron interactions give every variant the same minimum 2,000 ms post-ready think time, recording warmup CPU/wall time even when no passive preload files exist. Passive preload completion may extend that window. Cold-only and sharing runs have no think-time delay.",
         acceptance:
           "A measured real-scenario win of at least 5%; no median readiness regression over 5% or worse p95 unless an A/A control attributes the movement to host noise. On a noisy host, run 20 interleaved pairs and judge affected threadTicks CPU plus structural byte/request counts. Coverage-instrumented timings are diagnostic only.",
         buildVariants: variants,
@@ -839,6 +882,9 @@ const server = await startControlUiBenchGatewayServer(base.root);
 console.info(`[route-leaks] HTTP ready: ${server.baseUrl}; launching isolated browser`);
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 try {
+  if (appsProbesEnabled) {
+    appsSandbox = await startAppsPilotSandbox();
+  }
   browser = await chromium.launch({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
     headless: true,
@@ -877,6 +923,8 @@ try {
               pair,
               hostLoad,
             };
+            let pendingColdCoverage: CoverageEntry[] | undefined;
+            let abortAfterContext = false;
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const prepared = await prepareControlUiMockGatewayScenario(
@@ -903,7 +951,13 @@ try {
                 throw new Error(String(result.gap));
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
-              await page.addInitScript({ content: createControlUiMockGatewayInitScript(fixture) });
+              const gatewayInit = createControlUiMockGatewayInitScript(fixture);
+              await page.addInitScript({
+                content:
+                  isAppsPilotId(route) || (appsProbesEnabled && route === "memory")
+                    ? appsGatewayInitScript(gatewayInit)
+                    : gatewayInit,
+              });
               await page.addInitScript(
                 ({ attribute, bootstrap }) => {
                   const apply = () => {
@@ -944,6 +998,7 @@ try {
                   url: event.request.url,
                   type: event.type ?? "",
                   initiator: event.initiator,
+                  timestampSeconds: event.timestamp,
                 }),
               );
               cdp.on("Network.responseReceived", (event) => {
@@ -956,6 +1011,7 @@ try {
                 const request = requests.get(event.requestId);
                 if (request) {
                   request.wireBytes = event.encodedDataLength;
+                  request.finishedTimestampSeconds = event.timestamp;
                 }
               });
               cdp.on("Network.loadingFailed", (event) => {
@@ -1001,6 +1057,9 @@ try {
                   .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
                   .waitFor();
                 await page.locator(".chat-pane__sharing-trigger").click();
+              }
+              if (isAppsPilotId(route)) {
+                await waitForAppsCatalog(page);
               }
               if (route === "portal-embedded") {
                 const pane = page.locator(".chat-pane-cache__pane--active");
@@ -1128,6 +1187,10 @@ try {
               );
               const coverageAtReady =
                 mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+              pendingColdCoverage = coverageAtReady;
+              result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
+                /\.m?js$/u.test(new URL(request.url).pathname),
+              );
               const after = await metrics(cdp);
               result.readyMs = readyMs;
               result.workerUrls = page.workers().map((worker) => worker.url());
@@ -1137,6 +1200,172 @@ try {
               result.cpu = cpuDelta(before, after);
               result.target = target;
               result.errors = errors;
+              // First App opens happen before cold summaries, screenshots, or file writes.
+              // Each route/variant already owns a fresh browser context: never visit Chat first.
+              let appsFirstAction: InteractionResult | undefined;
+              if (isAppsOpenId(route)) {
+                const navigationStart = after.NavigationStart!;
+                const warm = route === "apps-open-idle";
+                let warmCoverage: CoverageEntry[] | undefined;
+                const warmBefore = after;
+                if (warm && mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                if (warm) {
+                  await page.evaluate(async (coldReady) => {
+                    const remaining = coldReady + 2_000 - performance.now();
+                    if (remaining > 0) {
+                      await new Promise<void>((resolve) => {
+                        setTimeout(resolve, remaining);
+                      });
+                    }
+                  }, readyMs);
+                }
+                const warmEnded = warm ? await page.evaluate(() => performance.now()) : readyMs;
+                if (warm && mode === "coverage") {
+                  warmCoverage = await page.coverage.stopJSCoverage();
+                }
+                const prior = new Map(
+                  Array.from(requests, ([key, request]) => [key, Object.assign({}, request)]),
+                );
+                if (mode === "coverage") {
+                  await page.coverage.startJSCoverage({
+                    resetOnNavigation: false,
+                    reportAnonymousScripts: false,
+                  });
+                }
+                const actionBefore = await metrics(cdp);
+                const { started, appSessionKey } = await page.evaluate(() => ({
+                  started: performance.now(),
+                  appSessionKey: window.openclawControlUi?.snapshot().sessionKey,
+                }));
+                if (!appSessionKey) {
+                  throw new Error("First App launch requires the live selected session");
+                }
+                await clickFirstAppAndWait(page);
+                const ended = await page.evaluate(
+                  () =>
+                    new Promise<number>((resolve) => {
+                      requestAnimationFrame(() => resolve(performance.now()));
+                    }),
+                );
+                const atEnd = Array.from(requests.values(), (request) =>
+                  Object.assign({}, request),
+                );
+                const stepCoverage =
+                  mode === "coverage" ? await page.coverage.stopJSCoverage() : undefined;
+                const actionAfter = await metrics(cdp);
+                appsFirstAction = {
+                  id: route,
+                  wallMs: ended - started,
+                  cpu: cpuDelta(actionBefore, actionAfter),
+                  actionStartedMs: started,
+                  actionReadyMs: ended,
+                  coldToActionGapMs: started - readyMs,
+                  intentionalThinkTimeMs: warm ? 2_000 : 0,
+                  phaseClockEvidence: {
+                    navigationStart,
+                    coldMetricTimestamp: after.Timestamp,
+                    actionBeforeMetricTimestamp: actionBefore.Timestamp,
+                    actionAfterMetricTimestamp: actionAfter.Timestamp,
+                  },
+                  coldPlusFirstOpenMs: ended,
+                  coldPlusFirstOpenCpu: cpuDelta(before, actionAfter),
+                  postColdThroughFirstOpenMs: ended - readyMs,
+                  warmupCpu: cpuDelta(warmBefore, actionBefore),
+                  warmupObservedEndMs: warmEnded,
+                  newJsRequests: atEnd.filter(
+                    (request) =>
+                      !prior.has(request.requestId) &&
+                      /\.m?js$/u.test(new URL(request.url).pathname),
+                  ),
+                  evaluatedScriptUrls: stepCoverage ? evaluatedUrls(stepCoverage) : undefined,
+                  warmupEvaluatedScriptUrls: warmCoverage ? evaluatedUrls(warmCoverage) : undefined,
+                };
+                result.interactions = [appsFirstAction];
+                if (stepCoverage) {
+                  await writeFile(
+                    path.join(output, `${prefix}-apps-open-v8.json`),
+                    JSON.stringify(stepCoverage),
+                  );
+                }
+                if (warmCoverage) {
+                  await writeFile(
+                    path.join(output, `${prefix}-apps-idle-v8.json`),
+                    JSON.stringify(warmCoverage),
+                  );
+                }
+                // Timestamped method observations are read after CPU cutoff, then cutoff-filtered.
+                result.appsColdProbe = await appsProbeSnapshot(page, readyMs);
+                appsFirstAction.preClickProbe = await appsProbeSnapshot(page, started);
+                const readyProbe = await appsProbeSnapshot(page, ended);
+                appsFirstAction.readyProbe = readyProbe;
+                const clock = qualifyAppsClock(
+                  atEnd,
+                  navigationStart,
+                  readyProbe.completedResourcesAtCutoff,
+                );
+                result.appsClockQualification = clock;
+                if (!clock.passed) {
+                  abortAfterContext = true;
+                  throw new Error(
+                    "Apps clock qualification failed; phase totals withheld and remaining contexts aborted",
+                  );
+                }
+                appsFirstAction.networkPhases = {
+                  cold: appsNetworkPhase(atEnd, navigationStart, 0, readyMs),
+                  postColdBeforeClick: appsNetworkPhase(atEnd, navigationStart, readyMs, started),
+                  firstOpen: appsNetworkPhase(atEnd, navigationStart, started, ended),
+                };
+                appsFirstAction.frameUrlsAtReady = page.frames().map((frame) => frame.url());
+                if (stepCoverage) {
+                  appsFirstAction.phaseAllScriptCoverage = await summarizeCoverage(
+                    stepCoverage,
+                    atEnd.filter(
+                      (request) =>
+                        new URL(request.url).origin === server.baseUrl &&
+                        new URL(request.url).pathname.startsWith("/assets/") &&
+                        /\.m?js$/u.test(new URL(request.url).pathname),
+                    ),
+                    variant.root,
+                    prepared.assets,
+                  );
+                }
+                if (values.screenshots && pair === 0) {
+                  await page.screenshot({
+                    path: path.join(output, `${prefix}-apps-first-ready.png`),
+                  });
+                }
+                appsFirstAction.nativeBehavior = await verifyFirstAppAndClose(page, appSessionKey);
+              } else if (isAppsPilotId(route) || (appsProbesEnabled && route === "memory")) {
+                const probe = await appsProbeSnapshot(page, readyMs);
+                result.appsColdProbe = probe;
+                result.phaseClockEvidence = {
+                  navigationStart: after.NavigationStart,
+                  coldMetricTimestamp: after.Timestamp,
+                };
+                const clock = qualifyAppsClock(
+                  requestsAtReady,
+                  after.NavigationStart!,
+                  probe.completedResourcesAtCutoff,
+                );
+                result.appsClockQualification = clock;
+                if (!clock.passed) {
+                  abortAfterContext = true;
+                  throw new Error(
+                    "Apps clock qualification failed; phase totals withheld and remaining contexts aborted",
+                  );
+                }
+                if (
+                  route === "memory" &&
+                  Object.keys(probe.counts).some((method) => method.startsWith("mcp.app."))
+                ) {
+                  throw new Error("Memory control unexpectedly admitted an Apps request");
+                }
+              }
               const routeInteractions = interactionIds.filter((value) =>
                 value.startsWith(
                   route === "agents" ? "agents-" : route === "cron" ? "cron-" : "__none__",
@@ -1247,7 +1476,7 @@ try {
                   JSON.stringify(coverageAtReady),
                 );
               }
-              if (values.screenshots && pair === 0) {
+              if (values.screenshots && pair === 0 && !isAppsOpenId(route)) {
                 await page.screenshot({
                   path: path.join(
                     output,
@@ -1309,7 +1538,11 @@ try {
                   throw new Error(`Next panel evaluated before interaction: ${warmFiles[0]}`);
                 }
               }
-              result.interactions = securityCell ? [securityCell] : [];
+              result.interactions = appsFirstAction
+                ? [appsFirstAction]
+                : securityCell
+                  ? [securityCell]
+                  : [];
               for (const id of routeInteractions) {
                 const cell: InteractionResult = { id };
                 try {
@@ -1406,6 +1639,21 @@ try {
                 throw new Error(errors.join("\n"));
               }
             } catch (error) {
+              if (pendingColdCoverage) {
+                await writeFile(
+                  path.join(output, `${prefix}-cold-failure-v8.json`),
+                  JSON.stringify(pendingColdCoverage),
+                );
+              }
+              if (mode === "coverage") {
+                const failedCoverage = await page.coverage.stopJSCoverage().catch(() => []);
+                if (failedCoverage.length) {
+                  await writeFile(
+                    path.join(output, `${prefix}-failed-phase-v8.json`),
+                    JSON.stringify(failedCoverage),
+                  );
+                }
+              }
               result.error = String(error);
               result.errors = errors;
               await page
@@ -1435,6 +1683,9 @@ try {
                 }),
               );
             }
+            if (abortAfterContext) {
+              throw new Error("Apps clock qualification failed; stopped after saving the failure");
+            }
           }
         }
       }
@@ -1444,7 +1695,11 @@ try {
   try {
     await browser?.close();
   } finally {
-    await server.close();
+    try {
+      await appsSandbox?.close();
+    } finally {
+      await server.close();
+    }
   }
 }
 if (results.some((result) => result.error || result.interactions?.some((cell) => cell.error))) {

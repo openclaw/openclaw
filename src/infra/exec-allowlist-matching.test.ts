@@ -1,5 +1,5 @@
 // Covers exec allowlist pattern matching.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
 function executable(
@@ -18,6 +18,34 @@ function executable(
 
 describe("exec allowlist matching", () => {
   const baseResolution = executable("rg", "/opt/homebrew/bin/rg");
+
+  it("prepares a revision's patterns once and follows replaced or edited entries", () => {
+    const entry: ExecAllowlistEntry = { pattern: "/opt/**/r?" };
+    const entries = [entry];
+    expect(matchAllowlist(entries, baseResolution)).toBe(entry);
+    const replace = vi.spyOn(String.prototype, "replace");
+    let repeatedPatternWork: number;
+    try {
+      for (let index = 0; index < 10; index++) {
+        expect(matchAllowlist(entries, baseResolution)).toBe(entry);
+      }
+      repeatedPatternWork = replace.mock.contexts.filter((value) => value === entry.pattern).length;
+    } finally {
+      replace.mockRestore();
+    }
+    expect(repeatedPatternWork).toBe(0);
+    entries[0] = { pattern: "/revoked/**" };
+    expect(matchAllowlist(entries, baseResolution)).toBeNull();
+    entry.pattern = "/revoked/**";
+    expect(matchAllowlist([entry], baseResolution)).toBeNull();
+    entry.pattern = "r?";
+    expect(matchAllowlist([entry], baseResolution)).toBe(entry);
+    entry.argPattern = "^--files$";
+    expect(matchAllowlist([entry], baseResolution, ["rg", "--json"])).toBeNull();
+    expect(matchAllowlist([entry], baseResolution, ["rg", "--files"])).toBe(entry);
+    entry.argPattern = "[invalid";
+    expect(matchAllowlist([entry], baseResolution, ["rg", "--files"])).toBeNull();
+  });
 
   it("handles wildcard and path matching semantics", () => {
     const cases = [

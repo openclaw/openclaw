@@ -6,31 +6,22 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "../../state/openclaw-agent-db.js";
+  SessionColdBatchInput,
+  SessionColdOversized,
+} from "./session-accessor.sqlite-archive-types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { MAX_COLD_ARCHIVE_BYTES } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import type { SessionColdOversized } from "./session-cold-storage.types.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
-export type SessionColdBatchInput = {
-  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
-  admissionIdentities: string[];
-  liveSessionKeys: string[];
-  cooledSessionIds: string[];
-  beforeMs: number;
-  maxTranscripts: number;
-  maxBytes: number;
-};
 export function selectSessionColdBatch(input: SessionColdBatchInput) {
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>

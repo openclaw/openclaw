@@ -233,7 +233,7 @@ async function prepareSpawnParentWorktreeSource(
         workspace: project.repoRoot,
         source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
-        withCurrent: async (run) =>
+        withCurrent: async (run, acquisition) =>
           await selection.withCurrent((current) => {
             const assertCurrent = composeSessionSourceAssertion([parentSource], (assertSources) => {
               assertSources();
@@ -244,7 +244,7 @@ async function prepareSpawnParentWorktreeSource(
               assertCheckoutCurrent: current.assertCheckoutCurrent,
               signal: current.signal,
             });
-          }),
+          }, acquisition),
       };
     }
     const assertCurrent = composeSessionSourceAssertion([parentSource], (assertSources) => {
@@ -426,7 +426,7 @@ export async function prepareSessionWorktree(params: {
       const selected = await selectSessionWorktreeProjectSource(projectId, params.signal);
       if (selected) {
         const expectedRoot = fs.realpathSync(workspace);
-        withSource = async (run) =>
+        withSource = async (run, acquisition) =>
           await selected.withCurrent((current) => {
             const assertCurrent = () => {
               commitGuard?.();
@@ -443,7 +443,7 @@ export async function prepareSessionWorktree(params: {
             };
             assertCurrent();
             return run({ ...current, assertCurrent });
-          });
+          }, acquisition);
         withRollback = selected.withRollback;
       }
     }

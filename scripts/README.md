@@ -201,6 +201,23 @@ use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
 Playwright headless shell for both arms. The manifest records the executable;
 compare only against the same browser configuration.
 
+## Control UI route dependency probes
+
+`bench-control-ui-route-leaks.ts` compares cold direct navigation using separate
+coverage and interleaved timing contexts. The optional `apps-catalog`,
+`apps-open-immediate`, and `apps-open-idle` routes seed a synthetic catalog and
+open its first App through the real launch, view, and sandbox path. Immediate
+opens have no intentional wait; idle opens wait at least two seconds without
+manual preloading. Each starts in a fresh context without visiting Chat first.
+
+Use `--routes apps-catalog,apps-open-immediate,apps-open-idle,memory` to include
+the shared-code control. The report retains cold and first-open measurements
+separately, plus combined elapsed time, JS/CSS transfer phases, and native counter
+and close checks after the action cutoff. Combined elapsed does not waive a
+first-open regression. Phase timestamps require an aligned document/CDP clock;
+coverage timings are diagnostic. Main-target CPU and V8 omit inner-App and worker
+execution. The 100 ms HTTP profile does not delay the synthetic WebSocket.
+
 ## Control UI request waterfalls
 
 The production-bundle cold-load harness can record usable-screen readiness,

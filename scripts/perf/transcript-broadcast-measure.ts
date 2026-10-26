@@ -2953,7 +2953,8 @@ async function assertPortAvailable(targetPort: number) {
   });
 }
 async function ready(targetPort: number, endpoint: string, owned?: ChildProcess) {
-  for (let attempt = 0; attempt < 300; attempt++) {
+  // Loaded hosts can need several minutes for plugin startup; measurement starts after readiness.
+  for (let attempt = 0; attempt < 1200; attempt++) {
     if (owned) {
       assertGatewayAlive();
       // Preflight is best effort; the owned bind-success log handles another process taking the port.

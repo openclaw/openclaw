@@ -932,18 +932,6 @@ export async function sendMessageSlack(
               textLimit: textChunkLimit,
             })
           : undefined;
-      const completeBlockFallbackText = blocks ? buildSlackCompleteBlocksFallbackText(blocks) : "";
-      const rawBlockAccessibilityText = trimmedMessage
-        ? [
-            trimmedMessage,
-            ...(completeBlockFallbackText.includes(trimmedMessage)
-              ? []
-              : [completeBlockFallbackText]),
-          ].join("\n\n")
-        : completeBlockFallbackText;
-      const blockAccessibilityText = blocks
-        ? (orderedBlockDeliveryPlan?.accessibilityText ?? rawBlockAccessibilityText)
-        : undefined;
       let pendingBlockFallback = orderedBlockDeliveryPlan?.skipOriginalBlocks
         ? orderedBlockDeliveryPlan
         : undefined;
@@ -995,9 +983,18 @@ export async function sendMessageSlack(
             "slack send: native data accessibility exceeds hard limit, using text fallback",
           );
         } else {
-          const accessibilityText = usesOrderedBlockAccessibility
-            ? (blockAccessibilityText ?? "Slack could not render this Block Kit message.")
-            : truncateSlackText(blockAccessibilityText ?? "", SLACK_TEXT_LIMIT);
+          let accessibilityText = orderedBlockDeliveryPlan?.accessibilityText;
+          if (accessibilityText === undefined) {
+            const fallback = buildSlackCompleteBlocksFallbackText(blocks);
+            accessibilityText = truncateSlackText(
+              trimmedMessage
+                ? [trimmedMessage, ...(fallback.includes(trimmedMessage) ? [] : [fallback])].join(
+                    "\n\n",
+                  )
+                : fallback,
+              SLACK_TEXT_LIMIT,
+            );
+          }
           const initialBlockMetadata = withSlackDeliveryMetadata(opts.metadata, {
             queueId: opts.deliveryQueueId,
             channelId,

@@ -234,8 +234,17 @@ it("shares recipient encodings only for matching authority and delivered baselin
       const stringify = JSON.stringify;
       let rowEncodings = 0;
       let envelopeEncodings = 0;
+      let sharingKeyEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          Array.isArray(value) &&
+          value.length === 10 &&
+          isRecord(value[0]) &&
+          value[0].kind === "operator"
+        ) {
+          sharingKeyEncodings++;
+        }
         if (isRecord(value) && value.key === key && typeof value.version === "number") {
           rowEncodings++;
         }
@@ -306,6 +315,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect([...fieldEnumerations.values()]).toEqual([1, 1]);
       // Referenced fields must not allocate entry tuples just to discard them.
       expect(envelopeEnumerations).toBe(0);
+      // Eight current delta recipients were primed at this revision; sixteen were not.
+      expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.

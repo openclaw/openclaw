@@ -1601,7 +1601,6 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
-src/plugins/plugin-instance-replacement.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
@@ -1749,6 +1748,7 @@ src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/projects/project-checkout.ts
 src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
