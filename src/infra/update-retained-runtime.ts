@@ -82,17 +82,18 @@ async function runWithRetainedUpdateRuntime<T>(
   return await withRuntimeWorkerGeneration(
     async (bind) =>
       await operation((params) => {
+        const signal = resolveCommandProcessSignal(params.signal);
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (closing) {
+            throw new Error("The updater's retained runtime is closing");
+          }
+          params.assertCurrent();
+        };
+        let importsBound = false;
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
           const temporaryRoot = (env ?? process.env).TMPDIR?.trim();
-          const signal = resolveCommandProcessSignal(params.signal);
-          const assertCurrent = () => {
-            signal?.throwIfAborted();
-            if (closing) {
-              throw new Error("The updater's retained runtime is closing");
-            }
-            params.assertCurrent();
-          };
           assertCurrent();
           if (prepared || unusable) {
             return undefined;
@@ -261,13 +262,26 @@ async function runWithRetainedUpdateRuntime<T>(
             url.href === nativeGateSource.href
               ? nativeGate
               : pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
+          importsBound = true;
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
           retainUpdateRuntimeImports(relocations.rules, files);
           prepared = true;
           return metrics;
-        })();
+        })().catch((error: unknown) => {
+          // Retention is best effort. Only cancellation, a lost update fence, or a
+          // half-bound runtime stops the update; anything else continues without it.
+          if (importsBound) {
+            throw error;
+          }
+          assertCurrent();
+          unusable = true;
+          log.warn(
+            `${formatErrorMessage(error)}; continuing update without a verified retained rollback runtime`,
+          );
+          return undefined;
+        });
         return preparation;
       }),
     async () => {

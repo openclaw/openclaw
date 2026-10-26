@@ -26,7 +26,6 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
-import { createUpdateErrorFact } from "./update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { expectRetainedNativeGate } from "./update-retained-native-gate.test-support.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
@@ -65,6 +64,31 @@ afterEach(() => {
   inspectionFixture.nativeGateModuleUrl = "";
   vi.restoreAllMocks();
 });
+
+/** Retention falls back with a warning; return what the updater logged. */
+async function retentionWarnings(base: string, run: () => Promise<void>) {
+  const log = path.join(base, "retention-warnings.log");
+  const previous = loggingState.overrideSettings;
+  try {
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: log });
+    await run();
+    await flushLogger();
+    return await readFile(log, "utf8");
+  } finally {
+    setLoggerOverride(previous as Parameters<typeof setLoggerOverride>[0]);
+  }
+}
+
+/** A skipped retention leaves the running generation on its original sources. */
+async function expectRetentionSkipped(
+  moduleUrl: string,
+  options: Parameters<RetainUpdateRuntime>[0],
+) {
+  await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+    expect(await retain(options)).toBeUndefined();
+    expect(captureRuntimeWorkerSource(new URL(moduleUrl)).runtimeGeneration).toBeUndefined();
+  });
+}
 
 type Operations = { append: { input: string; output: string[] } };
 const stores = new Set<SqliteWorkerStore<Operations>>();
@@ -382,24 +406,26 @@ it.each([
       await symlink(recoveryFile, path.join(root, "dist/recovery-link"));
     }
     const moduleUrl = moduleUrlFor(root);
-    const operation = withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
-      await retain(retainOptions(root));
-      const retained = fileURLToPath(captureRuntimeWorkerSource(moduleUrl).moduleUrl);
-      expect(retained).not.toBe(fileURLToPath(moduleUrl));
-      const retainedRoot = path.resolve(path.dirname(retained), "..");
-      for (const relative of assets) {
-        expect(await contents(retainedRoot, relative)).toBe("runtime asset");
-      }
-      expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, recoveryRoot)))).toBe(
-        false,
-      );
-    });
     if (explicitLink) {
-      await expect(operation).rejects.toThrow(
-        "Package recovery state cannot be a runtime dependency",
+      // Retention refuses to depend on recovery state; the update continues without it.
+      const warnings = await retentionWarnings(path.dirname(root), () =>
+        expectRetentionSkipped(moduleUrl.href, retainOptions(root)),
       );
+      expect(warnings).toContain("Package recovery state cannot be a runtime dependency");
+      expect(warnings).toContain("continuing update without a verified retained rollback runtime");
     } else {
-      await operation;
+      await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+        await retain(retainOptions(root));
+        const retained = fileURLToPath(captureRuntimeWorkerSource(moduleUrl).moduleUrl);
+        expect(retained).not.toBe(fileURLToPath(moduleUrl));
+        const retainedRoot = path.resolve(path.dirname(retained), "..");
+        for (const relative of assets) {
+          expect(await contents(retainedRoot, relative)).toBe("runtime asset");
+        }
+        expect(fsSync.existsSync(path.join(retainedRoot, path.relative(root, recoveryRoot)))).toBe(
+          false,
+        );
+      });
     }
     expect(await readFile(recoveryFile, "utf8")).toBe("preserved recovery evidence");
     // Old sealed helpers hash these fields: hard-linking identical bytes still
@@ -509,6 +535,29 @@ it("warns and continues the update without binding a replaced retained runtime",
   }
 });
 
+it("continues without retention when its worker fails, and removes the private runtime", async () => {
+  const { base, root, moduleUrl } = await runtimeFixture("retained-worker-failure-");
+  const worker = path.join(root, "dist/infra/update-candidate-state.worker.js");
+  await mkdir(path.dirname(worker));
+  // Odin's workers died on an output cap and on a source that grew during the copy.
+  await writeFile(
+    worker,
+    `process.stderr.write("fixture retention worker crashed\\n");\nprocess.exit(3);\n`,
+  );
+  inspectionFixture.moduleUrl = moduleUrlFor(root).href;
+  const warnings = await retentionWarnings(base, () =>
+    expectRetentionSkipped(moduleUrl, {
+      ...retainOptions(root),
+      env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
+    }),
+  );
+  expect(warnings).toContain("continuing update without a verified retained rollback runtime");
+  expect(
+    (await fs.readdir(base)).filter((name) => name.startsWith("openclaw-update-runtime-")),
+  ).toEqual([]);
+  expect(await contents(root, "dist/updater.mjs")).toBe("export {};\n");
+});
+
 it.for(["inventory", "materialization"])(
   "cancels stalled retention %s before removing its private runtime",
   async (phase, { signal }) => {
@@ -607,7 +656,7 @@ it.for(["inventory", "materialization"])(
 );
 
 it.each([".git", "extensions/retired", "extensions/linked-residue"])(
-  "refuses unrelated host files reached through a hoist link to %s",
+  "skips retention instead of copying host files reached through a hoist link to %s",
   async (directory) => {
     const root = await fixture(tempDirs.make("openclaw-retained-host-link-"), "git");
     const target = path.join(root, directory);
@@ -628,22 +677,16 @@ it.each([".git", "extensions/retired", "extensions/linked-residue"])(
     if (directory !== "extensions/retired") {
       await symlink(target, link, linkType);
     }
-    const failure = await withRetainedUpdateRuntime(moduleUrlFor(root).href, (retain) =>
-      retain(retainOptions(root)),
-    ).catch((error: unknown) => error);
-    expect(failure).toMatchObject({
-      code: "host-owned-plugin-link",
-      message: expect.stringContaining(`${link} -> ${target}`),
-    });
-    expect(createUpdateErrorFact("updater-runtime-retention", failure)).toMatchObject({
-      check: "updater-runtime-retention",
-      code: "host-owned-plugin-link",
-    });
+    const warnings = await retentionWarnings(path.dirname(root), () =>
+      expectRetentionSkipped(moduleUrlFor(root).href, retainOptions(root)),
+    );
+    expect(warnings).toContain(`${link} -> ${target}`);
+    expect(warnings).toContain("continuing update without a verified retained rollback runtime");
     expect(await readFile(marker, "utf8")).toBe("unrelated checkout data");
   },
 );
 
-it("refuses files added between residue selection and inventory", async () => {
+it("skips retention when files appear between residue selection and inventory", async () => {
   const { base, root, moduleUrl } = await runtimeFixture(
     "openclaw-retained-residue-inventory-",
     "git",
@@ -677,9 +720,11 @@ it("refuses files added between residue selection and inventory", async () => {
       options,
     ),
   );
-  await expect(
-    withRetainedUpdateRuntime(moduleUrl, (retain) => retain(retainOptions(root))),
-  ).rejects.toThrow("Retired workspace changed during runtime retention");
+  const warnings = await retentionWarnings(base, () =>
+    expectRetentionSkipped(moduleUrl, retainOptions(root)),
+  );
+  expect(warnings).toContain("Retired workspace changed during runtime retention");
+  expect(warnings).toContain("continuing update without a verified retained rollback runtime");
   expect(fsSync.existsSync(marker)).toBe(true);
   expect(await readFile(marker, "utf8")).toBe("late unrelated host data");
 });
@@ -820,7 +865,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
   },
 );
 
-it("refuses unsafe fallback storage without changing the installed runtime", async () => {
+it("skips retention when only unsafe storage is available, leaving the runtime unchanged", async () => {
   const base = tempDirs.make("retained-owner-refusal-");
   const owner = path.join(base, "manager-project");
   const globalRoot = path.join(owner, "v11");
@@ -837,14 +882,17 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
   });
   const original = await contents(root, "dist/state/store.js");
   const moduleUrl = moduleUrlFor(root).href;
-  await expect(
-    withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-      await retain({
-        ...retainOptions(root),
-        installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot: root },
-      });
+  const logs = tempDirs.make("retained-owner-refusal-log-");
+  const warnings = await retentionWarnings(logs, () =>
+    expectRetentionSkipped(moduleUrl, {
+      ...retainOptions(root),
+      installTarget: { manager: "pnpm", command: "pnpm", globalRoot, packageRoot: root },
     }),
-  ).rejects.toThrow("Updater temporary directory is inside an installation being replaced");
+  );
+  expect(warnings).toContain(
+    "Updater temporary directory is inside an installation being replaced",
+  );
+  expect(warnings).toContain("continuing update without a verified retained rollback runtime");
   expect(await contents(root, "dist/state/store.js")).toBe(original);
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
