@@ -67,6 +67,60 @@ function block(text: string, id: string, phase?: OpenAiResponsesTextEventPhase) 
   return createOpenAiResponsesTextBlock({ text, id, phase });
 }
 
+function responseItem(id: string, text: string, annotations: unknown[] = []) {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    status: "completed",
+    phase: "final_answer",
+    content: [{ type: "output_text", text, annotations }],
+  };
+}
+
+function completedResponse(id: string, output: unknown[]) {
+  return { type: "response.completed", response: { id, status: "completed", output } };
+}
+
+function streamResponses(
+  model: Model<"openai-responses">,
+  wireEvents: AsyncIterable<unknown>,
+  prompt: string,
+  onEvent: NonNullable<Parameters<typeof runAgentLoop>[3]>,
+) {
+  const output = createResponsesAssistantOutput(model);
+  const response = new AssistantMessageEventStream();
+  response.push({ type: "start", partial: output });
+  const producing = processResponsesStream(wireEvents, output, response, model).then(
+    () => {
+      response.push({ type: "done", reason: "stop", message: output });
+      response.end();
+    },
+    (error: unknown) => {
+      response.end({ ...output, stopReason: "error", errorMessage: String(error) });
+      throw error;
+    },
+  );
+  const running = runAgentLoop(
+    [{ role: "user", content: prompt, timestamp: 1 }],
+    { systemPrompt: "", messages: [] },
+    {
+      model,
+      convertToLlm: (messages) =>
+        messages.filter(
+          (message): message is Message =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
+    },
+    onEvent,
+    undefined,
+    () => response,
+  );
+  return { output, producing, running };
+}
+
 describe("Responses final delivery", () => {
   it.each(["text_end", "message_end"] as const)(
     "retains the active reply scope when terminal citations enrich an earlier item (%s)",
@@ -78,17 +132,8 @@ describe("Responses final delivery", () => {
         ...makeCompletionsModel(),
         api: "openai-responses",
       };
-      const output = createResponsesAssistantOutput(model);
-      const item = (id: string, text: string, annotations: unknown[] = []) => ({
-        type: "message",
-        id,
-        role: "assistant",
-        status: "completed",
-        phase: "final_answer",
-        content: [{ type: "output_text", text, annotations }],
-      });
-      const first = item("msg_alpha", "Alpha");
-      const second = item("msg_beta", "Beta");
+      const first = responseItem("msg_alpha", "Alpha");
+      const second = responseItem("msg_beta", "Beta");
       const citation = "[Source](https://example.com/source)";
       const secondDelivered = createDeferred();
       async function* wireEvents() {
@@ -102,45 +147,17 @@ describe("Responses final delivery", () => {
         }
         await secondDelivered.promise;
         expect(h.texts()).toEqual(["Alpha", ...(blockReplyBreak === "text_end" ? ["Beta"] : [])]);
-        yield {
-          type: "response.completed",
-          response: {
-            id: "resp_late_source",
-            status: "completed",
-            output: [
-              item("msg_alpha", "Alpha", [
-                { type: "url_citation", url: "https://example.com/source", title: "Source" },
-              ]),
-              second,
-            ],
-          },
-        };
+        yield completedResponse("resp_late_source", [
+          responseItem("msg_alpha", "Alpha", [
+            { type: "url_citation", url: "https://example.com/source", title: "Source" },
+          ]),
+          second,
+        ]);
       }
-      const response = new AssistantMessageEventStream();
-      response.push({ type: "start", partial: output });
-      const producing = processResponsesStream(wireEvents(), output, response, model).then(
-        () => {
-          response.push({ type: "done", reason: "stop", message: output });
-          response.end();
-        },
-        (error: unknown) => {
-          response.end({ ...output, stopReason: "error", errorMessage: String(error) });
-          throw error;
-        },
-      );
-      const running = runAgentLoop(
-        [{ role: "user", content: "Answer with sources.", timestamp: 1 }],
-        { systemPrompt: "", messages: [] },
-        {
-          model,
-          convertToLlm: (messages) =>
-            messages.filter(
-              (message): message is Message =>
-                message.role === "user" ||
-                message.role === "assistant" ||
-                message.role === "toolResult",
-            ),
-        },
+      const { output, producing, running } = streamResponses(
+        model,
+        wireEvents(),
+        "Answer with sources.",
         async (event) => {
           h.emit(event);
           await h.subscription.waitForPendingEvents();
@@ -152,8 +169,6 @@ describe("Responses final delivery", () => {
             secondDelivered.resolve();
           }
         },
-        undefined,
-        () => response,
       );
       try {
         await Promise.all([producing, running]);
@@ -242,16 +257,8 @@ describe("Responses final delivery", () => {
     "preserves $name across late Responses phase updates",
     async ({ prefix, audioAsVoice, expectedPrefix = "", recoveryPrefix, queuedDeltas = [] }) => {
       const model: Model<"openai-responses"> = {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
+        ...makeCompletionsModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         api: "openai-responses",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
       };
       const answer = "Answer".repeat(32);
       const expected = expectedPrefix + answer;
@@ -280,14 +287,7 @@ describe("Responses final delivery", () => {
         };
         await reanchorProcessed.promise;
         const text = prefix + queuedDeltas.join("") + recoveryPrefix + answer;
-        const finalItem = {
-          type: "message",
-          id: "msg_answer",
-          role: "assistant",
-          status: "completed",
-          phase: "final_answer",
-          content: [{ type: "output_text", text, annotations: [] }],
-        };
+        const finalItem = responseItem("msg_answer", text);
         if (queuedDeltas.length > 0) {
           for (const delta of queuedDeltas) {
             yield { type: "response.output_text.delta", output_index: 0, delta };
@@ -295,41 +295,15 @@ describe("Responses final delivery", () => {
           yield { type: "response.output_item.done", output_index: 0, item: finalItem };
           phaseProcessed.resolve();
         }
-        yield {
-          type: "response.completed",
-          response: {
-            id: "resp_phase_recovery",
-            status: "completed",
-            output: [finalItem, { type: "reasoning", id: "rs_reanchor", summary: [] }],
-          },
-        };
+        yield completedResponse("resp_phase_recovery", [
+          finalItem,
+          { type: "reasoning", id: "rs_reanchor", summary: [] },
+        ]);
       }
-      const output = createResponsesAssistantOutput(model);
-      const response = new AssistantMessageEventStream();
-      response.push({ type: "start", partial: output });
-      const producing = processResponsesStream(wireEvents(), output, response, model).then(
-        () => {
-          response.push({ type: "done", reason: "stop", message: output });
-          response.end();
-        },
-        (error: unknown) => {
-          response.end({ ...output, stopReason: "error", errorMessage: String(error) });
-          throw error;
-        },
-      );
-      const running = runAgentLoop(
-        [{ role: "user", content: "Give the answer.", timestamp: 1 }],
-        { systemPrompt: "", messages: [] },
-        {
-          model,
-          convertToLlm: (messages) =>
-            messages.filter(
-              (message): message is Message =>
-                message.role === "user" ||
-                message.role === "assistant" ||
-                message.role === "toolResult",
-            ),
-        },
+      const { producing, running } = streamResponses(
+        model,
+        wireEvents(),
+        "Give the answer.",
         async (event) => {
           emit(event);
           await subscription.waitForPendingEvents();
@@ -352,8 +326,6 @@ describe("Responses final delivery", () => {
             expect(onPartialReply).not.toHaveBeenCalled();
           }
         },
-        undefined,
-        () => response,
       );
       try {
         await Promise.all([producing, running]);
@@ -526,16 +498,11 @@ function subscribe(options: Options = {}) {
   onTestFinished(() => harness.subscription.unsubscribe());
   return harness;
 }
-function blockHarness(options: Options = {}) {
-  const onBlockReply = vi.fn();
-  return { ...subscribe({ onBlockReply, blockReplyBreak: "text_end", ...options }), onBlockReply };
-}
-
 describe("reasoning delivery", () => {
   it.each(["text_end", "message_end"] as const)(
     "delivers completed native reasoning before %s answers without repeating it at message_end",
     (blockReplyBreak) => {
-      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      const { emit, onBlockReply } = setup({ blockReplyBreak, reasoningMode: "on" });
       const thinking = { type: "thinking" as const, thinking: "Because it helps" };
       const message: TestAssistant = { role: "assistant", content: [thinking] };
       emit({ type: "message_start", message });
@@ -566,7 +533,7 @@ describe("reasoning delivery", () => {
   it.each(["text_end", "message_end"] as const)(
     "orders terminal-only reasoning before %s answer blocks",
     (blockReplyBreak) => {
-      const { emit, onBlockReply } = blockHarness({ blockReplyBreak, reasoningMode: "on" });
+      const { emit, onBlockReply } = setup({ blockReplyBreak, reasoningMode: "on" });
       emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
       expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
         "Because it helps",
@@ -598,7 +565,7 @@ describe("reasoning delivery", () => {
   });
 
   it("does not repeat accumulated reasoning and resets delivery for the next message", () => {
-    const { emit, onBlockReply } = blockHarness({ reasoningMode: "on" });
+    const { emit, onBlockReply } = setup({ reasoningMode: "on" });
     for (const answer of ["First answer", "Next answer"]) {
       const message: TestAssistant = { role: "assistant", content: [] };
       emit({ type: "message_start", message });
@@ -631,7 +598,7 @@ describe("reasoning delivery", () => {
   it.each(THINKING_TAG_CASES.filter(({ tag }) => tag === "mm:think"))(
     "promotes $tag reasoning to thinking blocks before delivering the answer",
     ({ open, close }) => {
-      const { emit, onBlockReply } = blockHarness({
+      const { emit, onBlockReply } = setup({
         blockReplyBreak: "message_end",
         reasoningMode: "on",
       });
@@ -682,7 +649,7 @@ describe("unphased provider text delivery", () => {
   ] as const)(
     "streams $api pre-tool narration once without retroactive phase changes",
     async ({ api, narration, toolName, args }) => {
-      const { emit, subscription, onBlockReply } = blockHarness({
+      const { emit, subscription, onBlockReply } = setup({
         blockReplyChunking: { minChars: 4, maxChars: 200 },
       });
       emit({ type: "message_start", message: textMessage("", api) });
@@ -743,7 +710,7 @@ describe("unphased provider text delivery", () => {
       emit({ type: "message_start", message: output });
       await processCompletionsStream(chunks(), output, model, {
         push(event) {
-          emit({ type: "message_update", message: output, assistantMessageEvent: event });
+          emitProviderUpdate(emit, output, event);
         },
       });
       emit({ type: "message_end", message: output });
