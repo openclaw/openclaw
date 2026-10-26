@@ -47,16 +47,11 @@ afterEach(async () => {
 });
 
 describe("discord model picker preferences", () => {
-  it("records recent models in recency order without duplicates", async () => {
+  it("records deduplicated recents in order and filters them by the current allowlist", async () => {
     await record("openai/gpt-4o");
     await record("openai/gpt-4.1");
     await record("openai/gpt-4o");
     expect(await read()).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
-  });
-
-  it("filters recent models using an allowlist", async () => {
-    await record("openai/gpt-4o");
-    await record("openai/gpt-4.1");
     const allowedModelRefs = new Set(["openai/gpt-4.1"]);
     expect(await read({ allowedModelRefs })).toEqual(["openai/gpt-4.1"]);
   });
@@ -66,13 +61,7 @@ describe("discord model picker preferences", () => {
       await record(`openai/${suffix}`);
     }
 
-    await expect(read()).resolves.toEqual([
-      "openai/f",
-      "openai/e",
-      "openai/d",
-      "openai/c",
-      "openai/b",
-    ]);
+    expect(await read()).toEqual(["f", "e", "d", "c", "b"].map((suffix) => `openai/${suffix}`));
     expect(await openStore().entries()).toHaveLength(5);
   });
 
@@ -104,7 +93,7 @@ describe("discord model picker preferences", () => {
     expect(new Set(await read())).toEqual(new Set(["openai/gpt-4o", "openai/gpt-4.1"]));
   });
 
-  it("retires the July command cache while preserving July SQLite state", async () => {
+  it("retires the July command cache without touching existing SQLite rows", async () => {
     const migration = stateMigrations.find((entry) => entry.id === "discord-legacy-state")!;
     const input = {
       config: {},
@@ -119,23 +108,10 @@ describe("discord model picker preferences", () => {
     };
     const preferences = openStore();
     const bindings = openStore("thread-bindings", 10_000);
-    const preference = {
-      scopeKey: "discord:default:dm:user:123",
-      modelRef: "openai/gpt-4.1",
-      updatedAt: "2026-07-01T00:00:00.000Z",
-    };
+    const preference = { modelRef: "openai/gpt-4.1", updatedAt: "2026-07-01T00:00:00.000Z" };
     const binding = {
-      accountId: "default",
-      channelId: "parent-1",
       threadId: "july-thread",
-      targetKind: "subagent",
       targetSessionKey: "agent:main:subagent:july",
-      agentId: "main",
-      boundBy: "system",
-      boundAt: 1_782_864_000_000,
-      lastActivityAt: 1_782_864_000_000,
-      idleTimeoutMs: 0,
-      maxAgeMs: 0,
     };
     const preferenceKey = "v1:d5899e380e110de25e5bfcc71b9ea6c2:c8893463e7ced4209fdb0702";
     await preferences.register(preferenceKey, preference);

@@ -25,10 +25,6 @@ const mockMessage = {
   timestamp: "123",
 } as unknown as AutoThreadParams["message"];
 
-function createMockMessage(overrides: Record<string, unknown>) {
-  return Object.assign({}, mockMessage, overrides) as AutoThreadParams["message"];
-}
-
 function createBaseParams(overrides: Partial<AutoThreadParams> = {}): AutoThreadParams {
   return {
     client: mockClient,
@@ -60,9 +56,13 @@ function expectRestBodyField(mock: typeof postMock, field: string, expected: unk
 
 function generatedParams(overrides: Partial<AutoThreadParams> = {}) {
   return createBaseParams({
-    channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
+    channelConfig: {
+      allowed: true,
+      autoThread: true,
+      autoThreadName: "generated",
+      autoArchiveDuration: "10080",
+    },
     cfg: { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } },
-    agentId: "main",
     ...overrides,
   });
 }
@@ -94,7 +94,9 @@ describe("maybeCreateDiscordAutoThread", () => {
       getMock.mockResolvedValueOnce(threadId ? { thread: { id: threadId } } : {});
       const result = await maybeCreateDiscordAutoThread(
         createBaseParams({
-          message: createMockMessage({ author: { bot: true } }),
+          message: Object.assign({}, mockMessage, {
+            author: { bot: true },
+          }) as AutoThreadParams["message"],
         }),
       );
 
@@ -102,15 +104,6 @@ describe("maybeCreateDiscordAutoThread", () => {
       expect(postMock).not.toHaveBeenCalled();
     },
   );
-  it("uses configured autoArchiveDuration", async () => {
-    mockThreadCreation();
-    await maybeCreateDiscordAutoThread(
-      createBaseParams({
-        channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: "10080" },
-      }),
-    );
-    expectRestBodyField(postMock, "auto_archive_duration", 10080);
-  });
   it("renames created thread when generated mode is enabled", async () => {
     mockThreadCreation();
     patchMock.mockResolvedValueOnce({});
@@ -126,6 +119,7 @@ describe("maybeCreateDiscordAutoThread", () => {
     );
     expect(result).toBe("thread1");
     expectRestBodyField(postMock, "name", "Need help with deploy rollout");
+    expectRestBodyField(postMock, "auto_archive_duration", 10080);
     await flushAsyncWork();
     expect(generateThreadTitleMock.mock.calls[0]?.[0]).toMatchObject({
       agentId: "main",

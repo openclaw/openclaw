@@ -62,11 +62,10 @@ describe("Discord question button", () => {
   });
   it("does not resolve unauthorized clicks", async () => {
     const { interaction, post } = createInteraction();
-    const resolveQuestion = dependencies.resolve;
     dependencies.authorize.mockResolvedValue(false);
     await runButton(interaction);
 
-    expect(resolveQuestion).not.toHaveBeenCalled();
+    expect(dependencies.resolve).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -77,73 +76,40 @@ describe("Discord question button", () => {
       .mockRejectedValue(new Error("receipt failed"));
     dependencies.resolve.mockResolvedValue(answered);
     await expect(runButton(interaction)).resolves.toBeUndefined();
-    expect(followUp).toHaveBeenCalledOnce();
-    expect(followUp).toHaveBeenCalledWith({
+    expect(followUp).toHaveBeenCalledExactlyOnceWith({
       content: "Answer submitted.",
       ephemeral: true,
     });
   });
 
   it.each([
-    {
-      name: "submitted answer",
-      acknowledged: false,
-      result: answered,
-      expectedText: "Answer submitted.",
-    },
-    {
-      name: "already answered question",
-      acknowledged: true,
-      result: { status: "already-terminal" as const, reason: "already-terminal" as const },
-      expectedText: "This question was already answered.",
-    },
-    {
-      name: "question resolution failure",
-      acknowledged: true,
-      error: new Error("question service unavailable"),
-      expectedText: "Could not submit this answer.",
-    },
-  ])("delivers $name feedback when acknowledgement is $acknowledged", async (testCase) => {
-    const { interaction, post } = createInteraction();
-    if (!testCase.acknowledged) {
-      post.mockRejectedValueOnce(new Error("temporary connection reset"));
-    }
-    const resolveQuestion = dependencies.resolve.mockImplementation(async () => {
-      if (testCase.error) {
-        throw testCase.error;
+    [false, answered, "Answer submitted."],
+    [true, { status: "already-terminal" }, "This question was already answered."],
+    [true, new Error("question service unavailable"), "Could not submit this answer."],
+  ] as const)(
+    "delivers %s acknowledgement feedback: %s",
+    async (acknowledged, result, expectedText) => {
+      const { interaction, post } = createInteraction();
+      if (!acknowledged) {
+        post.mockRejectedValueOnce(new Error("temporary connection reset"));
       }
-      return testCase.result;
-    });
-    await runButton(interaction);
+      dependencies.resolve.mockImplementation(async () => {
+        if (result instanceof Error) {
+          throw result;
+        }
+        return result;
+      });
+      await runButton(interaction);
 
-    expect(resolveQuestion).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenNthCalledWith(
-      1,
-      "/interactions/interaction-1/interaction-token/callback",
-      {
-        body: { type: InteractionResponseType.DeferredMessageUpdate },
-      },
-    );
-    if (testCase.acknowledged) {
-      expect(post).toHaveBeenNthCalledWith(
-        2,
-        "/webhooks/app1/interaction-token",
-        { body: { content: testCase.expectedText, flags: MessageFlags.Ephemeral } },
-        undefined,
-      );
-      expect(interaction.responseState).toBe("deferred-update");
-    } else {
-      expect(post).toHaveBeenNthCalledWith(
-        2,
-        "/interactions/interaction-1/interaction-token/callback",
-        {
-          body: {
-            type: InteractionResponseType.ChannelMessageWithSource,
-            data: { content: testCase.expectedText, flags: MessageFlags.Ephemeral },
-          },
-        },
-      );
-      expect(interaction.responseState).toBe("replied");
-    }
-  });
+      const callback = "/interactions/interaction-1/interaction-token/callback";
+      const feedback = { content: expectedText, flags: MessageFlags.Ephemeral };
+      expect(post.mock.calls.map(([path, request]) => [path, request.body])).toEqual([
+        [callback, { type: InteractionResponseType.DeferredMessageUpdate }],
+        acknowledged
+          ? ["/webhooks/app1/interaction-token", feedback]
+          : [callback, { type: InteractionResponseType.ChannelMessageWithSource, data: feedback }],
+      ]);
+      expect(interaction.responseState).toBe(acknowledged ? "deferred-update" : "replied");
+    },
+  );
 });

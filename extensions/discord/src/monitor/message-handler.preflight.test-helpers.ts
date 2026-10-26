@@ -71,7 +71,7 @@ export function createGuildEvent(params: {
 export function createDiscordMessage(
   params: Pick<Message, "id" | "channelId" | "content"> &
     Partial<Pick<Message, "mentionedEveryone" | "messageReference">> &
-    Partial<Pick<APIMessage, "type" | "timestamp" | "embeds" | "components" | "flags">> & {
+    Partial<Pick<APIMessage, "type" | "timestamp" | "embeds" | "components">> & {
       author: Pick<APIUser, "id"> & { bot: boolean; username?: string };
       mentionedUsers?: Array<{ id: string; username?: string }>;
       referencedMessage?: Message;
@@ -102,7 +102,6 @@ export function createDiscordMessage(
     pinned: false,
     embeds: params.embeds ?? [],
     components: params.components,
-    flags: params.flags,
     sticker_items: params.stickers,
   });
 }

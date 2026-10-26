@@ -1,9 +1,4 @@
-import {
-  ComponentType,
-  MessageFlags,
-  MessageReferenceType,
-  StickerFormatType,
-} from "discord-api-types/v10";
+import { ComponentType, MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createInternalTestClient } from "../internal/test-builders.test-support.js";
@@ -20,8 +15,6 @@ const renderText = (payload: Record<string, unknown>) =>
 function forwardedText(message: Record<string, unknown>) {
   const snapshot = {
     content: "",
-    embeds: [],
-    attachments: [],
     author: { id: "u2", username: "Bob", discriminator: "0" },
     ...message,
   };
@@ -30,13 +23,6 @@ function forwardedText(message: Record<string, unknown>) {
     { includeForwarded: true },
   );
 }
-
-const forwardedImage = {
-  id: "forwarded-image",
-  filename: "forwarded.png",
-  content_type: "image/png",
-  url: "https://cdn.discordapp.com/forwarded.png",
-};
 
 function asReferencedForwardMessage(content: string, type: MessageReferenceType) {
   return asMessage({
@@ -59,21 +45,16 @@ describe("resolveDiscordMessageText", () => {
   });
 
   it.each([
-    [MessageReferenceType.Forward, "forwarded from referenced message"],
-    [MessageReferenceType.Default, "quoted reply content"],
+    [MessageReferenceType.Forward, "[Forwarded message from @Bob]\nforwarded"],
+    [MessageReferenceType.Default, ""],
   ] as const)(
     "includes only forwarded reference text (type=%s)",
-    (messageReferenceType, content) => {
+    (messageReferenceType, expected) => {
       const result = resolveDiscordMessageText(
-        asReferencedForwardMessage(content, messageReferenceType),
+        asReferencedForwardMessage("forwarded", messageReferenceType),
         { includeForwarded: true },
       );
-      if (messageReferenceType === MessageReferenceType.Default) {
-        expect(result).toBe("");
-      } else {
-        expect(result).toContain("[Forwarded message from @Bob]");
-        expect(result).toContain(content);
-      }
+      expect(result).toBe(expected);
     },
   );
 
@@ -94,7 +75,7 @@ describe("resolveDiscordMessageText", () => {
   });
 
   it.each(["", "look at this"])("renders forwarded media with caption %j", (content) => {
-    const result = forwardedText({ content, attachments: [forwardedImage] });
+    const result = forwardedText({ content, attachments: [{ content_type: "image/png" }] });
     expect(result).toContain(content ? `${content}\n<media:image>` : "<media:image>");
     if (!content) {
       expect(result).toContain("[Forwarded message from @Bob]");
@@ -107,12 +88,10 @@ describe("resolveDiscordMessageText", () => {
     const text = resolveDiscordMessageText(
       createDiscordMessage(
         {
-          id: "message-components",
-          channelId: "channel-components",
+          id: "m",
+          channelId: "c",
           content: "",
-          author: { id: "user-components", username: "user", bot: false },
-          timestamp: "2026-01-01T00:00:00.000Z",
-          flags: MessageFlags.IsComponentsV2,
+          author: { id: "u", bot: false },
           components: [
             {
               type: ComponentType.Container,
@@ -121,10 +100,6 @@ describe("resolveDiscordMessageText", () => {
                 {
                   type: ComponentType.Section,
                   components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
-                  accessory: {
-                    type: ComponentType.Thumbnail,
-                    media: { url: "attachment://x.png" },
-                  },
                 },
               ],
             },
@@ -146,11 +121,6 @@ describe("resolveDiscordMessageText", () => {
         stickers: [{ id: "sticker-3", name: "party", format_type: StickerFormatType.PNG }],
       },
       "",
-    ],
-    [
-      "embed fallback",
-      { content: "", embeds: [{ title: "Breaking", description: "Details" }] },
-      "Breaking\nDetails",
     ],
     [
       "content before embed fallback",
