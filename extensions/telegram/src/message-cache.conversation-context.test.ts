@@ -1,5 +1,5 @@
 import type { Message } from "grammy/types";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
@@ -22,12 +22,12 @@ function message(messageId: number, fields: Record<string, unknown> = {}): Messa
   } as Message;
 }
 
-function record(cache: TelegramMessageCache, msg: Message) {
+let cache: TelegramMessageCache;
+function record(msg: Message) {
   return cache.record({ accountId: "default", chatId: msg.chat.id, msg });
 }
 
 function conversation(
-  cache: TelegramMessageCache,
   messageId: string,
   options: Partial<Parameters<typeof buildTelegramConversationContext>[0]> = {},
 ) {
@@ -43,77 +43,63 @@ function conversation(
   });
 }
 
-describe("telegram message cache conversation context", () => {
-  beforeEach(() => {
-    clearTelegramRuntimeForTest();
-    resetTelegramMessageCacheForTest();
-  });
-  afterEach(() => {
-    resetTelegramMessageCacheForTest();
-  });
+beforeEach(() => {
+  clearTelegramRuntimeForTest();
+  resetTelegramMessageCacheForTest();
+  cache = createTelegramMessageCache();
+});
+afterEach(resetTelegramMessageCacheForTest);
 
-  it.each([
-    {
-      name: "placeholder",
-      block: { type: "paragraph" },
-      body: "[unsupported Telegram rich_message received]",
-    },
-    {
-      name: "text",
-      block: { type: "paragraph", text: "Forwarded cache text" },
-      body: "Forwarded cache text",
-    },
-  ])("preserves rich-message $name in subsequent conversation context", async ({ block, body }) => {
-    const cache = createTelegramMessageCache();
-    const chat = { id: 7, type: "private", first_name: "Nora" } as const;
-    await record(cache, message(45, { chat, text: undefined, rich_message: { blocks: [block] } }));
-    await record(cache, message(46, { chat, text: "What did I just send?" }));
-    const context = await conversation(cache, "46", { replyTargetWindowSize: 2 });
-    expect(
-      context.map((entry) => ({ messageId: entry.node.messageId, body: entry.node.body })),
-    ).toEqual([{ messageId: "45", body }]);
-  });
+it.each([
+  [undefined, "[unsupported Telegram rich_message received]"],
+  ["Forwarded cache text", "Forwarded cache text"],
+])("preserves rich messages (text=%s) in subsequent context", async (text, body) => {
+  const block = { type: "paragraph", text };
+  const chat = { id: 7, type: "private", first_name: "Nora" } as const;
+  await record(message(45, { chat, text: undefined, rich_message: { blocks: [block] } }));
+  await record(message(46, { chat, text: "What did I just send?" }));
+  expect(await conversation("46", { replyTargetWindowSize: 2 })).toMatchObject([
+    { node: { messageId: "45", body } },
+  ]);
+});
 
-  it("selects reply targets referenced by the current local window", async () => {
-    const cache = createTelegramMessageCache();
-    for (const id of [33867, 33868, 33869]) {
-      await record(cache, message(id));
-    }
-    for (let id = 34460; id <= 34475; id++) {
-      await record(cache, message(id));
-    }
-    await record(cache, message(34476, { reply_to_message: message(33868) }));
-    await record(cache, message(34477));
-    const context = await conversation(cache, "34477");
-    expect(context.map((entry) => entry.node.messageId)).toEqual(
-      "33867 33868 33869 34467 34468 34469 34470 34471 34472 34473 34474 34475 34476".split(" "),
-    );
-    expect(context.find((entry) => entry.node.messageId === "33868")?.isReplyTarget).toBe(true);
-  });
+it("selects reply targets referenced by the current local window", async () => {
+  for (const id of [33867, 33868, 33869]) {
+    await record(message(id));
+  }
+  for (let id = 34460; id <= 34475; id++) {
+    await record(message(id));
+  }
+  await record(message(34476, { reply_to_message: message(33868) }));
+  await record(message(34477));
+  const context = await conversation("34477");
+  expect(context.map((entry) => entry.node.messageId)).toEqual(
+    "33867 33868 33869 34467 34468 34469 34470 34471 34472 34473 34474 34475 34476".split(" "),
+  );
+  expect(context.find((entry) => entry.node.messageId === "33868")?.isReplyTarget).toBe(true);
+});
 
-  it("does not select messages before the persisted session start when the reset command is absent", async () => {
-    const cache = createTelegramMessageCache();
-    const chat = { id: -7, type: "supergroup", title: "Ops", is_forum: true } as const;
-    const topicMessage = (id: number, date: number) =>
-      message(id, { chat, message_thread_id: 9, date });
-    const stale = topicMessage(2, 1_000);
-    for (const msg of [topicMessage(1, 700), stale, topicMessage(3, 3_000)]) {
-      await record(cache, msg);
-    }
-    const current = { ...topicMessage(4, 10_200), reply_to_message: stale };
-    await record(cache, current);
-    const replyChainNodes = await buildTelegramReplyChain({
-      cache,
-      accountId: "default",
-      chatId: chat.id,
-      msg: current,
-    });
-    const context = await conversation(cache, "4", {
-      chatId: chat.id,
-      threadId: 9,
-      replyChainNodes,
-      minTimestampMs: 2_000_127,
-    });
-    expect(context.map((entry) => entry.node.messageId)).toEqual(["3"]);
+it("does not select messages before the persisted session start when the reset command is absent", async () => {
+  const chat = { id: -7, type: "supergroup", title: "Ops", is_forum: true } as const;
+  const topicMessage = (id: number, date: number) =>
+    message(id, { chat, message_thread_id: 9, date });
+  const stale = topicMessage(2, 1_000);
+  for (const msg of [topicMessage(1, 700), stale, topicMessage(3, 3_000)]) {
+    await record(msg);
+  }
+  const current = { ...topicMessage(4, 10_200), reply_to_message: stale };
+  await record(current);
+  const replyChainNodes = await buildTelegramReplyChain({
+    cache,
+    accountId: "default",
+    chatId: chat.id,
+    msg: current,
   });
+  const context = await conversation("4", {
+    chatId: chat.id,
+    threadId: 9,
+    replyChainNodes,
+    minTimestampMs: 2_000_127,
+  });
+  expect(context.map((entry) => entry.node.messageId)).toEqual(["3"]);
 });
