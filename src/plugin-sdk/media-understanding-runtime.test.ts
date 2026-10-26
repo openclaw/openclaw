@@ -51,25 +51,20 @@ describe("createChannelPreflightAudio", () => {
     },
   );
 
-  it("checks abort state before and after transcription", async () => {
-    const before = new AbortController();
-    before.abort();
-    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>();
-    const preflight = createPreflight({ transcribeFirstAudio });
-
-    await expect(
-      preflight.resolve({ request, abortSignal: before.signal }),
-    ).resolves.toBeUndefined();
-    expect(transcribeFirstAudio).not.toHaveBeenCalled();
-
-    const after = new AbortController();
-    transcribeFirstAudio.mockImplementation(async () => {
-      after.abort();
+  it.each(["before", "during"])("checks abort state %s transcription", async (stage) => {
+    const controller = new AbortController();
+    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>(async () => {
+      controller.abort();
       return "too late";
     });
+    if (stage === "before") {
+      controller.abort();
+    }
+    const preflight = createPreflight({ transcribeFirstAudio });
     await expect(
-      preflight.resolve({ request, abortSignal: after.signal }),
+      preflight.resolve({ request, abortSignal: controller.signal }),
     ).resolves.toBeUndefined();
+    expect(transcribeFirstAudio).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
   });
 
   it("formats and sends admitted echoes while preserving literal replacement tokens", async () => {

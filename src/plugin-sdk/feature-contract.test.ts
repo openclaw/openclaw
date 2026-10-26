@@ -57,9 +57,8 @@ function watchFixture(clientContract: FeatureClientContract<typeof contract>, se
   };
   vi.spyOn(host, "request");
   const callbacks = { onChange: vi.fn(), onError: vi.fn() };
-  const options = { events: ["changed"] as const, ...callbacks, sessionKey };
   const client = createFeatureClient<typeof contract>(clientContract, host);
-  const dispose = client.watch("inspect", {}, options);
+  const dispose = client.watch("inspect", {}, { events: ["changed"], ...callbacks, sessionKey });
   return {
     client,
     host,
@@ -130,20 +129,18 @@ describe.each([
 });
 
 it("preserves canonical client inference and query-only watches without schemas", () => {
-  const fixture = watchFixture(browserContract);
-  const inferred = createFeatureClient(contract, fixture.host);
+  const { client, host, controller } = watchFixture(browserContract);
+  const inferred = createFeatureClient(contract, host);
   expectTypeOf(inferred).toEqualTypeOf<FeatureClient<typeof contract>>();
-  expectTypeOf(fixture.client).toEqualTypeOf<typeof inferred>();
-  expectTypeOf<Parameters<typeof fixture.client.watch>[0]>().toEqualTypeOf<"inspect">();
-  expectTypeOf<ReturnType<typeof fixture.client.invoke<"update">>>().toEqualTypeOf<
-    Promise<boolean>
-  >();
+  expectTypeOf(client).toEqualTypeOf<typeof inferred>();
+  expectTypeOf<Parameters<typeof client.watch>[0]>().toEqualTypeOf<"inspect">();
+  expectTypeOf<ReturnType<typeof client.invoke<"update">>>().toEqualTypeOf<Promise<boolean>>();
   expect(() =>
-    Reflect.apply(fixture.client.watch, undefined, [
+    Reflect.apply(client.watch, undefined, [
       "update",
       { value: "changed" },
       { events: ["changed"], onChange: vi.fn(), onError: vi.fn() },
     ]),
   ).toThrow("Only feature queries can be watched");
-  fixture.controller.abort();
+  controller.abort();
 });
