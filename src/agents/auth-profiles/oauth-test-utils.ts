@@ -108,33 +108,3 @@ export function resetOAuthProviderRuntimeMocks(mocks: {
   mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
   mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
 }
-
-/** Create a deterministic pseudo-random generator for fuzz-style OAuth tests. */
-export function makeSeededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Generate a random ASCII string using a deterministic RNG. */
-export function randomAsciiString(rng: () => number, maxLen: number): string {
-  const len = Math.floor(rng() * maxLen);
-  const chars: string[] = [];
-  for (let index = 0; index < len; index += 1) {
-    chars.push(String.fromCodePoint(32 + Math.floor(rng() * 95)));
-  }
-  return chars.join("");
-}
-
-/** Randomize string casing using a deterministic RNG. */
-export function randomlyCased(value: string, rng: () => number): string {
-  return value
-    .split("")
-    .map((char) => (rng() < 0.5 ? char.toUpperCase() : char.toLowerCase()))
-    .join("");
-}

@@ -325,8 +325,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
           });
         }
       }
-      // The full row's field ordering is shared even when delivery baselines differ.
-      expect([...fieldEnumerations.values()]).toEqual([1, 1]);
+      // Field order needs only names, never a temporary tuple for every row value.
+      expect([...fieldEnumerations.values()]).toEqual([]);
       // Referenced fields must not allocate entry tuples just to discard them.
       expect(envelopeEnumerations).toBe(0);
       // Field names are indexed once per audience, not inserted into a Set per history.

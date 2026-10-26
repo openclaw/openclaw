@@ -66,6 +66,9 @@ const repositoryScriptEntries = [
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
+  // Its header documents the full transcript-pairing repair benchmark.
+  "scripts/perf/tool-result-pairing-measure.ts!",
+  "scripts/perf/assistant-thinking-measure.ts!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -193,6 +196,26 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-pool-churn-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
   "scripts/perf/worktree-prompt-overlap-measure.ts!",
+  "scripts/perf/code-mode-worker-burst-measure.ts!",
+  "scripts/perf/embedded-subscribe-events-measure.ts!",
+  "scripts/perf/harness-selection-copy-measure.ts!",
+  "scripts/perf/session-catalog-pairing-measure.ts!",
+  "scripts/perf/session-involvement-measure.ts!",
+  "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
+  "scripts/perf/sqlite-wal-scan-measure.mjs!",
+  "scripts/perf/state-engine-schema-bench.ts!",
+  "scripts/perf/state-read-boot-bench.ts!",
+  // Knip follows the private Gateway boot preload through this parent's literal URL edge.
+  "scripts/perf/state-read-gateway-boot.ts!",
+  "scripts/perf/worktree-snapshot-measure.ts!",
+  "scripts/perf/attempt-stop-reason-stream-measure.ts!",
+  "scripts/perf/codex-inference-terminal-measure.ts!",
+  "scripts/perf/codex-inference-upload-measure.ts!",
+  "scripts/perf/codex-tool-report-measure.ts!",
+  "scripts/perf/failed-placement-recovery-bench.ts!",
+  "scripts/perf/provider-prompt-state-worker-measure.mjs!",
+  "scripts/perf/session-diff-metadata-measure.ts!",
+  "scripts/perf/session-file-workspace-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
@@ -333,6 +356,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
   "scripts/perf/gateway-clone-measure.ts!",
   "scripts/perf/gateway-snapshot-freeze-measure.mjs!",
@@ -414,6 +438,7 @@ const repositoryScriptEntries = [
   "scripts/perf/catalog-retained-data-measure.ts!",
   "scripts/perf/disk-budget-scan.ts!",
   "scripts/perf/git-operation-allocation-measure.ts!",
+  "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/mcp-namespace-result-measure.ts!",
   "scripts/perf/model-catalog-read-startup-measure.mjs!",
   "scripts/perf/model-stream-scheduler-measure.ts!",
@@ -492,9 +517,12 @@ const repositoryScriptEntries = [
   "scripts/perf/session-event-envelope-measure.ts!",
   "scripts/perf/session-transcript-path-measure.ts!",
   "scripts/perf/skill-search-copies-measure.ts!",
+  "scripts/perf/skill-collision-diagnostics-measure.ts!",
   "scripts/perf/sqlite-worker-reply-measure.ts!",
   "scripts/perf/startup-model-scope-measure.ts!",
   "scripts/perf/state-read-metadata-bench.ts!",
+  "scripts/perf/state-read-session-list-bench.ts!",
+  "scripts/perf/state-read-worker-bench.ts!",
   "scripts/perf/stream-idle-watchdog.ts!",
   "scripts/perf/tool-source-reply-completion-measure.mjs!",
   "scripts/perf/transcript-model-context-measure.ts!",
@@ -609,6 +637,8 @@ const repositoryScriptEntries = [
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
   "scripts/perf/branch-rotation-measure.ts!",
   "scripts/perf/branch-rotation-measure-preload.ts!",
+  // The plugin scope census is loaded by the documented stress --gateway-preload option.
+  "scripts/perf/plugin-scope-attribution-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   // The standalone build guide invokes this builder by path.

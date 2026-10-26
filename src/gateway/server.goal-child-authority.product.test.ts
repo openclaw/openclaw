@@ -41,7 +41,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -257,15 +257,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     for (const scenario of scenarios) {
       void scenario.failed.promise.catch(() => {});
     }
-    state = await createOpenClawTestState({
-      label: "goal-child-authority-product",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    state = await createOpenClawTestState(
+      kernelGatewayTestStateOptions("goal-child-authority-product"),
+    );
     cleanups.push(() => state.cleanup());
     const server = createServer((request, response) => {
       let owner: Scenario | undefined;

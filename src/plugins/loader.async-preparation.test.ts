@@ -1,6 +1,7 @@
 import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
@@ -52,6 +53,27 @@ async function isolated<T>(run: (input: ReturnType<typeof fixture>) => Promise<T
     () => withPluginCache(cache, () => run(fixture())),
   );
 }
+
+it("reports each external plugin's preparation worker in ordinary startup logs", () =>
+  isolated(async ({ options }) => {
+    const info = vi.fn();
+    const trace = createGatewayStartupTrace({ info } as never);
+    try {
+      const registry = await loadOpenClawPluginsAsync({ ...options, startupTrace: trace });
+      expect(registry.plugins.filter((plugin) => plugin.status === "loaded")).toHaveLength(2);
+      for (const id of ["first-external", "second-external"]) {
+        const messages = info.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) =>
+            message.startsWith(`startup trace: plugins.gateway-load.plugin.${id} `),
+          );
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toContain("plugin-generation-preparation.worker.js:1");
+      }
+    } finally {
+      trace.close();
+    }
+  }));
 
 it("bounds source acquisition and waits before publishing registrations in order", () =>
   isolated(async ({ options }) => {

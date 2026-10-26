@@ -9,7 +9,7 @@ import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
-export type SessionColdChunk = Selectable<DB["session_transcript_cold_archive_chunks"]>;
+type SessionColdChunk = Selectable<DB["session_transcript_cold_archive_chunks"]>;
 export type SessionColdChunkMetadata = Omit<SessionColdChunk, "archive_blob">;
 
 export type SessionColdPlan = {

@@ -158,6 +158,8 @@ describe("production lint suppressions", () => {
         // Thread assembly orders fresh Map-spread arrays without mutating posts or caller inputs.
         "extensions/x/src/thread.ts|unicorn/no-array-reverse|1",
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
+        // The Talk readiness probe calls the saved media method with its original receiver.
+        "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -224,6 +226,8 @@ describe("production lint suppressions", () => {
         "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-context-summary.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
+        // Stream wrappers preserve the original source iterator's rejection value.
+        "src/agents/embedded-agent-runner/run/stream-wrapper.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
         "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",

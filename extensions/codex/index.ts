@@ -156,6 +156,11 @@ export default definePluginEntry({
         const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
         return await preparePluginStateRead(openBindingMutationStore(), key);
       },
+      prepareGuard: async (key, assertValueCurrent) => {
+        const { preparePluginStateGuard } =
+          await import("openclaw/plugin-sdk/plugin-state-runtime");
+        return await preparePluginStateGuard(openBindingMutationStore(), key, assertValueCurrent);
+      },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
         lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),

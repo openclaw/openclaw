@@ -355,6 +355,40 @@ describe("config form and navigation", () => {
     expect(onWebPushSubscribe).toHaveBeenCalledOnce();
   });
 
+  it("exposes a Web Push subscription error as an alert on the shipped Settings page", () => {
+    const error = "This browser push subscription belongs to another Gateway.";
+    const { container, props } = renderConfigView({
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
+      includeVirtualSections: true,
+      schema: object({}),
+      formValue: {},
+      webPush: {
+        supported: true,
+        canManage: true,
+        canReadPreferences: true,
+        permission: "granted",
+        subscription: "vapid-mismatch",
+        loading: false,
+        error,
+      },
+    });
+
+    selectConfigTab(container, "__notifications__");
+    Object.assign(props, {
+      activeSection: "__notifications__",
+      showModeToggle: false,
+      showRootTab: false,
+    });
+    renderConfigInto(props, container);
+
+    const card = required(container, "#settings-communications-notifications", HTMLElement);
+    expect(normalizedText(card)).toContain(error);
+    const alert = required(card, '[role="alert"]', HTMLElement);
+    expect(alert.textContent).toContain(error);
+    expect(alert.closest(".settings-row")).not.toBeNull();
+  });
+
   it.each(["tabs", "accordion"] as const)(
     "groups channel settings without changing patch paths (%s)",
     (settingsLayout) => {

@@ -31,6 +31,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { forbidMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataHarness,
@@ -38,7 +39,6 @@ import {
   createDraftChatMetadataScope,
   createPersonalChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
   test("stops serving a retained shared list once the requester connects a personal account", async () => {

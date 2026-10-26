@@ -7,6 +7,7 @@ import {
 } from "../../agents/reply-completion.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createRestartRecoveryTombstoneFixture } from "../../config/sessions/main-session-recovery-fixtures.test-support.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -1842,16 +1843,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         status: "failed",
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 4,
-          chargedAttempts: 3,
-          tombstone: {
-            reason: "automatic recovery exhausted",
-            recoveredSessionId: "dashboard-successor",
-            recoveredSessionKey: "agent:main:dashboard:successor",
-          },
-        },
+        mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
       };
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => {
