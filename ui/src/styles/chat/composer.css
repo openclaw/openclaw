@@ -2971,8 +2971,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   padding: 11px 12px;
 }
 
-/* Effort menu sections (Access, Effort, Speed) are separated only between siblings. */
-.chat-controls__effort-menu > * + *,
+/* Qualify siblings so unrelated DOM removal cannot invalidate the whole document. */
+.chat-controls__effort-menu
+  > :where(.chat-controls__reasoning-panel, .chat-controls__speed-panel)
+  + :where(.chat-controls__reasoning-panel, .chat-controls__speed-panel),
 .chat-controls__fast-mode-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
