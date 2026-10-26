@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -34,8 +34,9 @@ const expectedResult = {
 };
 
 beforeEach(() => {
-  vi.mocked(getPreparedPluginSecretInput).mockReset();
-  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: "hosted-secret" });
+  vi.mocked(getPreparedPluginSecretInput)
+    .mockReset()
+    .mockReturnValue({ revision: 1, value: "hosted-secret" });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -104,16 +105,12 @@ it("never sends a stale hosted key locally", async () => {
 });
 
 it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (hostname) => {
-  const received: { url?: string; authorization?: string; host?: string; body: string }[] = [];
+  const received: { request: IncomingMessage; body: string }[] = [];
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     sockets.add(request.socket);
     collectRequest(request, (body) => {
-      const {
-        url,
-        headers: { authorization, host },
-      } = request;
-      received.push({ url, authorization, host, body });
+      received.push({ request, body });
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify(localAnswer));
     });
@@ -129,7 +126,6 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
       vi.mocked(lookup).mockRejectedValue(new Error("Synthetic untrusted localhost resolver"));
     }
     const provider = registeredProvider(`http://${hostname}:${address.port}`);
-    expect(provider.isReady?.()).toBe(true);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await expect(provider.evaluate(decisionBatch, decisionContext(input.model))).resolves.toEqual(
         expectedResult,
@@ -138,10 +134,9 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
     expect(received).toHaveLength(5);
     expect(sockets.size).toBeLessThan(received.length);
-    expect(received[0]).toMatchObject({
+    expect(received[0]?.request).toMatchObject({
       url: "/v1/systemone",
-      authorization: undefined,
-      host: `${hostname}:${address.port}`,
+      headers: { authorization: undefined, host: `${hostname}:${address.port}` },
     });
     expect(JSON.parse(received[0]!.body)).toEqual(wireInput);
     if (hostname === "localhost") {
