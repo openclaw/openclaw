@@ -58,7 +58,12 @@ it("grants API access only to the declared widget origins", () => {
   const origins = ["https://api.test", "https://s.test:8443", "https://[2001:db8::1]:9443"];
   const { csp, policies } = sandbox(document("granted", origins));
 
-  expect(csp?.connectDomains).toEqual(origins);
+  expect(csp).toEqual({
+    connectDomains: origins,
+    blockDescendantFrames: true,
+    resourceDomains: [...WIDGET_CDN_ORIGINS],
+    mediaDomains: ["https:", "blob:"],
+  });
   for (const policy of policies) {
     expect(policy).toContain(`connect-src ${origins.join(" ")}`);
   }
@@ -83,8 +88,18 @@ it("adds the requested descendant-frame guard before resetting document port off
   const proxy = buildHost({ blockDescendantFrames: true }).html;
   const genericProxy = buildHost().html;
 
-  expect(proxy).toContain("const blockDescendantFrames = true");
-  expect(proxy).toContain("sandbox descendant browsing contexts are disabled");
+  for (const snippet of [
+    "const blockDescendantFrames = true",
+    "sandbox descendant browsing contexts are disabled",
+    'lock(Document.prototype,\\"createElement\\"',
+    'wrapSetter(Element.prototype,\\"innerHTML\\"',
+    'wrapMethod(Element.prototype,\\"setHTMLUnsafe\\"',
+    "const apply=Reflect.apply",
+    'if (html.slice(index, index + 4) !== "<!--") break',
+    'const commentEnd = html.indexOf("-->", index + 4)',
+  ]) {
+    expect(proxy).toContain(snippet);
+  }
   const guardedHtmlIndex = proxy.indexOf("const guardedHtml = guardDocument(params.html)");
   expect(guardedHtmlIndex).toBeGreaterThan(-1);
   const clearIndex = proxy.indexOf("widgetPortsOffered.clear()", guardedHtmlIndex);

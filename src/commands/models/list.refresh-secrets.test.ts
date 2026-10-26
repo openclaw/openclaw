@@ -178,9 +178,11 @@ it.each(["provider", "profile"] as const)(
     }
 
     expect(requests).toEqual([true]);
-    expect(runtime.error.mock.calls.flat().join(" ")).toMatch(/Refreshing the local model catalog/);
+    expect(vi.mocked(runtime.error).mock.calls.flat().join(" ")).toMatch(
+      /Refreshing the local model catalog/,
+    );
     expect(runtime.writeJson).toHaveBeenCalledTimes(1);
-    expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({
+    expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
       count: 1,
       models: [{ key: `${provider}/discovered-model`, name: "Discovered model" }],
     });

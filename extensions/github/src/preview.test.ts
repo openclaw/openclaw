@@ -23,7 +23,7 @@ import {
   requestUrl,
 } from "./preview.test-support.js";
 
-const optionalIdentity = () => ({
+const optionalIdentity = (): ControlUiGitHubPreviewIdentity => ({
   ...managedIdentity("fixture-github-test-token"),
   token: "github-test-token",
   optionalAuth: true,
