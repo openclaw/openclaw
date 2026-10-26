@@ -551,14 +551,18 @@ function repository(url, root) {
 }
 
 function sweep(cache, current) {
-  let removed = 0;
-  for (const name of readdirSync(cache)) {
-    if (removed === 4) break;
-    if (!/^(?:[a-f0-9]{64}|install-[0-9]+-[A-Za-z0-9]+)$/.test(name)) continue;
-    const path = join(cache, name);
-    const stat = lstatSync(path);
-    if (path === current || !stat.isDirectory() || stat.uid !== process.getuid?.() ||
-        (stat.mode & 0o777) !== 0o700 || stat.mtimeMs >= Date.now() - 86_400_000) continue;
+  const entries = readdirSync(cache)
+    .filter((name) => /^(?:[a-f0-9]{64}|install-[0-9]+-[A-Za-z0-9]+)$/.test(name))
+    .map((name) => {
+      const path = join(cache, name);
+      return { name, path, stat: lstatSync(path, { throwIfNoEntry: false }) };
+    })
+    .filter(({ stat }) => stat)
+    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  let retained = 0;
+  for (const { name, path, stat } of entries) {
+    if (path === current || !stat?.isDirectory() || stat.uid !== process.getuid?.() ||
+        (stat.mode & 0o777) !== 0o700) continue;
     // Creator PIDs survive the wrapper/supervisor exec chain. PID reuse only
     // delays collection; a live consumer must never lose its pinned packages.
     const users = join(path, ".pr-users");
@@ -569,8 +573,14 @@ function sweep(cache, current) {
       try { process.kill(Number(pid), 0); return true; }
       catch (error) { return error.code !== "ESRCH"; }
     })) continue;
-    rmSync(path, { recursive: true });
-    removed++;
+    if (!name.startsWith("install-") && existsSync(join(path, ".pr-complete"))) {
+      // Adjacent main heads get a small reuse window; live and current installs
+      // do not consume it. Age alone cannot bound one new tree per landing.
+      if (retained++ < 4) continue;
+    } else if (stat.mtimeMs >= Date.now() - 86_400_000) {
+      continue;
+    }
+    rmSync(path, { recursive: true, force: true });
   }
 }
 

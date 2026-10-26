@@ -218,7 +218,14 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(message).not.toContain("file lock timeout");
   });
 
-  it.each([false, true])("clears stale lastGood; locked=%s", async (locked) => {
+  it.each([
+    [false, new Error("provider rejected: REFRESH_TOKEN_REUSED (401)")],
+    [true, "provider rejected: Refresh_Token_Reused (401)"],
+    [false, new Error("provider rejected: REFRESH TOKEN HAS ALREADY BEEN USED (401)")],
+    [true, "provider rejected: Refresh Token Has Already Been Used (401)"],
+    [false, new Error("provider rejected: ALREADY BEEN USED TO GENERATE A NEW ACCESS TOKEN (401)")],
+    [true, "provider rejected: Already Been Used To Generate A New Access Token (401)"],
+  ] as const)("clears stale lastGood; locked=%s, error=%s", async (locked, refreshError) => {
     const params = setup({}, undefined, false);
     const { store, profileId } = params;
     const alternateId = "openai:user@example.test";
@@ -230,7 +237,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     store.lastGood = { openai: profileId };
     saveAuthProfileStore(store, mainAgentDir);
-    getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
+    getOAuthApiKeyMock.mockRejectedValueOnce(refreshError);
     const { resolveApiKeyForProviderCore } = await import("../model-auth.js");
     const resolution = resolveApiKeyForProviderCore({
       provider: "openai",
@@ -240,6 +247,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     if (locked) {
       await expect(resolution).rejects.toThrow(OAuthRefreshFailureError);
+      expect(readStore().lastGood).toBeUndefined();
     } else {
       const resolved = await resolution;
       expect(resolved).toMatchObject({
@@ -258,6 +266,17 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       expect(readStore().lastGood?.openai).toBe(alternateId);
     }
     expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves lastGood for unrelated refresh failures", async () => {
+    const params = setup({}, undefined, false);
+    const { store, profileId } = params;
+    store.lastGood = { openai: profileId };
+    saveAuthProfileStore(store, mainAgentDir);
+    getOAuthApiKeyMock.mockRejectedValueOnce(new Error("invalid_grant"));
+    await expect(resolveProfile(params)).rejects.toThrow("invalid_grant");
+    expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+    expect(readStore().lastGood).toEqual({ openai: profileId });
   });
 
   it("preserves the refresh diagnosis when stale lastGood cleanup fails", async () => {

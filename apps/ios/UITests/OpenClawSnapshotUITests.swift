@@ -113,6 +113,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let stop = app.buttons["Stop response"]
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        self.waitForEnabled(stop)
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
         self.attachScreenshot(named: "dup-filter-settled")
@@ -173,7 +174,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let showsWaiting = waiting.waitForExistence(timeout: 5)
         self.attachScreenshot(named: "startup-status-waiting")
         XCTAssertTrue(showsWaiting, "STARTUP_STATUS_MISSING: waiting run has no Gateway startup label")
-        app.buttons["Stop response"].tap()
+        let stop = app.buttons["Stop response"]
+        self.waitForEnabled(stop)
+        stop.tap()
         XCTAssertTrue(waiting.waitForNonExistence(timeout: 5))
     }
 
@@ -806,6 +809,44 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-paste-image")
     }
 
+    func testStopIgnoresTapsForAMomentAfterItReplacesSend() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-stop-guard"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        self.waitForEnabled(send)
+        // Cache an absolute screen coordinate before sending, so the second independent tap
+        // reaches the replacement Stop without a stale Send lookup or an intervening snapshot.
+        let sendFrame = send.frame
+        let sendPosition = app.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: sendFrame.midX, dy: sendFrame.midY))
+        sendPosition.tap()
+        sendPosition.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(
+            stop.waitForExistence(timeout: 5),
+            "STOP_GUARD_MISSING: double-tapping Send cancelled the response")
+        self.waitForEnabled(stop)
+        self.attachScreenshot(named: "stop-guard-response-survived-double-tap")
+
+        // The held fixture cannot finish by itself, so disappearance proves deliberate cancellation.
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(
@@ -828,7 +869,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let stop = app.buttons["Stop response"]
         XCTAssertTrue(stop.waitForExistence(timeout: 8))
-        XCTAssertTrue(stop.isEnabled)
+        self.waitForEnabled(stop)
 
         let microphone = app.buttons["chat-dictation-control"]
         XCTAssertTrue(microphone.waitForExistence(timeout: 5))
@@ -845,7 +886,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let voiceNote = app.staticTexts["Voice note"]
         XCTAssertTrue(voiceNote.waitForExistence(timeout: 8))
         XCTAssertTrue(stop.waitForExistence(timeout: 5))
-        XCTAssertTrue(stop.isEnabled)
+        self.waitForEnabled(stop)
         self.attachScreenshot(named: "voice-note-stop-active-response")
 
         stop.tap()
@@ -2214,8 +2255,8 @@ extension OpenClawSnapshotUITests {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func waitForEnabled(_ element: XCUIElement) {
-        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+    private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 5) {
+        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: timeout))
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {

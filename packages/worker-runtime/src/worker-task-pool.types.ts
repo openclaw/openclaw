@@ -22,7 +22,7 @@ export type WorkerTaskPoolOptions<Output> = {
   maxPendingTasks?: number;
   maxPendingBytes?: number;
   idleTimeoutMs?: number;
-  /** Retire workers beyond the first usable slot sooner, without extending its warm window. */
+  /** Surplus idle timeout; one recently recreated burst can stay warm for three times this value. */
   burstIdleTimeoutMs?: number;
   restartOnError?: boolean;
   validateResult?: (value: Output) => void;

@@ -569,16 +569,12 @@ export async function createCodexInferenceProxy(params: {
               const forward = async (prepared: Awaited<ReturnType<typeof prepare>>) => {
                 let releaseUpload: (() => void) | null = null;
                 try {
-                  const requestSignal = AbortSignal.any([
-                    signal,
-                    ...(prepared.signal ? [prepared.signal] : []),
-                  ]);
                   releaseUpload = await acquireUpload(
-                    requestSignal,
+                    prepared.signal,
                     Date.now() + REQUEST_TIMEOUT_MS,
                     prepared.bytes.length,
                   );
-                  requestSignal.throwIfAborted();
+                  prepared.signal.throwIfAborted();
                   prepared.assertCurrent();
                   if (!releaseUpload) {
                     accepted.send(OVERLOAD_BODY, { binary: false }, close);

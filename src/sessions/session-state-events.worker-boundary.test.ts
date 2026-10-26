@@ -56,6 +56,7 @@ import {
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
+import { pruneSessionStateEvents } from "./session-state-events.prune.js";
 import {
   child,
   cleanupSessionStateTestState,
@@ -215,8 +216,10 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
         : undefined;
     const during: ReturnType<typeof prepareAmbientGroupWatchTargetsRead>[] = [];
     const stages: string[] = [];
+    using writer = probe.writerLock(openOpenClawStateDatabase(database).path);
     const admission = probe.admission(workerAdmission, (request, grant, admit) => {
       stages.push(request.stage);
+      writer.observe(request.stage);
       expect(before.isCurrent()).toBe(false);
       const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
       during.push(read);
@@ -230,6 +233,7 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
         await handleSessionStateSessionDeleted(group, "main", database);
       }
       expect(stages).toEqual(["transaction", "commit"]);
+      expect(writer.observed).toEqual(["transaction:free", "commit:held"]);
       expect(before.isCurrent()).toBe(false);
       for (const read of during) {
         expect(read.isCurrent()).toBe(false);
@@ -257,6 +261,62 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
       before.release();
       during.forEach((read) => read.release());
     }
+  }
+});
+
+it("keeps the writer free during session signal admission and commits current cursor state", async () => {
+  await seedWatcher();
+  const storePath = watcherStore();
+  publishSystemEventStoreResolver(() => storePath);
+  using writer = probe.writerLock(openOpenClawStateDatabase(database).path);
+  let acceptingAcknowledgment = false;
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    writer.observe(request.stage);
+    if (acceptingAcknowledgment && writer.observed.at(-1) === "transaction:free") {
+      // Another writer can advance the notice while admission waits. Acknowledgment
+      // must consume that committed cursor after acquiring its own transaction.
+      query("UPDATE session_watch_cursors SET notified_sequence = material_sequence").run();
+    }
+    admit(request, grant);
+  });
+  const expectAdmission = () => {
+    expect.soft(writer.observed).toEqual(["transaction:free", "commit:held"]);
+    writer.observed.length = 0;
+  };
+  try {
+    expect(await watch()).toBe(true);
+    expectAdmission();
+    const first = expectDefined(
+      await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), {
+        ...database,
+        now: 0,
+      }),
+      "first signal",
+    );
+    expectAdmission();
+    const second = expectDefined(
+      await recordSessionStateEventAsync(eventInput({ watcherSessionKeys: [] }), {
+        ...database,
+        now: 0,
+      }),
+      "second signal",
+    );
+    expectAdmission();
+    expectCursor([0, first.sequence, second.sequence]);
+    acceptingAcknowledgment = true;
+    await acknowledge(child, storePath);
+    acceptingAcknowledgment = false;
+    expectAdmission();
+    expectCursor([second.sequence, second.sequence, second.sequence]);
+    await pruneSessionStateEvents({ ...database, force: true, now: 31 * 24 * 60 * 60_000 });
+    expectAdmission();
+    expect(await listSessionStateEventsSince(child, "main", 0, 200, database)).toMatchObject({
+      events: [],
+      historyGap: true,
+    });
+    expect(await getSessionStateVersion(child, "main", database)).toBe(second.sequence);
+  } finally {
+    admission.mockRestore();
   }
 });
 

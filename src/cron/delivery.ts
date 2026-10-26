@@ -1,4 +1,4 @@
-/** Channel notifications share one durable send path; conversation results have a separate owner. */
+/** Channel notifications share outbound's durable send and conversation-write owner. */
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
 import { createChannelReplyTransform } from "../channels/message/reply-transform.js";
@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+import type { OutboundSessionRoute } from "../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
@@ -31,7 +32,7 @@ import {
   appendCronRunInspectionLink,
   normalizeDirectCronDeliveryPayloads,
 } from "./isolated-agent/delivery-payload-normalization.js";
-import { resolveCronNotificationSessionKey } from "./session-target.js";
+import { createCronExecutionId } from "./run-id.js";
 import type { CronJob } from "./types.js";
 export { resolveCronDeliveryPlan } from "./delivery-plan.js";
 
@@ -47,7 +48,7 @@ type CronAnnounceResult =
   | { status: "sent"; payloads: ReplyPayload[] }
   | { status: "suppressed"; reason: string; skipReason?: NormalizeReplySkipReason };
 
-/** Sends only the configured notification. It never selects or writes a model transcript. */
+/** Sends the configured notification through the outbound conversation owner. */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
   cfg: OpenClawConfig;
@@ -62,6 +63,9 @@ export async function sendCronAnnouncePayloadStrict(params: {
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
   sessionGeneration?: SessionDeliveryGeneration;
+  transcriptRoute?: OutboundSessionRoute;
+  transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
+  onTranscriptDiagnostic?: (message: string) => void;
   completion?: {
     job: CronJob;
     runStartedAt: number;
@@ -130,10 +134,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   const session = buildOutboundSessionContext({
     cfg: params.cfg,
     agentId: params.agentId,
-    sessionKey: resolveCronNotificationSessionKey({
-      jobId: params.jobId,
-      sessionKey: params.target.sessionKey,
-    }),
+    sessionKey: params.target.sessionKey,
   });
   const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
   let recipientReached = false;
@@ -155,6 +156,20 @@ export async function sendCronAnnouncePayloadStrict(params: {
           threadId: delivery.threadId,
           payloads,
           session,
+          transcriptRoute: params.transcriptRoute,
+          transcriptExpectedGeneration: params.transcriptExpectedGeneration,
+          onTranscriptDiagnostic: params.onTranscriptDiagnostic,
+          // Completion rows name the run that produced them; alerts have no run result.
+          ...(params.completion
+            ? {
+                transcriptProvenance: {
+                  kind: "cron" as const,
+                  jobId: params.jobId,
+                  runId: createCronExecutionId(params.jobId, params.completion.runStartedAt),
+                },
+              }
+            : {}),
+          assertTranscriptCurrent: fence?.assertCurrent,
           identity,
           bestEffort: params.bestEffort === true,
           durability: params.bestEffort === true ? "best_effort" : "required",

@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { fstatSync, renameSync } from "node:fs";
+import fs, { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
@@ -262,6 +262,21 @@ it("retires the final closed handle's facts while preserving open siblings and d
   using second = openNodeSqliteDatabase(location);
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
+  {
+    using stat = vi.spyOn(fs, "statSync");
+    using fstat = vi.spyOn(fs, "fstatSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+    using open = vi.spyOn(fs, "openSync");
+    using read = vi.spyOn(fs, "readFileSync");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    retainLocation(location, original.physicalIdentity);
+    retainLocation(location, original.physicalIdentity);
+    expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
+    expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
+    for (const probe of [stat, fstat, realpath, open, read, lstat]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  }
   const stale = structuredClone([original]);
   publishFact(first, key, "connection-scoped");
   first.close();

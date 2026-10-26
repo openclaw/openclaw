@@ -1,11 +1,15 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/commands/doctor/shared/model-replacement.test.ts",
   "src/infra/database-engine/memory-path-migration.conformance.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
+  "src/sessions/confirmed-visible-message.integration.test.ts",
+  "src/agents/tools/message-tool.scheduled-lifetime.test.ts",
+  "test/telegram-recovery-notice-send.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message-access/x-requester.test.ts",
@@ -76,7 +80,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",
-  "src/infra/database-engine/acp-retention.conformance.test.ts",
   "src/infra/database-engine/row-limit.conformance.test.ts",
   "src/infra/database-engine/scalar-portability.conformance.test.ts",
   "src/infra/database-engine/session-owner-portability.conformance.test.ts",
@@ -747,7 +750,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.test.ts",
   "src/boards/board-store.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",
-  "src/canvas/widget-tool.report.test.ts",
   "src/canvas/widget-tool.test.ts",
   "src/claws/add-stateless.test.ts",
   "src/claws/gateway-add-apply.plugin-batch.test.ts",
@@ -1341,6 +1343,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/plugin-state/plugin-state-publication.test.ts",
   "src/plugin-state/plugin-state-native-binding-facts.test.ts",
+  "src/plugin-state/plugin-state-guard.test.ts",
   "test/visitor-access-revocation.test.ts",
   "src/agents/tools/cron-tool.output-contract.test.ts",
   "src/plugins/services.control-ui-ingress.test.ts",
@@ -1357,6 +1360,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/failover-retry-controller.inline-auth.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.request-auth.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
@@ -1405,10 +1409,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-deletion-recovery-hold.postgres.test.ts",
   "src/commands/doctor/cron/legacy-repair.postgres.test.ts",
   "src/infra/database-engine/session-path-alias.conformance.test.ts",
-  "src/infra/database-engine/sql-probe.conformance.test.ts",
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
-  "src/infra/database-engine/session-archive-alias.conformance.test.ts",
-  "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
   "src/infra/database-engine/session-participant-capacity.conformance.test.ts",
 ];
 

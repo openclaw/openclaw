@@ -119,6 +119,35 @@ describe("secrets store CLI", () => {
     expect(mocks.runtimeErrors).toHaveLength(0);
   });
 
+  it("escapes readable env values while preserving JSON and plain output", async () => {
+    const value = "café\u001b[31m\noperator-forged\tend\rrow\u0007";
+    const entry = { name: "SERVICE_MODE", kind: "env", valuePreview: value };
+    mocks.list.mockReturnValue([entry]);
+    mocks.read.mockResolvedValue({ ok: true, value });
+
+    await run("list");
+    await run("get", "SERVICE_MODE");
+    expect(mocks.runtimeLogs).toEqual([
+      "SERVICE_MODE [env] = café\\noperator-forged\\tend\\rrow",
+      "SERVICE_MODE=café\\noperator-forged\\tend\\rrow",
+    ]);
+
+    mocks.runtimeLogs.length = 0;
+    await run("list", "--json");
+    await run("get", "SERVICE_MODE", "--json");
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toEqual([entry]);
+    expect(JSON.parse(mocks.runtimeLogs[1] ?? "")).toEqual({
+      name: "SERVICE_MODE",
+      kind: "env",
+      value,
+    });
+
+    mocks.runtimeLogs.length = 0;
+    await run("list", "--plain");
+    await run("get", "SERVICE_MODE", "--plain");
+    expect(mocks.runtimeLogs).toEqual([`SERVICE_MODE\tenv\t${value}\t`, value]);
+  });
+
   it("shows non-secret allowed-host metadata in list output", async () => {
     const allowedHosts = ["api.example.com", "uploads.example.com"];
     mocks.list.mockReturnValue([{ name: "SERVICE_API_KEY", kind: "secret", allowedHosts }]);

@@ -17,7 +17,6 @@ function checkMaintenance(
     id: "maintenance",
     schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
     sessionTarget: "main",
-    wakeMode: "now",
     payload: { kind: "systemEvent", text: "tick" },
     ...overrides,
   });
@@ -34,31 +33,12 @@ it("schedules loaded every jobs without backfilling anchorMs", () => {
   const { job } = checkMaintenance(
     {
       createdAtMs: startedAt - 120_000,
-      updatedAtMs: startedAt - 120_000,
       schedule: { kind: "every", everyMs: 60_000 },
     },
     startedAt + 60_000,
     { nowMs: startedAt, recomputeExpired: true, changed: true },
   );
   expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000 });
-});
-
-it("keeps recovered recurring error retries behind run-end backoff", () => {
-  checkMaintenance(
-    {
-      createdAtMs: startedAt - 60_000,
-      updatedAtMs: startedAt,
-      schedule: { kind: "every", everyMs: 1_000, anchorMs: startedAt - 60_000 },
-      state: {
-        lastRunAtMs: startedAt,
-        lastDurationMs: 90_000,
-        lastStatus: "error",
-        consecutiveErrors: 1,
-      },
-    },
-    startedAt + 120_000,
-    { nowMs: startedAt + 31_000, recomputeExpired: true, changed: true },
-  );
 });
 
 it.each([
@@ -77,17 +57,15 @@ it.each([
 });
 
 it.each([
-  ["without duration", 120, 60, 70, 600, undefined],
-  ["from run end", 600, 90, 330, 1230, 240_000],
+  ["without duration", 120, 60, 600, undefined],
+  ["from run end", 600, 90, 1230, 240_000],
 ] as const)(
   "preserves retry backoff %s",
-  (_name, nowSeconds, runSeconds, updatedSeconds, retrySeconds, lastDurationMs) => {
+  (_name, nowSeconds, runSeconds, retrySeconds, lastDurationMs) => {
     const at = (seconds: number) => Date.parse("2025-12-13T04:00:00Z") + seconds * 1000;
     checkMaintenance(
       {
-        updatedAtMs: at(updatedSeconds),
         schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-        wakeMode: "next-heartbeat",
         state: {
           nextRunAtMs: at(retrySeconds),
           lastRunAtMs: at(runSeconds),
@@ -102,24 +80,18 @@ it.each([
   },
 );
 
-it("preserves exact-second slots multiple intervals ahead (#81691)", () => {
-  const nextRunAtMs = Date.parse("2026-05-08T19:00:00Z");
+it.each([
+  [
+    "exact-second slots multiple intervals ahead (#81691)",
+    "0 9 * * *",
+    "Pacific/Honolulu",
+    Date.parse("2026-05-08T19:00:00Z"),
+  ],
+  ["future slots while probing malformed schedules", "not a valid cron", "UTC", badFuture],
+] as const)("preserves %s", (_name, expr, tz, nextRunAtMs) => {
   checkMaintenance(
-    {
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "Pacific/Honolulu", staggerMs: 0 },
-      state: { nextRunAtMs },
-    },
+    { schedule: { kind: "cron", expr, tz, staggerMs: 0 }, state: { nextRunAtMs } },
     nextRunAtMs,
-  );
-});
-
-it("keeps future slots while probing malformed schedules", () => {
-  checkMaintenance(
-    {
-      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
-      state: { nextRunAtMs: badFuture },
-    },
-    badFuture,
   );
 });
 

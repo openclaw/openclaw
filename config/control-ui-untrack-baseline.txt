@@ -11,6 +11,7 @@ ui/src/lib/reactive/context.ts	2
 ui/src/lib/reactive/domain-keyed.ts	1
 ui/src/lib/reactive/parked-projection.ts	1
 ui/src/lib/reactive/projection.ts	1
+ui/src/pages/chat/components/chat-agent-run-frame.tsx	1
 ui/src/pages/chat/components/chat-composer-regions.tsx	1
 ui/src/pages/chat/components/chat-composer.tsx	2
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1

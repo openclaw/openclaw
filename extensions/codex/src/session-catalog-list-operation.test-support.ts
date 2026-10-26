@@ -1,7 +1,7 @@
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { vi } from "vitest";
 import { runCatalogListInline } from "./session-catalog-list-operation.js";
-import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
+import { catalogFactory } from "./session-catalog-resident.test-support.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -10,6 +10,7 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   config,
   createCodexTestBindingStore,
+  createCatalogTestProvider,
   createControl,
   createRuntime,
 } from "./session-catalog.test-helpers.js";
@@ -35,7 +36,7 @@ export function observe<T>(promise: Promise<T>) {
   return { state, done };
 }
 
-export async function fixture(homeCount = 1) {
+export async function fixture(homeCount = 1, pluginConfig?: unknown) {
   const { runtime } = createRuntime();
   const base = catalogFactory({ getRuntimeConfig: () => config });
   const primary = (await base.homesForAgent("main"))[0]!;
@@ -56,16 +57,18 @@ export async function fixture(homeCount = 1) {
   const bindingStore = Object.assign(createCodexTestBindingStore(), {
     managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
   });
-  const provider = catalogProvider(
-    {
+  const provider = createCatalogTestProvider({
+    control: {
       ...base,
       homesForAgent: async () => homes,
       forRequest: (_agentId, source) =>
         createControl({ listPage: (params) => listPage(source!.sourceHomeId, params) }),
     },
     runtime,
+    startupConfig: config,
     bindingStore,
-  );
+    getPluginConfig: () => pluginConfig,
+  });
   const controller = new AbortController();
   const onHost = vi.fn();
   const publications: Promise<void>[] = [];
@@ -85,14 +88,13 @@ export async function fixture(homeCount = 1) {
       ...params,
     });
   };
-  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start };
+  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start, provider };
 }
 
 export async function nodeFixture() {
   const f = await fixture();
   const commands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND];
   const node = { nodeId: "remote", connected: true, connectedAtMs: 1, commands };
-  const listNodes = async () => ({ nodes: [node] });
   const invoke = vi.mocked(f.runtime.nodes.invoke);
   invoke.mockResolvedValue({ payloadJSON: JSON.stringify(page(["original"])) });
   const read = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) =>
@@ -100,7 +102,7 @@ export async function nodeFixture() {
       f.start({
         hostIds: undefined,
         allowPartialResults: true,
-        listNodes,
+        listNodes: async () => ({ nodes: [node] }),
         ...params,
       }),
     );

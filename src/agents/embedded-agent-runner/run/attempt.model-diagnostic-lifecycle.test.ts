@@ -30,6 +30,7 @@ import {
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -422,6 +423,106 @@ describe("model diagnostic lifecycle", () => {
       expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerProcessingMs");
       expect(ended.mock.calls[0]?.[0]).not.toHaveProperty("providerWaitEstimateMs");
       expect(JSON.stringify(events)).not.toMatch(/private-(?:answer|payload|prompt)/);
+    },
+  );
+
+  it("does not assimilate concrete event values as promises", async () => {
+    let assimilations = 0;
+    const chunk = new Proxy<AssistantMessageEvent>(
+      { type: "text_delta", contentIndex: 0, delta: "x" },
+      {
+        get(target, property, receiver) {
+          if (property === "then") {
+            assimilations++;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const ready = Promise.resolve({ done: false as const, value: chunk });
+    const response = await wrap(() => ({
+      [Symbol.asyncIterator]: () => ({ next: () => ready }),
+      result: async () => makeAssistantMessageFixture(),
+    }))(
+      makeProviderModelFixture({
+        id: "synthetic",
+        provider: "synthetic",
+        api: "openai-responses",
+        baseUrl: "https://example.invalid",
+      }),
+      { messages: [] },
+    );
+    const iterator = response[Symbol.asyncIterator]();
+    try {
+      for (let index = 0; index < 3; index++) {
+        const next = await iterator.next();
+        expect(assimilations).toBe(0);
+        expect(next.value).toBe(chunk);
+        expect(next.done).toBe(false);
+      }
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
+  it.each(["return", "throw", "rejected return"] as const)(
+    "serializes overlapping reads before consumer %s and closes subsequent reads",
+    async (operation) => {
+      const first = createDeferredCore<IteratorResult<AssistantMessageEvent>>();
+      const chunks: AssistantMessageEvent[] = ["first", "second"].map((delta) => ({
+        type: "text_delta",
+        contentIndex: 0,
+        delta,
+      }));
+      const next = vi
+        .fn()
+        .mockImplementationOnce(() => first.promise)
+        .mockResolvedValue({ done: false, value: chunks[1] });
+      const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
+      const failure = new Error("consumer stopped");
+      const events = await collect(async () => {
+        const response = await wrap(() => ({
+          [Symbol.asyncIterator]: () => ({ next, return: close }),
+          result: async () => makeAssistantMessageFixture(),
+        }))(
+          makeProviderModelFixture({
+            id: "synthetic",
+            provider: "synthetic",
+            api: "openai-responses",
+            baseUrl: "https://example.invalid",
+          }),
+          { messages: [] },
+        );
+        const iterator = response[Symbol.asyncIterator]();
+        const reads = [iterator.next(), iterator.next()];
+        const closing =
+          operation === "throw"
+            ? iterator.throw!(failure)
+            : iterator.return!(
+                operation === "rejected return" ? Promise.reject(failure) : "closed",
+              );
+        // Observe the rejected close before releasing the queued reads.
+        const closed =
+          operation === "return"
+            ? expect(closing).resolves.toEqual({ done: true, value: "closed" })
+            : expect(closing).rejects.toBe(failure);
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(close).not.toHaveBeenCalled();
+        first.resolve({ done: false, value: chunks[0]! });
+        expect(await Promise.all(reads)).toEqual(chunks.map((value) => ({ done: false, value })));
+        await closed;
+        if (operation !== "rejected return") {
+          expect(await iterator.next()).toEqual({ done: true, value: undefined });
+        } else {
+          await expect(iterator.next()).rejects.toBe(failure);
+        }
+        expect(next).toHaveBeenCalledTimes(2);
+        expect(close).toHaveBeenCalledTimes(operation === "return" ? 1 : 0);
+      });
+      expect(events.map((event) => event.type)).toEqual([
+        "model.call.started",
+        operation === "return" ? "model.call.completed" : "model.call.error",
+      ]);
     },
   );
 

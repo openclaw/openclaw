@@ -3,8 +3,9 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
-import type { ProgressCard } from "@openclaw/gateway-protocol";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
+import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
@@ -44,13 +45,24 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
     lastRunId: row.lastRunId,
     status: row.status,
     runtimeMs: row.runtimeMs,
+    contextTokens: row.contextTokens,
   };
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
 
 // Display only: the live catalog and session owners still admit every action.
-export type ChatComposerSnapshot = { id: string; provider: string; name: string };
+export type ChatComposerSnapshot = Pick<
+  ModelCatalogEntry,
+  "id" | "provider" | "name" | "reasoning"
+> &
+  Pick<
+    GatewaySessionRow,
+    "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
+  > & {
+    defaultPermissionMode?: GatewaySessionRow["permissionMode"];
+    speed?: ChatFastModePresentation;
+  };
 
 export type ChatSessionSnapshot = {
   composer?: ChatComposerSnapshot | null;
@@ -58,6 +70,7 @@ export type ChatSessionSnapshot = {
   board?: { snapshot: unknown; receivedAtMs: number } | null;
   widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
+  messageReactions?: Record<string, MessageReactionSummary[]>;
   progressCard?: ProgressCard | null;
   deltaCursor?: string;
   historyState?: ChatHistoryState;
@@ -310,17 +323,24 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
-  const withWidgetHeights =
-    withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
-      ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
+  const withReactions =
+    withProgress.messageReactions === undefined &&
+    existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withProgress, messageReactions: existing.snapshot.messageReactions }
       : withProgress;
+  const withWidgetHeights =
+    withReactions.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withReactions, widgetHeights: existing.snapshot.widgetHeights }
+      : withReactions;
   // Boards belong to the scoped conversation key, independently of transcript resets.
   const withBoard =
     withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
   const snapshot =
-    withBoard.composer === undefined && existing?.snapshot.composer !== undefined
+    withBoard.composer === undefined &&
+    existing?.snapshot.composer !== undefined &&
+    existing.snapshot.sessionId === incoming.sessionId
       ? { ...withBoard, composer: existing.snapshot.composer }
       : withBoard;
   if (
@@ -330,6 +350,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
+    existing.snapshot.messageReactions === snapshot.messageReactions &&
     existing.snapshot.progressCard === snapshot.progressCard &&
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     existing.snapshot.board === snapshot.board &&

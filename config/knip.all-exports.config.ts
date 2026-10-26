@@ -228,7 +228,13 @@ const workspaces = Object.fromEntries(
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next
               // time a scenario needs its own fixture plugin.
-              ...(workspace === "extensions/qa-lab" ? ["test-fixtures/*/index.js!"] : []),
+              ...(workspace === "extensions/qa-lab"
+                ? [
+                    "test-fixtures/*/index.js!",
+                    // The lifecycle test spawns this suite fixture as a separate Node process.
+                    "src/suite-process-lifecycle.test-support.ts!",
+                  ]
+                : []),
             ]),
       ],
       project:
