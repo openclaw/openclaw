@@ -72,7 +72,7 @@ try {
       ),
       ...facts,
     };
-    const invoke =
+    const invoke: () => ReturnType<typeof buildEmbeddedAttemptToolRunContext> =
       values.arm === "base"
         ? () =>
             buildEmbeddedAttemptToolRunContext({
