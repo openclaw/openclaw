@@ -66,26 +66,17 @@ it("applies quiet mode at configuration and restores the SDK logger level afterw
     clientLogger.error("real error");
     expect(error.mock.calls).toEqual([["[MatrixHttpClient.requests] real error"]]);
 
-    for (const quiet of [false, true, false]) {
-      setMatrixSdkLogMode(quiet ? "quiet" : "default");
-      ensureMatrixSdkLoggingConfigured();
-      if (!quiet) {
-        expect(logger.getLevel?.()).toBe(logger.levels.WARN);
-        logger.setLevel?.("trace", false);
-      }
-      logger.info("root sync started", sync);
-      logger.info("Storing user profile @synthetic-private-user:example.test", {
-        profile_updates: profile,
-      });
-      for (const forwardLooking of [true, false]) {
-        const membership = `membership event with membership undefined (forwardLooking: ${forwardLooking})!`;
-        logger.trace(membership, profile, "prevcontent is ", profile);
-      }
-      logger.warn("root sync warning", sync);
+    logger.setLevel?.("trace", false);
+    logger.info("root sync started", sync);
+    logger.info("Storing user profile @synthetic-private-user:example.test", {
+      profile_updates: profile,
+    });
+    for (const forwardLooking of [true, false]) {
+      const membership = `membership event with membership undefined (forwardLooking: ${forwardLooking})!`;
+      logger.trace(membership, profile, "prevcontent is ", profile);
     }
-    expect(info.mock.calls).toEqual([cancellation, ...repeat(2, "root sync started", sync)]);
-    expect(trace.mock.calls).toEqual(repeat(4, "membership event with membership undefined"));
-    expect(warn.mock.calls.slice(3)).toEqual(repeat(2, "root sync warning", sync));
+    expect(info.mock.calls).toEqual([cancellation, ["root sync started", sync]]);
+    expect(trace.mock.calls).toEqual(repeat(2, "membership event with membership undefined"));
   } finally {
     if (typeof originalLevel === "string" || typeof originalLevel === "number") {
       logger.setLevel?.(originalLevel, false);

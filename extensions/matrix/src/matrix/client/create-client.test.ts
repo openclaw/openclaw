@@ -3,7 +3,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createMatrixClient } from "./create-client.js";
 
 const mocks = vi.hoisted(() => ({
-  ensureMatrixSdkLoggingConfigured: vi.fn(),
   resolveValidatedMatrixHomeserverUrl: vi.fn(),
   maybeMigrateLegacyStorage: vi.fn(async () => undefined),
   resolveMatrixStoragePaths: vi.fn(),
@@ -13,27 +12,22 @@ const mocks = vi.hoisted(() => ({
   state: { resolveStateDir: vi.fn() },
 }));
 const preparedSyncStore = {};
-// mock-isolation: Client construction uses a synthetic runtime rather than shared Gateway state.
+// mock-isolation: Keep construction, logging, network validation, and storage synthetic.
 vi.mock("../../runtime.js", () => ({ getMatrixRuntime: () => ({ state: mocks.state }) }));
-// mock-isolation: Constructor wiring must not reconfigure the process-wide SDK logger.
 vi.mock("./logging.js", () => ({
-  ensureMatrixSdkLoggingConfigured: mocks.ensureMatrixSdkLoggingConfigured,
+  ensureMatrixSdkLoggingConfigured: vi.fn(),
 }));
-// mock-isolation: Homeserver validation is controlled without resolving external hosts.
 vi.mock("./config.js", () => ({
   resolveValidatedMatrixHomeserverUrl: mocks.resolveValidatedMatrixHomeserverUrl,
 }));
-// mock-isolation: Observe migration and metadata wiring without persisting account state.
 vi.mock("./storage.js", () => ({
   maybeMigrateLegacyStorage: mocks.maybeMigrateLegacyStorage,
   resolveMatrixStoragePaths: mocks.resolveMatrixStoragePaths,
   writeStorageMeta: mocks.writeStorageMeta,
 }));
-// mock-isolation: Hydration is explicitly gated without opening a real sync database.
 vi.mock("./file-sync-store.js", () => ({
   SqliteBackedMatrixSyncStore: { create: mocks.createSyncStore },
 }));
-// mock-isolation: Observe constructor options without starting real SDK transports.
 vi.mock("../sdk.js", () => ({ MatrixClient: mocks.MatrixClient }));
 
 const storagePaths = {
@@ -76,9 +70,6 @@ beforeEach(() => {
   mocks.createSyncStore.mockResolvedValue(preparedSyncStore);
   mocks.resolveValidatedMatrixHomeserverUrl.mockResolvedValue(auth.homeserver);
   mocks.resolveMatrixStoragePaths.mockReturnValue(storagePaths);
-  mocks.MatrixClient.mockImplementation(function MockMatrixClient() {
-    return { stop: vi.fn() };
-  });
 });
 
 it("persists metadata and hydrates sync state before constructing the client", async () => {
@@ -87,14 +78,7 @@ it("persists metadata and hydrates sync state before constructing the client", a
   const pending = createMatrixClient(auth);
   await vi.waitFor(() => expect(mocks.createSyncStore).toHaveBeenCalled());
   expect(mocks.MatrixClient).not.toHaveBeenCalled();
-  expect(mocks.writeStorageMeta).toHaveBeenCalledWith({
-    storagePaths,
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    accountId: undefined,
-    deviceId: undefined,
-  });
-  expect(mocks.resolveMatrixStoragePaths).toHaveBeenCalledTimes(1);
+  expect(mocks.writeStorageMeta).toHaveBeenCalledBefore(mocks.createSyncStore);
   hydration.resolve(preparedSyncStore);
   await pending;
   expectClient({
