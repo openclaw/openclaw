@@ -1,3 +1,5 @@
+/// <reference lib="es2024.promise" />
+
 type CloseReason = "return" | "throw" | "observer";
 
 /**
