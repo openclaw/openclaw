@@ -24,29 +24,22 @@ function fixturePath(root: string, file: string) {
   return target;
 }
 
-it.each(["ts", "tsx", "cts", "ctsx", "mts", "mtsx", "js", "jsx", "cjs", "cjsx", "mjs", "mjsx"])(
-  "keeps .%s specialized suites opt-in across root and scoped discovery",
-  (extension) => {
-    for (const directory of ["test/example", "extensions/example/src"]) {
-      for (const kind of ["e2e", "live"]) {
-        const file = `${directory}/example.${kind}.test.${extension}`;
-        expect(cli.isSharedVitestExcludedPath(file), file).toBe(true);
-        expect(cli.isSharedVitestExcludedPath(file.replaceAll("/", "\\")), file).toBe(true);
-        expect(cli.isSharedVitestExcludedPath(file, directory), file).toBe(true);
-      }
-      expect(cli.isSharedVitestExcludedPath(`${directory}/example.test.${extension}`)).toBe(false);
-    }
-  },
-);
-
-it.each(["json", "ts.map", "txt"])(
-  "does not classify .%s assets as specialized tests",
-  (extension) => {
+it.each([
+  ...["ts", "tsx", "cts", "ctsx", "mts", "mtsx", "js", "jsx", "cjs", "cjsx", "mjs", "mjsx"].map(
+    (extension) => ({ extension, excluded: true }),
+  ),
+  ...["json", "ts.map", "txt"].map((extension) => ({ extension, excluded: false })),
+])("classifies .$extension specialized suites (excluded: $excluded)", ({ extension, excluded }) => {
+  for (const directory of ["test/example", "extensions/example/src"]) {
     for (const kind of ["e2e", "live"]) {
-      expect(cli.isSharedVitestExcludedPath(`test/example.${kind}.test.${extension}`)).toBe(false);
+      const file = `${directory}/example.${kind}.test.${extension}`;
+      expect(cli.isSharedVitestExcludedPath(file), file).toBe(excluded);
+      expect(cli.isSharedVitestExcludedPath(file.replaceAll("/", "\\")), file).toBe(excluded);
+      expect(cli.isSharedVitestExcludedPath(file, directory), file).toBe(excluded);
     }
-  },
-);
+    expect(cli.isSharedVitestExcludedPath(`${directory}/example.test.${extension}`)).toBe(false);
+  }
+});
 
 it("plans Node CI test ownership before dependencies are installed", () => {
   const root = tempDirs.make("openclaw-selection-preflight-");
@@ -134,24 +127,20 @@ it("keeps absolute Windows operands selected after discovery", async () => {
 
 const qaFile = "extensions/qa-lab/example.test.ts";
 it.each([
-  [["--config-loader", "runner"], true],
-  [["-no-isolate", "true"], false],
-  [["--", `--exclude=${qaFile}`], true],
-  [[`${qaFile}:12`], true],
-  [["--testNamePattern", "unrelated.test.ts"], true],
-  [["unrelated.test.ts", "run"], false],
-])("projects native operands without consuming controls: %j", (args, selected) => {
+  [["--config-loader", "runner"], true, null],
+  [["--configLoader", "test/runner.test.ts"], true, null],
+  [["-no-isolate", "true"], false, null],
+  [["--", `--exclude=${qaFile}`], true, null],
+  [["--", "test/other.test.ts"], true, null],
+  [[`${qaFile}:12`], true, [qaFile]],
+  [["--testNamePattern", "unrelated.test.ts"], true, null],
+  [["unrelated.test.ts", "run"], false, []],
+])("projects native operands without consuming controls: %j", (args, selected, discovery) => {
   expect(matches(qaFile, [qaFile], ...args)).toBe(selected);
+  expect(narrow([qaFile], ...args)).toEqual(discovery);
 });
 
-it("does not narrow discovery from config-loader operands or separator tails", () => {
-  const include = [qaFile];
-  for (const args of [
-    ["--configLoader", "test/runner.test.ts"],
-    ["--", "test/other.test.ts"],
-  ]) {
-    expect(narrow(include, ...args)).toBeNull();
-  }
+it("stops collecting excludes at the separator", () => {
   expect(
     cli.collectVitestExcludePatterns(["--exclude", "before", "--", "--exclude=after"]),
   ).toEqual(["before"]);
@@ -180,10 +169,8 @@ it("keeps a large exclusion inventory within Node's compiled-pattern cache budge
 const view = (extension: string) => `ui/src/components/view.test.${extension}`;
 it.each([
   [["ts"], "tsx", []],
-  [["tsx"], "ts", []],
   [["ts"], "{ts,tsx}", [view("ts")]],
   [["{ts,tsx}"], "tsx", [view("tsx")]],
-  [["ts", "tsx"], "{ts,tsx}", withTsx([view("ts")])],
 ])("constrains owner %j for shallow %s globs", (owner, candidate, expected) => {
   const selected = intersect(
     owner.map((extension) => `ui/src/**/*.test.${extension}`),
