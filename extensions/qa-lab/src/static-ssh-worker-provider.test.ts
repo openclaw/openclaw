@@ -3,18 +3,9 @@ import { describe, expect, it } from "vitest";
 import { createStaticSshWorkerProvider } from "./static-ssh-worker-provider.js";
 
 const provider = createStaticSshWorkerProvider();
-const KEY_REF = {
-  source: "file" as const,
-  provider: "default",
-  id: "/cloud-workers/development/private-key",
-};
+const KEY_REF = { source: "file" as const, provider: "default", id: "/private-key" };
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
-const PROFILE = {
-  host: "worker.example.test",
-  user: "openclaw",
-  hostKey: HOST_KEY,
-  keyRef: KEY_REF,
-};
+const PROFILE = { host: "worker.test", user: "openclaw", hostKey: HOST_KEY, keyRef: KEY_REF };
 const authority = { assertCurrent: () => {} };
 const invalid = (label: string, overrides: WorkerProfile) => ({
   label,
@@ -25,7 +16,7 @@ describe("QA Lab static-SSH worker provider", () => {
   it("provisions a deterministic logical lease with the default SSH port", async () => {
     const profile = {
       ...PROFILE,
-      host: " worker.example.test ",
+      host: ` ${PROFILE.host} `,
       user: " openclaw ",
       hostKey: ` ${HOST_KEY} `,
     };

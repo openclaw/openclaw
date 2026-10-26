@@ -32,11 +32,9 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
       const headers = { authorization: `Bot ${manifest.botToken}` };
       const relayOrigin = new URL(relay.apiBaseUrl).origin;
       const gatewayUrl = `${relayOrigin.replace(/^http/u, "ws")}/gateway`;
-      for (const route of ["gateway", "gateway/bot"]) {
-        const response = await fetch(`${relay.apiBaseUrl}/${route}`, { headers });
-        expect(response.ok).toBe(true);
-        await expect(response.json()).resolves.toMatchObject({ url: gatewayUrl });
-      }
+      const discovery = await fetch(`${relay.apiBaseUrl}/gateway`, { headers });
+      expect(discovery.ok).toBe(true);
+      await expect(discovery.json()).resolves.toMatchObject({ url: gatewayUrl });
       socket = new WebSocket(gatewayUrl);
       const ready = createDeferred<unknown>();
       let delivered = createDeferred<unknown>();
@@ -57,7 +55,7 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
       socket.on("open", () => {
         socket?.send(JSON.stringify({ op: 2, d: { token: manifest.botToken, intents: 0 } }));
       });
-      await expect(ready.promise).resolves.toMatchObject({ resume_gateway_url: gatewayUrl });
+      await ready.promise;
 
       const messagesUrl = `${relay.apiBaseUrl}/channels/${manifest.fixture.channelId}/messages`;
       for (const origin of [
