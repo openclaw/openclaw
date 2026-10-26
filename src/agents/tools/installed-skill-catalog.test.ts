@@ -56,6 +56,7 @@ describe("installed skill catalog", () => {
     const guide = skill("guide", "Guide");
     guide.source = { filePath };
     await fs.writeFile(filePath, "quasars");
+    await fs.utimes(filePath, 1_700_000_000, 1_700_000_000);
     const original = await fs.stat(filePath);
     expect(await matchingNames([guide], "quasars")).toEqual(["guide"]);
     await fs.writeFile(filePath, "pulsars");
