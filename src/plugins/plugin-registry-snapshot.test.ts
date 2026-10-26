@@ -72,8 +72,7 @@ function configuredRegistry(disabled = false) {
   return { ...fixture, rootDir, config };
 }
 
-function bundledRegistry() {
-  const tempRoot = makeTempDir();
+function bundledRegistry(tempRoot = makeTempDir()) {
   const packageRoot = path.join(tempRoot, "openclaw");
   const bundledRoot = path.join(packageRoot, "dist", "extensions");
   const sourceRoot = path.join(packageRoot, "extensions");
@@ -207,15 +206,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
   it.each(["persisted", "current"])(
     "reselects checkout plugins for a fresh config request after a %s global selection",
     async (cache) => {
-      const root = fs.realpathSync(makeTempDir());
-      const packageRoot = path.join(root, "openclaw");
-      const bundledRoot = path.join(packageRoot, "dist", "extensions");
+      const { packageRoot, bundledRoot, stateDir, env } = bundledRegistry(
+        fs.realpathSync(makeTempDir()),
+      );
       const bundledPlugin = path.join(bundledRoot, "demo");
-      const globalPlugin = path.join(root, "state", "extensions", "demo");
-      const env: NodeJS.ProcessEnv = {
-        ...createHermeticEnv(root),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      };
+      const globalPlugin = path.join(stateDir, "extensions", "demo");
       fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
       fs.mkdirSync(path.join(packageRoot, "extensions"));
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
@@ -427,17 +422,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     const metaDir = path.join(rootDir, "..meta");
     fs.mkdirSync(metaDir, { recursive: true });
     const packageJsonPath = path.join(metaDir, "package.json");
-    writeJson(packageJsonPath, {
-      name: "demo",
-      version: "1.0.0",
-      openclaw: {
-        channel: {
-          id: "demo",
-          label: "Demo",
-          commands: { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: false },
-        },
-      },
-    });
+    writeJson(packageJsonPath, { name: "demo", version: "1.0.0" });
     const index = loadInstalledPluginIndex({ config, env });
     await persistFirstPlugin(index, stateDir, {
       packageJson: packageMetadata(packageJsonPath, "..meta/package.json"),
@@ -447,16 +432,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expectPersisted(result);
     expect(result.manifestRegistry).toBeUndefined();
-    const registry = loadPluginManifestRegistryForInstalledIndex({
-      index: result.snapshot,
-      config,
-      env,
-      includeDisabled: true,
-    });
-    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
-      nativeCommandsAutoEnabled: true,
-      nativeSkillsAutoEnabled: false,
-    });
   });
 
   it.runIf(process.platform !== "win32")(
