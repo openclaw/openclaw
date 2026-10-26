@@ -30,6 +30,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import { registerGatewayToolFinalEffectTests } from "./tool-resolution.effects.test-support.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 async function resolveTools(
@@ -366,20 +367,4 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
   expect(names).toContain("sessions_history");
 });
 
-it.each([
-  [true, "Changes wait for the user to approve"],
-  [false, "Full Access applies permitted changes without asking for approval"],
-] as const)(
-  "builds the openclaw delegate tool for tools.fs.workspaceOnly=%s on the loopback surface",
-  async (workspaceOnly, expectedDescription) => {
-    const result = await resolveTools({
-      cfg: {
-        plugins: { enabled: false },
-        tools: { allow: ["openclaw"], fs: { workspaceOnly } },
-      },
-      senderIsOwner: true,
-    });
-    const tool = result.tools.find(({ name }) => name === "openclaw");
-    expect(tool?.description).toContain(expectedDescription);
-  },
-);
+registerGatewayToolFinalEffectTests();

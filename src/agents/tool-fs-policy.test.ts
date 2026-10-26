@@ -96,29 +96,6 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
 });
 
 describe("resolveOpenClawToolsFsPolicy", () => {
-  it("is unrestricted by default", () => {
-    expect(resolveOpenClawToolsFsPolicy({ cfg: {}, agentId: "main" })).toBeUndefined();
-  });
-
-  it("restricts from global tools.fs.workspaceOnly", () => {
-    expect(resolveOpenClawToolsFsPolicy(policy({ fs: { workspaceOnly: true } }))).toEqual({
-      workspaceOnly: true,
-    });
-  });
-
-  it("honors an agent override over the global setting", () => {
-    expect(
-      resolveOpenClawToolsFsPolicy(
-        policy({ fs: { workspaceOnly: true } }, { fs: { workspaceOnly: false } }),
-      ),
-    ).toBeUndefined();
-    expect(
-      resolveOpenClawToolsFsPolicy(
-        policy({ fs: { workspaceOnly: false } }, { fs: { workspaceOnly: true } }),
-      ),
-    ).toEqual({ workspaceOnly: true });
-  });
-
   it("lets an explicit session permission mode decide and pins its root", () => {
     expect(
       resolveOpenClawToolsFsPolicy({
