@@ -118,8 +118,12 @@ it.runIf(process.platform !== "win32")(
       });
     });
     const gatePath = join(workspace, "initialize.sock");
-    await new Promise<void>((resolve) => {
-      server.listen(gatePath, resolve);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(gatePath, () => {
+        server.off("error", reject);
+        resolve();
+      });
     });
     vi.stubEnv("MUSE_FIXTURE_INITIALIZE_GATE", gatePath);
     const controller = new AbortController();

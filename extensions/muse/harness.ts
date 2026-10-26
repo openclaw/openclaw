@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { realpath } from "node:fs/promises";
 import type { ApprovalHandler, Session, Turn } from "@muse-code/sdk";
 import {
@@ -35,14 +36,14 @@ import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  appendSessionTranscriptMessagesByIdentity,
-  publishSessionTranscriptUpdateByIdentity,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
-import { consumeTurn } from "./src/events.js";
-import { MusePool, openMuseSession } from "./src/runtime.js";
+  consumeTurn,
+  recordMuseTranscriptGroup,
+  projectMuseAttemptResult,
+  collectMuseHistoricalItemIds,
+  createMuseInput,
+} from "./src/events.js";
+import { MusePool, openMuseSession, retainMuseSession } from "./src/runtime.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
-
-type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
 export type MuseSessionBinding = { sessionId: string; compatibility: string };
 export type MuseHarnessOptions = {
@@ -56,8 +57,53 @@ function museRefusal(message: string): AgentHarnessPreflightError {
   return new AgentHarnessPreflightError(message, { scope: "harness", userMessage: message });
 }
 
-// Matches the Codex harness: a pending native approval should not hold a turn for hours.
-const APPROVAL_TIMEOUT_MS = 120_000;
+function createMuseApprovalHandler(
+  params: AgentHarnessAttemptParamsV2,
+  recordFailure: (error: Error) => void,
+  assertCurrent: () => void,
+): ApprovalHandler {
+  // Capture this prepared owner before replay; pooled pipe callbacks retain their first caller's context.
+  return AsyncLocalStorage.bind(async (request) => {
+    assertCurrent();
+    const timeoutMs = Math.min(120_000, params.timeoutMs);
+    const { subject, toolName } = request;
+    let decision: string | null | undefined;
+    try {
+      // The host schema bounds titles to 80, descriptions to 512, and details
+      // to 16,384 characters; native commands can exceed these limits.
+      const answer = await params.hostCapabilities.requestApproval({
+        title: `Muse: ${toolName}`.slice(0, 80),
+        description: (subject.command ?? subject.path ?? subject.host ?? toolName).slice(0, 512),
+        ...(request.rawArgs ? { detail: request.rawArgs.slice(0, 16_384) } : {}),
+        toolName,
+        toolCallId: request.toolCallId,
+        severity: "warning",
+        allowedDecisions: ["allow-once", "deny"],
+        timeoutMs,
+        signal: params.abortSignal,
+      });
+      decision = answer?.decision;
+      if (answer?.id && decision == null) {
+        decision = (
+          await params.hostCapabilities.waitForApproval({
+            approvalId: answer.id,
+            timeoutMs,
+            signal: params.abortSignal,
+          })
+        )?.decision;
+      }
+    } catch (error) {
+      // A current owner may fail closed using a choice Muse actually offered.
+      // Revoked authority cannot make even that native decision.
+      assertCurrent();
+      const refusal = selectApprovalChoice(request, "deny");
+      recordFailure(new Error(`Muse approval failed: ${formatErrorMessage(error)}`));
+      return refusal;
+    }
+    assertCurrent();
+    return selectApprovalChoice(request, decision);
+  });
+}
 
 function selectApprovalChoice(
   request: Parameters<ApprovalHandler>[0],
@@ -207,11 +253,13 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       ]);
       let session: Session | undefined;
       let turn: Turn | undefined;
+      let submitCommandId: string | undefined;
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
       let timedOut = false;
       let aborted = false;
       let abortPromise: Promise<void> | undefined;
       let failure: unknown;
+      let unsettledApprovalFailure = false;
       let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
       const messages: AgentMessage[] = [];
       let text = "";
@@ -233,16 +281,40 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const signal = bound
         ? AbortSignal.any([bound.signal, ...(params.abortSignal ? [params.abortSignal] : [])])
         : params.abortSignal;
+      const projectionAbort = new AbortController();
+      const projectionSignal = AbortSignal.any([
+        projectionAbort.signal,
+        ...(signal ? [signal] : []),
+      ]);
+      const ownsTurn = () => {
+        if (!session || !turn || !submitCommandId) {
+          return false;
+        }
+        // A materialized user-message echo can retire the pending ack; the fold
+        // still records which command started the turn.
+        return (
+          session.pending.get(submitCommandId)?.ack?.disposition === "started" ||
+          session.fold.turn(turn.turnId)?.commandId === submitCommandId
+        );
+      };
       const assertDispatchActive = () => {
         params.hostCapabilities.assertActive();
         bound?.assertCurrent();
-        signal?.throwIfAborted();
+        projectionSignal.throwIfAborted();
         if (aborted) {
           throw new Error("Muse attempt was aborted before turn dispatch.");
         }
       };
       const stop = async () => {
         if (!session || !turn) {
+          return;
+        }
+        const nativeState = session.fold.turn(turn.turnId)?.state;
+        if (nativeState === "settled" || nativeState === "unqueued") {
+          return;
+        }
+        if (!ownsTurn()) {
+          projectionAbort.abort(failure ?? new Error("Muse attempt detached from native work"));
           return;
         }
         if (!abortPromise) {
@@ -268,6 +340,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       const abort = async () => {
         aborted = true;
         await stop();
+        projectionAbort.abort(new Error(timedOut ? "Muse turn timed out" : "Muse attempt aborted"));
       };
       const onAbort = () => {
         void abort().catch(() => runtime.close());
@@ -314,6 +387,24 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           workspace,
           modelId: params.modelId,
           approvalMode,
+          onSession: (nativeSession) => {
+            nativeSession.onApproval(
+              createMuseApprovalHandler(
+                { ...params, abortSignal: projectionSignal },
+                (error) => {
+                  failure ??= error;
+                },
+                assertDispatchActive,
+              ),
+            );
+            nativeSession.onApprovalError((error) => {
+              failure ??= new Error(
+                `Muse approval failed (${error.kind}): ${error.kind === "unofferedChoice" ? `choice ${error.choiceId} was not offered` : formatErrorMessage(error.error)}`,
+              );
+              unsettledApprovalFailure = true;
+              void stop().catch(() => runtime.close());
+            });
+          },
           onResumeRefused: (message) => {
             freshSession = true;
             options.logger?.warn(`${message}; started a new Muse session.`);
@@ -375,75 +466,32 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           }
           assertDispatchActive();
         }
-        session.onApproval(async (request) => {
-          params.hostCapabilities.assertActive();
-          const timeoutMs = Math.min(APPROVAL_TIMEOUT_MS, params.timeoutMs);
-          // The Gateway approval schema bounds title (80), description (512), and
-          // detail (1..16384) characters; Muse commands and arguments can exceed them.
-          const answer = await params.hostCapabilities.requestApproval({
-            title: `Muse: ${request.toolName}`.slice(0, 80),
-            description: (
-              request.subject.command ??
-              request.subject.path ??
-              request.subject.host ??
-              request.toolName
-            ).slice(0, 512),
-            ...(request.rawArgs ? { detail: request.rawArgs.slice(0, 16_384) } : {}),
-            toolName: request.toolName,
-            toolCallId: request.toolCallId,
-            severity: "warning",
-            allowedDecisions: ["allow-once", "deny"],
-            timeoutMs,
-            signal: params.abortSignal,
-          });
-          let decision = answer?.decision;
-          if (answer?.id && decision == null) {
-            decision = (
-              await params.hostCapabilities.waitForApproval({
-                approvalId: answer.id,
-                timeoutMs,
-                signal: params.abortSignal,
-              })
-            )?.decision;
-          }
-          params.hostCapabilities.assertActive();
-          params.abortSignal?.throwIfAborted();
-          return selectApprovalChoice(request, decision);
-        });
-        session.onApprovalError((error) => {
-          failure = new Error(
-            `Muse approval failed (${error.kind}): ${
-              error.kind === "unofferedChoice"
-                ? `choice ${error.choiceId} was not offered`
-                : formatErrorMessage(error.error)
-            }`,
-          );
-          void stop().catch(() => runtime.close());
-        });
         assertDispatchActive();
         await params.userTurnTranscriptRecorder?.persistApproved();
         assertDispatchActive();
         // MSP has no system/developer instruction field; preserve host context in user input.
-        const input: MuseInputPart[] = [
-          {
-            type: "text",
-            text: [sessionContext, params.extraSystemPrompt, params.prompt]
-              .filter(Boolean)
-              .join("\n\n"),
-          },
-          ...(params.images ?? []).map((image): MuseInputPart => ({
-            type: "image",
-            mediaType: image.mimeType,
-            base64Data: image.data,
-          })),
-        ];
+        const input = createMuseInput(params, sessionContext);
         lifecycle.emitExecutionPhaseOnce("context", { phase: "context_assembled" });
-        turn = await session.sendUserTurn({
+        // items() replays retained items when steering an existing turn. Those
+        // completed before this input belong to history, not the new reply.
+        const historicalItemIds = collectMuseHistoricalItemIds(session, runtime.detachedSessions);
+        const composerInput = { runId: params.runId };
+        const submitted = session.sendUserTurn({
           input,
+          composerInput,
+          // A resumed session can already have native background continuation
+          // work. Join its authoritative turn instead of queueing behind it.
+          ...(!freshSession ? { ifBusy: "steer" as const } : {}),
           ...(params.thinkLevel
             ? { reasoningEffort: params.thinkLevel === "off" ? "minimal" : params.thinkLevel }
             : {}),
         });
+        // The SDK registers its optimistic entry synchronously, before I/O.
+        // Retain that command identity even if its user-message echo retires it.
+        submitCommandId = session.pending
+          .list()
+          .find((entry) => entry.input === composerInput)?.commandId;
+        turn = await submitted;
         lifecycle.emitLifecycleStart({ provider: "meta", model: params.modelId });
         lifecycle.emitExecutionPhaseOnce("accepted", { phase: "turn_accepted" });
         // Publish the binding only once Muse accepted the turn carrying any fresh-session
@@ -454,7 +502,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         });
         if (signal?.aborted) {
           onAbort();
-        } else if (failure) {
+        } else if (unsettledApprovalFailure) {
           // An approval can fail before sendUserTurn resolves; interrupt now that the turn exists.
           void stop().catch(() => runtime.close());
         }
@@ -468,44 +516,27 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         active.set(params.sessionId, abort);
         params.onExecutionStarted?.({ backend: "muse" });
         const nativeSessionId = session.sessionId;
-        const result = await consumeTurn(turn, params, async (itemId, group) => {
-          const entries = group.map((message, index) => {
-            const idempotencyKey = `muse:${nativeSessionId}:${itemId}:${index}`;
-            if (message.role === "assistant" && message.stopReason !== "toolUse") {
-              finalKey = idempotencyKey;
-            }
-            return {
-              message: { ...message, idempotencyKey, __openclaw: { runId: params.runId } },
-              idempotencyLookup: "scan" as const,
-            };
-          });
-          params.hostCapabilities.assertActive();
-          const written = await appendSessionTranscriptMessagesByIdentity({
-            ...transcriptTarget,
-            messages: entries,
-            config: params.config,
-          });
-          if (written.length !== entries.length) {
-            throw new Error("Muse transcript persistence rejected a native message group.");
-          }
-          const committed = written.at(-1);
-          if (committed) {
-            await publishSessionTranscriptUpdateByIdentity({
-              ...transcriptTarget,
-              update: {
-                message: committed.message,
-                messageId: committed.messageId,
-                ...(committed.anchor
-                  ? { messageSeq: committed.anchor.activeMessagePosition + 1 }
-                  : {}),
-                runId: params.runId,
-                ...(committed.message.role === "assistant" ? { assistantItemIds: [itemId] } : {}),
-              },
+        const observation = { ...params, abortSignal: projectionSignal };
+        const result = await consumeTurn(
+          turn,
+          observation,
+          async (itemId, group, historical) => {
+            const key = await recordMuseTranscriptGroup({
+              params: observation,
+              target: transcriptTarget,
+              nativeSessionId,
+              itemId,
+              group,
+              historical,
             });
-          }
-          messages.push(...group);
-          assistantTranscriptOwned = finalKey !== undefined;
-        });
+            if (!historical) {
+              finalKey = key ?? finalKey;
+              messages.push(...group);
+              assistantTranscriptOwned = finalKey !== undefined;
+            }
+          },
+          historicalItemIds,
+        );
         text = result.visibleText;
         lastToolError = result.lastToolError;
         if (result.outcome.kind !== "completed") {
@@ -528,7 +559,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         }
         lifecycle.emitLifecycleTerminal({ phase: "end" });
       } catch (error) {
-        if (signal?.aborted && !failure) {
+        if ((signal?.aborted || projectionAbort.signal.aborted) && !failure) {
           // The caller's abort, not a Muse failure, ended this attempt.
           aborted = true;
         } else {
@@ -542,6 +573,14 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ...(failure ? { error: failure } : {}),
         });
       } finally {
+        const detached = projectionAbort.signal.aborted;
+        projectionAbort.abort(new Error("Muse observation is no longer active."));
+        // Session outlives this model observation. Never leave its callbacks
+        // holding caller approval authority after the binding is released.
+        session?.onApproval(async () => {
+          throw new Error("Muse observation is no longer active.");
+        });
+        session?.onApprovalError(() => {});
         await abortPromise?.catch(() => undefined);
         clearTimeout(timer);
         clearTimeout(forceCloseTimer);
@@ -556,11 +595,20 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           activeAttachment,
         );
         bound?.release();
-        lease.release();
+        if (session && turn && !ownsTurn() && detached) {
+          // Detached observation releases caller authority above. Retain only
+          // the process lease so idle shutdown cannot kill the joined work.
+          retainMuseSession(
+            runtime,
+            session,
+            turn.completed,
+            lease.release,
+            unsettledApprovalFailure,
+          );
+        } else {
+          lease.release();
+        }
       }
-      const toolMetas = messages
-        .filter((message) => message.role === "toolResult")
-        .map((message) => ({ toolName: message.toolName }));
       const interruption = timedOut
         ? { kind: "timeout" as const, phase: "prompt" as const, source: "runtime" as const }
         : aborted
@@ -581,38 +629,16 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             error: new Error(failureMessage),
           })
         : interruption;
-      const lastAssistant = messages.findLast((message) => message.role === "assistant");
-      return {
+      return projectMuseAttemptResult({
+        params,
+        messages,
         terminal,
-        assistantTexts: text ? [text] : [],
-        messagesSnapshot: messages,
-        lastAssistant,
-        currentAttemptAssistant: lastAssistant,
-        currentAttemptCompletedAssistant: failure ? undefined : lastAssistant,
+        text,
+        failed: Boolean(failure),
         assistantTranscriptOwned,
-        assistantTranscriptIdempotencyKey: finalKey,
-        toolMetas,
+        finalKey,
         lastToolError,
-        cloudCodeAssistFormatError: false,
-        didSendViaMessagingTool: false,
-        itemLifecycle: {
-          activeCount: 0,
-          completedCount: messages.length,
-          startedCount: messages.length,
-        },
-        messagingToolSentTexts: [],
-        messagingToolSentTargets: [],
-        messagingToolSentMediaUrls: [],
-        sessionIdUsed: params.sessionId,
-        sessionFileUsed: params.sessionFile,
-        yieldDetected: false,
-        replayMetadata: {
-          replaySafe:
-            !failure && !params.initialReplayState?.replayInvalid && toolMetas.length === 0,
-          hadPotentialSideEffects:
-            params.initialReplayState?.hadPotentialSideEffects === true || toolMetas.length > 0,
-        },
-      };
+      });
     });
     inFlight.add(operation);
     try {

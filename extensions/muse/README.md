@@ -28,6 +28,13 @@ text. `finishing` settles an attempt rather than the logical run: newer retry,
 fallback, or foreground activity restores the indicator, while older replayed
 events cannot replace the newer state.
 
+When a resumed native session is already continuing background work, the next
+OpenClaw request joins that active turn without replacing its tools or children.
+Messages arriving during an active OpenClaw attempt keep their normal queueing
+behavior.
+Stopping a request that joined existing native work detaches that request's
+observation; the native tools and children continue until their own completion.
+
 ## Package
 
 - Plugin id: `muse`
