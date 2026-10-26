@@ -193,6 +193,7 @@ it.each([
   if (scenario === "archived") {
     replaceSessionEntrySync({ sessionKey: SESSION }, { ...creatorEntry, archivedAt: Date.now() });
   }
+  let resetRefusal = "";
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
     withAuthorityTools(
       params,
@@ -223,7 +224,11 @@ it.each([
               lifecycleRevision: "reset",
             }),
           });
-          expect(assertRunActive).toThrow(/no longer active/);
+          try {
+            assertRunActive();
+          } catch (error) {
+            resetRefusal = String(error);
+          }
           return { payloads: [{ text: "Read refused" }], meta: { agentMeta: {} } };
         }
         expect(
@@ -270,6 +275,7 @@ it.each([
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     } else {
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(resetRefusal).toMatch(/no longer active/);
     }
     if (worktree) {
       expect(hasLiveWorktreeRunLease(process.env, worktree.id)).toBe(false);
