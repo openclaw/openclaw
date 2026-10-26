@@ -83,7 +83,18 @@ describe("media defaults", () => {
     ];
     const providerRegistry = new Map(providers.map((provider) => [provider.id, provider]));
 
-    expect(resolveAutoMediaKeyProviders({ capability, providerRegistry })).toEqual([
+    const copy = vi.spyOn(Array.prototype, "toSorted");
+    let ordered: string[];
+    let copies: number;
+    try {
+      ordered = resolveAutoMediaKeyProviders({ capability, providerRegistry });
+      copies = copy.mock.calls.length;
+    } finally {
+      copy.mockRestore();
+    }
+
+    expect(copies).toBe(0);
+    expect(ordered).toEqual([
       "negative",
       "zero",
       "hook-only",
@@ -117,6 +128,12 @@ describe("media defaults", () => {
     expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
       providers.indexOf("minimax-portal"),
     );
+    providers.length = 0;
+    expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
+      "google",
+      "minimax",
+      "minimax-portal",
+    ]);
   });
   it("reads native PDF support from provider metadata", () => {
     const supports = (providerId: string) => providerSupportsNativePdfDocument({ providerId });

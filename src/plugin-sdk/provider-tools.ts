@@ -144,7 +144,7 @@ export function inspectGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
   return inspectToolSchemas(ctx, (schema, path) =>
-    findUnsupportedSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
+    inspectSchemaKeywords(schema, path, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS),
   );
 }
 
@@ -450,7 +450,7 @@ export function inspectDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
   return inspectToolSchemas(ctx, (schema, path) =>
-    findUnsupportedSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
+    inspectSchemaKeywords(schema, path, DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS),
   );
 }
 

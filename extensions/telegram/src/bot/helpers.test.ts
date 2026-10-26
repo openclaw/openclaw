@@ -1,6 +1,6 @@
 import type { Message as TelegramMessage, MessageEntity } from "grammy/types";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { describeReplyTarget, getTelegramTextParts, hasBotMention } from "./helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
@@ -123,6 +123,27 @@ it.each([
 });
 
 describe("renderTelegramTextEntities", () => {
+  it("orders owned boundaries without copying or mutating caller entities", () => {
+    const text = "bold before\nquoted\nbold after";
+    const entities = Object.freeze([
+      Object.freeze({ type: "italic", offset: 12, length: 6 } as const),
+      Object.freeze({ type: "bold", offset: 0, length: text.length } as const),
+      Object.freeze({ type: "blockquote", offset: 12, length: 6 } as const),
+      Object.freeze({ type: "bold", offset: -1, length: 6 } as const),
+    ]);
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(renderTelegramTextEntities(text, entities)).toBe(
+          "**bold before**\n> **_quoted_**\n\n**bold after**",
+        );
+      }
+      expect(copyingSort).not.toHaveBeenCalled();
+    } finally {
+      copyingSort.mockRestore();
+    }
+  });
+
   it("uses a pre fence that cannot close inside content", () => {
     const text = "before\n```\ninside";
     const entities = [
