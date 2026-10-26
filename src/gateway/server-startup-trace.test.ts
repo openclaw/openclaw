@@ -58,10 +58,10 @@ describe("gateway startup trace", () => {
           rss.mockReturnValue(256 * 1024 * 1024);
         });
         expect(info.mock.calls[0]?.[0]).not.toContain("rssMb=");
-        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d$/);
+        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
         rss.mockReturnValue(512 * 1024 * 1024);
         trace.mark("ready");
-        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d$/);
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=0 /);
       } finally {
         trace.close();
       }

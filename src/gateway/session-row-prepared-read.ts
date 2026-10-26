@@ -53,6 +53,7 @@ export type SessionRowSelectionPreparationOptions = {
 
 export type SessionRowPreparationOptions = {
   includeAncestors?: boolean;
+  /** Queries select canonical durable roster keys; private exact reads use the default path. */
   selection?: boolean | SessionRowSelectionPreparationOptions;
 };
 

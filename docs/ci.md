@@ -143,6 +143,12 @@ serving it. Protocol recovery also uses the producer’s built Gateway and retai
 its incompatible-protocol UI build. Local, compatibility, and frozen targets
 retain their ordinary preparation path.
 
+When the selected mocked Control UI shard includes production stale-build recovery,
+its workflow step prepares the Gateway runtime before starting Vitest. This moves
+the existing cold build outside the fixture's subprocess budget without adding a
+job or building on shards that do not select that fixture. Production-artifact
+reuse still omits the delegated fixture from the mocked shards.
+
 The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or

@@ -39,6 +39,7 @@ import {
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { requestSessionRow } from "./session-row-projection.test-support.js";
+import * as storeKeys from "./session-store-key.js";
 import * as rowInputs from "./session-utils-row.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
@@ -229,11 +230,13 @@ describe("list preparation", () => {
         // including after an unrelated subagent registry renewal.
         rendered.length = 0;
         publishSubagentRunChanges();
+        const canonicalize = vi.spyOn(storeKeys, "resolveStoredSessionKeyForAgentStore");
         for (const [index, offset] of [0, 5, 0, 5].entries()) {
           expect((await listPage(offset, index)).sessions).toEqual(pages[index]!.sessions);
         }
         expect([rendered, projection.materializedCount, sql.queries]).toEqual([[], 10, []]);
         expect(reads).not.toHaveBeenCalled();
+        expect(canonicalize).not.toHaveBeenCalled();
       } finally {
         sql.restore();
       }

@@ -1,5 +1,6 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import * as requesterOrigin from "../../agents/requester-origin.js";
 import { withPreparedToolConstruction } from "../../agents/tool-construction-preparation.js";
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
@@ -28,6 +29,7 @@ async function prepare(config: OpenClawConfig, sessionId: string) {
 afterEach(() => {
   authorities.splice(0).forEach((authority) => authority.close());
   snapshots.clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
 });
 it("captures authority facts without copying unrelated attempt payloads", async () => {
   let payloadReads = 0;
@@ -286,4 +288,30 @@ it("treats absent and undefined classification fields equally but still checks l
   } finally {
     retained?.release();
   }
+});
+
+it("reuses the captured incumbent principal while validating interleaved callers", async () => {
+  const principal = vi.spyOn(requesterOrigin, "resolveRequesterPrincipalKey");
+  const alice = prepareReplyToolAuthority({ run: { ...run, sessionId: "alice" } });
+  const bob = prepareReplyToolAuthority({
+    run: { ...run, sessionId: "bob", senderId: "bob" },
+  });
+  authorities.push(alice, bob);
+  const aliceFingerprint = await alice.fingerprintAsync(route);
+  const bobFingerprint = await bob.fingerprintAsync(route);
+  expect(bobFingerprint).not.toBe(aliceFingerprint);
+  for (const [owner, caller, expected] of [
+    [alice, overlay, aliceFingerprint],
+    [bob, { ...overlay, senderId: "bob" }, bobFingerprint],
+    [alice, overlay, aliceFingerprint],
+  ] as const) {
+    principal.mockClear();
+    expect(await owner.projectAsync(caller, route)).toBe(expected);
+    // One arriving caller check plus two live fingerprint evaluations; the incumbent
+    // principal was already captured by this owner and needs no fourth derivation.
+    expect(principal).toHaveBeenCalledTimes(3);
+  }
+  await expect(alice.projectAsync({ ...overlay, senderId: "bob" }, route)).rejects.toThrow(
+    "requester",
+  );
 });

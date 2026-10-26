@@ -1,9 +1,35 @@
 import { isDeepStrictEqual } from "node:util";
+import type { ProviderPlugin } from "../../../plugins/types.js";
+import type { AuthProfileCredential } from "../../auth-profiles/types.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { resolveModelCatalogAccessPrograms } from "../../model-catalog-access-programs.js";
 import { getPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+// OAuth refresh rotates tokens without changing the account that discovery observed.
+// The provider owns account-and-user identity; workspace ids or optional emails are not enough.
+function isSameDiscoveredAccount(
+  discovered: AuthProfileCredential | undefined,
+  credential: AuthProfileCredential,
+  provider: ProviderPlugin | undefined,
+): boolean {
+  if (isDeepStrictEqual(discovered, credential)) {
+    return true;
+  }
+  if (discovered?.type !== "oauth" || credential.type !== "oauth") {
+    return false;
+  }
+  return (
+    discovered.provider === credential.provider &&
+    discovered.enterpriseUrl === credential.enterpriseUrl &&
+    discovered.issuer === credential.issuer &&
+    discovered.clientId === credential.clientId &&
+    discovered.authFlow === credential.authFlow &&
+    provider?.auth.some((method) => method.matchesPersonalAccount?.(credential, discovered)) ===
+      true
+  );
+}
 
 /** Session overrides need current account evidence; model configuration remains explicit policy. */
 export async function prepareEmbeddedAccessProgramGuard(
@@ -42,7 +68,7 @@ export async function prepareEmbeddedAccessProgramGuard(
   const check = () => {
     const snapshot = runtime?.readFullModelCatalog?.() ?? runtime?.modelCatalog;
     // Direct discovery belongs to the current prepared runtime generation.
-    // A cold private catalog can reuse shared discovery only for the same credential.
+    // A cold private catalog can reuse shared discovery only for the same account.
     // A published empty private catalog is authoritative and must not fall back.
     const providerOutcomes =
       selectedCredential?.source === "direct"
@@ -52,9 +78,12 @@ export async function prepareEmbeddedAccessProgramGuard(
           : snapshot &&
               profileId &&
               credential &&
-              isDeepStrictEqual(
+              isSameDiscoveredAccount(
                 getPreparedModelFullCatalogAuth(snapshot)?.authStore.profiles[profileId],
                 credential,
+                runtime?.pluginRegistry?.providers.find(
+                  ({ provider }) => provider.id === attempt.provider,
+                )?.provider,
               )
             ? snapshot.providerOutcomes
             : [];

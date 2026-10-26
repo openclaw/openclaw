@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import { parseOpenAIChatGptResponsesSse } from "./openai-chatgpt-responses-protocol.js";
+import { makeStallingStream } from "./provider-stream.test-support.js";
 
 const completedEvent = { type: "response.completed", response: { id: "resp_parser" } };
 const parse = (body: BodyInit) => parseOpenAIChatGptResponsesSse(new Response(body));
@@ -90,15 +91,13 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
 
   it("releases the response reader when upstream cancellation remains pending", async () => {
     let cancelStarted = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(`data: ${serializedCompletedEvent}\n\n`));
-      },
-      cancel() {
+    const body = makeStallingStream(
+      [new TextEncoder().encode(`data: ${serializedCompletedEvent}\n\n`)],
+      () => {
         cancelStarted = true;
         return new Promise<void>(() => {});
       },
-    });
+    );
     const iterator = parse(body);
 
     await expect(settleWithin(iterator.next(), "first response event")).resolves.toEqual({

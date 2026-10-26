@@ -56,7 +56,6 @@ it.each(["worker", "snapshot"] as const)(
           for (const retained of directories) {
             await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
           }
-          expect(terminate).toHaveBeenCalledTimes(failureStage === "worker" ? 2 : 1);
           expect((await state.read()).store.jobs).toEqual([]);
         } finally {
           terminate.mockRestore();

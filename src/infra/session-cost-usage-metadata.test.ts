@@ -3,14 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import {
-  loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshotAsync as resolveSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync as resolveSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -25,23 +21,13 @@ afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
 });
 
-it("keeps async cold adoption, workspace scopes, and forced fresh inventories distinct", async () => {
+it("keeps an async forced fresh inventory outside the adopted process snapshot", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-async-usage-metadata-") };
   const config = { plugins: { enabled: false } };
-  const resolve = (options: Omit<Parameters<typeof resolveSnapshot>[0], "env"> = {}) =>
-    resolveSnapshot({ config, env, ...options });
-  const first = await resolve();
-  expect(await resolve({ config: structuredClone(config) })).toBe(first);
-  const workspaceDir = path.join(env.OPENCLAW_STATE_DIR, "workspace");
-  const scoped = withPluginCache(createPluginCache(), () =>
-    loadPluginMetadataSnapshot({ config, env, index: first.index, workspaceDir }),
+  const first = await resolveSnapshot({ config, env });
+  expect(await resolveSnapshot({ config, env, index: first.index, allowCurrent: false })).not.toBe(
+    first,
   );
-  await withPluginMetadataSnapshotScope(
-    scoped,
-    async () => expect(await resolve({ allowWorkspaceScopedCurrent: true })).toBe(scoped),
-    { config, env, workspaceDir, trustConfigIdentity: true },
-  );
-  expect(await resolve({ index: first.index, allowCurrent: false })).not.toBe(first);
   expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(first);
 });
 

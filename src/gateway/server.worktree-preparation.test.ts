@@ -97,14 +97,15 @@ it.each([
     if (hookEvent) {
       registerInternalHook(hookEvent, bootstrapExtraFilesHook);
     }
+    const target = {
+      agentId: "main",
+      key: "agent:main:sandbox-worktree",
+      storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
+      sandboxRequired,
+    };
     const preparing = prepareSessionWorktree({
       cfg,
-      target: {
-        agentId: "main",
-        key: "agent:main:sandbox-worktree",
-        storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
-        sandboxRequired,
-      },
+      target,
       workspace,
       baseRef: "HEAD",
       runSetupScript: false,
@@ -147,10 +148,7 @@ it.each([
         const reused = await prepareSessionWorktree({
           cfg,
           target: {
-            agentId: "main",
-            key: "agent:main:sandbox-worktree",
-            storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
-            sandboxRequired,
+            ...target,
             entry: {
               sessionId: "workspace-reuse",
               updatedAt: 1,

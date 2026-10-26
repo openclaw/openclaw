@@ -15,13 +15,17 @@ import { resolveConversationRouteFingerprint } from "./conversation-route-finger
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   applySessionEntryOperation,
+  patchSessionEntryCore,
   recordInboundSessionMeta,
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 const { getSessionEntryPatchDelivery } =
@@ -29,6 +33,53 @@ const { getSessionEntryPatchDelivery } =
 const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it("accepts hydrated owner ordering but rejects a changed owner during callback patches", async () => {
+  await withFixture(async (f) => {
+    const owner = assignSessionOwner(f.scope, {
+      owner: { type: "human", id: "synthetic-owner" },
+      assignedBy: { type: "system", id: "synthetic-system" },
+      assignedAt: 20,
+    });
+    await readSessionEntryInWorker(f.scope);
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { pinnedAt: 30 } },
+      { skipMaintenance: true },
+    );
+    const result = await patchSessionEntryCore(
+      f.scope,
+      (entry) => {
+        // Retained facts keep owner before new metadata; SQL hydration appends it last.
+        const keys = Object.keys(entry);
+        expect(keys.indexOf("owner")).toBeLessThan(keys.indexOf("pinnedAt"));
+        return { label: "prepared with the same owner" };
+      },
+      { skipMaintenance: true, workerGuard: {} },
+    );
+    expect(result).toMatchObject({ label: "prepared with the same owner", pinnedAt: 30, owner });
+    expect(f.read()).toEqual(result);
+
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      assignSessionOwner(f.scope, {
+        owner: { type: "human", id: "replacement-owner" },
+        assignedBy: { type: "system", id: "synthetic-system" },
+        assignedAt: 40,
+      });
+    };
+    await expect(
+      patchSessionEntryCore(f.scope, () => ({ label: "stale owner patch" }), {
+        skipMaintenance: true,
+        workerGuard: {},
+      }),
+    ).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    expect(f.read()).toMatchObject({
+      label: "prepared with the same owner",
+      owner: { actor: { type: "human", id: "replacement-owner" }, assignedAt: 40 },
+    });
+  });
+});
 
 it("keeps resident SQL metadata out of callback patch preparation and commit bytes", async () => {
   await withActor(async (f) => {
