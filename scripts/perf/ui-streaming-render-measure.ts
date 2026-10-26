@@ -1,9 +1,10 @@
 /**
  * Warm production-renderer streaming proof (synthetic Gateway WebSocket fixture).
  * node --import ./scripts/tsx.mjs scripts/perf/ui-streaming-render-measure.ts \
- *   --bundle-dir dist/control-ui --output .local/stream-proof --mode thinking
+ *   --bundle-dir dist/control-ui --output .local/stream-proof --mode text
  * Use --trace for attribution, --allocations in a separate pass, and uninstrumented
  * AB/BA runs for timings. This measures browser work, not live Gateway throughput.
+ * Thinking mode measures a separate renderer path, not run-retention work.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -24,10 +25,10 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     output: { type: "string", default: ".local/ui-streaming-render" },
-    mode: { type: "string", default: "thinking" },
+    mode: { type: "string", default: "text" },
     deltas: { type: "string", default: "300" },
     sessions: { type: "string", default: "6" },
-    "retained-runs": { type: "string", default: "180" },
+    "retained-runs": { type: "string", default: "199" },
     trace: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
   },
