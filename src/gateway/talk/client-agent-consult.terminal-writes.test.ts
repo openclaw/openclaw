@@ -6,7 +6,6 @@ import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js"
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as terminal from "../../infra/agent-run-terminal-writes.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -88,7 +87,6 @@ it.each([false, true])("drains writes; abort revokes authority (%s)", async (abo
   const controller = new AbortController();
   const runner = createConsultRunner({
     config,
-    context: { logGateway: createSubsystemLogger("test/talk-terminal-writes") },
     sessionTarget: await prepareTalkSessionTarget(config, `agent:main:talk-terminal-${abort}`),
   });
   const settled = vi.fn();

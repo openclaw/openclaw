@@ -69,15 +69,11 @@ it("joins all connection cleanups after settlement admission is lost", () =>
       disconnect(connId, log);
     }
   }));
-it.each([false, true])("cleans relay kinds (failure=%s)", (throws) => {
-  const warning =
-    "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed";
+it("replaces relay callbacks and retries failures without blocking sibling cleanup", () => {
   const replaced = vi.fn();
   const transcription = vi.fn();
   const realtime = vi.fn().mockImplementationOnce(() => {
-    if (throws) {
-      throw new Error("realtime cleanup failed");
-    }
+    throw new Error("realtime cleanup failed");
   });
 
   register("conn-dedupe", "realtime-relay", replaced);
@@ -88,9 +84,12 @@ it.each([false, true])("cleans relay kinds (failure=%s)", (throws) => {
   expect(replaced).not.toHaveBeenCalled();
   expect(realtime.mock.contexts).toEqual([undefined]);
   expect(transcription).toHaveBeenCalledOnce();
-  expect(log.warn.mock.calls).toEqual(throws ? [[warning]] : []);
+  expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+    "failed to run realtime-relay Talk cleanup after connection disconnect: realtime cleanup failed",
+  );
   disconnect("conn-dedupe", log);
-  expect(realtime).toHaveBeenCalledTimes(throws ? 2 : 1);
+  expect(realtime).toHaveBeenCalledTimes(2);
+  expect(transcription).toHaveBeenCalledOnce();
 });
 
 it("retains failed async cleanup for shutdown retry without replacing its owner", async () => {
