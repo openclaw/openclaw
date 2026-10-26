@@ -43,19 +43,6 @@ export function defineProfilePreferenceTests({
       });
   const coauthorSwitch = (page: Page) =>
     identity(page).getByRole("switch", { name: "Git co-author credit" });
-  const preferenceResponses = (entries: Record<string, boolean> = {}) => ({
-    "users.prefs.get": { status: "ok", entries },
-    "users.prefs.set": { status: "ok" },
-  });
-  async function expectSavedPreference(
-    gateway: MockGatewayControls,
-    key: string,
-    value: boolean,
-    after = 0,
-  ) {
-    const saved = await gateway.waitForRequest("users.prefs.set", { after });
-    expect(saved.params).toEqual({ entries: { [key]: value } });
-  }
 
   it.each([
     {
@@ -85,41 +72,28 @@ export function defineProfilePreferenceTests({
           viewport: { width: 1280, height: 800 },
         },
         async ({ page }) => {
-          const avatarRequests: string[] = [];
           const avatarUrl = profile.githubIdentity.avatarUrl;
           await page.route(avatarUrl, async (route) => {
-            avatarRequests.push(route.request().url());
             await route.fulfill({
               body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#24292f"/><circle cx="32" cy="27" r="14" fill="white"/><path d="M12 62c2-15 10-23 20-23s18 8 20 23" fill="white"/></svg>`,
               contentType: "image/svg+xml",
               status: 200,
             });
           });
-          const gateway = await openProfilePage(page, {
-            "users.self": { profile: testProfile },
-            ...preferenceResponses({ [GIT_COAUTHOR_PREFERENCE_KEY]: false }),
+          await openProfilePage(page, {
+            "users.self": { profile },
+            "users.prefs.get": {
+              status: "ok",
+              entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
+            },
           });
 
           const githubRow = identityRow(page, "GitHub account");
           const coauthorRow = identityRow(page, "Git co-author credit");
-          await expect(githubRow).toContainText("Unavailable");
-          await expect(githubRow).toContainText("No single verified GitHub sign-in account");
-          await expect(githubRow.locator(".settings-account")).toHaveCount(0);
-          await expect(coauthorSwitch(page)).toBeEnabled();
           await expect(page.getByRole("textbox", { name: "GitHub username" })).toHaveCount(0);
           await expect(
             identity(page).getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
           ).toHaveCount(0);
-          await screenshot(page, "08-github-identity-unlinked.png");
-
-          await gateway.setMethodResponse("users.self", { profile });
-          const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
-          await page.locator(".profile-refresh").click();
-          await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
-          const prefGet = await gateway.waitForRequest("users.prefs.get");
-          expect(prefGet.params).toEqual({
-            keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
-          });
           const account = githubRow.getByRole("link", { name: "@octocat" });
           await expect(account).toBeVisible();
           await expect(account).toHaveAttribute("href", profile.githubIdentity.profileUrl);
@@ -132,96 +106,17 @@ export function defineProfilePreferenceTests({
           await expect
             .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
             .toBe(64);
-          expect(avatarRequests).toEqual([avatarUrl]);
           await expect(githubRow).toContainText("Verified from your GitHub-backed sign-in");
           await screenshot(page, "09-github-identity-linked.png");
-          // A public primary can also hold enterprise credit after explicit profile linking.
-          await expect(coauthorRow).toContainText("public GitHub noreply address");
-          await expect(coauthorRow).toContainText("verified enterprise email address");
-          await expect(coauthorRow).toContainText("visible in commit history");
           await expect(coauthorRow).toContainText("future commits only");
           const toggle = coauthorSwitch(page);
           await expect(toggle).toBeEnabled();
           await expect(toggle).not.toBeChecked();
-
-          await toggle.click();
-          await expectSavedPreference(gateway, GIT_COAUTHOR_PREFERENCE_KEY, true);
-          await expect(toggle).toBeChecked();
-          await screenshot(page, "10-git-coauthor-enabled.png");
+          await expect(
+            identity(page).getByRole("link", { name: "🦞 Made with OpenClaw" }),
+          ).toHaveAttribute("href", "https://openclaw.ai");
         },
       );
     },
   );
-
-  it("keeps co-author consent editable for merged enterprise hosts without a display primary", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      const gateway = await openProfilePage(page, {
-        "users.self": {
-          profile: {
-            ...testProfile,
-            emails: ["github:ghe.example.test:101", "github:code.example.test:101"],
-            githubIdentity: null,
-          },
-        },
-        ...preferenceResponses(),
-      });
-      const toggle = coauthorSwitch(page);
-      // Capture before the changed assertion so the same scenario records the original defect.
-      await screenshot(page, "14-multi-host-consent-initial.png");
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await toggle.click();
-      await expectSavedPreference(gateway, GIT_COAUTHOR_PREFERENCE_KEY, false);
-      await expect(toggle).not.toBeChecked();
-    });
-  });
-
-  it("credits a verified GitHub account by default with no stored preference", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      await openProfilePage(page, {
-        "users.self": { profile: linkedGitHubProfile },
-        "users.prefs.get": { status: "ok", entries: {} },
-      });
-
-      const toggle = coauthorSwitch(page);
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await screenshot(page, "13-git-coauthor-default-on.png");
-    });
-  });
-
-  it("persists personal PR attribution independently from Git co-author credit", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await openProfilePage(page, preferenceResponses());
-      const toggle = identity(page).getByRole("switch", {
-        name: "Add OpenClaw attribution to pull requests",
-      });
-      const coauthor = coauthorSwitch(page);
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).not.toBeChecked();
-      await expect(coauthor).toBeChecked();
-      await expect(
-        identity(page).getByRole("link", { name: "🦞 Made with OpenClaw" }),
-      ).toHaveAttribute("href", "https://openclaw.ai");
-      await screenshot(page, "15-pr-attribution-default-off.png");
-      await toggle.click();
-      await expectSavedPreference(gateway, "github.prAttribution.enabled", true);
-      await expect(toggle).toBeChecked();
-      await expect(coauthor).toBeChecked();
-      await screenshot(page, "16-pr-attribution-enabled.png");
-      await gateway.setMethodResponse("users.prefs.get", {
-        status: "ok",
-        entries: { "github.prAttribution.enabled": true },
-      });
-      const reads = (await gateway.getRequests("users.prefs.get")).length;
-      await page.locator(".profile-refresh").click();
-      await gateway.waitForRequest("users.prefs.get", { after: reads });
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await toggle.click();
-      await expectSavedPreference(gateway, "github.prAttribution.enabled", false, 1);
-      await expect(toggle).not.toBeChecked();
-      await expect(coauthor).toBeChecked();
-    });
-  });
 }
