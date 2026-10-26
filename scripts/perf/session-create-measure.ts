@@ -328,7 +328,6 @@ try {
   }
   const results = [];
   for (const kind of kinds) {
-    const rows = [];
     const run = async (index: number) => {
       const key = `agent:main:dashboard:create-measure-${invocationId}-${kind}-${index}`;
       const beforePhase = phases.length;
@@ -377,6 +376,7 @@ try {
       }
       return { key, sessionId: payload.sessionId, wallMs, phase, entry: payload.entry };
     };
+    const rows: Awaited<ReturnType<typeof run>>[] = [];
     for (let index = -3; index < 0; index++) {
       await run(index);
     }
