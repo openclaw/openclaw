@@ -5,7 +5,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -269,37 +268,60 @@ it("retains the shared pool after a resource drain fails until canonical retry",
   }
 });
 
-it("preserves task and cleanup errors across explicit retirement retries", async () => {
-  const { pathname, options } = source();
-  const task = queueTask();
-  const original = new Error("original worker task failed");
-  const retirement = new Error("first worker stop failed");
-  const retryFailure = new Error("second worker stop failed");
-  task.close.mockRejectedValueOnce(retirement);
-  task.close.mockRejectedValueOnce(retryFailure);
-  const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
-  const assertion = expect(result).rejects.toMatchObject({
-    cause: original,
-    errors: [original, retirement],
-  });
-  await task.captured;
-  task.result.reject(original);
-  await assertion;
-  expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
-  expect(mock.closePool).not.toHaveBeenCalled();
+it.each(["task", "source"] as const)(
+  "preserves %s and cleanup errors across retirement retries",
+  async (origin) => {
+    const { pathname, options } = source();
+    const task = queueTask();
+    const original = new Error("original worker task failed");
+    const retirement = new Error("first worker stop failed");
+    const retryFailure = new Error("second worker stop failed");
+    task.close.mockRejectedValueOnce(retirement);
+    task.close.mockRejectedValueOnce(retryFailure);
+    const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    const outcome = result.catch((error: unknown) => error);
+    await task.captured;
+    if (origin === "task") {
+      task.result.reject(original);
+    } else {
+      task.result.resolve({
+        ok: false,
+        sourceAdmitted: true,
+        message: original.message,
+        error: encodeOpenClawStateWorkerError(original, { includeOrdinary: true }),
+        nativeCleanupFailure: { error: undefined },
+      });
+    }
+    const failure = await outcome;
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw new Error("Read cleanup did not retain its error graph");
+    }
+    expect(failure.cause).toBe(failure.errors[0]);
+    expect(failure.errors).toEqual([
+      expect.objectContaining({ message: original.message }),
+      retirement,
+    ]);
+    expect(failure.errors[1]).toBe(retirement);
+    if (origin === "task") {
+      expect(failure.cause).toBe(original);
+    }
+    expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
+    expect(mock.closePool).not.toHaveBeenCalled();
 
-  // Result and native settlement are separate: the initial close reports the
-  // cached first stop failure; only a later lifecycle close retries that stop.
-  await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
-  expect(task.close).toHaveBeenCalledTimes(2);
-  await closeOpenClawStateDatabaseByPathAsync(pathname);
-  expect(task.close).toHaveBeenCalledTimes(3);
-  await closeOpenClawStateDatabaseByPathAsync(pathname);
-  expect(task.close).toHaveBeenCalledTimes(3);
-  expect(mock.closePool).not.toHaveBeenCalled();
-  expect(mock.runTask).toHaveBeenCalledOnce();
-  await expect(result).rejects.toMatchObject({ cause: original, errors: [original, retirement] });
-});
+    // Result and native settlement are separate: the initial close reports the
+    // cached first stop failure; only a later lifecycle close retries that stop.
+    await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
+    expect(task.close).toHaveBeenCalledTimes(2);
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(task.close).toHaveBeenCalledTimes(3);
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(task.close).toHaveBeenCalledTimes(3);
+    expect(mock.closePool).not.toHaveBeenCalled();
+    expect(mock.runTask).toHaveBeenCalledOnce();
+    await expect(result).rejects.toBe(failure);
+  },
+);
 
 it("reads externally created state after an absent read without allocating a worker first", async () => {
   const root = tempDirs.make("openclaw-read-first-creation-");
@@ -373,44 +395,6 @@ it("retires a successful read without hydrating an error and retains custody unt
   expect(task.close).toHaveBeenCalledOnce();
 });
 
-it("preserves source and worker stop failures when native cleanup fails", async () => {
-  const { pathname, options } = source();
-  const task = queueTask();
-  const primary = new Error("source query failed");
-  const stop = new Error("worker native exit not confirmed");
-  task.close.mockRejectedValueOnce(stop);
-  const result = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
-  const outcome = result.catch((error: unknown) => error);
-  await task.captured;
-  const reply: OpenClawStateReadReply = {
-    ok: false,
-    sourceAdmitted: true,
-    message: primary.message,
-    error: encodeOpenClawStateWorkerError(primary, { includeOrdinary: true }),
-  };
-  task.result.resolve({
-    ...reply,
-    nativeCleanupFailure: {
-      error: undefined,
-    },
-  });
-  const failure = await outcome;
-  expect(failure).toBeInstanceOf(AggregateError);
-  if (!(failure instanceof AggregateError)) {
-    throw new Error("Read cleanup did not retain its error graph");
-  }
-  expect(failure.cause).toBe(failure.errors[0]);
-  expect(failure.errors).toHaveLength(2);
-  expect(failure.cause).toMatchObject({ message: primary.message });
-  expect(failure.errors[1]).toBe(stop);
-  expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
-  expect(mock.closePool).not.toHaveBeenCalled();
-
-  await closeOpenClawStateDatabaseByPathAsync(pathname);
-  expect(task.close).toHaveBeenCalledTimes(2);
-  await expect(result).rejects.toBe(failure);
-});
-
 it("closes one read path without aborting its sibling", async () => {
   const firstSource = source("first.sqlite");
   const siblingSource = source("sibling.sqlite");
@@ -449,6 +433,8 @@ function captureCase<T extends OpenClawStateReadCommand>(
   options: {
     prepared?: boolean;
     queued?: () => void;
+    checkFreshAdmission?: boolean;
+    mutateWhenQueued?: boolean;
   } = {},
 ) {
   return { command, reply, bytes, mutate: () => mutate(command), ...options };
@@ -456,6 +442,17 @@ function captureCase<T extends OpenClawStateReadCommand>(
 
 const selector = "租户🦞".repeat(512);
 const selectorBytes = Buffer.byteLength(selector);
+function observationInput(value: string) {
+  return {
+    session: { agentId: value, sessionKey: value, sessionId: value, lifecycleRevision: value },
+    selector: { requestId: value },
+    entry: {
+      repositoryWorkspaceId: value,
+      lifecycleRevision: value,
+      worktree: { id: value, branch: value, repoRoot: value },
+    },
+  };
+}
 const reconciliationInput = {
   runIds: ["更新🦞".repeat(512), "修复🦞".repeat(512)],
   explicit: true,
@@ -471,24 +468,36 @@ const inspectionInput = {
   decisionLimit: 0,
   decisionCursor: "游标🦞",
 };
+const metadataEntries = [
+  {
+    keys: ["principal-根🦞", "second-principal"],
+    entry: { lifecycleRevision: "revision-根🦞", sessionId: "session-根🦞", sessionStartedAt: 0 },
+  },
+  { keys: ["entry-without-optionals"] },
+];
 const captures = [
+  captureCase(
+    { type: "acpSessions.metadata", entries: metadataEntries },
+    { ok: true, type: "acpSessions.metadata", sourceAdmitted: true, rows: [null, null] },
+    Buffer.byteLength(
+      "principal-根🦞second-principalrevision-根🦞session-根🦞entry-without-optionals",
+    ) + 8,
+    ({ entries }) => {
+      entries[0]!.keys[0] = "changed-principal";
+      entries[0]!.keys.push("added-after-admission");
+      Object.assign(entries[0]!.entry!, {
+        lifecycleRevision: "changed-revision",
+        sessionId: "changed-session",
+        sessionStartedAt: 99,
+      });
+      entries.push({ keys: ["added-entry-after-admission"] });
+    },
+    { prepared: true, checkFreshAdmission: true, mutateWhenQueued: true },
+  ),
   captureCase(
     {
       type: "githubPublications.sharedObservation",
-      input: {
-        session: {
-          agentId: selector,
-          sessionKey: selector,
-          sessionId: selector,
-          lifecycleRevision: selector,
-        },
-        selector: { requestId: selector },
-        entry: {
-          repositoryWorkspaceId: selector,
-          lifecycleRevision: selector,
-          worktree: { id: selector, branch: selector, repoRoot: selector },
-        },
-      },
+      input: observationInput(selector),
     },
     {
       ok: true,
@@ -498,20 +507,12 @@ const captures = [
     },
     selectorBytes * 10,
     ({ input }) => {
-      Object.assign(input.session, {
-        agentId: "changed",
-        sessionKey: "changed",
-        sessionId: "changed",
-        lifecycleRevision: "changed",
-      });
+      const changed = observationInput("changed");
+      Object.assign(input.session, changed.session);
       input.selector.requestId = "changed";
       input.entry.repositoryWorkspaceId = "changed";
       input.entry.lifecycleRevision = "changed";
-      Object.assign(input.entry.worktree, {
-        id: "changed",
-        branch: "changed",
-        repoRoot: "changed",
-      });
+      Object.assign(input.entry.worktree, changed.entry.worktree);
     },
   ),
   captureCase(
@@ -559,15 +560,22 @@ it.each(captures)(
     const expected = structuredClone(fixture.command);
     const originalRoot = options.env.OPENCLAW_STATE_DIR;
     const context = captureOpenClawStateWorkerContext(options);
-    const location = { context, location: pathname, checkFreshAdmission: false };
-    const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
+    const location = {
+      context,
+      location: pathname,
+      checkFreshAdmission: fixture.checkFreshAdmission ?? false,
+    };
+    const authority = {
+      signal: new AbortController().signal,
+      assertCurrent: fixture.checkFreshAdmission ? context.admission.assertCurrent : () => {},
+    };
     const transport = fixture.prepared
       ? captureOpenClawStateReadSource().createTransport(fixture.command)
       : undefined;
     const baselineTransport = fixture.prepared
       ? captureOpenClawStateReadSource().createTransport({ type: "backup.runs" })
       : undefined;
-    if (transport) {
+    if (transport && !fixture.mutateWhenQueued) {
       fixture.mutate();
     }
     const dispatch = createDeferredCore();
@@ -589,7 +597,7 @@ it.each(captures)(
           }),
         ]),
       ]);
-      if (!transport) {
+      if (!transport || fixture.mutateWhenQueued) {
         fixture.mutate();
       }
       fixture.queued?.();
@@ -619,83 +627,3 @@ it.each(captures)(
     }
   },
 );
-
-it("captures and charges the full acpSessions.metadata batch before queued dispatch", async () => {
-  const { options } = source();
-  const context = captureOpenClawStateWorkerContext(options);
-  const keys = ["principal-根🦞", "second-principal"];
-  const entry = {
-    lifecycleRevision: "revision-根🦞",
-    sessionId: "session-根🦞",
-    sessionStartedAt: 0,
-  };
-  const metadata = { keys, entry };
-  const entries: AcpSessionReadInput[] = [metadata, { keys: ["entry-without-optionals"] }];
-  const expectedEntries: AcpSessionReadInput[] = [
-    { ...metadata, keys: [...keys], entry: { ...entry } },
-    { keys: ["entry-without-optionals"] },
-  ];
-  const dispatch = createDeferredCore();
-  const baselineTask = queueTask(dispatch.promise);
-  const task = queueTask(dispatch.promise);
-  const baseline = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
-  const transport = captureOpenClawStateReadSource().createTransport({
-    type: "acpSessions.metadata",
-    entries,
-  });
-  const controller = new AbortController();
-  const authority = {
-    signal: controller.signal,
-    assertCurrent: context.admission.assertCurrent,
-  };
-  const location = { context, location: options.path, checkFreshAdmission: true };
-  const baselineRead = baseline.startRead(location, authority);
-  const read = transport.startRead(location, authority);
-  try {
-    const [baselineOptions, batchOptions] = await Promise.all([
-      baselineTask.submitted,
-      task.submitted,
-    ]);
-    const additionalBytes =
-      Buffer.byteLength("acpSessions.metadata") -
-      Buffer.byteLength("backup.runs") +
-      expectedEntries.reduce(
-        (bytes, input) =>
-          bytes +
-          input.keys.reduce((total, sessionKey) => total + Buffer.byteLength(sessionKey), 0) +
-          Buffer.byteLength(input.entry?.lifecycleRevision ?? "") +
-          Buffer.byteLength(input.entry?.sessionId ?? "") +
-          (input.entry?.sessionStartedAt === undefined ? 0 : 8),
-        0,
-      );
-    expect(batchOptions.inputBytes).toBeGreaterThanOrEqual(
-      Number(baselineOptions.inputBytes) + additionalBytes,
-    );
-    keys[0] = "changed-principal";
-    keys.push("added-after-admission");
-    entry.lifecycleRevision = "changed-revision";
-    entry.sessionId = "changed-session";
-    entry.sessionStartedAt = 99;
-    entries.push({ keys: ["added-entry-after-admission"] });
-    dispatch.resolve();
-    await baselineTask.captured;
-    baselineTask.result.resolve(emptyReply);
-    expect((await task.captured).command).toEqual({
-      type: "acpSessions.metadata",
-      entries: expectedEntries,
-    });
-    task.result.resolve({
-      ok: true,
-      type: "acpSessions.metadata",
-      sourceAdmitted: true,
-      rows: expectedEntries.map(() => null),
-    });
-    await Promise.all([baselineRead, read]);
-  } finally {
-    dispatch.resolve();
-    baselineTask.result.resolve(emptyReply);
-    task.result.resolve(emptyReply);
-    await Promise.allSettled([baselineRead, read]);
-    await Promise.all([baseline.startClose(), transport.startClose()]);
-  }
-});
