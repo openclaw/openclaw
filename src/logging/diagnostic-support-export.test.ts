@@ -714,19 +714,22 @@ describe("diagnostic support export", () => {
     expect(combined).toContain("Attach this zip to the bug report");
   });
 
-  it("preserves a quoted output directory name instead of trimming its whitespace", async () => {
-    const quotedDir = path.join(tempDir, " quoted dir ");
-    fs.mkdirSync(quotedDir);
-    const result = await writeDiagnosticSupportExport({ outputPath: quotedDir });
+  // Windows normalizes trailing whitespace in both directory and file names.
+  it.skipIf(process.platform === "win32")(
+    "preserves a quoted output directory name instead of trimming its whitespace",
+    async () => {
+      const quotedDir = path.join(tempDir, " quoted dir ");
+      fs.mkdirSync(quotedDir);
+      const result = await writeDiagnosticSupportExport({ outputPath: quotedDir });
 
-    // beforeEach freezes the clock at 2026-04-22T12:00:01.000Z.
-    const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
-    expect(result.path).toBe(path.join(quotedDir, expectedName));
-    expect(fs.existsSync(path.join(quotedDir, expectedName))).toBe(true);
-    expect(fs.existsSync(path.join(tempDir, " quoted dir"))).toBe(false);
-  });
+      // beforeEach freezes the clock at 2026-04-22T12:00:01.000Z.
+      const expectedName = `openclaw-diagnostics-2026-04-22T12-00-01-000Z-${process.pid}.zip`;
+      expect(result.path).toBe(path.join(quotedDir, expectedName));
+      expect(fs.existsSync(path.join(quotedDir, expectedName))).toBe(true);
+      expect(fs.existsSync(path.join(tempDir, " quoted dir"))).toBe(false);
+    },
+  );
 
-  // Win32 cannot represent a filename with trailing whitespace, so this is POSIX-only.
   it.skipIf(process.platform === "win32")(
     "preserves leading and trailing whitespace in an explicit output file path",
     async () => {
