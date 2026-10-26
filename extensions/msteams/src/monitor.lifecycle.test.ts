@@ -103,36 +103,15 @@ function teams(team: string, channel: string) {
   return { [team]: { channels: { [channel]: {} } } };
 }
 
-describe("monitorMSTeamsProvider lifecycle", () => {
-  it.each(["default", "support"])(
-    "keeps %s routing and durable ingress identity isolated",
-    async (accountId) => {
-      const cfg = createConfig();
-      updateMSTeamsConfig(cfg, {
-        accounts: {
-          support: {
-            appId: "support-app",
-            appPassword: "support-secret",
-            webhook: { path: "/teams/support" },
-          },
-        },
-      });
-      await startMonitor(cfg, { accountId });
-      expect(routeState.routes).toHaveLength(1);
-      expect(routeState.routes[0]).toMatchObject({
-        accountId,
-        path: accountId === "default" ? "/api/messages" : "/teams/support",
-      });
-      expect(getMSTeamsIngressMockState().instances.at(-1)?.options.accountId).toBe(
-        accountId === "default" ? "app-id" : "support-app",
-      );
-      expect(createMSTeamsActivityHandler.mock.calls[0]?.[0].accountId).toBe(accountId);
-    },
-  );
+function configured(patch: Parameters<typeof updateMSTeamsConfig>[1]) {
+  const cfg = createConfig();
+  updateMSTeamsConfig(cfg, patch);
+  return cfg;
+}
 
+describe("monitorMSTeamsProvider lifecycle", () => {
   it("does not reopen a retired default bot inbox through a reused logical account id", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       appId: undefined,
       appPassword: undefined,
       accounts: {
@@ -145,10 +124,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("keeps default and two named routes independent through shutdown", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       accounts: {
-        support: { appId: "support-app", appPassword: "support-secret" },
+        support: {
+          appId: "support-app",
+          appPassword: "support-secret",
+          webhook: { path: "/teams/support" },
+        },
         sales: { appId: "sales-app", appPassword: "sales-secret" },
       },
     });
@@ -163,10 +145,18 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       }
       expect(routeState.routes.map(({ accountId, path }) => ({ accountId, path }))).toEqual([
         { accountId: "default", path: "/api/messages" },
-        { accountId: "support", path: "/api/messages/support" },
+        { accountId: "support", path: "/teams/support" },
         { accountId: "sales", path: "/api/messages/sales" },
       ]);
       const ingresses = getMSTeamsIngressMockState().instances;
+      expect(ingresses.map(({ options }) => options.accountId)).toEqual([
+        "app-id",
+        "support-app",
+        "sales-app",
+      ]);
+      expect(createMSTeamsActivityHandler.mock.calls.map(([deps]) => deps.accountId)).toEqual(
+        accountIds,
+      );
       controllers[1]!.abort();
       await tasks[1];
       expect(routeState.unregister).toHaveBeenCalledTimes(1);
@@ -181,8 +171,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("rejects sibling webhook aliases before creating a listener", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       accounts: {
         support: {
           appId: "support-app",
@@ -198,28 +187,15 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(routeState.routes).toHaveLength(0);
   });
 
-  it("prefers the Teams media limit over the agent default", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, { mediaMaxMb: 12 });
+  it.each([12, undefined])("resolves media limits with Teams override=%s", async (mediaMaxMb) => {
+    const cfg = configured({ mediaMaxMb });
     cfg.agents = { defaults: { mediaMaxMb: 3 } };
-
     await startMonitor(cfg);
-
-    expect(registeredDeps().mediaMaxBytes).toBe(12 * 1024 * 1024);
-  });
-
-  it("falls back to the agent media limit when Teams has no override", async () => {
-    const cfg = createConfig();
-    cfg.agents = { defaults: { mediaMaxMb: 3 } };
-
-    await startMonitor(cfg);
-
-    expect(registeredDeps().mediaMaxBytes).toBe(3 * 1024 * 1024);
+    expect(registeredDeps().mediaMaxBytes).toBe((mediaMaxMb ?? 3) * 1024 * 1024);
   });
 
   it("does not persist SDK SSO signin events when Teams sender policy denies them", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       sso: { enabled: true, connectionName: "graph" },
     });
     isSigninInvokeAuthorized.mockResolvedValueOnce(false);
@@ -395,8 +371,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       allowFrom: ["19:group@thread.tacv2", "Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
       groupAllowFrom: [
         "19:MiXeD-group@thread.tacv2;messageid=1740123456789",
@@ -437,8 +412,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
       .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
 
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       dangerouslyAllowNameMatching: true,
       allowFrom: ["19:group@thread.tacv2", "Alice"],
       groupAllowFrom: [
@@ -479,8 +453,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       new Error("Graph unavailable"),
     );
     const runtime = createRuntime();
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       dangerouslyAllowNameMatching: true,
       allowFrom: ["Alice", "accessGroup:operators", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
       teams: {
@@ -515,8 +488,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockResolvedValueOnce([
       { input: "Alice", resolved: true, id: "alice-aad" },
     ]);
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, {
+    const cfg = configured({
       dangerouslyAllowNameMatching: true,
       allowFrom: ["19:fallback-group@thread.v2;messageid=1740123456789", "Alice"],
     });
@@ -783,8 +755,7 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     { path: "", endpoint: "/api/messages" },
     { path: "/teams/events", endpoint: "/teams/events" },
   ])("routes /api/messages with configured path $path", async ({ path, endpoint }) => {
-    const cfg = createConfig();
-    updateMSTeamsConfig(cfg, { webhook: { path } });
+    const cfg = configured({ webhook: { path } });
     await withMonitor(async () => {
       expect(routeState.routes[0]?.path).toBe(endpoint);
       expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
