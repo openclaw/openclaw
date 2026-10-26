@@ -25,6 +25,8 @@ it("searches and reads installed skills from a worker RPC outside the launching 
   const input = worker.turn("worker-skills");
   const body = "# Plain text\nWrite plain text files with the write tool.\n";
   const skillPath = path.join(worker.root, "plain-text", "SKILL.md");
+  await mkdir(path.dirname(skillPath), { recursive: true });
+  await writeFile(skillPath, body);
   const tunnel = worker.createWorkerTurnTunnel({
     reconcileWorkspace: worker.reconcileUnchangedLocalWorkspace,
     launchTurn: async ({ turnClaim }) => {

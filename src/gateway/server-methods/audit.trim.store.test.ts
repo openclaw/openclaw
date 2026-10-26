@@ -100,14 +100,18 @@ describe("audit methods against a real audit store", () => {
         runId: "run-trim-1",
       };
       const store = { ...database, database: openOpenClawStateDatabase(database) };
-      const [, finished] = (["started", "succeeded"] as const).map((status, index) =>
+      const [, finished] = (
+        [
+          { action: "agent.run.started", status: "started" },
+          { action: "agent.run.finished", status: "succeeded" },
+        ] as const
+      ).map((phase, index) =>
         recordAuditEventInDatabase(
           {
             ...input,
             sourceId: `audit-trim-${index}`,
             sourceSequence: index + 1,
-            action: index === 0 ? "agent.run.started" : "agent.run.finished",
-            status,
+            ...phase,
           },
           store,
         ),

@@ -53,14 +53,20 @@ it.each([false, true])(
       const fixture = await reserveTestPortListener({
         offsets: [0],
         createListener: () =>
-          createServer(async (request, response) => {
-            requests.push({ path: request.url, body: await text(request) });
-            respondJson(
-              response,
-              fail
-                ? { ok: false, description: "fixture provider unavailable" }
-                : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
-            );
+          createServer((request, response) => {
+            void text(request)
+              .then((body) => {
+                requests.push({ path: request.url, body });
+                respondJson(
+                  response,
+                  fail
+                    ? { ok: false, description: "fixture provider unavailable" }
+                    : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
+                );
+              })
+              .catch((error: unknown) => {
+                response.destroy(error instanceof Error ? error : new Error(String(error)));
+              });
           }),
       });
       try {

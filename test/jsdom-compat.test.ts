@@ -105,7 +105,13 @@ describe("jsdom native API boundary", () => {
     const reader = new FileReader();
     const finished = new Promise<string | ArrayBuffer | null>((resolve, reject) => {
       reader.addEventListener("load", () => resolve(reader.result), { once: true });
-      reader.addEventListener("error", () => reject(reader.error), { once: true });
+      reader.addEventListener(
+        "error",
+        () => reject(reader.error ?? new Error("FileReader failed")),
+        {
+          once: true,
+        },
+      );
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));
     expect(await finished).toBe("data:text/plain;base64,cmVhZGVyIGJ5dGVz");

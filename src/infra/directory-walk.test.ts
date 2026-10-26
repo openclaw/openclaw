@@ -113,7 +113,7 @@ describe.each([
       ["absent", "ENOENT"],
       ["file", "ENOTDIR"],
       ["link", "ERR_DIRECTORY_WALK_ROOT_SYMLINK"],
-    ]) {
+    ] as const) {
       await expect(run(path.join(root, entry))).rejects.toMatchObject({ code });
     }
   });

@@ -1707,6 +1707,7 @@
 ["src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts","../../harness/runtime-plugin.js","1129fb0a8ddf7620abb116b14c84c982022289e4c9d72ebf123d2ac2013ae43d",1]
 ["src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts","../../harness/selection.js","a662e9b756b6573b4bab2eb5565c85b300385bd5d8fbbdcf1d88817b7e257f80",1]
 ["src/agents/embedded-agent-runner/run/settled-turn-finalization.silence.test.ts","./backend.js","87534d7412c31c39d092a1711a87c400c2f748a28343caa85e7a58aa6e9a9913",1]
+["src/agents/embedded-agent-runner/run/settled-turn-finalization.stale-error.test.ts","./backend.js","87534d7412c31c39d092a1711a87c400c2f748a28343caa85e7a58aa6e9a9913",1]
 ["src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts","./backend.js","83def1360f79b6e448494d435d75e904017bc6229edbe50ef3c8cbff3c0fc163",1]
 ["src/agents/embedded-agent-runner/run/terminal-preparation.test.ts","./payloads.js","fed80077d03be2bf4eb3eedefb4d05289ebaa4dafd1a1fcb51d091d8b0528830",1]
 ["src/agents/embedded-agent-runner/run/terminal-preparation.yield.test.ts","./auth-profile-success.js","67aeef995ef76519134b0987618d6e5f39dbea45725059c01a9adbe219a50f24",1]

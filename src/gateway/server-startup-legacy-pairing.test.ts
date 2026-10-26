@@ -1,11 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import { seedNodeDevice } from "../infra/device-pairing-node.test-support.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { runGatewayPostReadyStartupMaintenance } from "./server-startup-plugins.js";
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
@@ -16,7 +24,7 @@ vi.mock("./server-startup-session-migration.js", () => ({
   runGatewaySessionStartupMaintenance: async () => {},
 }));
 
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+const temporary = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
 let sources: Map<string, string>;
 const cfg = { plugins: { enabled: false } };
@@ -45,8 +53,12 @@ async function expectSources(suffix = "") {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  state = await createOpenClawTestState({ label: "doctor-pairing-boundary" });
-  stateDir = state.stateDir;
+  const home = temporary.make("openclaw-doctor-pairing-boundary-");
+  stateDir = path.join(home, ".openclaw");
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("OPENCLAW_HOME", home);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   const device = { publicKey: "pk", roles: ["node"], createdAtMs: 1, approvedAtMs: 1 };
   sources = new Map([
     ["devices/paired.json", JSON.stringify({ synthetic: device })],
@@ -56,24 +68,43 @@ beforeEach(async () => {
     ["nodes/pending.json", "{}"],
   ]);
   for (const [relative, bytes] of sources) {
-    await state.writeText(relative, bytes);
+    const file = path.join(stateDir, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, bytes);
   }
-  await state.writeConfig(cfg);
+  await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
 });
 
 afterEach(async () => {
-  try {
-    await state?.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-  }
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
-it("leaves legacy pairing files for Doctor and reports the repair", async () => {
+it.each([false, true])("keeps legacy files and desktop opt-outs (desktop: %s)", async (desktop) => {
+  if (desktop) {
+    const callerScopes = ["operator.pairing", "operator.admin"];
+    await seedNodeDevice(stateDir, "desktop-node");
+    const { request } = await requestNodePairing(
+      { nodeId: "desktop-node", platform: "darwin", commands: ["desktop.stream", "system.run"] },
+      stateDir,
+    );
+    await approveNodePairing(request.requestId, { callerScopes }, stateDir);
+  }
+  const retired = await migrateLegacyDesktopStreamOptOuts(cfg, stateDir);
   await startup();
-  await expectSources();
-  expect(await getPairedDevice("synthetic", stateDir)).toBeNull();
-  expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  if (desktop) {
+    expect((await getPairedDevice("desktop-node", stateDir))?.nodeSurface?.commands).toEqual([
+      "system.run",
+    ]);
+    expect(retired).toBe(1);
+  } else {
+    await expectSources();
+    expect(await getPairedDevice("synthetic", stateDir)).toBeNull();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  }
 });
 
 it("reports pairing inspection failure without treating it as absence", async () => {
@@ -92,20 +123,23 @@ it("reports pairing inspection failure without treating it as absence", async ()
   );
   await expectSources();
 });
-it("retries failed imports in device-before-node order without repeating completed changes", async () => {
-  await migrate(false);
-  await expectSources();
-  const devicePath = path.join(stateDir, "devices/paired.json");
-  await fs.writeFile(devicePath, "{invalid");
-  const failed = await migrate();
-  expect(failed.stepReceipts.find((receipt) => receipt.id === "pairing-stores")).toMatchObject({
-    outcome: "refused",
-  });
-  expect(await fs.readFile(devicePath, "utf8")).toBe("{invalid");
-  expect(await fs.readFile(path.join(stateDir, "nodes/paired.json"), "utf8")).toBe(
-    sources.get("nodes/paired.json"),
-  );
-  await fs.writeFile(devicePath, sources.get("devices/paired.json")!);
+it.each([false, true])("imports device approvals before node caps (retry: %s)", async (retry) => {
+  if (retry) {
+    const devicePath = path.join(stateDir, "devices/paired.json");
+    await fs.writeFile(devicePath, "{invalid");
+    const failed = await migrate();
+    expect(failed.stepReceipts.find((receipt) => receipt.id === "pairing-stores")).toMatchObject({
+      outcome: "refused",
+    });
+    expect(await fs.readFile(devicePath, "utf8")).toBe("{invalid");
+    expect(await fs.readFile(path.join(stateDir, "nodes/paired.json"), "utf8")).toBe(
+      sources.get("nodes/paired.json"),
+    );
+    await fs.writeFile(devicePath, sources.get("devices/paired.json")!);
+  } else {
+    await migrate(false);
+    await expectSources();
+  }
   const result = await migrate();
   expect(result.warnings).toEqual([]);
   expect(await getPairedDevice("synthetic", stateDir)).toMatchObject({
@@ -115,6 +149,8 @@ it("retries failed imports in device-before-node order without repeating complet
   });
   expect((await listDevicePairing(stateDir)).pending).toEqual([]);
   await expectSources(".migrated");
-  const repeated = await migrate();
-  expect(repeated.changes).toEqual([]);
+  if (!retry) {
+    const repeated = await migrate();
+    expect(repeated.changes).toEqual([]);
+  }
 });

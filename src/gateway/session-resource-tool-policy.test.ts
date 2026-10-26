@@ -4,15 +4,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionResourceToolPolicy } from "./session-resource-tool-policy.js";
 
-const { storageRead } = vi.hoisted(() => ({
+const { storageRead, runtimeOwnership } = vi.hoisted(() => ({
   storageRead: vi.fn(() => {
     throw new Error("Unexpected synchronous session storage read");
   }),
+  runtimeOwnership: vi.fn(),
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadExactSessionEntryReadOnly: storageRead,
   loadSessionEntryByIdReadOnly: storageRead,
   loadSessionEntryReadOnly: storageRead,
+}));
+vi.mock("../agents/harness/registry.js", () => ({
+  getRegisteredAgentHarness: () => ({
+    harness: { resolveSessionRuntimeOwnership: runtimeOwnership },
+  }),
 }));
 vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
   getGatewayPluginMetadataSnapshot: () => undefined,
@@ -54,7 +60,10 @@ function fixture(
   };
 }
 
-beforeEach(() => storageRead.mockClear());
+beforeEach(() => {
+  storageRead.mockClear();
+  runtimeOwnership.mockReset();
+});
 afterEach(() => expect(storageRead).not.toHaveBeenCalled());
 
 const denyBrowser = { deny: ["browser"] };
@@ -102,6 +111,7 @@ it.each<PolicyCase>([
     result: { sandboxRequired: true, sandboxed: true },
   },
   { entry: { sandbox: "required" } },
+  { entry: { agentHarnessId: "test-harness" }, result: unlocked },
 ])("enforces prepared resource policy %j", (options) => {
   const test = fixture(options);
   if (options.parent) {
@@ -113,6 +123,7 @@ it.each<PolicyCase>([
   if (options.result) {
     expect(test.resolve(options.tool)).toMatchObject(options.result);
   }
+  expect(runtimeOwnership).not.toHaveBeenCalled();
 });
 
 it("requires a live native owner for locked-session MCP App policy", () => {
@@ -120,10 +131,12 @@ it("requires a live native owner for locked-session MCP App policy", () => {
   expect(() => test.resolve()).toThrow("locked model selection");
   const assertCurrent = vi.fn();
   expect(() => test.resolve("browser", assertCurrent)).not.toThrow();
+  expect(assertCurrent).toHaveBeenCalledOnce();
   assertCurrent.mockImplementation(() => {
     throw new Error("native binding changed");
   });
   expect(() => test.resolve("browser", assertCurrent)).toThrow("native binding changed");
+  expect(runtimeOwnership).not.toHaveBeenCalled();
 });
 
 it("rechecks selected model policy when the stored provider changes", () => {

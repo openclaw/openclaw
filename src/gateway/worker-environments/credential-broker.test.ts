@@ -117,9 +117,7 @@ describe("worker environment service", () => {
   it("recovers an undelivered atomic session credential after restart without changing owner", async () => {
     await support.seedReady(environmentId);
     const tunnelManager = createStoppedTunnelManager();
-    tunnelManager.stop = async () => {
-      throw new Error("tunnel stop interrupted");
-    };
+    tunnelManager.stop.mockRejectedValue(new Error("tunnel stop interrupted"));
     const first = createService({ tunnelManager });
     await first.reconcileOnce();
     await expect(attach(first, "session-1")).rejects.toThrow("tunnel stop interrupted");

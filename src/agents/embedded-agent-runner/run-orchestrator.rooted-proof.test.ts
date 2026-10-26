@@ -79,7 +79,10 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
   });
   preparation.mockImplementationOnce(async ({ toolBase }) => {
     expect(toolBase.toolsRaw.some((tool) => tool.name === "llm-task")).toBe(true);
-    const read = expectDefined(toolBase.toolsRaw.find((tool) => tool.name === "read"));
+    const read = expectDefined(
+      toolBase.toolsRaw.find((tool) => tool.name === "read"),
+      "rooted read tool",
+    );
     expect(await read.execute("task.txt", { path: "task.txt" })).toMatchObject({
       content: [expect.objectContaining({ text: expect.stringContaining("task fixture") })],
     });

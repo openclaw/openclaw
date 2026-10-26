@@ -81,8 +81,10 @@ async function welcomeHarness(grants: VisitorGrant[], config: OpenClawConfig = g
   const creates = () =>
     vi.mocked(gateway.request).mock.calls.filter(([method]) => method === "sessions.create");
   const welcome = restart();
-  const ensure = (grant = grants[0], profile: Parameters<typeof guestClient>[1] = SAM) =>
-    welcome.ensure(guestClient(grant.grantId!, profile));
+  const ensure = (grant = grants[0], profile: Parameters<typeof guestClient>[1] = SAM) => {
+    assert(grant, "welcome fixture requires a grant");
+    return welcome.ensure(guestClient(grant.grantId!, profile));
+  };
   return { fixture, sessions, messages, gateway, creates, welcome, restart, ensure };
 }
 

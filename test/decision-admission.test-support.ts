@@ -60,7 +60,7 @@ export async function withAdmissionFixture(
   try {
     fs.mkdirSync(bundledPluginsDir);
     await withServer(
-      async (request, response) => {
+      (request, response) => {
         const incoming: CapturedRequest = {
           url: request.url,
           method: request.method,
@@ -68,12 +68,14 @@ export async function withAdmissionFixture(
           body: undefined,
         };
         received.push(incoming);
-        try {
-          incoming.body = await json(request);
-          respondJson(response, responseBody);
-        } catch (error) {
-          response.destroy(error instanceof Error ? error : new Error(String(error)));
-        }
+        void json(request)
+          .then((body) => {
+            incoming.body = body;
+            respondJson(response, responseBody);
+          })
+          .catch((error: unknown) => {
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          });
       },
       (baseUrl) =>
         withEnvAsync(

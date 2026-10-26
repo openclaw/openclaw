@@ -111,11 +111,14 @@ export function registerGatewayLockFailureTests(f: {
       }),
   );
 
-  it.each([
+  it.each<[string, string | undefined]>([
     ["SQLITE_FULL", "Free up space"],
     ["SQLITE_IOERR_READ", "check the volume for I/O errors"],
     ["SQLITE_CANTOPEN", "check the volume for I/O errors"],
-    ...["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].map((code) => [code, "storage failure"]),
+    ...["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].map((code): [string, string | undefined] => [
+      code,
+      "storage failure",
+    ]),
     ["EACCES", undefined],
   ])(
     "reports %s with database-specific guidance only in database context (%s)",

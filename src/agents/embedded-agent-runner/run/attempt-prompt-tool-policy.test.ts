@@ -121,7 +121,9 @@ it.each([
     expectSurface(result, expected);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(expected);
     expect(session.getActiveToolNames()).toEqual(expected);
-    expect(finalize(result.activeToolNames)).toBe(`cron:${expected.includes("message")}`);
+    expect(finalize(result.activeToolNames)).toBe(
+      `cron:${expected.some((name) => name === "message")}`,
+    );
   },
 );
 

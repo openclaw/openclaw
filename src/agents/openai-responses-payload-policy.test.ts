@@ -44,7 +44,7 @@ describe("openai responses payload policy", () => {
   it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
     const payload = { reasoning: { effort: "none" } } satisfies Record<string, unknown>;
 
-    applyOpenAIResponsesPayloadPolicy(
+    apply(
       payload,
       policy({ id: "gpt-5.4", baseUrl: "https://api.openai.com/v1" }, { storeMode: "disable" }),
     );

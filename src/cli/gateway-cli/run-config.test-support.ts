@@ -30,7 +30,8 @@ export function failedGatewayRunConfigSnapshot(
 }
 
 type ReadFailureFixture = { label: string; expected: object; exact?: boolean } & (
-  | { stage: "read" | "runtime"; failure: Error }
+  | { stage: "read"; failure: Error }
+  | { stage: "runtime"; failure: Error }
   | { stage: "snapshot"; snapshot: ReturnType<typeof failedGatewayRunConfigSnapshot> }
 );
 
