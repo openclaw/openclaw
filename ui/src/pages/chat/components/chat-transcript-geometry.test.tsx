@@ -127,82 +127,96 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve(2)).toBe(0);
 });
 
-it("batches measured footprints after reveal and idle without publishing boot measurements", () => {
-  const frames: FrameRequestCallback[] = [];
-  const idle: IdleRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => frames.push(callback)),
-  );
-  vi.stubGlobal(
-    "requestIdleCallback",
-    vi.fn((callback: IdleRequestCallback) => idle.push(callback)),
-  );
-  const container = transcriptContainer();
-  container.innerHTML = '<div data-index="0" data-virtual-row-key="row"></div>';
-  const row = container.firstElementChild as HTMLElement;
-  const host = { assistantAgentId: "main" };
-  const target = { sessionKey: "agent:main:footprints" };
-  const cache: ChatMessageCache = new Map();
-  cacheChatSessionSnapshot(cache, host, target, {
-    messages: [],
-    sessionId: "one",
-    pagination: { hasMore: false },
-  });
-  const write = vi.fn();
-  observeChatCache(cache, { write, delete: vi.fn() });
-  const layout = new TranscriptLayoutOwner(() => {});
-  layout.configureRows(
-    threadProps("footprint-idle", target.sessionKey, [], {
-      widgetLayout: createChatWidgetLayout()(cache, host, target),
-    }),
-    "gutter",
-    false,
-  );
-  layout.rowWidth = 768;
-  layout.paneWidth = 1100;
-  layout.rows = [{ key: "row", revision: "one" }];
-  layout.connect(container);
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 1,
-    estimateSize: () => 120,
-    getItemKey: () => "row",
-    getScrollElement: () => container,
-    measureElement: layout.measureRow,
-    observeElementRect: (_, callback) => {
-      callback({ width: 768, height: 600 });
-    },
-    observeElementOffset: (_, callback) => {
-      callback(0, false);
-    },
-    scrollToFn: () => {},
-  });
-  // eslint-disable-next-line no-underscore-dangle -- Native adapter lifecycle installs row observers.
-  const dispose = virtualizer._didMount();
-  // eslint-disable-next-line no-underscore-dangle -- Bind the native viewport before measuring.
-  virtualizer._willUpdate();
-  try {
-    virtualizer.measureElement(row);
-    emitTranscriptResize(row, 768, 100);
-    expect(write).not.toHaveBeenCalled();
-    layout.persistRows(virtualizer);
-    layout.persistRows(virtualizer);
-    expect(frames).toHaveLength(1);
-    frames.shift()!(0);
-    expect(write).not.toHaveBeenCalled();
-    idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
-    layout.persistRows(virtualizer);
-    frames.shift()!(0);
-    layout.disconnect();
-    idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
-    expect(write).toHaveBeenCalledTimes(1);
-  } finally {
-    layout.disconnect();
-    dispose();
-  }
-});
+it.each(["chat-bubble-activity", ""])(
+  "batches restorable footprints without persisting open native disclosures (%s)",
+  (className) => {
+    const frames: FrameRequestCallback[] = [];
+    const idle: IdleRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => frames.push(callback)),
+    );
+    vi.stubGlobal(
+      "requestIdleCallback",
+      vi.fn((callback: IdleRequestCallback) => idle.push(callback)),
+    );
+    const container = transcriptContainer();
+    container.innerHTML = `<div data-index="0" data-virtual-row-key="row"><details class="${className}"><summary>Details</summary>Synthetic details</details></div>`;
+    const row = container.firstElementChild as HTMLElement;
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:footprints" };
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(cache, host, target, {
+      messages: [],
+      sessionId: "one",
+      pagination: { hasMore: false },
+    });
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const layout = new TranscriptLayoutOwner(() => {});
+    layout.configureRows(
+      threadProps("footprint-idle", target.sessionKey, [], {
+        widgetLayout: createChatWidgetLayout()(cache, host, target),
+      }),
+      "gutter",
+      false,
+    );
+    layout.rowWidth = 768;
+    layout.paneWidth = 1100;
+    layout.rows = [{ key: "row", revision: "one" }];
+    layout.connect(container);
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      estimateSize: () => 120,
+      getItemKey: () => "row",
+      getScrollElement: () => container,
+      measureElement: layout.measureRow,
+      observeElementRect: (_, callback) => {
+        callback({ width: 768, height: 600 });
+      },
+      observeElementOffset: (_, callback) => {
+        callback(0, false);
+      },
+      scrollToFn: () => {},
+    });
+    // eslint-disable-next-line no-underscore-dangle -- Native adapter lifecycle installs row observers.
+    const dispose = virtualizer._didMount();
+    // eslint-disable-next-line no-underscore-dangle -- Bind the native viewport before measuring.
+    virtualizer._willUpdate();
+    try {
+      virtualizer.measureElement(row);
+      emitTranscriptResize(row, 768, 100);
+      expect(write).not.toHaveBeenCalled();
+      layout.persistRows(virtualizer);
+      layout.persistRows(virtualizer);
+      expect(frames).toHaveLength(1);
+      frames.shift()!(0);
+      expect(write).not.toHaveBeenCalled();
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
+      const disclosure = row.firstElementChild as HTMLDetailsElement;
+      disclosure.open = true;
+      emitTranscriptResize(row, 768, 300);
+      layout.persistRows(virtualizer);
+      frames.shift()!(0);
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+      disclosure.open = false;
+      emitTranscriptResize(row, 768, 100);
+      const savedKey = Object.keys(write.mock.calls[0]![1].widgetHeights)[0]!;
+      expect(createChatWidgetLayout()(cache, host, target).read(savedKey)).toBe(100);
+      layout.persistRows(virtualizer);
+      frames.shift()!(0);
+      layout.disconnect();
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      layout.disconnect();
+      dispose();
+    }
+  },
+);
 
 it("measures newly committed rows before observer registration using fractional layout height", () => {
   const container = transcriptContainer();

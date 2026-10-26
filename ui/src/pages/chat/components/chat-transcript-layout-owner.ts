@@ -126,9 +126,13 @@ export class TranscriptLayoutOwner {
         this.rowLayout?.writeRows(
           Object.fromEntries(
             [...instance.elementsCache].flatMap(([id, element]) => {
+              // Native disclosure toggles do not change the row revision.
+              if (!element.isConnected || element.matches(":has(details[open])")) {
+                return [];
+              }
               const key = this.rowLayoutKey(instance.indexFromElement(element));
               const size = instance.itemSizeCache.get(id) ?? 0;
-              return element.isConnected && key && size > 0 && size <= 8000 ? [[key, size]] : [];
+              return key && size > 0 && size <= 8000 ? [[key, size]] : [];
             }),
           ),
         );
