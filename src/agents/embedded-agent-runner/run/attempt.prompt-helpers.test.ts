@@ -137,28 +137,37 @@ describe("buildAfterTurnRuntimeContext", () => {
         scopeKey,
       });
     }
-    const context = buildAfterTurnRuntimeContext({
-      ...runtimeParams({
-        sessionId: "session-123",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        trigger: "cron",
-        inputProvenance: { kind: "external_user" },
-        authProfileId: "openai:p1",
-        modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: locked,
-        config: {
-          agents: {
-            defaults: {
-              models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
-              compaction: { model: "summary" },
-            },
+    let attemptEnumerations = 0;
+    const params = runtimeParams({
+      sessionId: "session-123",
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      trigger: "cron",
+      inputProvenance: { kind: "external_user" },
+      authProfileId: "openai:p1",
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: locked,
+      config: {
+        agents: {
+          defaults: {
+            models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
+            compaction: { model: "summary" },
           },
+        },
+      },
+    });
+    const context = buildAfterTurnRuntimeContext({
+      ...params,
+      attempt: new Proxy(params.attempt, {
+        ownKeys(target) {
+          attemptEnumerations++;
+          return Reflect.ownKeys(target);
         },
       }),
       activeAgentId: "main",
     });
+    expect(attemptEnumerations).toBe(0);
     expect(context.activeProcessSessions).toHaveLength(1);
     expect(context).toMatchObject({
       activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],

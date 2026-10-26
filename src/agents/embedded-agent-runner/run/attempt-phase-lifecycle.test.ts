@@ -298,27 +298,31 @@ describe("embedded attempt phase lifecycle state", () => {
       }));
       const onContextEngineTurnCandidate = vi.fn();
       const config = {};
+      const enumerateAttempt = vi.fn(Reflect.ownKeys);
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager)),
-          attempt: {
-            runId: "run-1",
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            provider: "test",
-            modelId: "model",
-            model: { api: "openai-responses", contextWindow: 120_000 },
-            modelContextWindow: 200_000,
-            contextTokenBudget: 180_000,
-            workspaceDir: dir,
-            cwd: dir,
-            authProfileId: "profile-1",
-            config,
-            userTurnTranscriptRecorder: recorder,
-            onContextEngineTurnCandidate,
-          } as never,
+          attempt: new Proxy(
+            {
+              runId: "run-1",
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              provider: "test",
+              modelId: "model",
+              model: { api: "openai-responses", contextWindow: 120_000 },
+              modelContextWindow: 200_000,
+              contextTokenBudget: 180_000,
+              workspaceDir: dir,
+              cwd: dir,
+              authProfileId: "profile-1",
+              config,
+              userTurnTranscriptRecorder: recorder,
+              onContextEngineTurnCandidate,
+            },
+            { ownKeys: enumerateAttempt },
+          ) as never,
           activeContextEngine: {
             info: { id: "test", name: "Test" },
             assemble: vi.fn(),
@@ -335,6 +339,8 @@ describe("embedded attempt phase lifecycle state", () => {
         prompt(),
       );
 
+      // Only foreground prompt projection still copies the full attempt.
+      expect(enumerateAttempt).toHaveBeenCalledOnce();
       if (boundary === "complete") {
         expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
           expect.objectContaining({

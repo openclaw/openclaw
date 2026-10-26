@@ -231,7 +231,15 @@ export async function completeEmbeddedAttemptAfterTurn(
       }
     }
     await finalizeHarnessContextEngineTurn({
-      ...attempt,
+      sessionKey: attempt.sessionKey,
+      sessionTarget: attempt.sessionTarget,
+      sessionFile: attempt.sessionFile,
+      config: attempt.config,
+      modelId: attempt.modelId,
+      requestedModelId: attempt.requestedModelId,
+      modelContextWindow: attempt.modelContextWindow,
+      fallbackReason: attempt.fallbackReason,
+      degradedReason: attempt.degradedReason,
       abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
