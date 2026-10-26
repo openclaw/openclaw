@@ -292,7 +292,9 @@ it("keeps native file navigation and selection while windowing a large leaf fold
             entries: [
               ...Array.from({ length: fileCount() }, (_, index) => ({
                 path: filename(index + fileOffset()),
-                name: filename(index + fileOffset()).split("/").at(-1)!,
+                name: filename(index + fileOffset())
+                  .split("/")
+                  .at(-1)!,
                 kind: "file" as const,
                 sessionKind: index % 2 === 0 ? ("modified" as const) : ("read" as const),
               })),
