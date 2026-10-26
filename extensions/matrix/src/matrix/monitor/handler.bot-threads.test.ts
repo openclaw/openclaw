@@ -10,7 +10,7 @@ import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixConfigSchema } from "../../config-schema.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
-import type { MatrixConfig } from "../../types.js";
+import type { CoreConfig, MatrixConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
@@ -29,7 +29,8 @@ beforeEach(() => installMatrixMonitorTestRuntime());
 
 describe("Matrix bot-owned thread mention policy", () => {
   function setup(matrix: MatrixConfig = {}) {
-    const cfg = { channels: { matrix: MatrixConfigSchema.parse(matrix) } };
+    expect(MatrixConfigSchema.parse(matrix)).toEqual(matrix);
+    const cfg: CoreConfig = { channels: { matrix } };
     const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: "work" });
     const root = textMessage({ eventId: "$root", sender: botUserId, body: rootBody });
     const getEvent = vi.fn(async () => root);
