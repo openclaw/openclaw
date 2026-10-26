@@ -38,6 +38,7 @@ import { serializeGatewayFrame } from "./serialized-json.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { captureSessionRowGeneration } from "./session-row-identity.js";
 import * as preparedRead from "./session-row-prepared-read.js";
 import {
@@ -556,19 +557,9 @@ it("presents current recipient roles without SQLite while rejecting source overr
     const viewer = ensureProfileForEmail("viewer@presentation.test");
     setUserProfileRole(viewer.id, "none");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const clients = [owner, member, viewer].map((profile) => {
-      const client = Object.assign(sharingPolicyClient({ user: profile.id }), {
-        connId: profile.id,
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send: vi.fn(),
-          close: vi.fn(),
-        } as unknown as GatewayWsClient["socket"],
-      }) as GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
-      return client;
-    });
+    const clients = [owner, member, viewer].map(
+      (profile) => createSessionRowEventPeer(profile, profile.id, Date.now()).client,
+    );
     const cfg = rolePolicyConfig();
     const query = { agentId: "main", key: "agent:main:parent" };
     const scope = { agentId: "main", sessionKey: query.key };
