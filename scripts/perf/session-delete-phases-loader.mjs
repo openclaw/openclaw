@@ -126,18 +126,18 @@ if (output) {
     }
     return handle;
   };
-  const exec = DatabaseSync.prototype.exec.call.bind(DatabaseSync.prototype.exec);
+  const exec = DatabaseSync.prototype.exec;
   DatabaseSync.prototype.exec = function (sql) {
     if (
       !/^\s*(?:BEGIN|COMMIT|ROLLBACK|PRAGMA\s+(?:wal_checkpoint|incremental_vacuum))/i.test(sql)
     ) {
-      return exec(this, sql);
+      return exec.call(this, sql);
     }
     const database = this.location();
     const walBytesBefore = database ? size(`${database}-wal`) : 0;
     const started = performance.now();
     try {
-      return exec(this, sql);
+      return exec.call(this, sql);
     } finally {
       record({
         operation: "sqlite.exec",
@@ -148,17 +148,17 @@ if (output) {
       });
     }
   };
-  const prepare = DatabaseSync.prototype.prepare.call.bind(DatabaseSync.prototype.prepare);
+  const prepare = DatabaseSync.prototype.prepare;
   const counters = new WeakMap();
   DatabaseSync.prototype.prepare = function (sql, ...args) {
-    const statement = prepare(this, sql, ...args);
+    const statement = prepare.call(this, sql, ...args);
     if (!/^\s*(?:DELETE\b|PRAGMA\s+(?:wal_checkpoint|incremental_vacuum))/i.test(sql)) {
       return statement;
     }
     const database = this.location();
     let changes = counters.get(this);
     if (!changes) {
-      changes = prepare(this, "SELECT total_changes() AS count");
+      changes = prepare.call(this, "SELECT total_changes() AS count");
       counters.set(this, changes);
     }
     for (const method of ["run", "all", "get"]) {
