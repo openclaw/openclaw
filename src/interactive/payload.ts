@@ -24,6 +24,13 @@ type QuestionPresentationAction =
       type: "question";
       questionId: string;
       optionValue: string;
+      selected?: boolean;
+    }
+  | {
+      /** Finish a question after its choices were staged. */
+      type: "question";
+      questionId: string;
+      intent: "done";
     }
   | {
       /** Switch this question to its free-text answer path. */
@@ -509,10 +516,15 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     const intent = record.intent;
     if (intent === undefined) {
       return typeof optionValue === "string" && optionValue.trim()
-        ? { type: "question", questionId, optionValue }
+        ? {
+            type: "question",
+            questionId,
+            optionValue,
+            ...(record.selected === false ? { selected: false } : {}),
+          }
         : undefined;
     }
-    if (intent === "custom-input") {
+    if (intent === "custom-input" || intent === "done") {
       return { type: "question", questionId, intent };
     }
     return undefined;

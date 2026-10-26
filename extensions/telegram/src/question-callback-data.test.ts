@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramQuestionCallbackData,
+  buildTelegramQuestionDoneCallbackData,
   buildTelegramQuestionCustomInputCallbackData,
   parseTelegramQuestionCallbackData,
 } from "./question-callback-data.js";
@@ -28,6 +29,39 @@ describe("question callback data", () => {
     expect(parseTelegramQuestionCallbackData(data)).toEqual({
       questionId,
       intent: "custom-input",
+    });
+  });
+
+  it("round-trips indexed multi-question and multi-select controls", () => {
+    const data = buildTelegramQuestionCallbackData({
+      questionId,
+      questionIndex: 2,
+      optionIndex: 63,
+      selected: false,
+    });
+    expect(Buffer.byteLength(data ?? "", "utf8")).toBeLessThanOrEqual(64);
+    expect(parseTelegramQuestionCallbackData(data)).toEqual({
+      questionId,
+      intent: "select",
+      questionIndex: 2,
+      optionIndex: 63,
+      selected: false,
+    });
+    expect(
+      parseTelegramQuestionCallbackData(buildTelegramQuestionDoneCallbackData(questionId, 2)),
+    ).toEqual({
+      questionId,
+      intent: "done",
+      questionIndex: 2,
+    });
+    expect(
+      parseTelegramQuestionCallbackData(
+        buildTelegramQuestionCustomInputCallbackData(questionId, 1),
+      ),
+    ).toEqual({
+      questionId,
+      intent: "custom-input",
+      questionIndex: 1,
     });
   });
 

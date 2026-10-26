@@ -149,6 +149,29 @@ describe("question event parsing", () => {
 });
 
 describe("question prompt state", () => {
+  it("hydrates intermediate answers from another channel", () => {
+    const state = createState();
+    requestQuestion(state, {
+      questions: [
+        ...requestedPayload().questions,
+        { questionId: "target", header: "Target", question: "Where?", options: [{ label: "QA" }] },
+      ],
+    });
+    requestQuestion(state, {
+      questions: [
+        ...requestedPayload().questions,
+        { questionId: "target", header: "Target", question: "Where?", options: [{ label: "QA" }] },
+      ],
+      draftRevision: 1,
+      draftCompletedIds: ["format"],
+      draftAnswers: { answers: { format: ["Detailed"] } },
+    });
+    const prompt = state.prompts.get("question-1");
+    expect(prompt?.status).toBe("pending");
+    expect(prompt?.draftCompletedIds).toEqual(["format"]);
+    expect([...prompt!.drafts.get("format")!.selected]).toEqual(["Detailed"]);
+  });
+
   it.each(["cancelled", "expired"] as const)("transitions requested to %s", (status) => {
     const state = createState();
     expect(requestQuestion(state)).toBe(true);

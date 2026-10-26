@@ -104,6 +104,41 @@ afterEach(async () => {
 });
 
 describe("QuestionManager", () => {
+  it("keeps the waiter pending until all indexed answers are complete", async () => {
+    const requested = manager.request({
+      questions: [questions[0]!, { ...questions[0]!, questionId: "second", multiSelect: true }],
+      timeoutMs: 10_000,
+    });
+    const waiter = manager.waitAnswer(requested.id);
+    expect(
+      manager.saveDraft(requested.id, { answers: { choice: ["One"] } }, 0, "choice"),
+    ).toMatchObject({
+      status: "pending",
+      question: { draftCompletedIds: ["choice"] },
+    });
+    expect(manager.get(requested.id)?.status).toBe("pending");
+    expect(() =>
+      manager.saveDraft(requested.id, { answers: { choice: ["Two"] } }, 1, "choice"),
+    ).toThrowError(QuestionManagerError);
+    expect(() => manager.saveDraft(requested.id, { answers: { second: ["Two"] } }, 0)).toThrowError(
+      QuestionManagerError,
+    );
+    expect(manager.saveDraft(requested.id, { answers: { second: ["Two"] } }, 1)).toMatchObject({
+      status: "pending",
+      question: { draftAnswers: { answers: { second: ["Two"] } } },
+    });
+    expect(
+      manager.saveDraft(requested.id, { answers: { second: ["One", "Two"] } }, 2, "second"),
+    ).toMatchObject({
+      status: "answered",
+      answers: { answers: { choice: ["One"], second: ["One", "Two"] } },
+    });
+    await expect(waiter).resolves.toMatchObject({ status: "answered" });
+    expect(() => manager.saveDraft(requested.id, { answers: { second: ["One"] } }, 3)).toThrowError(
+      QuestionManagerError,
+    );
+  });
+
   it("hides a committing question on reset and settles it without touching a reused id", async () => {
     const commit = createDeferredCore();
     const onResolved = vi.fn();

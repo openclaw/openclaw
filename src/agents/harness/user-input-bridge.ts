@@ -40,7 +40,7 @@ type AgentHarnessQuestionPromptPayload = {
   presentation?: MessagePresentation;
   presentationTextMode?: "fallback";
   channelData: {
-    askUser: { questionId: string; optionValues?: string[] };
+    askUser: { questionId: string; questionIndex?: number; optionValues?: string[] };
   };
 };
 
@@ -98,16 +98,16 @@ function buildAgentHarnessQuestionPresentation(params: {
   questionId: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   formatText?: (text: string) => string;
+  selectedValues?: readonly string[];
 }): MessagePresentation | undefined {
-  // Button taps resolve atomically, so multi-question and multi-select records
-  // remain text-only until partial answer state has one shared owner.
+  // Native messaging controls are emitted per question; Gateway owns partial state.
   if (params.questions.length !== 1) {
     return undefined;
   }
   const [question] = params.questions;
   const options = question?.options ?? [];
   const formatText = params.formatText ?? ((text: string) => text);
-  if (!question || question.multiSelect || question.isSecret || options.length === 0) {
+  if (!question || question.isSecret || options.length === 0 || options.length > 64) {
     return undefined;
   }
   // The question stays in its own leading text block so reaction/native
@@ -137,8 +137,23 @@ function buildAgentHarnessQuestionPresentation(params: {
               type: "question" as const,
               questionId: params.questionId,
               optionValue: option.value ?? option.label,
+              ...(params.selectedValues
+                ? { selected: !params.selectedValues.includes(option.value ?? option.label) }
+                : {}),
             },
           })),
+          ...(question.multiSelect
+            ? [
+                {
+                  label: "Done",
+                  action: {
+                    type: "question" as const,
+                    questionId: params.questionId,
+                    intent: "done" as const,
+                  },
+                },
+              ]
+            : []),
           ...(question.isOther
             ? [
                 {
@@ -162,6 +177,8 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   questionId: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   options?: AgentHarnessUserInputPromptOptions;
+  questionIndex?: number;
+  selectedValues?: readonly string[];
 }): AgentHarnessQuestionPromptPayload {
   const prompt = formatAgentHarnessUserInputPrompt(params.questions, params.options);
   // Callers may supply a fully-authored presentation; only build one otherwise.
@@ -170,16 +187,17 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
     buildAgentHarnessQuestionPresentation({
       ...params,
       formatText: params.options?.formatText,
+      selectedValues: params.selectedValues,
     });
   const [question] = params.questions;
   const candidateOptionValues =
-    params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
+    params.questions.length === 1 && question && !question.isSecret
       ? (question.options?.map((option) => option.value ?? option.label) ?? [])
       : [];
   const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
   const optionValues =
-    candidateOptionValues.length >= 2 &&
-    candidateOptionValues.length <= 4 &&
+    candidateOptionValues.length >= 1 &&
+    candidateOptionValues.length <= 64 &&
     normalizedOptionValues.every(Boolean) &&
     new Set(normalizedOptionValues).size === candidateOptionValues.length
       ? candidateOptionValues
@@ -189,7 +207,11 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
     ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
     // Native callbacks need Gateway option order even when presentation controls are reordered.
     channelData: {
-      askUser: { questionId: params.questionId, ...(optionValues ? { optionValues } : {}) },
+      askUser: {
+        questionId: params.questionId,
+        ...(params.questionIndex !== undefined ? { questionIndex: params.questionIndex } : {}),
+        ...(optionValues ? { optionValues } : {}),
+      },
     },
   });
 }
@@ -219,20 +241,40 @@ export async function deliverAgentHarnessQuestionPrompt(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
+  const payloads =
+    questions.length > 1
+      ? questions.map((question, questionIndex) =>
+          buildAgentHarnessQuestionPromptPayload({
+            questionId,
+            questions: [question],
+            options,
+            questionIndex,
+          }),
+        )
+      : [
+          buildAgentHarnessQuestionPromptPayload({
+            questionId,
+            questions,
+            options,
+          }),
+        ];
   if (params.onBlockReply) {
     // The agent cannot finish until this prompt is answered. Give channel delivery
     // an independent stable intent so it does not wait behind the blocked stream.
-    await runWithQuestionChannelDeliveries([questionId], () =>
-      params.onBlockReply?.(payload, {
-        ...(signal ? { abortSignal: signal } : {}),
-        deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
-      }),
-    );
+    for (const [index, payload] of payloads.entries()) {
+      await runWithQuestionChannelDeliveries([questionId], () =>
+        params.onBlockReply?.(payload, {
+          ...(signal ? { abortSignal: signal } : {}),
+          deliveryIntentId: `block-reply:v1:agent-question:${questionId}${payloads.length > 1 ? `:${index}` : ""}`,
+        }),
+      );
+    }
     return;
   }
   signal?.throwIfAborted();
-  await params.onPartialReply?.({ text: payload.text });
+  for (const payload of payloads) {
+    await params.onPartialReply?.({ text: payload.text });
+  }
 }
 
 export function buildAgentHarnessUserInputAnswers(

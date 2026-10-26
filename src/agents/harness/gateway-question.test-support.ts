@@ -124,9 +124,16 @@ export async function withQuestionGateway(
               const result =
                 "cancel" in request
                   ? manager.cancel(request.id, request.resolvedBy)
-                  : manager.resolve(request.id, request.answers, request.resolvedBy, {
-                      resolutionId: request.resolutionId,
-                    });
+                  : "draftAnswers" in request
+                    ? manager.saveDraft(
+                        request.id,
+                        request.draftAnswers,
+                        request.expectedRevision,
+                        request.completeQuestionId,
+                      )
+                    : manager.resolve(request.id, request.answers, request.resolvedBy, {
+                        resolutionId: request.resolutionId,
+                      });
               onResolved();
               if (dropResolveResponse) {
                 dropResolveResponse = false;

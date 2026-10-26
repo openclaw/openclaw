@@ -92,6 +92,7 @@ export function createTelegramTextSender(config: {
       plainText: string;
       reportChatId: string | number;
       hasInlineKeyboard: boolean;
+      hasRichQuestionButtons: boolean;
     };
 
     const start = sender.parts.length;
@@ -115,10 +116,11 @@ export function createTelegramTextSender(config: {
     };
     let pendingChunk: PendingChunk | undefined;
     let finalMeta: TelegramSendResult["meta"] | undefined;
+    let lastMeta: TelegramSendResult["meta"] | undefined;
 
     const flushChunk = async (chunk: PendingChunk, finalPart: boolean) => {
       let keyboardError: unknown;
-      if (finalPart && replyMarkup && !chunk.hasInlineKeyboard) {
+      if (finalPart && replyMarkup && !chunk.hasInlineKeyboard && !chunk.hasRichQuestionButtons) {
         try {
           await api.editMessageReplyMarkup(chunk.reportChatId, chunk.messageId, {
             reply_markup: replyMarkup,
@@ -169,6 +171,11 @@ export function createTelegramTextSender(config: {
         accountId: account.accountId,
         agentId: ownerAgentId,
       });
+      lastMeta = {
+        telegramDeliveredText: params.plainText,
+        telegramHasInlineKeyboard: params.hasInlineKeyboard,
+        telegramHasRichQuestionButtons: params.hasRichQuestionButtons,
+      };
       await reportDelivery({
         messageId,
         fallbackChatId: params.result?.chat?.id ?? chatId,
@@ -176,6 +183,7 @@ export function createTelegramTextSender(config: {
         meta: {
           telegramDeliveredText: params.plainText,
           telegramHasInlineKeyboard: params.hasInlineKeyboard,
+          telegramHasRichQuestionButtons: params.hasRichQuestionButtons,
         },
         kind: "text",
         onPrepared: (delivery) => deliveryResults.push(delivery),
@@ -226,6 +234,7 @@ export function createTelegramTextSender(config: {
       skipEntityDetection: account.config.linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
       warn: (message) => sendLogger.warn(message),
+      ...(useRichMessages && opts.richMessage ? { richMessage: opts.richMessage } : {}),
     });
     try {
       await sender.sendText({
@@ -233,7 +242,12 @@ export function createTelegramTextSender(config: {
         context,
         tracking,
         drainFallback: true,
-        observe: record,
+        suppressRichMarkup: Boolean(opts.richMessage),
+        observe: (part) =>
+          record({
+            ...part,
+            hasRichQuestionButtons: Boolean(opts.richMessage && part.usedRichMessage),
+          }),
         preparePage: (index) => ({
           requestParams: (fallback) => {
             const count = Math.max(pages.length, fallback?.count ?? pages.length);
@@ -259,7 +273,7 @@ export function createTelegramTextSender(config: {
         messageId: lastMessageId,
         chatId: lastChatId,
         ...(receipt ? { receipt } : {}),
-        ...(finalMeta ? { meta: finalMeta } : {}),
+        ...((finalMeta ?? lastMeta) ? { meta: { ...lastMeta, ...finalMeta } } : {}),
       };
     } catch (error) {
       // Terminal/ambiguous failures escape chunk rejection before its invalidate

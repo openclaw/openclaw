@@ -282,6 +282,24 @@ export function createTelegramCallbackRouter({
           callback: typedQuestionCallback,
           cfg: runtimeCfg,
           senderId,
+          expectedSessionKey: (
+            await messageRuntime.resolveTelegramSessionState({
+              chatId,
+              isGroup,
+              threadSpec,
+              botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+              senderId,
+              runtimeCfg,
+            })
+          ).sessionKey,
+          authorize: () =>
+            isTelegramModelCallbackAuthorized({
+              chatId,
+              isGroup,
+              senderId,
+              context: eventAuthContext,
+            }),
+          updateRichMessage: actions.editCallbackQuestionRichMessage,
           feedback: async (text, mode) =>
             await sendTelegramQuestionFeedback({
               actions,

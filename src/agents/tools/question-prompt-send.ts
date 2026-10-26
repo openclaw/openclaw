@@ -60,13 +60,14 @@ export async function sendQuestionToolPrompt(params: {
     }
     return;
   }
-  await send(
-    buildAgentHarnessQuestionPromptPayload({
-      questionId,
-      questions: questions.map(({ questionId: id, ...question }) =>
-        Object.assign(question, { id }),
-      ),
-      options: { intro: "Question for you:" },
-    }),
-  );
+  for (const [questionIndex, question] of questions.entries()) {
+    await send(
+      buildAgentHarnessQuestionPromptPayload({
+        questionId,
+        questions: [{ ...question, id: question.questionId }],
+        ...(questions.length > 1 ? { questionIndex } : {}),
+        options: { intro: "Question for you:" },
+      }),
+    );
+  }
 }

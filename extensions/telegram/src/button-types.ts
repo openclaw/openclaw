@@ -26,6 +26,7 @@ import {
 } from "./native-command-callback-data.js";
 import {
   buildTelegramQuestionCallbackData,
+  buildTelegramQuestionDoneCallbackData,
   buildTelegramQuestionCustomInputCallbackData,
   hasTelegramQuestionCallbackPrefix,
 } from "./question-callback-data.js";
@@ -64,6 +65,7 @@ export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
+  questionIndex?: number;
 };
 
 export function appendTelegramDroppedControlFallback(
@@ -138,7 +140,11 @@ function toTelegramInlineButton(
     const hasQuestionContext = options?.questionOptionIndices?.has(action.questionId) === true;
     if ("intent" in action) {
       const callbackData = hasQuestionContext
-        ? buildTelegramQuestionCustomInputCallbackData(action.questionId)
+        ? action.intent === "done"
+          ? options?.questionIndex === undefined
+            ? undefined
+            : buildTelegramQuestionDoneCallbackData(action.questionId, options.questionIndex)
+          : buildTelegramQuestionCustomInputCallbackData(action.questionId, options?.questionIndex)
         : undefined;
       return callbackButton(callbackData, "question_context_unavailable");
     }
@@ -152,7 +158,12 @@ function toTelegramInlineButton(
     }
     // Presentation order is not authoritative; only Gateway-owned option order can choose an index.
     return callbackButton(
-      buildTelegramQuestionCallbackData({ questionId: action.questionId, optionIndex }),
+      buildTelegramQuestionCallbackData({
+        questionId: action.questionId,
+        optionIndex,
+        questionIndex: options?.questionIndex,
+        selected: action.selected,
+      }),
     );
   }
   if (action.type === "command") {

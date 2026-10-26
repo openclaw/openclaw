@@ -152,7 +152,7 @@ export function applyAgentToolSurfaceCatalog({
       catalogParams.config?.tools?.toolSearch === undefined &&
       model?.api === "ollama" &&
       model.toolSearchMode === "tools"
-        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
-        : ["message"],
+        ? ["message", "ask_user", "web_search", "web_fetch", "memory_search", "memory_get"]
+        : ["message", "ask_user"],
   });
 }

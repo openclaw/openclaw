@@ -9,6 +9,7 @@ import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
+import type { TelegramInputRichMessage } from "./rich-message.js";
 import type { TelegramApiOverride } from "./send-context.js";
 
 export type TelegramSendOpts = {
@@ -54,6 +55,8 @@ export type TelegramSendOpts = {
   directMessagesTopicId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
+  /** Native rich question body; buttons remain as an actionable send fallback. */
+  richMessage?: TelegramInputRichMessage;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
@@ -84,6 +87,7 @@ export type TelegramSendResult = {
   meta?: {
     telegramDeliveredText?: string;
     telegramHasInlineKeyboard?: boolean;
+    telegramHasRichQuestionButtons?: boolean;
   };
 };
 

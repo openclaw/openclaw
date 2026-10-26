@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAgentHarnessQuestionPromptPayload } from "../../../src/agents/harness/user-input-bridge.js";
 import type * as TelegramSend from "./send.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -112,6 +113,52 @@ describe("Telegram question finalization", () => {
       );
     },
   );
+
+  it("keeps rich question controls visibly disabled after terminal finalization", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const payload = buildAgentHarnessQuestionPromptPayload({
+      questionId,
+      questionIndex: 1,
+      questions: [
+        {
+          id: "details",
+          header: "Details",
+          question: "Choose details",
+          options: [{ label: "Logs" }, { label: "Screenshots" }],
+          multiSelect: true,
+          isOther: true,
+        },
+      ],
+    });
+    const outbound = createTelegramOutboundAdapter();
+    await outbound.afterDeliverPayload?.({
+      cfg: {},
+      target: { channel: "telegram", to: "123", accountId: "default" },
+      payload,
+      results: [
+        {
+          channel: "telegram",
+          messageId: "56",
+          target: { kind: "chat", id: "123" },
+          meta: {
+            telegramDeliveredText: "Choose details",
+            telegramHasRichQuestionButtons: true,
+          },
+        },
+      ],
+    });
+
+    expect(hoisted.register).toHaveBeenCalledOnce();
+    await hoisted.register.mock.calls[0]?.[0]?.finalize("Expired.");
+    expect(hoisted.editMarkup).not.toHaveBeenCalled();
+    const rich = hoisted.edit.mock.calls[0]?.[3]?.richMessage;
+    expect(rich?.blocks.at(-1)).toEqual({ type: "footer", text: "Expired." });
+    for (const block of rich?.blocks ?? []) {
+      if (block.type === "buttons") {
+        expect(block.buttons.every((button: { disabled?: object }) => button.disabled)).toBe(true);
+      }
+    }
+  });
 
   it("finalizes an accepted unthreaded media question by editing its caption", async () => {
     const send = await vi.importActual<typeof TelegramSend>("./send.js");

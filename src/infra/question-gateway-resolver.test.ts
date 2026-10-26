@@ -25,6 +25,18 @@ it("does not resolve when access is lost between the read and the write", async 
   expect(methods()).toEqual(["question.get"]);
 });
 
+it("rejects a button from another Telegram session before writing", async () => {
+  reply({ ...pending, sessionKey: "agent:main:telegram:direct:42" });
+  await expect(
+    resolveQuestionOverGateway({
+      ...request,
+      expectedSessionKey: "agent:main:telegram:direct:99",
+      authorize: () => true,
+    }),
+  ).resolves.toEqual({ status: "denied" });
+  expect(methods()).toEqual(["question.get"]);
+});
+
 it("resolves the rendered option with current authorization and sender attribution", async () => {
   reply().mockResolvedValueOnce({ status: "answered" });
   await expect(resolveQuestionOverGateway({ ...request, authorize: () => true })).resolves.toEqual({

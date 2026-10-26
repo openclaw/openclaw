@@ -4,6 +4,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramCallbackButton } from "./button-types.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
+import { updateTelegramQuestionRichMessage } from "./question-rich-message.js";
 import { buildInlineKeyboard } from "./send.js";
 
 type TelegramCallbackReplyParams = Omit<
@@ -48,6 +49,34 @@ export function createTelegramCallbackMessageActions(params: {
         reply_markup: buildInlineKeyboard(buttons) ?? { inline_keyboard: [] },
       }),
     );
+  };
+
+  const editCallbackQuestionRichMessage = async (input: {
+    questionId: string;
+    questionIndex?: number;
+    selectedOptionIndex?: number;
+    mode: "selected" | "completed" | "inactive";
+  }): Promise<boolean> => {
+    const richMessage = updateTelegramQuestionRichMessage({
+      richMessage: callbackMessage.rich_message,
+      ...input,
+    });
+    if (!richMessage) {
+      return false;
+    }
+    try {
+      await bot.api.raw.editMessageText({
+        chat_id: callbackMessage.chat.id,
+        message_id: callbackMessage.message_id,
+        rich_message: richMessage,
+        ...callbackBusinessParams,
+      });
+    } catch (error) {
+      if (!String(error).includes("message is not modified")) {
+        throw error;
+      }
+    }
+    return true;
   };
 
   const deleteCallbackMessage = async () => {
@@ -95,13 +124,14 @@ export function createTelegramCallbackMessageActions(params: {
     editCallbackMessage,
     clearCallbackButtons: () => editCallbackButtons([]),
     editCallbackButtons,
+    editCallbackQuestionRichMessage,
     editCallbackMessageWithButtons,
     deleteCallbackMessage,
     replyToCallbackChat,
   };
 }
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
-type QuestionFeedbackMode = "terminal" | "retry" | "custom-input";
+type QuestionFeedbackMode = "terminal" | "retry" | "custom-input" | "pending";
 
 export async function sendTelegramQuestionFeedback(params: {
   actions: TelegramCallbackMessageActions;
@@ -114,9 +144,7 @@ export async function sendTelegramQuestionFeedback(params: {
     await params.actions.clearCallbackButtons().catch(() => {});
   }
   const groupCustomInput = params.mode === "custom-input" && params.isGroup;
-  const text = groupCustomInput
-    ? `${params.user.first_name}, reply with your own answer.`
-    : params.text;
+  const text = groupCustomInput ? `${params.user.first_name}, ${params.text}` : params.text;
   await params.actions.replyToCallbackChat(
     text,
     params.mode === "custom-input"
@@ -139,40 +167,93 @@ export async function sendTelegramQuestionFeedback(params: {
         }
       : undefined,
   );
-  if (params.mode === "custom-input") {
-    // Keep the existing answer route until Telegram accepts its replacement.
-    await params.actions.clearCallbackButtons().catch(() => {});
-  }
 }
 
 export async function handleTelegramQuestionCallback(params: {
   callback: TelegramQuestionCallback;
   cfg: ResolveQuestionParams["cfg"];
   senderId: string;
+  authorize?: () => boolean | Promise<boolean>;
+  expectedSessionKey?: string;
   feedback: (text: string, mode: QuestionFeedbackMode) => Promise<unknown>;
+  updateRichMessage?: TelegramCallbackMessageActions["editCallbackQuestionRichMessage"];
+  resolveQuestion?: typeof questionGatewayRuntime.resolveOption;
 }): Promise<void> {
   try {
-    const result = await questionGatewayRuntime.resolveOption({
+    const request: ResolveQuestionParams = {
       cfg: params.cfg,
       questionId: params.callback.questionId,
       ...(params.callback.intent === "custom-input"
         ? { customInput: true }
-        : { optionIndex: params.callback.optionIndex }),
+        : params.callback.intent === "done"
+          ? { done: true }
+          : { optionIndex: params.callback.optionIndex, selected: params.callback.selected }),
+      ...(params.callback.questionIndex !== undefined
+        ? { questionIndex: params.callback.questionIndex }
+        : {}),
       senderId: params.senderId,
+      expectedSessionKey: params.expectedSessionKey,
       clientDisplayName: "Telegram question",
-    });
+    };
+    const resolve = params.resolveQuestion ?? questionGatewayRuntime.resolveOption;
+    const result = params.authorize
+      ? await resolve({ ...request, authorize: params.authorize })
+      : await resolve(request);
+    if (result.status === "denied") {
+      return;
+    }
     if (params.callback.intent === "custom-input") {
+      if (result.status === "already-terminal") {
+        const updated = await params
+          .updateRichMessage?.({
+            questionId: params.callback.questionId,
+            questionIndex: params.callback.questionIndex,
+            mode: "inactive",
+          })
+          .catch(() => false);
+        if (updated) {
+          return;
+        }
+      }
       const terminal = result.status === "already-terminal";
       await params.feedback(
-        terminal ? "This question was already answered." : "Reply with your own answer.",
+        terminal
+          ? "This question was already answered."
+          : params.callback.questionIndex !== undefined && result.status === "custom-input"
+            ? `Reply with your answer. To answer out of order, use "${result.questionId}: your answer".`
+            : "Reply with your own answer.",
         terminal ? "terminal" : "custom-input",
       );
       return;
     }
+    const updated = await params
+      .updateRichMessage?.({
+        questionId: params.callback.questionId,
+        questionIndex: params.callback.questionIndex,
+        ...(params.callback.intent === "select"
+          ? { selectedOptionIndex: params.callback.optionIndex }
+          : {}),
+        mode:
+          result.status === "answered" || (result.status === "pending" && result.completed)
+            ? "completed"
+            : result.status === "pending"
+              ? "selected"
+              : "inactive",
+      })
+      .catch(() => false);
+    if (updated) {
+      return;
+    }
     await params
       .feedback(
-        result.status === "answered" ? "Answer submitted." : "This question was already answered.",
-        "terminal",
+        result.status === "answered"
+          ? "Answer submitted."
+          : result.status === "pending"
+            ? result.completed
+              ? "Answer saved. Waiting for the other questions."
+              : "Choice saved. Select more or tap Done."
+            : "This question was already answered.",
+        result.status === "pending" ? "pending" : "terminal",
       )
       .catch(() => {});
   } catch (error) {

@@ -329,7 +329,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       label: "oversized",
       askUser: {
         questionId: "ask_0123456789abcdef0123456789abcdef",
-        optionValues: ["A", "B", "C", "D", "E"],
+        optionValues: ["C", ...Array.from({ length: 64 }, (_, index) => `Option ${index}`)],
       },
     },
   ])("visibly falls back when canonical question metadata is $label", ({ askUser }) => {

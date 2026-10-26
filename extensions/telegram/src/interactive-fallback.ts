@@ -13,6 +13,7 @@ import {
 import {
   copyReplyPayloadMetadata,
   resolveAskUserQuestionOptionIndices,
+  readAskUserQuestionIndex,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -174,6 +175,7 @@ export function canonicalizeTelegramPresentationPayload(
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
+    questionIndex: readAskUserQuestionIndex(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {
@@ -330,6 +332,7 @@ export function resolveFinalTelegramPresentationText(params: {
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: params.allowWebAppButtons === true,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
+    questionIndex: readAskUserQuestionIndex(params.payload),
   };
   // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.
   const telegramData = params.payload.channelData?.telegram as

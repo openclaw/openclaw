@@ -56,6 +56,25 @@ export type RichBlockTableCell = {
   valign: "top" | "middle" | "bottom";
 };
 
+type RichMessageButtonBase = {
+  text: RichText;
+  style?: "danger" | "success" | "primary" | "link";
+};
+
+export type RichMessageButton = RichMessageButtonBase &
+  (
+    | { callback_data: string; url?: never; web_app?: never; disabled?: never }
+    | { url: string; callback_data?: never; web_app?: never; disabled?: never }
+    | { web_app: { url: string }; callback_data?: never; url?: never; disabled?: never }
+    | { disabled: Record<string, never>; callback_data?: never; url?: never; web_app?: never }
+  );
+
+export type InputRichBlockButtons = {
+  type: "buttons";
+  buttons: RichMessageButton[];
+  align?: "left" | "center" | "right";
+};
+
 export type InputRichBlockParagraph = {
   type: "paragraph";
   text: RichText;
@@ -77,6 +96,7 @@ export type InputRichBlockListItem = {
 type InputMediaUrl<K extends string> = { type: K; media: string };
 
 export type InputRichBlock =
+  | InputRichBlockButtons
   | InputRichBlockParagraph
   | {
       type: "heading";
@@ -217,6 +237,11 @@ export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
     for (const block of children) {
       size.blocks += 1;
       switch (block.type) {
+        case "buttons":
+          for (const button of block.buttons) {
+            measureRichBlockText(button.text, size, depth);
+          }
+          break;
         case "paragraph":
         case "heading":
         case "footer":
@@ -353,6 +378,9 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
     };
     const block = frame.blocks[frame.index++]!;
     switch (block.type) {
+      case "buttons":
+        push(block.buttons.map((button) => richTextToPlainString(button.text)).join(" | "));
+        break;
       case "paragraph":
       case "heading":
       case "footer":
@@ -454,6 +482,14 @@ export function normalizeInputRichBlocks(
   return blocks.map((block): InputRichBlock => {
     const textDepth = depth + 1;
     switch (block.type) {
+      case "buttons":
+        return {
+          ...block,
+          buttons: block.buttons.map((button) => ({
+            ...button,
+            text: normalizeRichText(button.text, textDepth),
+          })),
+        };
       case "paragraph":
       case "heading":
       case "footer":

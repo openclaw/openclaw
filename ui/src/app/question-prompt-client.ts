@@ -108,6 +108,7 @@ export function requestQuestionGateway(
   client: QuestionClient,
   method: "question.get",
   params: QuestionGetParams,
+  expiresAtMs?: number,
 ): Promise<QuestionGetResult>;
 export function requestQuestionGateway(
   client: QuestionClient,

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- this lifecycle module exceeded the limit before this change; text progress lives in its own module. */
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import {
@@ -34,6 +35,7 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
+import { resolveAgentQuestionTextProgress } from "./gateway-question-progress.js";
 import {
   captureAgentQuestionAnswerAuthority,
   prepareQuestionCallerAuthority,
@@ -142,10 +144,12 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
             },
           }
         : undefined,
-    finish: (consumed: boolean) => {
-      state.resolving = consumed;
-      if (state.kind === "gateway" && !consumed) {
-        state.cancelRequested = false;
+    finish: (consumed: boolean, keepPending = false) => {
+      state.resolving = consumed && !keepPending;
+      if (state.kind === "gateway") {
+        if (!consumed) {
+          state.cancelRequested = false;
+        }
       }
     },
   };
@@ -310,6 +314,7 @@ async function claimQuestionAnswer(
   const reservation = reserveQuestionInput(state, authority);
   let consumed = false;
   let retainReservation = false;
+  let keepPending = false;
   try {
     if (state.kind === "gateway" && !state.answer) {
       // Both registration owners attach the answer before this continuation.
@@ -362,6 +367,34 @@ async function claimQuestionAnswer(
       return consumed;
     }
     state.answerAuthority?.admitTranscriptAnswer?.(sourceRecorder);
+    try {
+      const progress = await resolveAgentQuestionTextProgress({
+        questions: state.questions,
+        text: params.text,
+        questionId: state.questionId,
+        sessionKey: state.sessionKey,
+        callQuestion: (method, request) =>
+          state.gatewayCall(
+            method,
+            {},
+            request,
+            ...(reservation.extra ? ([reservation.extra] as const) : []),
+          ),
+      });
+      if (progress) {
+        consumed = progress.consumed;
+        keepPending = progress.keepPending;
+        if (consumed) {
+          onAnswerProcessed?.();
+        }
+        return consumed;
+      }
+    } catch (error) {
+      if (error instanceof QuestionAnswerUnconfirmedError) {
+        retainReservation = true;
+      }
+      throw error;
+    }
     const parsed = buildAgentHarnessUserInputAnswers(state.questions, params.text);
     const answers = buildAgentQuestionAnswers(parsed);
     const resolutionId = randomBytes(16).toString("hex");
@@ -411,7 +444,7 @@ async function claimQuestionAnswer(
     }
     return consumed;
   } finally {
-    reservation.finish(consumed || retainReservation);
+    reservation.finish(consumed || retainReservation, keepPending);
   }
 }
 

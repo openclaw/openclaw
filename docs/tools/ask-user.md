@@ -43,15 +43,20 @@ You can answer from any supported conversation surface:
   **Skip**. Multi-select prompts let you toggle choices before confirming;
   multi-question prompts advance one question at a time. Press Esc to return
   to the composer without answering, then `/question` to reopen the prompt.
-- Telegram renders each choice as a full-width native button for one
-  single-select question. **Other…** switches to Telegram's reply input without
-  resolving the question.
-- Discord and Slack render native buttons for a single-choice, single-question
-  prompt.
-- On a supported messaging channel, a plain-text reply can answer a question
-  created by an active OpenClaw run when your current permissions match the
-  creator's. Reply with a number, an option label, or your own answer. For
-  multi-select questions, separate choices with commas.
+- Telegram renders each question with native inline buttons, including multiple
+  questions and multi-select choices. Select multiple choices, then tap **Done**.
+  **Other…** opens Telegram's reply input while the question remains pending.
+  For several questions, a plain reply answers the next unanswered question. To
+  answer out of order, prefix it with the shown question key (for example,
+  `details: custom note`).
+- Discord, Slack, and Mattermost render native buttons for a single-choice,
+  single-question prompt. Mattermost retires its prompt on the tap it accepts;
+  a question that ends elsewhere leaves the buttons in place until someone taps
+  one and is told it was already answered.
+- For a question created by an active OpenClaw run, a plain-text reply works on
+  any channel when your current permissions match the creator's. Reply with a
+  number, an option label, or your own answer. For multi-select questions,
+  separate choices with commas.
 
 Questions from a standalone [attached MCP client](/cli/attach) do not carry an
 OpenClaw run's creator binding. Answer those using the question controls in the
@@ -91,10 +96,10 @@ idiom. The TUI keeps a compact resolution notice in the chat; other platforms
 keep the question-to-answer summary without timed eviction. **Skip** is
 available everywhere and declines the entire prompt.
 
-Multi-question and multi-select prompts use readable text on Discord, Slack,
-and Telegram; reply in text to answer them. The Control UI and TUI keep the
-full structured stepper. The TUI shows the time remaining, dismisses expired
-prompts, and restores pending questions
+Telegram keeps native buttons for multi-question and multi-select prompts. Other
+messaging channels may use readable text. The Control UI and TUI keep the full
+structured stepper. The TUI shows
+the time remaining, dismisses expired prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
 
@@ -194,13 +199,13 @@ question.
 The model-facing contract tells the agent to:
 
 - ask only when blocked on a genuinely user-owned decision;
-- ask exactly one question per call unless several answers must be submitted
-  together, because one-question prompts can use native messaging controls;
+- group one to three related questions in a call when they should be answered
+  together; Telegram presents each question with its own controls;
 - put every selectable choice in `options`, never only in question prose;
 - use `multiSelect` only when several choices can be selected at once;
 - put the recommended option first and suffix its label with `(Recommended)`;
 - omit an authored `Other` option because free text is added automatically;
-- continue with best judgment after `no_answer`.
+- treat `no_answer` as an unanswered request, never as a selected choice.
 
 The agent should not use `ask_user` to ask whether it may proceed or to confirm
 its own plan.

@@ -106,6 +106,15 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     }
     updateDraft(item, { selected, freeText: item.multiSelect ? (previous?.freeText ?? "") : "" });
     if (advance && !item.multiSelect && currentQuestionIndex() < model().questions.length - 1) {
+      if (
+        props.panel.onQuestionComplete &&
+        !model().completedQuestionIds?.includes(item.questionId)
+      ) {
+        void props.panel.onQuestionComplete(
+          item.questionId,
+          questionDraftValues(model().drafts.get(item.questionId), item),
+        );
+      }
       setCurrentQuestionIndex((index) => index + 1);
     }
   };
@@ -168,6 +177,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       return;
     }
     if (currentQuestionIndex() < model().questions.length - 1) {
+      if (
+        props.panel.onQuestionComplete &&
+        !model().completedQuestionIds?.includes(item.questionId)
+      ) {
+        void props.panel.onQuestionComplete(item.questionId, answerValues(model(), item));
+      }
       setCurrentQuestionIndex((index) => index + 1);
     } else {
       void resolve("submit");
@@ -303,7 +318,12 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       {buttonProps.label}
     </button>
   );
-  const progress = () => `${currentQuestionIndex() + 1}/${model().questions.length}`;
+  const progress = () => {
+    const completed = model().completedQuestionIds?.length ?? 0;
+    return completed > 0
+      ? `${completed}/${model().questions.length} answered · ${currentQuestionIndex() + 1}/${model().questions.length}`
+      : `${currentQuestionIndex() + 1}/${model().questions.length}`;
+  };
   const skipLabel = () =>
     t(
       model().nonBlocking

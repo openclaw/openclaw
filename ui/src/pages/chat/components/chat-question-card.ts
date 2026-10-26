@@ -36,10 +36,12 @@ export function createGatewayQuestionPanelProps(
       disabled: prompt.status !== "pending",
       submitting: prompt.submitting,
       drafts: prompt.drafts,
+      completedQuestionIds: prompt.draftCompletedIds,
       error: prompt.error,
       requestPosition: options.requestPosition,
     },
     onChange,
+    onQuestionComplete: prompt.saveProgress,
     onSecretStoreAllowedHostsChange: (allowedHosts) => {
       prompt.secretStoreAllowedHostsDraft = allowedHosts;
       onChange?.();

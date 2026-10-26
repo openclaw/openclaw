@@ -461,7 +461,7 @@ export function createQuestionHandlers(
       }
     },
     "question.resolve": async (options) => {
-      const { params, respond, client } = options;
+      const { params, respond, client, context } = options;
       if (!assertValidParams(params, validateQuestionResolveParams, "question.resolve", respond)) {
         return;
       }
@@ -476,6 +476,33 @@ export function createQuestionHandlers(
         let save: Promise<void> | undefined;
         await selected.withCurrent(
           () => {
+            if ("draftAnswers" in request) {
+              authorize.assertCurrent();
+              const result = manager.saveDraft(
+                request.id,
+                request.draftAnswers,
+                request.expectedRevision,
+                request.completeQuestionId,
+              );
+              if (result.status === "pending") {
+                let publishing = true;
+                try {
+                  context.broadcast(
+                    "question.requested",
+                    result.question,
+                    questionBroadcastOptions({
+                      observation: manager.observe(request.id, result.question),
+                      cfg: context.getRuntimeConfig(),
+                      isPublishing: () => publishing,
+                    }),
+                  );
+                } finally {
+                  publishing = false;
+                }
+              }
+              respond(true, result, undefined);
+              return;
+            }
             if ("cancel" in request) {
               authorize.assertCurrent();
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);

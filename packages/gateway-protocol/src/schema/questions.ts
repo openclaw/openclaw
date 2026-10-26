@@ -122,6 +122,11 @@ export const QuestionRecordSchema = closedObject({
   expiresAtMs: Type.Integer({ minimum: 0 }),
   status: QuestionStatusSchema,
   answers: Type.Optional(QuestionAnswersSchema),
+  draftAnswers: Type.Optional(QuestionAnswersSchema),
+  draftRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+  draftCompletedIds: Type.Optional(
+    Type.Array(QuestionIdSchema, { maxItems: 3, uniqueItems: true }),
+  ),
   resolvedBy: Type.Optional(NonEmptyString),
 });
 
@@ -159,6 +164,12 @@ export const QuestionWaitAnswerResultSchema = Type.Union([
 export const QuestionResolveParamsSchema = Type.Union([
   closedObject({
     id: NonEmptyString,
+    draftAnswers: QuestionAnswersSchema,
+    expectedRevision: Type.Integer({ minimum: 0 }),
+    completeQuestionId: Type.Optional(QuestionIdSchema),
+  }),
+  closedObject({
+    id: NonEmptyString,
     answers: QuestionAnswersSchema,
     secretStoreAllowedHosts: Type.Optional(
       withSince("2026.8", QuestionSecretStoreAllowedHostsSchema),
@@ -174,6 +185,7 @@ export const QuestionResolveParamsSchema = Type.Union([
 ]);
 
 export const QuestionResolveResultSchema = Type.Union([
+  closedObject({ status: Type.Literal("pending"), question: QuestionRecordSchema }),
   closedObject({ status: Type.Literal("answered"), answers: QuestionAnswersSchema }),
   closedObject({ status: Type.Literal("cancelled") }),
 ]);

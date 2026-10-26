@@ -10,7 +10,7 @@ export function registerTelegramQuestionDelivery(params: {
   text: string;
   textLimit: number;
   clearButtons: () => Promise<void>;
-  annotate: (text: string) => Promise<void>;
+  annotate: (text: string, statusLine: string) => Promise<void>;
 }): void {
   const questionId = questionGatewayRuntime.readAskUserQuestionId(params.payload);
   const text = params.text.trim();
@@ -28,7 +28,7 @@ export function registerTelegramQuestionDelivery(params: {
       const suffix = truncateUtf16Safe(statusLine.trim(), Math.min(512, limit));
       const separator = suffix && limit - suffix.length >= 2 ? "\n\n" : "";
       const prefix = truncateUtf16Safe(text, limit - separator.length - suffix.length);
-      await annotate(`${prefix}${separator}${suffix}`);
+      await annotate(`${prefix}${separator}${suffix}`, suffix);
     },
   });
 }

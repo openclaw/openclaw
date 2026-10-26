@@ -348,8 +348,8 @@ function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "ans
   const payload = { status: "no_answer" as const };
   const note =
     status === "cancelled"
-      ? "The question was cancelled; proceed with best judgment."
-      : "No answer arrived; proceed with best judgment.";
+      ? "The question was cancelled without an answer. Do not treat this as a selection."
+      : "The question expired without an answer. Do not treat this as a selection.";
   return textResult(`${note}\n\n${JSON.stringify(payload, null, 2)}`, payload);
 }
 

@@ -31,6 +31,14 @@ describe("question protocol validators", () => {
     ).toBe(true);
     expect(validateQuestionWaitAnswerParams({ id: "question-uuid", timeoutMs: 50 })).toBe(true);
     expect(validateQuestionResolveParams({ id: "question-uuid", answers })).toBe(true);
+    expect(
+      validateQuestionResolveParams({
+        id: "question-uuid",
+        draftAnswers: answers,
+        expectedRevision: 0,
+        completeQuestionId: "choice",
+      }),
+    ).toBe(true);
     expect(validateQuestionResolveParams({ id: "question-uuid", cancel: true })).toBe(true);
     expect(
       Value.Check(QuestionRecordSchema, {

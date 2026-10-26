@@ -391,6 +391,30 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(config.tools).toBeUndefined();
   });
 
+  it("keeps ask_user directly available for structured questions", () => {
+    const config: OpenClawConfig = { tools: { toolSearch: true, profile: "messaging" } };
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      codeModeOverride: false,
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createToolSearchTools({ config, catalogRef, executeTool }),
+        createStubTool("message"),
+        createStubTool("ask_user"),
+        createStubTool("hidden_target"),
+      ],
+      config,
+      ...plan,
+      catalogRef,
+    });
+    expect(result.tools.map((tool) => tool.name)).toContain("ask_user");
+    expect(result.tools.map((tool) => tool.name)).toContain("message");
+    expect(result.tools.map((tool) => tool.name)).not.toContain("hidden_target");
+  });
+
   it("uses the code-mode catalog when code-mode controls are enabled", () => {
     const config: OpenClawConfig = {
       tools: { codeMode: true, toolSearch: { enabled: true, mode: "directory" } },

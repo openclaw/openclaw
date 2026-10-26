@@ -34,6 +34,7 @@ export const QuestionManagerErrorCodes = {
   ALREADY_TERMINAL: "QUESTION_ALREADY_TERMINAL",
   ID_IN_USE: "QUESTION_ID_IN_USE",
   INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
+  DRAFT_CONFLICT: "QUESTION_DRAFT_CONFLICT",
   REQUESTER_INACTIVE: "QUESTION_REQUESTER_INACTIVE",
 } as const;
 
@@ -351,6 +352,71 @@ export class QuestionManager {
     });
   }
 
+  /** Draft updates keep the run waiting; the last completed answer resolves it once. */
+  saveDraft(
+    id: string,
+    patch: QuestionAnswers,
+    expectedRevision: number,
+    completeQuestionId?: string,
+  ): { status: "pending"; question: QuestionRecord } | QuestionResolveResult {
+    const entry = this.requirePendingEntry(id);
+    if (!entry.ordinary) {
+      throw this.invalidAnswer(id, "does not allow shared secret drafts");
+    }
+    const revision = entry.record.draftRevision ?? 0;
+    if (expectedRevision !== revision) {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.DRAFT_CONFLICT,
+        "Question answers changed; refresh before retrying.",
+      );
+    }
+    if (
+      completeQuestionId &&
+      !entry.record.questions.some((q) => q.questionId === completeQuestionId)
+    ) {
+      throw this.invalidAnswer(completeQuestionId, "is not part of this request");
+    }
+    if (
+      completeQuestionId &&
+      Object.keys(patch.answers).some((questionId) => questionId !== completeQuestionId)
+    ) {
+      throw this.invalidAnswer(completeQuestionId, "cannot complete a different question");
+    }
+    const canonical = this.validateAnswers(entry.record.questions, patch, true);
+    for (const questionId of Object.keys(canonical.answers)) {
+      if (entry.record.draftCompletedIds?.includes(questionId)) {
+        throw this.invalidAnswer(questionId, "is already complete");
+      }
+    }
+    const draftAnswers = {
+      answers: { ...entry.record.draftAnswers?.answers, ...canonical.answers },
+    };
+    if (completeQuestionId && !Object.hasOwn(draftAnswers.answers, completeQuestionId)) {
+      throw this.invalidAnswer(completeQuestionId, "has no staged answer");
+    }
+    if (
+      completeQuestionId &&
+      !entry.record.questions.find((q) => q.questionId === completeQuestionId)?.allowEmpty &&
+      !draftAnswers.answers[completeQuestionId]?.length
+    ) {
+      throw this.invalidAnswer(completeQuestionId, "requires an answer before completion");
+    }
+    const completed = new Set(entry.record.draftCompletedIds ?? []);
+    if (completeQuestionId) {
+      completed.add(completeQuestionId);
+    }
+    if (completed.size === entry.record.questions.length) {
+      return this.resolve(id, draftAnswers);
+    }
+    entry.record = {
+      ...entry.record,
+      draftAnswers,
+      draftRevision: revision + 1,
+      draftCompletedIds: [...completed],
+    };
+    return { status: "pending", question: entry.record };
+  }
+
   resolve(
     id: string,
     answers: QuestionAnswers,
@@ -358,6 +424,18 @@ export class QuestionManager {
     options?: { commit?: () => void; resolutionId?: string },
   ): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
+    if (
+      entry.record.draftCompletedIds?.some((questionId) => {
+        const saved = entry.record.draftAnswers?.answers[questionId] ?? [];
+        const submitted = answers.answers[questionId] ?? [];
+        return (
+          saved.length !== submitted.length ||
+          saved.some((value, index) => value !== submitted[index])
+        );
+      })
+    ) {
+      throw this.invalidAnswer(id, "cannot change a completed answer");
+    }
     const canonical = this.validateAnswers(entry.record.questions, answers);
     // The commit, receipt, and answered transition are synchronous. Failed
     // validation/writes must not publish a receipt; lost ACKs must not erase it.
@@ -514,7 +592,11 @@ export class QuestionManager {
   }
 
   /** Validates answers against stored questions and returns them in canonical form. */
-  private validateAnswers(questions: Question[], answers: QuestionAnswers): QuestionAnswers {
+  private validateAnswers(
+    questions: Question[],
+    answers: QuestionAnswers,
+    partial = false,
+  ): QuestionAnswers {
     const submittedIds = Object.keys(answers.answers);
     const questionsById = new Map(questions.map((question) => [question.questionId, question]));
     const unknownId = submittedIds.find((id) => !questionsById.has(id));
@@ -530,7 +612,14 @@ export class QuestionManager {
       const values = Object.hasOwn(answers.answers, question.questionId)
         ? answers.answers[question.questionId]
         : undefined;
+      if (partial && !Object.hasOwn(answers.answers, question.questionId)) {
+        continue;
+      }
       if (!values || values.length === 0) {
+        if (partial && values?.length === 0) {
+          canonical.answers[question.questionId] = [];
+          continue;
+        }
         if (question.allowEmpty) {
           canonical.answers[question.questionId] = [];
           continue;

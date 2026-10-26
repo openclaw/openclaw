@@ -152,6 +152,14 @@ export class EmbeddedQuestionBroker {
     if ("cancel" in params) {
       return this.manager.cancel(params.id, params.resolvedBy);
     }
+    if ("draftAnswers" in params) {
+      return this.manager.saveDraft(
+        params.id,
+        params.draftAnswers,
+        params.expectedRevision,
+        params.completeQuestionId,
+      );
+    }
     if (params.secretStoreAllowedHosts !== undefined) {
       throw invalidRequest("Secret store allowed hosts require a store-bound question.");
     }

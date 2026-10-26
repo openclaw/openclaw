@@ -155,6 +155,46 @@ describe("EmbeddedQuestionBroker", () => {
     },
   );
 
+  it("keeps an embedded question pending while saving answers one at a time", async () => {
+    const { id, answer } = ask({
+      ...requestParams,
+      questions: [
+        ...requestParams.questions,
+        {
+          questionId: "details",
+          header: "Details",
+          question: "What should be included?",
+          options: [{ label: "Logs" }, { label: "Screenshots" }],
+        },
+      ],
+    });
+    const first = broker.resolve({
+      id,
+      draftAnswers: stagingAnswers,
+      expectedRevision: 0,
+      completeQuestionId: "destination",
+    });
+    expect(first.status).toBe("pending");
+    expect(broker.get({ id }).question).toMatchObject({
+      status: "pending",
+      draftRevision: 1,
+      draftCompletedIds: ["destination"],
+    });
+    expect(broker.list().questions).toHaveLength(1);
+
+    const final = broker.resolve({
+      id,
+      draftAnswers: { answers: { details: ["Logs"] } },
+      expectedRevision: 1,
+      completeQuestionId: "details",
+    });
+    expect(final.status).toBe("answered");
+    expect(await answer).toMatchObject({
+      status: "answered",
+      answers: { answers: { destination: ["Staging"], details: ["Logs"] } },
+    });
+  });
+
   it("supports plain secret protocol questions but refuses store-bound input before publication", async () => {
     const events: string[] = [];
     broker = createBroker((event) => events.push(event.event));

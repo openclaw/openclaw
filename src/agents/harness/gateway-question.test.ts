@@ -608,6 +608,107 @@ describe("gateway harness questions", () => {
     }
   });
 
+  it("routes a keyed custom reply to its question without replacing another answer", async () => {
+    const sessionKey = "agent:main:keyed-custom-qa";
+    const keyedQuestionId = "ask_55555555555555555555555555555555";
+    const questionSet = [
+      {
+        id: "target",
+        header: "Target",
+        question: "Where?",
+        options: [{ label: "Staging" }, { label: "Review" }],
+        isOther: true,
+      },
+      {
+        id: "details",
+        header: "Details",
+        question: "What details?",
+        options: [{ label: "Logs" }, { label: "Screenshots" }],
+        multiSelect: true,
+        isOther: true,
+      },
+    ];
+    const record = {
+      id: keyedQuestionId,
+      sessionKey,
+      status: "pending",
+      draftRevision: 0,
+      draftAnswers: { answers: {} as Record<string, string[]> },
+      draftCompletedIds: [] as string[],
+    };
+    const answer = createDeferred<{
+      status: "answered";
+      answers: { answers: Record<string, string[]> };
+    }>();
+    const resolved = vi.fn();
+    let conflictOnce = true;
+    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _options, params) => {
+      if (method === "question.request") {
+        return { id: keyedQuestionId };
+      }
+      if (method === "question.waitAnswer") {
+        return await answer.promise;
+      }
+      if (method === "question.get") {
+        return { question: record };
+      }
+      if (method === "question.resolve") {
+        const request = params as {
+          draftAnswers: { answers: Record<string, string[]> };
+          expectedRevision: number;
+          completeQuestionId: string;
+        };
+        expect(request.expectedRevision).toBe(record.draftRevision);
+        if (request.completeQuestionId === "details" && conflictOnce) {
+          conflictOnce = false;
+          record.draftAnswers.answers.details = ["Logs"];
+          record.draftRevision += 1;
+          throw Object.assign(new Error("draft changed"), {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            details: { reason: "QUESTION_DRAFT_CONFLICT" },
+          });
+        }
+        resolved(request);
+        Object.assign(record.draftAnswers.answers, request.draftAnswers.answers);
+        record.draftRevision += 1;
+        record.draftCompletedIds.push(request.completeQuestionId);
+        if (record.draftCompletedIds.length === 2) {
+          const result = { status: "answered" as const, answers: record.draftAnswers };
+          answer.resolve(result);
+          return result;
+        }
+        return { status: "pending", question: record };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    };
+    const onBlockReply = vi.fn();
+    const run = runAgentHarnessGatewayQuestion({
+      questions: questionSet,
+      sessionKey,
+      timeoutMs: 60_000,
+      gatewayCall,
+      delivery: { onBlockReply },
+      questionId: keyedQuestionId,
+    });
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(2));
+    await expect(
+      claimPendingAgentQuestionAnswer({ sessionKey, text: "details: custom note" }),
+    ).resolves.toBe(true);
+    expect(record.draftAnswers.answers).toEqual({ details: ["Logs", "custom note"] });
+    await expect(
+      claimPendingAgentQuestionAnswer({ sessionKey, text: "details: different note" }),
+    ).resolves.toBe(true);
+    expect(resolved).toHaveBeenCalledTimes(1);
+    await expect(claimPendingAgentQuestionAnswer({ sessionKey, text: "Staging" })).resolves.toBe(
+      true,
+    );
+    await expect(run).resolves.toEqual({
+      status: "answered",
+      answers: { answers: { details: ["Logs", "custom note"], target: ["Staging"] } },
+    });
+  });
+
   it("accepts a later text answer after cancellation fails", async () => {
     let cancelAttempts = 0;
     const gatewayCall = answerGateway(() => {

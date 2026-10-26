@@ -63,7 +63,11 @@ export type TelegramPreparedSendPart = {
 };
 
 type TextFallback = { index: number; count: number };
-type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
+type AcceptedPart = TelegramPreparedSendPart & {
+  messageId: number;
+  hasInlineKeyboard: boolean;
+  usedRichMessage: boolean;
+};
 type ObservePart = (part: AcceptedPart) => Promise<void>;
 type PartialDeliveryResult = Omit<
   Parameters<typeof mergeTelegramPartialDeliveryError>[1],
@@ -106,6 +110,7 @@ export function createTelegramPreparedSender(config: {
       ...part,
       messageId: resolveTelegramMessageIdOrThrow(part.result, "send"),
       hasInlineKeyboard: Boolean(part.acceptedParams.reply_markup),
+      usedRichMessage: Boolean(part.acceptedParams.rich_message),
     };
     // One ledger owns provider acceptance. Receipt/cache/projection observers are
     // fallible and cannot retroactively turn an accepted part into a rejection.
@@ -181,6 +186,7 @@ export function createTelegramPreparedSender(config: {
     tracking: Tracking;
     /** Durable text drains definite rejected fallback parts; direct replies stop that page. */
     drainFallback?: boolean;
+    suppressRichMarkup?: boolean;
   }) => {
     const start = parts.length;
     let firstRejectedError: unknown;
@@ -250,7 +256,10 @@ export function createTelegramPreparedSender(config: {
           sendHtml: (text) => sendPlainOrHtml(text, true),
           sendRich: async (richMessage) => {
             const rawParams = prepared.requestParams();
-            const markup = rawParams.reply_markup ? { reply_markup: rawParams.reply_markup } : {};
+            const markup =
+              rawParams.reply_markup && !params.suppressRichMarkup
+                ? { reply_markup: rawParams.reply_markup }
+                : {};
             const sent = await request(
               "sendRichMessage",
               toTelegramRichMessageContextParams(rawParams),
@@ -267,7 +276,7 @@ export function createTelegramPreparedSender(config: {
             // on both physical attempts and record the fields actually accepted.
             return {
               ...sent,
-              acceptedParams: { ...sent.acceptedParams, ...markup },
+              acceptedParams: { ...sent.acceptedParams, ...markup, rich_message: true },
             };
           },
         },

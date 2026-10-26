@@ -260,7 +260,12 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         throw new Error("invalid question resolution");
       }
       if (!disposed) {
-        finish(record.id, result.status);
+        if (result.status === "pending") {
+          update(record.id, { record: result.question, resolving: false });
+          present();
+        } else {
+          finish(record.id, result.status);
+        }
       }
     } catch (error) {
       // This Gateway error is emitted only after the store write commits; an

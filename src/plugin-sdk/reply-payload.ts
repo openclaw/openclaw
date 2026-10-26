@@ -31,6 +31,16 @@ export function hasReplyPayloadFinalDeliveryCapture(payload: ReplyPayload): bool
 
 export type AskUserQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
 
+export function readAskUserQuestionIndex(
+  payload: Pick<ReplyPayload, "channelData">,
+): number | undefined {
+  const value = (payload.channelData?.askUser as { questionIndex?: unknown } | undefined)
+    ?.questionIndex;
+  return Number.isInteger(value) && typeof value === "number" && value >= 0 && value <= 2
+    ? value
+    : undefined;
+}
+
 /** Read bounded Gateway-owned option ordering for one native ask_user question. */
 export function resolveAskUserQuestionOptionIndices(
   payload: Pick<ReplyPayload, "channelData">,
@@ -48,8 +58,8 @@ export function resolveAskUserQuestionOptionIndices(
     typeof questionId !== "string" ||
     !questionId ||
     !Array.isArray(optionValues) ||
-    optionValues.length < 2 ||
-    optionValues.length > 4
+    optionValues.length < 1 ||
+    optionValues.length > 64
   ) {
     return undefined;
   }

@@ -15,6 +15,7 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTerminalContent,
   resolveAskUserQuestionOptionIndices,
+  readAskUserQuestionIndex,
   resolveSendableOutboundReplyParts,
   stripReplyPayloadResponsePrefix,
   type ReplyPayload,
@@ -114,6 +115,7 @@ function resolvePayloadTelegramControls(
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
+      questionIndex: readAskUserQuestionIndex(payload),
     },
   );
   const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);

@@ -16,6 +16,7 @@ export type QuestionPanelViewModel = {
   disabled: boolean;
   submitting?: boolean;
   drafts: Map<string, QuestionDraft>;
+  completedQuestionIds?: readonly string[];
   error?: string | null;
   notice?: string;
   requestPosition?: { current: number; total: number };
@@ -24,6 +25,7 @@ export type QuestionPanelViewModel = {
 export type QuestionPanelProps = {
   getTranscriptElement?: () => HTMLElement | null;
   model: QuestionPanelViewModel;
+  onQuestionComplete?: (questionId: string, values: string[]) => void | Promise<void>;
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
   onChange?: () => void;
