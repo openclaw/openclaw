@@ -138,9 +138,17 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
       return {
         top: box.top,
         bottom: box.bottom,
+        width: box.width,
+        height: box.height,
         conversationTop: conversation.top,
         availableHeight: editor.clientHeight - paddingTop - paddingBottom,
         scrollTop: editor.scrollTop,
+        scrollHeight: editor.scrollHeight,
+        clientHeight: editor.clientHeight,
+        selectionStart: editor.selectionStart,
+        selectionEnd: editor.selectionEnd,
+        focused: document.activeElement === editor,
+        overflowY: style.overflowY,
         line,
         lineTop,
         lineBottom: lineTop + line,
@@ -148,6 +156,23 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
           document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === editor,
       };
     });
+  const reportScrollFailure = async (
+    edge: "start" | "end",
+    beforeWheel: Awaited<ReturnType<typeof measure>>,
+    error: unknown,
+  ) => {
+    console.error(
+      "[composer-scroll-edge]",
+      JSON.stringify({
+        edge,
+        platform: process.platform,
+        browser: page.context().browser()?.version(),
+        beforeWheel,
+        current: await measure(),
+      }),
+    );
+    throw error;
+  };
   const before = await measure();
 
   expect(before.top).toBeGreaterThanOrEqual(before.conversationTop);
@@ -165,10 +190,12 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   // Scroll the complete line into view; native caret scrolling may show only its glyphs.
   await textarea.hover();
+  const beforeEndWheel = await measure();
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
-    .toBe(await textarea.evaluate((editor) => editor.scrollHeight));
+    .toBe(await textarea.evaluate((editor) => editor.scrollHeight))
+    .catch((error) => reportScrollFailure("end", beforeEndWheel, error));
   const last = await measure();
   expect(last.scrollTop).toBeGreaterThan(0);
   await expectReachableAction(page, "Send message", visibleBottom, mobile);
@@ -176,8 +203,12 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   await textarea.hover();
+  const beforeStartWheel = await measure();
   await page.mouse.wheel(0, -1000);
-  await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
+  await expect
+    .poll(() => textarea.evaluate((editor) => editor.scrollTop))
+    .toBe(0)
+    .catch((error) => reportScrollFailure("start", beforeStartWheel, error));
   const first = await measure();
   for (const reading of [last, first]) {
     expect(reading.lineTop).toBeGreaterThanOrEqual(Math.max(reading.top, reading.conversationTop));
