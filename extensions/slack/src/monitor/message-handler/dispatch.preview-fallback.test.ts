@@ -1,10 +1,7 @@
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  projectAgentToolActivity,
-  projectProgressCardChannelUpdate,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { projectProgressCardChannelUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
@@ -41,6 +38,7 @@ import {
   expectCalls,
   contentTaskId,
   emitCompactProgressScenario,
+  emitSlackToolProgressTestEvent,
   expectRecordFields,
   planUpdate,
   requireMockCall,
@@ -622,19 +620,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         if (entry.kind === "item") {
           const { kind: _kind, itemKind, ...payload } = entry;
           await params.replyOptions?.onItemEvent?.({ ...payload, kind: itemKind });
-        } else if (entry.kind === "tool_start") {
-          const { kind: _kind, ...payload } = entry;
-          await params.replyOptions?.onToolStart?.(payload);
-          const item = projectAgentToolActivity({
-            toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
-            name: entry.name,
-            phase: entry.phase === "update" ? "update" : "start",
-            args: entry.args,
-          });
-          await params.replyOptions?.onItemEvent?.({
-            ...item,
-            itemId: entry.itemId ?? item.itemId,
-          });
+        } else if (entry.kind === "command_output" || entry.kind === "tool_start") {
+          await emitSlackToolProgressTestEvent(params.replyOptions, entry, index);
         } else if (entry.kind === "patch") {
           const { kind: _kind, ...payload } = entry;
           await params.replyOptions?.onPatchSummary?.(payload);
