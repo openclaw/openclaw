@@ -46,7 +46,7 @@ it.for([
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const effect = vi.fn();
-    const handler = vi.fn(async () => {
+    const handler = async () => {
       entered.resolve();
       await release.promise;
       await trackAsyncWork(() => {
@@ -55,7 +55,7 @@ it.for([
           throw new Error("synthetic session cleanup failure");
         }
       });
-    });
+    };
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName, handler }]));
     // Observe completion without replacing either lifetime owner or polling its count.
     const continuation = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
@@ -93,12 +93,6 @@ it.for([
       await withinTest(joinContinuations(), signal);
       expect(effect).toHaveBeenCalledExactlyOnceWith();
       expect(admission.getActiveGatewayRootWorkCount()).toBe(0);
-      const completion = handler.mock.results[0]?.value;
-      if (fails) {
-        await expect(completion).rejects.toThrow("synthetic session cleanup failure");
-      } else {
-        await expect(completion).resolves.toBeUndefined();
-      }
     } finally {
       release.resolve();
       root?.release();

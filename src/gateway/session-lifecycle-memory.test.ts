@@ -68,8 +68,8 @@ async function fixture() {
   };
 }
 
-it("reads committed actor changes through Gateway target and creation preparation", async () => {
-  const { patch } = await fixture();
+it("reads current actor metadata and resets after cleanup updates it", async () => {
+  const { patch, owner, reset } = await fixture();
   const target = await resolveGatewaySessionStoreTargetInWorker({ cfg, key, agentId: "main" });
   await patch({ displayName: "Current title" });
   expect(
@@ -78,35 +78,31 @@ it("reads committed actor changes through Gateway target and creation preparatio
   expect(
     await readSessionCreateTarget({ cfg, commandSource: "test" }, target, "original", [key]),
   ).toMatchObject({ ok: true, value: { displayName: "Current title" } });
+  expect(
+    await deleteIncognitoSessionForReset({
+      ...reset,
+      beforeDelete: async () => {
+        await patch({ displayName: "Cleanup complete", updatedAt: 2 });
+      },
+    }),
+  ).toEqual({ ok: true, value: { deletedSessionId: "original" } });
+  expect(owner.readSession(key, authority)).toBeUndefined();
 });
 
-it.each(["metadata update", "authority revocation"])(
-  "resets after cleanup: %s",
-  async (cleanup) => {
-    const { patch, owner, reset } = await fixture();
-    const revoked = cleanup === "authority revocation";
-    let allowed = true;
-    const pending = deleteIncognitoSessionForReset({
-      ...reset,
-      commitGuard() {
-        if (!allowed) {
-          throw new Error("Deletion authority revoked");
-        }
-      },
-      async beforeDelete() {
-        if (revoked) {
-          allowed = false;
-        } else {
-          await patch({ displayName: "Cleanup complete", updatedAt: 2 });
-        }
-      },
-    });
-    if (revoked) {
-      await expect(pending).rejects.toThrow("Deletion authority revoked");
-      expect(owner.readSession(key, authority)?.entry?.sessionId).toBe("original");
-    } else {
-      expect(await pending).toEqual({ ok: true, value: { deletedSessionId: "original" } });
-      expect(owner.readSession(key, authority)).toBeUndefined();
-    }
-  },
-);
+it("preserves the actor when cleanup revokes deletion authority", async () => {
+  const { owner, reset } = await fixture();
+  let allowed = true;
+  const pending = deleteIncognitoSessionForReset({
+    ...reset,
+    commitGuard() {
+      if (!allowed) {
+        throw new Error("Deletion authority revoked");
+      }
+    },
+    async beforeDelete() {
+      allowed = false;
+    },
+  });
+  await expect(pending).rejects.toThrow("Deletion authority revoked");
+  expect(owner.readSession(key, authority)?.entry?.sessionId).toBe("original");
+});

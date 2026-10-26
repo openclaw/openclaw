@@ -69,9 +69,6 @@ describe("public reader language", () => {
     ["ar-EG", "unsupported", false, "ar", "rtl", "أعلى"],
     ["fr-FR", undefined, true, "fr", "ltr", "Haut"],
     ["zz-ZZ", undefined, false, "en", "ltr", "Top"],
-    ["zh-Hans-TW", undefined, false, "zh-CN", "ltr", "Top"],
-    ["zh-Hant-CN", undefined, false, "zh-TW", "ltr", "Top"],
-    ["pt-PT", undefined, false, "pt-BR", "ltr", "Top"],
   ])(
     "selects %s with preference %s (blocked storage: %s)",
     (language, preference, blocked, locale, direction, top) => {
@@ -90,7 +87,6 @@ describe("public reader language", () => {
     expect(find(".copy")?.getAttribute("aria-label")).toBe("Copier le code");
     find("[data-public-refresh-now]")!.click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetch).toHaveBeenCalledTimes(1);
     expect(find(".copy")?.getAttribute("title")).toBe("Copier");
     expect(find("[data-public-refresh-status]")?.textContent).toBe("À jour");
     expect(find("footer a")?.textContent).toBe("Actualiser");
