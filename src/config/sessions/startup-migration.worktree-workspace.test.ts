@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import * as worktreeRegistry from "../../agents/worktrees/registry.js";
 import * as projectRegistry from "../../projects/project-registry.js";
 import {
   ensureProjectRegistrySchema,
@@ -114,7 +115,9 @@ it("backfills a nested requested workspace once instead of using the agent defau
     worktree: { canonicalWorkspaceDir: requestedWorkspace },
     updatedAt: 10,
   });
+  const listWorktrees = vi.spyOn(worktreeRegistry, "listRegistryWorktreesForMigration");
   await runMigration();
+  expect(listWorktrees).not.toHaveBeenCalled();
   expect(loadSessionEntry(scope)).toEqual(first);
   expect(loadSessionEntry(ordinaryScope)).toEqual(ordinaryBefore);
 });

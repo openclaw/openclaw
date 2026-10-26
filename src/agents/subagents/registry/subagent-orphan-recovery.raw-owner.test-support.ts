@@ -18,9 +18,7 @@ export async function restartRegistry(
   beforeInit?: () => void | Promise<void>,
 ) {
   await resetSubagentRegistryForTests({ persist: false });
-  if (beforeInit) {
-    await beforeInit();
-  }
+  await beforeInit?.();
   rotateAgentEventLifecycleGeneration();
   await initSubagentRegistry();
   await fixture.activateGatewayRuntime();

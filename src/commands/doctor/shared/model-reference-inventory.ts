@@ -14,8 +14,7 @@ import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletio
 import { readCronStoreSelectionForDoctor } from "../cron/default-store-selection.js";
 import { loadLegacyCronRepairState } from "../cron/legacy-repair.js";
 import { createDoctorModelRefResolver } from "./model-reference-resolver.js";
-export { createDoctorModelRefResolver } from "./model-reference-resolver.js";
-export type DoctorModelReference = {
+type DoctorModelReference = {
   path: string;
   modelRef: string;
   rawModelRef: string;

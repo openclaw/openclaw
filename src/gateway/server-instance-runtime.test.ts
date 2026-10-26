@@ -294,7 +294,7 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       await expect(staleDelivery).rejects.toThrow("Recovery notice owner retired before delivery");
 
       expect(visibleSend).toHaveBeenCalledOnce();
-      expect(queuedResumption).toBeNull();
+      expect(queuedResumption).toMatchObject({ namespace: "preparing", retired: true });
       expect(sendText).toHaveBeenCalledWith(expect.objectContaining(target));
       expect(handleAction).not.toHaveBeenCalled();
 

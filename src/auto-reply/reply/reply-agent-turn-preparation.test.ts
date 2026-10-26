@@ -15,6 +15,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
@@ -241,17 +242,7 @@ function createActiveGoalEntry(): SessionEntry {
   return {
     sessionId: "queued-session",
     updatedAt: 1,
-    goal: {
-      schemaVersion: 1,
-      id: "goal",
-      objective: "Finish",
-      status: "active",
-      createdAt: 1,
-      updatedAt: 1,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    },
+    goal: createSessionGoalFixture("goal", "Finish"),
   };
 }
 

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, it } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import {
   attachModelProviderRequestRouteFacts,
@@ -28,16 +29,14 @@ it.each([
   const provider = "custom-dashscope";
   const config: OpenClawConfig = {
     plugins,
-    models: {
-      providers: {
-        [provider]: {
-          baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          api: "openai-completions",
-          apiKey: "synthetic-not-a-real-key",
-          models: [makeCatalogModel("qwen3.8", "Fixture", { reasoning: true, maxTokens: 1000 })],
-        },
+    models: configForProviders({
+      [provider]: {
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        api: "openai-completions",
+        apiKey: "synthetic-not-a-real-key",
+        models: [makeCatalogModel("qwen3.8", "Fixture", { reasoning: true, maxTokens: 1000 })],
       },
-    },
+    }).models,
   };
   const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
   const snapshot = loadPluginMetadataSnapshot({ config, env });

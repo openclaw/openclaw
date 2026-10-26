@@ -577,7 +577,7 @@ export async function reserveOwnedWorktree<T>(
   );
 }
 
-export async function createOwnedWorktree<T>(
+async function createOwnedWorktree<T>(
   params: CreateManagedWorktreeParams & WorktreeAllocationGuard & WorktreeSourceCustody,
   repository: ResolvedRepository,
   env: NodeJS.ProcessEnv,

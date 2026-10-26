@@ -169,8 +169,18 @@ export function createSlashMenu() {
           ) {
             return;
           }
+          const selectedCommand =
+            draft.slashMenuMode === "command"
+              ? draft.slashMenuItems[draft.slashMenuIndex]?.name
+              : undefined;
           // Parse the argument draft as well as its command token after refresh.
           updateSlashMenu(host.getDraft(), draft, host, { skipSlashIntent: true });
+          if (selectedCommand && draft.slashMenuMode === "command") {
+            const index = draft.slashMenuItems.findIndex((item) => item.name === selectedCommand);
+            if (index >= 0) {
+              draft.slashMenuIndex = index;
+            }
+          }
         });
       });
   }

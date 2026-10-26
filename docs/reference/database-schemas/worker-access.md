@@ -87,6 +87,27 @@ check, then verifies the same live owner before dispatch and native admission.
 Successful checks are never reused across requests. Retained schema settlement,
 synchronous bootstrap, and native cleanup keep their existing lease checks.
 
+MCP config mutations, personal GitHub credential publication, and transcript
+artifact exports retain their original database context through the async lease
+owner. They await durable ownership verification after staging and before each
+effect, then use the same owner's synchronous liveness guard at publication.
+Worker writes retain the lease through native transaction settlement; draining
+refuses new effects without revoking accepted writes. Read-only transcript
+exports refuse before acquiring a writable lease. Automatic recovery cleanup
+also awaits serving-owner verification before launch and destructive admission.
+
+Runtime owner-path capture resolves filesystem aliases asynchronously. Borrowed
+cleanup clients carry their original physical database identity to the SQLite
+worker, including birthtime where supported, instead of repeating synchronous
+host filesystem checks. The binding belongs to each client, so reusing an actor
+does not change another client's authority. Close-checkpoint diagnostics inspect
+files asynchronously and recheck cleanup custody before publishing.
+Periodic WAL work carries its original file identity through worker opening and
+execution; host lifecycle guards stay in memory. Worker admission publication
+consumes the broker's prepared identity instead of rescanning the same file and
+aliases. Warm admission exchanges reuse their locally retained descriptor facts.
+Native opening, replacement, and retirement keep their existing custody checks.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.

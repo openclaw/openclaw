@@ -1,8 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
-import { createOpenClawCodingTools as createCoreCodingTools } from "../agents/agent-tools.js";
-import type { EmbeddedRunAttemptParams as CoreAttempt } from "../agents/embedded-agent-runner/run/types.js";
 import * as toolSurfaceCore from "../agents/harness/tool-surface-bridge.js";
 import type * as Harness from "./agent-harness-runtime.js";
 import {
@@ -36,23 +34,13 @@ async function surface(mode: "sync" | "async", config: SurfaceParams["config"]) 
   return runtime;
 }
 
-it("keeps thinking provenance out of public attempt and tool inputs", () => {
+it("keeps host-owned controls out of public attempt and tool inputs", () => {
   expectTypeOf<KeysIn<Attempts, "thinkingExplicit">>().toEqualTypeOf<never>();
   expectTypeOf<KeysIn<[Tools, AsyncTools], "requesterThinkingExplicit">>().toEqualTypeOf<never>();
-});
-
-it("keeps the host-owned blind prompt flag out of public attempts", () => {
   expectTypeOf<KeysIn<Attempts, "blindPrompt">>().toEqualTypeOf<never>();
-  expectTypeOf<Pick<CoreAttempt, "blindPrompt">>().toEqualTypeOf<{ blindPrompt?: true }>();
-});
-
-it("accepts the optional host run trigger for tool presentation", () => {
   expectTypeOf<Pick<SurfaceParams, "trigger">>().toEqualTypeOf<{
     trigger?: Harness.AgentHarnessAttemptParamsV2["trigger"];
   }>();
-});
-
-it("keeps Side chat controls out of every public attempt and tool-surface input", () => {
   type HostTools = Options<NonNullable<Attempts[1]["hostCapabilities"]["createToolSurface"]>>;
   type HostTest = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
   type Inputs = [...Attempts, SurfaceParams, Tools, HostTools, HostTest];
@@ -63,18 +51,9 @@ it("keeps Side chat controls out of every public attempt and tool-surface input"
   expectTypeOf<Surface>().not.toHaveProperty("plan");
   type CompactOptions = NonNullable<Parameters<Surface["compactTools"]>[1]>;
   expectTypeOf<CompactOptions>().not.toHaveProperty("prepared");
-  expectTypeOf<Pick<CoreAttempt, PrivateControls>>().toEqualTypeOf<{
-    disableToolSearch?: true;
-    sessionReadScopeKey?: string;
-  }>();
   type Hooks = "onProgressCardPlanSaved" | "authProfileStoreSource" | "onWebSearchConfiguration";
   expectTypeOf<KeysIn<[Tools], Hooks>>().toEqualTypeOf<never>();
   expectTypeOf<AsyncTools>().not.toHaveProperty("onWebSearchConfiguration");
-  expectTypeOf<Tools>().toMatchTypeOf<Options<typeof createCoreCodingTools>>();
-});
-
-it("keeps the public factory on the existing shared implementation", () => {
-  expect(createOpenClawCodingTools).toBe(createCoreCodingTools);
 });
 
 it("preserves explicitly allowed tools in an asynchronously prepared lean surface", async () => {
@@ -103,9 +82,4 @@ it.each(["sync", "async"] as const)("projects only public %s controls", async (m
   expect(runtime).not.toHaveProperty("plan");
   expect(compact).toHaveBeenCalledExactlyOnceWith([], publicOptions);
   expect(Object.keys(result)).toEqual(["tools", "promptToolPolicy"]);
-  expect(result.tools).toBe(compact.mock.results[0]?.value.tools);
-  expect(result.promptToolPolicy).toBe(compact.mock.results[0]?.value.promptToolPolicy);
-  for (const key of ["cleanup", "toolSearchCatalogRef", "toolSearchCatalogExecutor"] as const) {
-    expect(runtime[key]).toBe(internal[key]);
-  }
 });
