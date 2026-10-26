@@ -36,6 +36,42 @@ const reject = (result: Promise<unknown>) =>
   expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
 const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
+const includeConfig = (include: string) =>
+  JSON.stringify({ gateway: { mode: "local" }, logging: { $include: include } }) + "\n";
+const infoLogging = '{"level":"info"}\n';
+
+function configWriter() {
+  const output = createTestRuntime();
+  type SetOptions = Parameters<typeof runConfigSet>[0];
+  return {
+    ...output,
+    setJson: (
+      field: string,
+      value: string,
+      cliOptions: SetOptions["cliOptions"] = {},
+      beforePersistentApply?: SetOptions["beforePersistentApply"],
+    ) =>
+      runConfigSet({
+        path: field,
+        value,
+        cliOptions: { ...cliOptions, strictJson: true },
+        beforePersistentApply,
+        runtime: output.runtime,
+      }),
+    patch: (file: string) => runConfigPatch({ cliOptions: { file }, runtime: output.runtime }),
+    unset: (field: string) => runConfigUnset({ path: field, runtime: output.runtime }),
+  };
+}
+
+function denyRename(target: string) {
+  const rename = fs.renameSync;
+  vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (to === target) {
+      throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+    }
+    return rename(from, to);
+  });
+}
 
 async function get(field: string, json = false) {
   logs.length = 0;
@@ -120,17 +156,11 @@ describe("config cli integration", () => {
   it.each(["restore", "empty external replacement", "recovery failure"])(
     "openclaw config set reports owned root removal with %s",
     async (recovery) => {
-      const raw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
+      const raw = includeConfig("logging.json");
       await withConfig(raw, async ({ configPath, tempDir }) => {
         const includePath = path.join(tempDir, "logging.json");
-        fs.writeFileSync(includePath, '{"level":"info"}\n');
-        const rename = fs.renameSync;
-        vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (to === configPath) {
-            throw Object.assign(new Error("rename denied"), { code: "EPERM" });
-          }
-          return rename(from, to);
-        });
+        fs.writeFileSync(includePath, infoLogging);
+        denyRename(configPath);
         const concurrentRaw =
           recovery === "empty external replacement"
             ? ""
@@ -176,7 +206,7 @@ describe("config cli integration", () => {
   it.each(["root", "include"])(
     "openclaw config set preserves all five %s backups after five failed stages",
     async (location) => {
-      const includeRaw = '{"level":"info"}\n';
+      const includeRaw = infoLogging;
       const raw =
         JSON.stringify({
           gateway: { mode: "local" },
@@ -214,15 +244,13 @@ describe("config cli integration", () => {
 
   it("openclaw config set preserves the parent mode when saving a long include filename", async () => {
     const name = "a".repeat(230) + ".json";
-    const raw =
-      JSON.stringify({ gateway: { mode: "local" }, logging: { $include: "shared/" + name } }) +
-      "\n";
+    const raw = includeConfig("shared/" + name);
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const parent = path.join(tempDir, "shared");
       fs.mkdirSync(parent, { mode: 0o750 });
       const mode = fs.statSync(parent).mode;
       const include = path.join(parent, name);
-      const original = '{"level":"info"}\n';
+      const original = infoLogging;
       fs.writeFileSync(include, original);
       await set("logging.level", "debug");
       expect(readJson(include)).toEqual({ level: "debug" });
@@ -241,18 +269,13 @@ describe("config cli integration", () => {
   ])(
     "openclaw config set preserves $alias include identity during fallback: $outcome",
     async ({ alias, outcome }) => {
-      const raw =
-        JSON.stringify({
-          gateway: { mode: "local" },
-          logging: {
-            $include:
-              alias === "parent"
-                ? "alias/actual.json"
-                : alias === "relative"
-                  ? "links/logging.json"
-                  : "logging.json",
-          },
-        }) + "\n";
+      const raw = includeConfig(
+        alias === "parent"
+          ? "alias/actual.json"
+          : alias === "relative"
+            ? "links/logging.json"
+            : "logging.json",
+      );
       await withConfig(raw, async ({ configPath, tempDir }) => {
         const directory = alias === "parent" ? path.join(tempDir, "real") : tempDir;
         fs.mkdirSync(directory, { recursive: true });
@@ -260,7 +283,7 @@ describe("config cli integration", () => {
           fs.mkdirSync(path.join(tempDir, "links"));
         }
         const target = path.join(directory, "actual.json");
-        const original = '{"level":"info"}\n';
+        const original = infoLogging;
         fs.writeFileSync(target, original);
         const link = path.join(
           tempDir,
@@ -286,12 +309,7 @@ describe("config cli integration", () => {
         const concurrentRoot =
           JSON.stringify({ ...JSON.parse(raw), messages: { responsePrefix: "external" } }) + "\n";
         const rename = fs.renameSync;
-        vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (to === target) {
-            throw Object.assign(new Error("include rename denied"), { code: "EPERM" });
-          }
-          return rename(from, to);
-        });
+        denyRename(target);
         let removed = false;
         const remove = fs.rmSync;
         vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
@@ -556,11 +574,8 @@ describe("config cli integration", () => {
     await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "patch.json5");
       writeFixtureJsonSync(patchPath, configForExec({ security: "allowlist", ask: "on-miss" }));
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
-      ).rejects.toThrow("__exit__:1");
+      const output = configWriter();
+      await expect(output.patch(patchPath)).rejects.toThrow("__exit__:1");
 
       expect(read(configPath)).toBe(migratedRaw);
       const diagnostic = output.errors.join("\n");
@@ -569,7 +584,7 @@ describe("config cli integration", () => {
       expect(diagnostic).toContain("at this scope");
 
       writeFixtureJsonSync(patchPath, { ...migrated, messages: { ackReaction: "✅" } });
-      await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
+      await output.patch(patchPath);
       expect(load(configPath)).toMatchObject({
         ...migrated,
         messages: { ackReaction: "✅" },
@@ -585,17 +600,11 @@ describe("config cli integration", () => {
         const concurrentRaw = '{ port: 19002, bind: "loopback" }\n';
         fs.writeFileSync(includePath, "{ port: 18789 }\n", "utf8");
         clearConfigCache();
-        const output = createTestRuntime();
+        const output = configWriter();
 
         await expect(
-          runConfigSet({
-            path: "gateway.port",
-            value: "19001",
-            cliOptions: { strictJson: true },
-            runtime: output.runtime,
-            beforePersistentApply: () => {
-              fs.writeFileSync(includePath, concurrentRaw, "utf8");
-            },
+          output.setJson("gateway.port", "19001", {}, () => {
+            fs.writeFileSync(includePath, concurrentRaw, "utf8");
           }),
         ).rejects.toThrow("__exit__:1");
 
@@ -608,23 +617,10 @@ describe("config cli integration", () => {
 
   it("accepts absent and exact authored expectations", async () => {
     await withConfig("{ gateway: { port: 18789 } }\n", async ({ configPath }) => {
-      const absentOutput = createTestRuntime();
-      await runConfigSet({
-        path: "gateway.bind",
-        value: '"loopback"',
-        cliOptions: { strictJson: true, expectCurrentAbsent: true },
-        runtime: absentOutput.runtime,
-      });
-      expect(absentOutput.errors).toStrictEqual([]);
-
-      const exactOutput = createTestRuntime();
-      await runConfigSet({
-        path: "gateway.port",
-        value: "19001",
-        cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-        runtime: exactOutput.runtime,
-      });
-      expect(exactOutput.errors).toStrictEqual([]);
+      const output = configWriter();
+      await output.setJson("gateway.bind", '"loopback"', { expectCurrentAbsent: true });
+      await output.setJson("gateway.port", "19001", { expectCurrentJson: "18789" });
+      expect(output.errors).toStrictEqual([]);
       expect(load(configPath)).toMatchObject({
         gateway: { bind: "loopback", port: 19001 },
       });
@@ -639,19 +635,18 @@ describe("config cli integration", () => {
       await withConfig(
         changedBeforeLoad ? concurrentRaw : "{ gateway: { port: 18789 } }\n",
         async ({ configPath }) => {
-          const output = createTestRuntime();
+          const output = configWriter();
           await expect(
-            runConfigSet({
-              path: "gateway.port",
-              value: "19001",
-              cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-              runtime: output.runtime,
-              ...(!changedBeforeLoad && {
-                beforePersistentApply: () => {
-                  fs.writeFileSync(configPath, concurrentRaw, "utf8");
-                },
-              }),
-            }),
+            output.setJson(
+              "gateway.port",
+              "19001",
+              { expectCurrentJson: "18789" },
+              changedBeforeLoad
+                ? undefined
+                : () => {
+                    fs.writeFileSync(configPath, concurrentRaw, "utf8");
+                  },
+            ),
           ).rejects.toThrow("__exit__:1");
           expect(read(configPath)).toBe(concurrentRaw);
           expect(output.logs).toStrictEqual([]);
@@ -680,11 +675,8 @@ describe("config cli integration", () => {
     const raw =
       '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';
     await withConfig(raw, async ({ configPath }) => {
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigUnset({ path: "gateway.bind", runtime: output.runtime }),
-      ).rejects.toThrow("__exit__:1");
+      const output = configWriter();
+      await expect(output.unset("gateway.bind")).rejects.toThrow("__exit__:1");
 
       expect(read(configPath)).toBe(raw);
       expect(output.logs).toStrictEqual([]);
@@ -697,14 +689,8 @@ describe("config cli integration", () => {
   it("writes an absent key even when its value equals the resolved default", async () => {
     const raw = "{\n  // the default is not authored yet\n  gateway: {},\n}\n";
     await withConfig(raw, async ({ configPath }) => {
-      const output = createTestRuntime();
-
-      await runConfigSet({
-        path: "gateway.port",
-        value: "18789",
-        cliOptions: { strictJson: true },
-        runtime: output.runtime,
-      });
+      const output = configWriter();
+      await output.setJson("gateway.port", "18789");
 
       const after = read(configPath);
       expect(after).not.toBe(raw);

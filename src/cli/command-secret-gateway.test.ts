@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
@@ -20,16 +20,9 @@ import {
 } from "../test-utils/talk-test-provider.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
-const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(),
-}));
-
-const { callGateway } = mocks;
-const tempRoots = new Set<string>();
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: mocks.callGateway,
-}));
+const callGateway = vi.hoisted(() => vi.fn());
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("../gateway/call.js", () => ({ callGateway }));
 
 vi.mock("../secrets/runtime-web-tools.js", () => ({
   resolveRuntimeWebTools: vi.fn(async () => ({
@@ -59,13 +52,9 @@ beforeEach(() => {
   resetCommandSecretMocks();
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetCommandSecretMocks();
   vi.unstubAllEnvs();
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
 });
 
 const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
@@ -129,8 +118,7 @@ async function createExecProviderConfig(refId: string): Promise<{
   config: OpenClawConfig;
   markerPath: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-secret-exec-"));
-  tempRoots.add(root);
+  const root = tempRoots.make("openclaw-command-secret-exec-");
   const markerPath = path.join(root, "executed");
   const resolverScript = [
     "const fs = require('node:fs');",
