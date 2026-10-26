@@ -221,6 +221,11 @@ describe("production lint suppressions", () => {
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // These sort only freshly materialized arrays or locally owned swarm member lists.
+        "src/gateway/health/collector.ts|unicorn/no-array-sort|3",
+        "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
+        "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
+        "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
         "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
@@ -229,6 +234,8 @@ describe("production lint suppressions", () => {
         "src/gateway/server-methods/usage-session-loading.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
+        "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
+        "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
