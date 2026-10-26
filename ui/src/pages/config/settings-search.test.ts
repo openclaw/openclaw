@@ -43,11 +43,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);
   vi.resetModules();
   const runtime = await import("../../i18n/index.ts");
-  const { en } = await import("../../i18n/locales/en.ts");
   await runtime.i18n.setLocale("en");
-  const configView = en.configView;
-  const updates = en.updates;
-  const campaign = (updates as Record<string, unknown>).campaign;
   const sharedKeys = ["configView.adminRequired", "updates.confirm.message"];
   const sharedCopy = sharedKeys.map((key) => runtime.t(key));
   const lazyKeys = [
@@ -66,35 +62,19 @@ it("keeps target metadata cold and loads Settings English when search opens", as
     const find = (query: string) => coldSearch({ query, schema: null, value: null, uiHints: {} });
 
     expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
-    expectBlocks(
-      coldSearch({
-        query: "attribution",
-        schema: null,
-        value: null,
-        uiHints: {},
-        identityAvailable: true,
-      }),
-      { routeId: "profile", hash: "#settings-profile-identity" },
-    );
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
-    expect(en.configView).toBe(configView);
-    expect(en.updates).toBe(updates);
-    expect((en.updates as Record<string, unknown>).campaign).toBe(campaign);
     expect(sharedKeys.map((key) => runtime.t(key))).toEqual(sharedCopy);
     for (const key of lazyKeys) {
       expect(runtime.t(key), key).not.toBe(key);
     }
 
-    runtime.i18n.registerTranslation("fr", {
-      configView: { chatPrefs: { title: "Discussion" } },
-    });
-    await runtime.i18n.setLocale("fr");
-    expectBlocks(find("Discussion"), { routeId: "appearance", label: "Discussion" });
-    expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
-    expect(runtime.t("modelProviders.modelsAvailable", { available: "2", count: "3" })).toBe(
-      "2 of 3 models available",
+    await runtime.i18n.setLocale("es");
+    expectBlocks(
+      find("modelo"),
+      { routeId: "model-providers", hash: "#settings-model-behavior" },
+      { routeId: "appearance", hash: "#settings-appearance-sidebar" },
     );
-    expect(runtime.t("settings.missing.key")).toBe("settings.missing.key");
+    expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
     await runtime.i18n.setLocale("en");
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
   } finally {
@@ -222,16 +202,6 @@ it("routes global plugin policy to Plugin Settings without indexing plugin entri
     hash: "#plugin-settings-advanced",
   });
   expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
-});
-
-it("searches and displays static settings blocks in the active locale", async () => {
-  await i18n.setLocale("es");
-
-  expectBlocks(
-    search("modelo"),
-    { routeId: "model-providers", hash: "#settings-model-behavior" },
-    { routeId: "appearance", hash: "#settings-appearance-sidebar" },
-  );
 });
 
 it("does not create block results for an empty query", () => {

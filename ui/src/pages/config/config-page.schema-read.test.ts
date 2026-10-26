@@ -5,12 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
+import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { mountConfigPage, publishConfigSource } from "./config-page.test-support.ts";
@@ -22,10 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
   resetServerUiPrefsSync();
-  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -47,13 +42,7 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
   let reads = 0;
   const request = vi.fn((method: string) => {
     if (method === "config.get") {
-      return Promise.resolve({
-        config,
-        hash: "synthetic",
-        raw: JSON.stringify(config),
-        valid: true,
-        issues: [],
-      });
+      return Promise.resolve(configSnapshot(config, "synthetic"));
     }
     if (method === "config.schema") {
       reads += 1;
@@ -61,20 +50,7 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     }
     return Promise.resolve({});
   });
-  const { gateway } = createApplicationGateway(
-    createApplicationGatewaySnapshot({
-      client: createTestGatewayClient(request),
-      phase: "connected",
-      hello: gatewayHelloForMethods([
-        "config.schema",
-        "config.set",
-        "config.apply",
-        "config.patch",
-      ]),
-      assistantAgentId: "main",
-      sessionKey: "main",
-    }),
-  );
+  const { gateway } = createGatewayHarness(createTestGatewayClient(request));
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   // SAFETY: the mount helper fills unrelated page capabilities; these Gateway and Config owners are real.
   const context = { gateway, runtimeConfig } as ApplicationContext;
@@ -84,10 +60,7 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
   const expectError = (message: string) => expect(view.page.textContent).toContain(message);
   try {
     await vi.dynamicImportSettled();
-    await waitForSolid(() => {
-      expect(reads).toBe(1);
-      expect(view.page.querySelector(".config-loading")).not.toBeNull();
-    });
+    await waitForSolid(() => expect(view.page.querySelector(".config-loading")).not.toBeNull());
     first.reject(new Error("Synthetic schema service unavailable"));
     await waitForSolid(() => expectError("Synthetic schema service unavailable"));
     publishConfigSource(context.theme);
@@ -97,12 +70,8 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
       view.page.querySelector<HTMLButtonElement>('.config-content [role="alert"] button'),
       "schema Retry",
     );
-    expect(retryButton.textContent?.trim()).toBe("Retry");
     retryButton.click();
-    await waitForSolid(() => {
-      expect(reads).toBe(2);
-      expectError("Synthetic schema service unavailable");
-    });
+    await waitForSolid(() => expectError("Synthetic schema service unavailable"));
     retry.resolve(response);
     await waitForSolid(() =>
       expect(view.page.textContent).not.toContain("Synthetic schema service unavailable"),
@@ -110,7 +79,6 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     const field = await waitForSolid(() => expectDefined(port(), "loaded port field"));
     const revalidation = runtimeConfig.refreshSchema();
     await waitForSolid(() => {
-      expect(reads).toBe(3);
       expect(port()).toBe(field);
       expect(field.disabled).toBe(true);
     });

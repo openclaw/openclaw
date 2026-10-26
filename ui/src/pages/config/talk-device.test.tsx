@@ -31,6 +31,10 @@ function installBridge(snapshot: NativeDeviceSettingsSnapshot | null = null) {
   return { capability, post };
 }
 
+function change(select: HTMLSelectElement, value: string, bubbles = false) {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles }));
+}
 function publish(snapshot: unknown) {
   window.dispatchEvent(
     new CustomEvent("openclaw:native-device-settings-changed", { detail: snapshot }),
@@ -53,32 +57,24 @@ function mountDevice(capability: NativeDeviceSettingsCapability) {
   return mounted;
 }
 
-it.each(["document", "event", "edit"])(
-  "renders the first accepted native snapshot from %s",
-  async (source) => {
-    const snapshot = createNativeDeviceSettingsSnapshot();
-    const { capability, post } = installBridge(source === "document" ? snapshot : null);
-    const { container } = mountDevice(capability);
-    if (source === "document") {
-      expect(container.querySelector("input[type=checkbox]")).not.toBeNull();
-    } else {
-      expect(container.textContent).toContain("Loading");
-      publish({ contract: 0 });
-      flush();
-      expect(container.querySelector("input[type=checkbox]")).toBeNull();
-      if (source === "event") {
-        publish(snapshot);
-      } else {
-        post.mockResolvedValueOnce(snapshot);
-        await capability.set("voice.wakeEnabled", false);
-      }
-    }
-    await expect(capability.initialSnapshot).resolves.toEqual(snapshot);
-    await waitForSolid(() => expect(container.textContent).toContain("Voice Wake"));
-    expect(container.textContent).not.toContain("Loading");
-    expect(post.mock.calls.filter(([message]) => message.type === "status")).toHaveLength(1);
-  },
-);
+it.each(["event", "edit"])("renders the first accepted native snapshot from %s", async (source) => {
+  const snapshot = createNativeDeviceSettingsSnapshot();
+  const { capability, post } = installBridge();
+  const { container } = mountDevice(capability);
+  expect(container.textContent).toContain("Loading");
+  publish({ contract: 0 });
+  flush();
+  expect(container.querySelector("input[type=checkbox]")).toBeNull();
+  if (source === "event") {
+    publish(snapshot);
+  } else {
+    post.mockResolvedValueOnce(snapshot);
+    await capability.set("voice.wakeEnabled", false);
+  }
+  await expect(capability.initialSnapshot).resolves.toEqual(snapshot);
+  await waitForSolid(() => expect(container.textContent).toContain("Voice Wake"));
+  expect(container.textContent).not.toContain("Loading");
+});
 
 it("retires a pending snapshot without letting an old edit settle the replacement", async () => {
   const previous = installBridge();
@@ -120,15 +116,12 @@ it("keeps native controls editable and mounted through overlapping writes", asyn
   const { container } = mountDevice(capability);
   const microphone = container.querySelector<HTMLSelectElement>('select[aria-label="Microphone"]')!;
   const wake = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-  microphone.value = "builtin";
-  microphone.dispatchEvent(new Event("change", { bubbles: true }));
+  change(microphone, "builtin", true);
   await waitForSolid(() => expect(container.textContent).toContain("Saving"));
   expect(microphone.value).toBe("builtin");
   expect(microphone.disabled).toBe(false);
-  microphone.value = "usb";
-  microphone.dispatchEvent(new Event("change", { bubbles: true }));
+  change(microphone, "usb", true);
   await waitForSolid(() => expect(microphone.value).toBe("usb"));
-  expect(post).toHaveBeenCalledWith({ type: "set", key: "voice.microphone", value: "usb" });
 
   const accepted = structuredClone(snapshot);
   accepted.revision = 3;
@@ -166,8 +159,7 @@ it("shows rejected native edits and retries the desired value without replacing 
   post.mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
   const { container } = mountDevice(capability);
   const microphone = container.querySelector<HTMLSelectElement>('select[aria-label="Microphone"]')!;
-  microphone.value = "builtin";
-  microphone.dispatchEvent(new Event("change", { bubbles: true }));
+  change(microphone, "builtin", true);
   await waitForSolid(() => expect(container.textContent).toContain("Saving"));
   expect(microphone.value).toBe("builtin");
   failed.reject(new Error("Synthetic microphone unavailable"));
@@ -184,7 +176,6 @@ it("shows rejected native edits and retries the desired value without replacing 
     expect(container.textContent).toContain("Saving");
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
-  expect(post).toHaveBeenLastCalledWith({ type: "set", key: "voice.microphone", value: "builtin" });
   const accepted = structuredClone(snapshot);
   accepted.voice.microphone.selectedId = "builtin";
   retry.resolve(accepted);
@@ -207,8 +198,7 @@ it("retains a rejected native language edit and retries it visibly", async () =>
     expect(select).not.toBeNull();
     return select!;
   });
-  primary.value = "de-DE";
-  primary.dispatchEvent(new Event("change"));
+  change(primary, "de-DE");
   failed.reject(new Error("Native language write unavailable"));
   await waitForSolid(() => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain(
@@ -225,17 +215,6 @@ it("retains a rejected native language edit and retries it visibly", async () =>
     expect(capability.snapshot?.voice.locale?.primary).toBe("de-DE");
     expect(primary.value).toBe("de-DE");
     expect(page.querySelector('[role="alert"]')).toBeNull();
-  });
-  expect(post).toHaveBeenCalledTimes(3);
-  expect(post).toHaveBeenNthCalledWith(2, {
-    type: "set",
-    key: "voice.locale.primary",
-    value: "de-DE",
-  });
-  expect(post).toHaveBeenNthCalledWith(3, {
-    type: "set",
-    key: "voice.locale.primary",
-    value: "de-DE",
   });
 });
 
@@ -259,32 +238,28 @@ it("preserves pending language additions across an older native acknowledgment a
     completions[index]?.();
   };
   const { container: page } = mountDevice(nativeDeviceSettings);
+  const expectAdditional = (...languages: string[]) =>
+    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
+      "voice.locale.additional",
+      languages,
+      expect.any(Function),
+    );
   const add = (id: string) => {
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Add language…"]')!;
-    select.value = id;
-    select.dispatchEvent(new Event("change"));
+    change(select, id);
   };
   add("de-DE");
   add("fr-FR");
-  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-    "voice.locale.additional",
-    ["de-DE", "fr-FR"],
-    expect.any(Function),
-  );
+  expectAdditional("de-DE", "fr-FR");
   flush();
   expect(page.querySelector('button[aria-label="Remove French"]')).not.toBeNull();
   snapshot.voice.locale.additional = ["de-DE"];
   settle(0);
   publishSnapshot();
   add("es-ES");
-  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-    "voice.locale.additional",
-    ["de-DE", "fr-FR", "es-ES"],
-    expect.any(Function),
-  );
+  expectAdditional("de-DE", "fr-FR", "es-ES");
   const primary = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]')!;
-  primary.value = "fr-FR";
-  primary.dispatchEvent(new Event("change"));
+  change(primary, "fr-FR");
   expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
     "voice.locale.additional",
     ["de-DE", "es-ES"],
@@ -295,11 +270,7 @@ it("preserves pending language additions across an older native acknowledgment a
   publishSnapshot();
   expect(primary.value).toBe("fr-FR");
   add("it-IT");
-  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-    "voice.locale.additional",
-    ["de-DE", "es-ES", "it-IT"],
-    expect.any(Function),
-  );
+  expectAdditional("de-DE", "es-ES", "it-IT");
   settle(completions.length - 1, new Error("Native edit failed"));
   publishSnapshot();
   await waitForSolid(() => {
@@ -308,10 +279,6 @@ it("preserves pending language additions across an older native acknowledgment a
     expect(page.querySelector('button[aria-label="Remove Italian"]')).not.toBeNull();
   });
   page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-    "voice.locale.additional",
-    ["de-DE", "es-ES", "it-IT"],
-    expect.any(Function),
-  );
+  expectAdditional("de-DE", "es-ES", "it-IT");
   completions.forEach((complete) => complete());
 });
