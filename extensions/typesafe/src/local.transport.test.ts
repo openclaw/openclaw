@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -55,7 +55,10 @@ it("refuses hosted dispatch for local Kev", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
-    registeredProvider().evaluate(decisionBatch, decisionContext(input.model, 10000)),
+    registeredProvider().evaluate(
+      { state: "local-only evidence", questions: { q: { type: "boolean" } } },
+      decisionContext(input.model, 10000),
+    ),
   ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -101,12 +104,16 @@ it("never sends a stale hosted key locally", async () => {
 });
 
 it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (hostname) => {
-  const received: { request: IncomingMessage; body: string }[] = [];
+  const received: { url?: string; authorization?: string; host?: string; body: string }[] = [];
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     sockets.add(request.socket);
     collectRequest(request, (body) => {
-      received.push({ request, body });
+      const {
+        url,
+        headers: { authorization, host },
+      } = request;
+      received.push({ url, authorization, host, body });
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify(localAnswer));
     });
@@ -122,17 +129,19 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
       vi.mocked(lookup).mockRejectedValue(new Error("Synthetic untrusted localhost resolver"));
     }
     const provider = registeredProvider(`http://${hostname}:${address.port}`);
+    expect(provider.isReady?.()).toBe(true);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await expect(provider.evaluate(decisionBatch, decisionContext(input.model))).resolves.toEqual(
         expectedResult,
       );
     }
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+    expect(received).toHaveLength(5);
     expect(sockets.size).toBeLessThan(received.length);
-    const request = received[0]!.request;
-    expect({ url: request.url, headers: request.headers }).toMatchObject({
+    expect(received[0]).toMatchObject({
       url: "/v1/systemone",
-      headers: { authorization: undefined, host: `${hostname}:${address.port}` },
+      authorization: undefined,
+      host: `${hostname}:${address.port}`,
     });
     expect(JSON.parse(received[0]!.body)).toEqual(wireInput);
     if (hostname === "localhost") {
