@@ -38,10 +38,12 @@ const originalWatch = fs.watch;
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const originalRealpath = fs.realpathSync.native;
 let resolutions = 0;
-fs.realpathSync.native = (...args) => {
-  resolutions++;
-  return originalRealpath(...args);
-};
+fs.realpathSync.native = new Proxy(originalRealpath, {
+  apply(target, thisArg, args) {
+    resolutions++;
+    return Reflect.apply(target, thisArg, args);
+  },
+});
 class ReplayWatch extends EventEmitter implements fs.FSWatcher {
   close() {}
   ref() {
