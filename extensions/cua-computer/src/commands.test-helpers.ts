@@ -36,15 +36,7 @@ export function invalidMacOsEndpoints(): Array<[string, NodeJS.ProcessEnv]> {
   return [
     ["missing", {}],
     ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
-    [
-      "partial",
-      {
-        [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
-          v: 1,
-          socketPath: "/tmp/openclaw-cua-test/driver.sock",
-        }),
-      },
-    ],
+    ["partial", macOsEndpoint({ binaryPath: undefined })],
     ["unsupported version", macOsEndpoint({ v: 2 })],
     ["extra field", macOsEndpoint({ extra: true })],
     ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
@@ -67,17 +59,14 @@ export function driver(
 ) {
   let generation = "execution-1";
   const activeGeometry = options.geometry ?? geometry;
+  const screenSize = options.screenSize ?? {
+    width: activeGeometry.screen_width,
+    height: activeGeometry.screen_height,
+    scale_factor: activeGeometry.scale_factor,
+  };
   const methods = {
     getDesktopState: vi.fn(async () => result(activeGeometry, true)),
-    getScreenSize: vi.fn(async () =>
-      result(
-        options.screenSize ?? {
-          width: activeGeometry.screen_width,
-          height: activeGeometry.screen_height,
-          scale_factor: activeGeometry.scale_factor,
-        },
-      ),
-    ),
+    getScreenSize: vi.fn(async () => result(screenSize)),
     click: vi.fn(async () => result({})),
     drag: vi.fn(async () => result({})),
     moveCursor: vi.fn(async () => result({})),

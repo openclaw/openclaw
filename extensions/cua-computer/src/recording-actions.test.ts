@@ -22,7 +22,8 @@ function recordingHandle(json: string): string {
 }
 
 async function createRecording(
-  reply: (name: string, root: string) => CuaToolResult | Promise<CuaToolResult>,
+  reply: (name: string, root: string) => CuaToolResult | Promise<CuaToolResult> = (name) =>
+    cuaToolResult(recordingStates[name] ?? {}),
 ) {
   const active = Object.assign(driver(), { root: "" });
   active.callTool.mockImplementation(async (name, args) => {
@@ -76,13 +77,7 @@ it("maps each recording tool while projecting only opaque resource handles", asy
 it("rejects malformed, absolute, traversal, and symlink-escaped replay resources", async () => {
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-resource-outside-"));
   onTestFinished(() => fs.rm(outside, { recursive: true, force: true }));
-  const active = await createRecording((name) =>
-    cuaToolResult(
-      name === "start_recording" || name === "stop_recording"
-        ? recordingStates[name]!
-        : fixtures.replay,
-    ),
-  );
+  const active = await createRecording();
   const { act, computer } = active;
 
   for (const resourceHandle of [
