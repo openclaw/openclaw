@@ -378,7 +378,7 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   }
   // Fixed metadata must not allocate an intermediate descriptor collection per delta.
   expect(
-    collectDescriptors.mock.calls.filter(([target]) => received.includes(target)),
+    collectDescriptors.mock.calls.filter(([target]) => received.some((entry) => entry === target)),
   ).toHaveLength(0);
 });
 
