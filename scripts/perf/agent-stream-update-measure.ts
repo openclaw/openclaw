@@ -9,6 +9,8 @@
  * --event-type text_delta|thinking_delta|toolcall_delta selects snapshot updates.
  * --transforms 1 (or 3) installs real adjacent stream-event decorators. Compare
  * against --transforms 0 to separate wrapper cost from the fixture generator.
+ * --plugin-bound includes a registered plugin's iterator membrane; --owner can
+ * select a frozen stream-wrapper.ts module for paired decorator measurements.
  * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
  * fragments and a blocking tool; compare its outputSha256 across revisions.
@@ -17,6 +19,9 @@
  * slope between 32 and --events reads; see agent-stream-update-measure.md.
  * --profile /path/profile.json saves allocation stacks. Use --no-turbo-inlining
  * for attribution only, and normal optimization for the paired measurements.
+ * --dispatch session includes Agent state and AgentSession listener dispatch with
+ * an in-memory transcript. Compare to --dispatch loop (the default) to attribute
+ * listener promises. Session runs reset agent history before each prompt.
  * Accept lower allocation/update with stable CPU and identical delivery counts;
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
@@ -27,6 +32,8 @@ import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runAgentLoop } from "../../packages/agent-core/src/agent-loop.js";
 import {
@@ -36,9 +43,12 @@ import {
   makeTool,
   user,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { Agent } from "../../packages/agent-core/src/agent.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
-import { wrapStreamObjectEvents } from "../../src/agents/embedded-agent-runner/run/stream-wrapper.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
+import { PluginInstance } from "../../src/plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
 
 const { values } = parseArgs({
   options: {
@@ -51,9 +61,19 @@ const { values } = parseArgs({
     snapshots: { type: "string", default: "true" },
     "async-fragments": { type: "string", default: "false" },
     transforms: { type: "string", default: "0" },
+    "plugin-bound": { type: "boolean", default: false },
+    owner: { type: "string" },
     layer: { type: "string" },
+    dispatch: { type: "string", default: "loop" },
   },
 });
+const {
+  wrapStreamObjectEvents,
+}: typeof import("../../src/agents/embedded-agent-runner/run/stream-wrapper.js") = await import(
+  values.owner
+    ? pathToFileURL(resolve(values.owner)).href
+    : "../../src/agents/embedded-agent-runner/run/stream-wrapper.js"
+);
 const events = Number(values.events);
 const turns = Number(values.turns);
 const warmup = Number(values.warmup);
@@ -63,6 +83,8 @@ assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(["timing", "allocation", "verify", "promises"].includes(values.mode));
+assert(values.dispatch === "loop" || values.dispatch === "session");
+assert(values.dispatch === "loop" || (!values.layer && values.mode !== "verify"));
 if (values.layer) {
   const { measureStreamLayers } = await import("./agent-stream-update-layers.js");
   await measureStreamLayers({
@@ -122,7 +144,15 @@ const fragmentTail = {
 };
 let deliveries = 0;
 let observations = 0;
-function decorate(stream: MutableAssistantMessageEventStream) {
+const record = createPluginRecord({ id: "synthetic-stream", origin: "bundled" });
+const plugin = values["plugin-bound"]
+  ? new PluginInstance(record.id, {
+      record,
+      registry: { ...createEmptyPluginRegistry(), plugins: [record] },
+    })
+  : undefined;
+function decorate(source: MutableAssistantMessageEventStream) {
+  const stream = plugin?.wrap(source) ?? source;
   for (let index = 0; index < transforms; index++) {
     wrapStreamObjectEvents(stream, (event) => {
       if (event.type === eventType) {
@@ -132,39 +162,81 @@ function decorate(stream: MutableAssistantMessageEventStream) {
   }
   return stream;
 }
+const onEvent = (event: { type: string }) => {
+  if (event.type === "message_update") {
+    deliveries++;
+  }
+};
+const session = values.dispatch === "session" ? await createSession() : undefined;
+async function createSession() {
+  const agent = new Agent({
+    initialState: { model: config.model, tools },
+    streamFn: () => {
+      throw new Error("Probe stream not installed");
+    },
+  });
+  const { AgentSession } = await import("../../src/agents/sessions/agent-session.js");
+  const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js");
+  const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.js");
+  const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
+  const { SettingsManager } = await import("../../src/agents/sessions/settings-manager.js");
+  const { createResourceLoader } =
+    await import("../../src/agents/sessions/agent-session-loop-resource-loader.test-support.js");
+  const manager = SessionManager.inMemory();
+  const result = new AgentSession({
+    agent,
+    systemPrompt: "synthetic probe",
+    sessionManager: manager,
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: false },
+    }),
+    cwd: manager.getCwd(),
+    resourceLoader: await createResourceLoader(),
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    allowedToolNames: [],
+    cleanupProviderSessionResourcesOnDispose: false,
+  });
+  agent.state.tools = tools;
+  result.subscribe(onEvent);
+  return result;
+}
 async function run() {
   let responseCount = 0;
+  const streamFn: NonNullable<Parameters<typeof runAgentLoop>[5]> = () => {
+    const toolResponse = asyncFragments && responseCount === 0;
+    const updates = responseCount++ === 0 ? events : 0;
+    const result = toolResponse ? fragmentTail : finalMessage;
+    return decorate({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message } as const;
+        if (toolResponse) {
+          for (const fragment of fragments) {
+            yield fragment;
+          }
+        } else {
+          for (let index = 0; index < updates; index++) {
+            yield update;
+          }
+        }
+        yield { type: "done", reason: "stop", message: result } as const;
+      },
+      result: async () => result,
+    });
+  };
+  if (session) {
+    session.agent.state.messages = history;
+    session.agent.streamFn = streamFn;
+    await session.agent.prompt(user());
+    return;
+  }
   await runAgentLoop(
     [user()],
     { systemPrompt: "synthetic probe", messages: history, tools },
     config,
-    (event) => {
-      if (event.type === "message_update") {
-        deliveries++;
-      }
-    },
+    onEvent,
     undefined,
-    () => {
-      const toolResponse = asyncFragments && responseCount === 0;
-      const updates = responseCount++ === 0 ? events : 0;
-      const result = toolResponse ? fragmentTail : finalMessage;
-      return decorate({
-        async *[Symbol.asyncIterator]() {
-          yield { type: "start", partial: message } as const;
-          if (toolResponse) {
-            for (const fragment of fragments) {
-              yield fragment;
-            }
-          } else {
-            for (let index = 0; index < updates; index++) {
-              yield update;
-            }
-          }
-          yield { type: "done", reason: "stop", message: result } as const;
-        },
-        result: async () => result,
-      });
-    },
+    streamFn,
   );
 }
 // Record checkpoints before replay so provider fixture allocation is not confused
@@ -290,12 +362,14 @@ if (values.mode === "promises") {
   hook.enable();
 }
 const cpu = process.cpuUsage();
+const threadCpu = process.threadCpuUsage();
 const start = performance.now();
 for (let turn = 0; turn < turns; turn++) {
   await run();
 }
 const elapsedMs = performance.now() - start;
 const used = process.cpuUsage(cpu);
+const threadUsed = process.threadCpuUsage(threadCpu);
 hook.disable();
 let allocatedBytes: number | undefined;
 if (allocation) {
@@ -315,6 +389,7 @@ if (!asyncFragments && snapshots) {
 console.log(
   JSON.stringify({
     mode: values.mode,
+    dispatch: values.dispatch,
     eventType: values["event-type"],
     snapshots,
     asyncFragments,
@@ -322,12 +397,16 @@ console.log(
     turns,
     warmup,
     transforms,
+    pluginBound: Boolean(plugin),
     observations,
     promisesPerUpdate: values.mode === "promises" ? promises / deliveries : undefined,
     deliveries,
     hostLoad,
     elapsedMs,
     cpuNsPerUpdate: ((used.user + used.system) * 1000) / deliveries,
+    mainThreadCpuNsPerUpdate: ((threadUsed.user + threadUsed.system) * 1000) / deliveries,
     allocatedBytesPerUpdate: allocatedBytes === undefined ? undefined : allocatedBytes / deliveries,
   }),
 );
+session?.dispose();
+await plugin?.dispose();

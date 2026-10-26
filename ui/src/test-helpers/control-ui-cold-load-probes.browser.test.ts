@@ -156,6 +156,77 @@ describe("serialized cold-load probes", () => {
     }
   });
 
+  it("records history response outcomes without retaining or changing response bodies", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const responses = [
+        { method: "chat.startup", ok: true, payload: { messages: ["synthetic"] } },
+        { method: "chat.history", ok: false, error: { message: "Synthetic failure" } },
+        {
+          method: "sessions.messages.subscribe",
+          ok: true,
+          payload: { initialHistory: { ok: true } },
+        },
+        {
+          method: "sessions.messages.subscribe",
+          ok: true,
+          payload: { initialHistory: { ok: false } },
+        },
+        {
+          method: "sessions.messages.subscribe",
+          ok: false,
+          error: { message: "Synthetic failure" },
+        },
+      ];
+      const script = doc.createElement("script");
+      script.textContent = `
+        const timers = [];
+        window.setTimeout = callback => { timers.push(callback); return timers.length; };
+        window.WebSocket = class extends EventTarget { send() {} };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, events: [] })}
+        const socket = new WebSocket();
+        const delivered = [];
+        socket.addEventListener("message", event => delivered.push(JSON.parse(event.data)));
+        const sent = ${JSON.stringify(responses)}.map(({method, ...response}, index) => {
+          const id = String(index);
+          socket.send(JSON.stringify({type: "req", id, method, params: {sessionKey: "synthetic-session"}}));
+          const frame = {type: "res", id, ...response};
+          socket.dispatchEvent(new MessageEvent("message", {data: JSON.stringify(frame)}));
+          return frame;
+        });
+        while (timers.length) timers.shift()();
+        window.historyResponseProof = {sent, delivered, rpcs: __coldLoad.read().rpcs};
+      `;
+      doc.body.append(script);
+      const proof = Reflect.get(target, "historyResponseProof");
+      expect(proof.delivered).toEqual(proof.sent);
+      expect(
+        proof.rpcs.map((rpc: Record<string, unknown>) => ({
+          responseOk: rpc.responseOk,
+          initialHistoryOk: rpc.initialHistoryOk,
+        })),
+      ).toEqual([
+        { responseOk: true, initialHistoryOk: undefined },
+        { responseOk: false, initialHistoryOk: undefined },
+        { responseOk: true, initialHistoryOk: true },
+        { responseOk: true, initialHistoryOk: false },
+        { responseOk: false, initialHistoryOk: undefined },
+      ]);
+      for (const rpc of proof.rpcs) {
+        expect(rpc).not.toHaveProperty("payload");
+        expect(rpc).not.toHaveProperty("error");
+      }
+    } finally {
+      iframe.remove();
+    }
+  });
+
   it("holds the challenge until connect can leave without an intercepted send", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);

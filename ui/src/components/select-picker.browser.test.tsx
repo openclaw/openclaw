@@ -332,13 +332,13 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         value: entry.value,
         label: entry.label,
         provider: index % 2 ? "openai" : undefined,
-        detail: index % 3 ? "API" : "Account",
+        description: index % 3 ? "API" : "Account",
       }));
       options[998] = {
         value: "fixture/long",
         label: "A long provider model with   extra whitespace and a\nwide context window",
         provider: "openai",
-        detail: "Team account with an extended capability description",
+        description: "Team account with an extended capability description",
       };
       const measured: { open: number; filtered: number; empty: number }[] = [];
       for (const windowed of [false, true]) {

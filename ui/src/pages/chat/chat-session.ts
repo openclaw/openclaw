@@ -18,7 +18,7 @@ import {
 import {
   normalizeChatFastModeInput,
   resolveChatModelOverrideValue,
-  resolveChatModelSelectState,
+  resolveChatModelSelectValues,
 } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -359,7 +359,7 @@ export async function switchChatModel(
   // A newer intent retires even a confirmation for a previous selection.
   const selection = claimChatModelSelection(host, targetSessionKey);
   const { ownsSelection, agentScope } = selection;
-  const { currentOverride, defaultModel } = resolveChatModelSelectState({
+  const { currentOverride, defaultModel } = resolveChatModelSelectValues({
     activeSession: activeRow,
     agentDefaultModel,
     modelSelectionPolicy: host.chatModelSelectionPolicy,

@@ -1,7 +1,7 @@
 import type { AgentsListResult, ModelCatalogResult } from "../../api/types.ts";
 import {
   resolveChatFastModeSelectState,
-  resolveChatModelSelectState,
+  resolveChatModelSelectValues,
 } from "../../lib/chat/model-select-state.ts";
 import { resolveThinkingProfileForSession } from "../../lib/chat/thinking.ts";
 import { chatHistoryRequests, getAcceptedChatHistorySession } from "./chat-history-state.ts";
@@ -42,7 +42,7 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
     }
     const agents: AgentsListResult | null = host.agentsList;
     const agent = agents?.agents.find((row) => row.id === resolveChatAgentId(host));
-    const selection = resolveChatModelSelectState({
+    const selection = resolveChatModelSelectValues({
       activeSession: session,
       agentDefaultModel: agent?.model?.primary,
       modelOverrides: host.sessions.state.modelOverrides,

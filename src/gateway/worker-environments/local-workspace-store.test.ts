@@ -65,6 +65,35 @@ beforeAll(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["absent", "same", "distinct"] as const)(
+  "checks each workspace authority once per synchronous assertion (%s worker guard)",
+  async (kind) => {
+    const current = vi.fn();
+    const worker = kind === "same" ? current : vi.fn();
+    let retained: (() => void) | undefined;
+    await withLocalWorkspaceStore(
+      {
+        worktreeId: randomUUID(),
+        env,
+        assertCurrent: current,
+        workerAuthority: kind === "absent" ? undefined : { assertCurrent: worker },
+      },
+      async (store) => {
+        current.mockClear();
+        worker.mockClear();
+        store.assertCurrent();
+        expect(current).toHaveBeenCalledOnce();
+        if (kind === "distinct") {
+          expect(worker).toHaveBeenCalledOnce();
+        }
+        retained = store.assertCurrent;
+      },
+    );
+    expect(retained).toBeDefined();
+    expect(retained).toThrow();
+  },
+);
+
 it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
   const worktreeId = randomUUID();
   const previous = { ...localWorkspaceProjectionFixture(worktreeId, root), revision: 0 };

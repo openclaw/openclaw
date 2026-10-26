@@ -126,7 +126,8 @@ export function IdentitySection(props: IdentitySectionProps) {
                 maxlength={256}
                 aria-label={t("profilePage.identity.displayName")}
                 value={props.displayName}
-                disabled={!canWrite() || props.busy !== null}
+                disabled={!canWrite() || (props.busy !== null && props.busy !== "display-name")}
+                readonly={props.busy === "display-name"}
                 onInput={(event) => props.onDisplayNameInput(event.currentTarget.value)}
               />
               <button

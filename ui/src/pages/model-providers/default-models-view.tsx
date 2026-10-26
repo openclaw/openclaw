@@ -87,7 +87,7 @@ function modelOption(
   return {
     value: ref,
     label: model.name || ref,
-    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(auth ? { description: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };
@@ -428,21 +428,23 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           ? `${t("quickSettings.model.fastModes.auto")} · ${automatic?.label ?? ref}`
           : t("quickSettings.model.fastModes.auto"),
         provider: automatic?.provider,
-        detail:
+        description:
           ref === null
             ? t("modelProviders.defaults.automaticUnavailable")
             : selected === AUTOMATIC_UTILITY_VALUE && route
-              ? [automatic?.detail, route.label].filter(Boolean).join(" · ")
-              : automatic?.detail,
+              ? [automatic?.description, route.label].filter(Boolean).join(" · ")
+              : automatic?.description,
       },
       { value: "", label: t("modelProviders.defaults.disabled") },
     ];
     for (const option of options()) {
-      const detail =
+      const description =
         option.value === selected && route
-          ? [option.detail, route.label].filter(Boolean).join(" · ")
-          : option.detail;
-      choices.push(detail === option.detail ? option : Object.assign({}, option, { detail }));
+          ? [option.description, route.label].filter(Boolean).join(" · ")
+          : option.description;
+      choices.push(
+        description === option.description ? option : Object.assign({}, option, { description }),
+      );
     }
     return choices;
   });

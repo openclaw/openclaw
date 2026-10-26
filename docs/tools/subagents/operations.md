@@ -114,6 +114,8 @@ while the registry keeps tracking the result. A queued completion never blocks
 the preparation of an earlier input in the same mailbox.
 
 Operator-admitted children retain bounded source evidence with their run record.
+Direct turns in a child session save their own admitted operator source even when
+there is no spawning requester turn. That source survives repeated restarts.
 Before continuing the requester after restart, the Gateway revalidates the current
 operator profile, role, authentication policy, device identity, and access grant,
 preserving the original scope restrictions. The saved evidence contains no credentials

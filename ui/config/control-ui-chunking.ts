@@ -334,13 +334,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
-    case "ui/src/components/markdown-audio-transcript.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":
     case "ui/src/components/markdown-file-links.ts":
     case "ui/src/components/markdown-github-refs.ts":
-    case "ui/src/components/markdown-hex-colors.ts":
     case "ui/src/components/markdown-human-mentions.ts":
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
@@ -462,6 +460,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Chat and creation share the same identity-scoped preference owner.
+                modules.add("ui/src/pages/new-session/draft-preference-state.ts");
+                modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
                 // Placement and delivery share retries without importing either route's bundle.

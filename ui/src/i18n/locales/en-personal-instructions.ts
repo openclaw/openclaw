@@ -5,7 +5,7 @@ const enPersonalInstructions = {
   profilePage: {
     personalInstructions: {
       signIn:
-        "Sign in with your personal profile to edit your instructions. This requires operator.read access.",
+        "Sign in with your personal profile to edit your instructions. This requires operator.read or operator.sessions.read access.",
       noAgents: "No agents are available on this connection.",
       guidance:
         "{count} / 4,000 characters. Keep it brief: preferences, context, and working style.",

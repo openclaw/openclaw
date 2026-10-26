@@ -1211,6 +1211,10 @@ source still resumes under the original operator's permissions, regardless of
 who created the session.
 When no other recovery or delivery custody remains, send a new authenticated
 message to continue; `sessions.recover` does not revive that retired input.
+Child sessions retain a recovery tombstone instead, and the parent receives an
+interruption notice with instructions to use **Resume**. An authorized operator can use
+**Resume** or `sessions.recover` on the child to continue under current authority.
+Later Gateway restarts do not automatically replay the denied input.
 
 Cancelling a recovery reservation after foreground work finishes clears an empty,
 uncharged recovery record. Recovery reconciliation and foreground admission also
