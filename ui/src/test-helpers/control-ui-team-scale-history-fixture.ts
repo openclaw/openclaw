@@ -163,9 +163,9 @@ export function createTeamScaleHistoryFixture(options: {
         response: {
           ...configuredHistory,
           messages: historyMessages.slice(-80),
-          hasMore: options.messageCount > 80,
-          ...(options.messageCount > 80 ? { nextOffset: 80 } : {}),
-          totalMessages: options.messageCount,
+          hasMore: historyMessages.length > 80,
+          ...(historyMessages.length > 80 ? { nextOffset: 80 } : {}),
+          totalMessages: historyMessages.length,
         },
       },
       { match: { sessionKey: options.sessionInfo.key }, response: configuredHistory },

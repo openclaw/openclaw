@@ -1249,9 +1249,10 @@ try {
   const paneChromeScript = values["pane-chrome-probe"]
     ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
     : "";
-  const warmProbes = values["warm-reload"] || firstLoad
-    ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
-    : "";
+  const warmProbes =
+    values["warm-reload"] || firstLoad
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
@@ -2031,9 +2032,10 @@ try {
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
-    const warmReload = values["warm-reload"] || firstLoad
-      ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
-      : undefined;
+    const warmReload =
+      values["warm-reload"] || firstLoad
+        ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
+        : undefined;
     const paneChrome = values["pane-chrome-probe"]
       ? {
           ...(await page.evaluate(
