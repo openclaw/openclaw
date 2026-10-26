@@ -159,6 +159,8 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        // The copy-count probe restores the native method after measurement.
+        "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
         // The load probe forwards native WebSocket.send with its original socket receiver.
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
         // The retention probe preserves the static Buffer factories for exact restoration.
@@ -190,10 +192,15 @@ describe("production lint suppressions", () => {
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
+        // These owners sort only fresh private arrays, preserving their source collections.
+        "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
+        "src/agents/auth-profiles/external-cli-scope.ts|unicorn/no-array-sort|2",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
+        "src/agents/code-mode-mcp-api.ts|unicorn/no-array-sort|1",
+        "src/agents/computer-use-node-capabilities.ts|unicorn/no-array-sort|1",
         // Sort only freshly materialized private arrays; avoid a second copying sort.
         "src/agents/embedded-agent-runner/model.static-catalog.ts|unicorn/no-array-sort|2",
         "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
@@ -201,7 +208,11 @@ describe("production lint suppressions", () => {
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
         "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
+        "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
+        "src/agents/prepared-model-runtime.synthetic-auth.ts|unicorn/no-array-sort|1",
+        "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
+        "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // Board private helpers only sort cloned layouts or freshly filtered arrays.
         "src/boards/board-layout.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
