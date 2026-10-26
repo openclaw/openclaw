@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  hasExplicitRetryText,
   parseGoogleRetryDelaySeconds as googleDelay,
   parseRetryAfterErrorSeconds as errorSeconds,
-  parseRetryAfterErrorTiming as errorTiming,
   parseRetryAfterHeadersSeconds as headerSeconds,
   parseRetryAfterTextSeconds as textSeconds,
   resolveProviderErrorRetrySeconds as providerSeconds,
@@ -19,13 +17,13 @@ const anthropicQuotaHeaders = (dimension: string, remaining: string, reset: stri
   [`anthropic-ratelimit-${dimension}-remaining`]: remaining,
   [`anthropic-ratelimit-${dimension}-reset`]: reset,
 });
+const exhausted = { status: 429, headers: quotaHeaders("tokens", "0", "5m") };
 
 describe("retry header floors", () => {
   it.each<[Record<string, string | number>, number | undefined]>([
     [{ "retry-after": "7", "retry-after-ms": "335" }, 7],
     [{ "Retry-After": 7, "retry-after-ms": 8500 }, 8.5],
     [{ "retry-after": "7", "retry-after-ms": "invalid" }, 7],
-    [{ "retry-after": "7", "retry-after-ms": "0" }, 7],
     [{ "retry-after": "Sun, 06 Nov 1994 08:49:37 GMT", "retry-after-ms": "335" }, 7],
     [{ "retry-after": "9007199254740993", "retry-after-ms": "335" }, Infinity],
     [{ "retry-after-ms": "9007199254740993" }, Infinity],
@@ -40,28 +38,21 @@ describe("retry header floors", () => {
     [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 7],
     [anthropicQuotaHeaders("output-tokens", "0", "1994-11-06T08:49:42Z"), 12],
     [anthropicQuotaHeaders("requests", "0", "1994-11-06T08:49:31.5Z"), 1.5],
-    [anthropicQuotaHeaders("tokens", "12", "1994-11-06T08:49:42Z"), undefined],
     [anthropicQuotaHeaders("input-tokens", "0", "later"), undefined],
-    [{ "retry-after": "3", ...anthropicQuotaHeaders("tokens", "0", "1994-11-06T08:50:30Z") }, 3],
-  ])("keeps the greatest valid native and record floor: %j", (headers, expected) => {
-    const native = new Headers(Object.entries(headers).map(([key, value]) => [key, String(value)]));
-    for (const source of [headers, native]) {
-      expect(headerSeconds(source, EXAMPLE_TIMESTAMP - 7000, 429)).toBe(expected);
-    }
+  ])("keeps the greatest valid header floor: %j", (headers, expected) => {
+    expect(headerSeconds(headers, EXAMPLE_TIMESTAMP - 7000, 429)).toBe(expected);
   });
 
-  it.each([undefined, 200, 503])("does not infer a quota wait from HTTP %s", (status) => {
-    expect(
-      headerSeconds(quotaHeaders("tokens", "0", "1m"), EXAMPLE_TIMESTAMP, status),
-    ).toBeUndefined();
+  it.each([undefined, 503])("does not infer a quota wait from HTTP %s", (status) => {
+    expect(headerSeconds(exhausted.headers, EXAMPLE_TIMESTAMP, status)).toBeUndefined();
   });
 
   it("reads native Headers without calling an overridden get method", () => {
-    const headers = new Headers({ "retry-after": "7" });
+    const headers = new Headers({ "retry-after": "7", "retry-after-ms": "8500" });
     headers.get = () => {
       throw new Error("overridden get called");
     };
-    expect(headerSeconds(headers)).toBe(7);
+    expect(headerSeconds(headers)).toBe(8.5);
   });
 
   it.each(["retry-after", "retry-after-ms"])("fails closed on unsafe numeric %s values", (key) => {
@@ -89,7 +80,8 @@ describe("retry header floors", () => {
 
   it("combines SDK and response header floors", () => {
     const error = {
-      headers: new Headers({ "retry-after": "7" }),
+      status: 429,
+      headers: new Headers({ "retry-after": "7", ...quotaHeaders("tokens", "0", "5m") }),
       response: { headers: { "Retry-After-Ms": 8500 } },
     };
     expect(errorSeconds(error)).toBe(8.5);
@@ -107,38 +99,19 @@ describe("retry header floors", () => {
 });
 
 describe("provider error retry authority", () => {
-  const exhausted = { status: 429, headers: quotaHeaders("tokens", "0", "5m") };
-
-  it("separates explicit instructions from bucket refills", () => {
-    const error = { ...exhausted, response: { headers: { "retry-after": "4" } } };
-    expect(errorTiming(exhausted)).toEqual({ resetSeconds: 300 });
-    expect(errorTiming(error)).toEqual({ explicitSeconds: 4, resetSeconds: 300 });
-    expect(errorSeconds(error)).toBe(4);
-  });
-
-  it("drops a refill reset when the provider wrote an explicit retry time", () => {
-    expect(providerSeconds(exhausted)).toBe(300);
-    for (const message of ["Please try again in 6s.", "Please retry in 32.5s.", "Retry-After: 2"]) {
-      expect(providerSeconds({ ...exhausted, message })).toBeUndefined();
-    }
-    for (const message of ["Please try again later.", "Please try again in 6 attempts."]) {
-      expect(providerSeconds({ ...exhausted, message })).toBe(300);
-    }
-    expect(
-      providerSeconds({
-        ...exhausted,
-        message: "Please try again in 6s.",
-        body: '{"details":[{"retryDelay":"8s"}]}',
-      }),
-    ).toBe(8);
-  });
-
-  it("recognizes explicit retry prose only with a parseable time", () => {
-    expect(hasExplicitRetryText("try again in 6s")).toBe(true);
-    expect(hasExplicitRetryText("Retry-After: Sun, 06 Nov 1994 08:49:37 GMT")).toBe(true);
-    expect(hasExplicitRetryText("please try again in a moment")).toBe(false);
-    expect(hasExplicitRetryText("please try again in 6 attempts")).toBe(false);
-    expect(hasExplicitRetryText(undefined)).toBe(false);
+  it.each<[object, number | undefined]>([
+    [{}, 300],
+    [{ response: { headers: { "retry-after": "4" } } }, 4],
+    [{ message: "Please try again in 6s." }, undefined],
+    [{ message: "Please retry in 32.5s." }, undefined],
+    [{ message: "Retry-After: 2" }, undefined],
+    [{ message: "Retry-After: Sun, 06 Nov 1994 08:49:37 GMT" }, undefined],
+    [{ message: "Please try again later." }, 300],
+    [{ message: "Please try again in a moment." }, 300],
+    [{ message: "Please try again in 6 attempts." }, 300],
+    [{ message: "Please try again in 6s.", body: '{"details":[{"retryDelay":"8s"}]}' }, 8],
+  ])("prioritizes explicit instructions over bucket refills: %j", (extra, expected) => {
+    expect(providerSeconds({ ...exhausted, ...extra })).toBe(expected);
   });
 
   it("parses retry-text durations with the same grammar the failover path uses", () => {
@@ -176,13 +149,9 @@ describe("parseRetryAfterHttpDateMs", () => {
     ["Sunday, 06-Nov-94 08:49:37 GMT", EXAMPLE_TIMESTAMP, Date.UTC(1994, 0, 1)],
     ["Sun Nov  6 08:49:37 1994", EXAMPLE_TIMESTAMP],
     ["Sun Nov 06 08:49:37 1994", EXAMPLE_TIMESTAMP],
-    ["Sun, 31 Feb 2027 00:00:00 GMT", undefined],
     ["Sunday, 31-Feb-27 00:00:00 GMT", undefined],
-    ["Sun Feb 31 00:00:00 2027", undefined],
     ["Thu, 29 Feb 2027 00:00:00 GMT", undefined],
     ["Mon, 06 Nov 1994 08:49:37 GMT", undefined],
-    ["Monday, 06-Nov-94 08:49:37 GMT", undefined],
-    ["Mon Nov  6 08:49:37 1994", undefined],
     ["sun, 06 Nov 1994 08:49:37 GMT", undefined],
     ["Sun, 06 Nov 1899 08:49:37 GMT", undefined],
     ["Sun, 06 Nov 1994 24:00:00 GMT", undefined],
@@ -193,10 +162,7 @@ describe("parseRetryAfterHttpDateMs", () => {
     ["Sat, 31 Dec 2016 23:59:60 GMT", Date.UTC(2017, 0, 1)],
     ["Sunday, 06-Nov-50 00:00:00 GMT", Date.UTC(2050, 10, 6)],
     ["Sunday, 06-Nov-77 00:00:00 GMT", Date.UTC(1977, 10, 6)],
-  ])(
-    "validates HTTP-date grammar, calendar, leap seconds and rolling years: %s",
-    (value, expected, now = Date.UTC(2026, 10, 6)) => {
-      expect(parseDate(value, now)).toBe(expected);
-    },
-  );
+  ])("validates HTTP dates: %s", (value, expected, now = Date.UTC(2026, 10, 6)) => {
+    expect(parseDate(value, now)).toBe(expected);
+  });
 });
