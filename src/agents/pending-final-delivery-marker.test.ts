@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   advancePendingFinalDeliveryCompletion,
@@ -17,11 +18,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 it("owns a multi-payload command delivery as one durable batch", async () => {
   const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
   state.applySessionEntryReplacements.mockImplementationOnce(
-    async (
-      params: Parameters<
-        typeof import("../config/sessions/session-accessor.js").applySessionEntryReplacements
-      >[0],
-    ) => (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
+    async (params: Parameters<typeof applySessionEntryReplacements>[0]) =>
+      (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
   );
   const payloads = [
     { text: "first" },

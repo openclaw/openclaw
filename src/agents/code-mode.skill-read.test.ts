@@ -2,18 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
-import {
-  createCatalogCodeModeHarness,
-  createCodeModeHarness,
-  resetCodeModeTestState,
-  runUntilCompleted,
-} from "./code-mode.test-support.js";
+import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
-afterEach(async () => {
-  await resetCodeModeTestState();
-});
+afterEach(resetCodeModeTestState);
 
 it("reports bounded, redacted installed-skill failures returned by a Gateway", async () => {
   const secret = `ghp_${"a".repeat(36)}`;
@@ -59,33 +51,28 @@ it("reads a known skill with resource context before discovery through the worke
     candidates: [demo.skill, hidden.skill],
   });
   codeModeSkills[0]!.reader = reader;
-  const h = createCodeModeHarness({ codeModeSkills });
-  applyCodeModeCatalog({
-    ...h.ctx,
-    tools: [...h.tools, ...createInstalledSkillTools(codeModeSkills)],
+  const h = createCatalogCodeModeHarness(createInstalledSkillTools(codeModeSkills), {
+    codeModeSkills,
   });
-  const result = await runUntilCompleted({
-    execTool: h.tools[0]!,
-    waitTool: h.tools[1]!,
-    code: `
+  const result = await h.complete(`
     const body = await skills.read("demo");
     const listed = await skills.list();
     const found = await skills.search("demo");
     let unknown;
     try { await skills.read("missing"); } catch (error) { unknown = error.message; }
     return { listed, found, body, unknown };
-  `,
-  });
+  `);
+  const metadata = {
+    name: "demo",
+    description: `${demo.skill.description}\n${locationNote}`,
+    location,
+  };
   expect(result).toMatchObject({
     status: "completed",
     value: {
-      listed: [
-        { name: "demo", description: `${demo.skill.description}\n${locationNote}`, location },
-      ],
+      listed: [metadata],
       found: {
-        skills: [
-          { name: "demo", description: `${demo.skill.description}\n${locationNote}`, location },
-        ],
+        skills: [metadata],
         hasMore: false,
         coverage: { bodyIndexed: 0, metadataOnly: 1, truncatedBodies: 0 },
       },

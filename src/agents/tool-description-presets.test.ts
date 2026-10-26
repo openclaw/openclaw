@@ -57,15 +57,14 @@ const SESSION_DESCRIPTIONS = [
 ] as const;
 
 it.each(SESSION_DESCRIPTIONS)(
-  "keeps %s bytes unchanged without a link base",
+  "only appends the shared link rule to %s when configured",
   (_tool, describe, original) => {
     expect(describe()).toBe(original);
+    expect(describe({ sessionLinkBase: SESSION_LINK_BASE })).toBe(
+      `${original} ${SESSION_LINK_LINE}`,
+    );
   },
 );
-
-it.each(SESSION_DESCRIPTIONS)("appends the shared link rule to %s", (_tool, describe, original) => {
-  expect(describe({ sessionLinkBase: SESSION_LINK_BASE })).toBe(`${original} ${SESSION_LINK_LINE}`);
-});
 
 it("distinguishes sessions_send local context selection from exact external addressing", () => {
   expect(SESSIONS_SEND_TOOL_DISPLAY_SUMMARY).toContain("same-Gateway");
