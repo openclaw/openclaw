@@ -71,26 +71,35 @@ describe("requester final attachment", () => {
   });
 
   it("rejects the wrong session or batch without consuming the owner", () => {
-    promote();
+    promote({ rearmGeneration: 2 });
 
-    finalize({ requesterSessionId: "session-other" });
-    finalize({ batchRunIds: ["run-b"], finalAssistantVisibleText: "wrong batch" });
+    finalize({ requesterSessionId: "session-other", rearmGeneration: 2 });
+    finalize({
+      batchRunIds: ["run-b"],
+      rearmGeneration: 2,
+      finalAssistantVisibleText: "wrong batch",
+    });
+    finalize({ rearmGeneration: 1 });
     expect(append).not.toHaveBeenCalled();
-    finalize();
+    finalize({ rearmGeneration: 2 });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
   it.each(["rotated", "current"])("only the %s lifecycle can finalize a replacement", (state) => {
+    const rearmGeneration = state === "rotated" ? 1 : 3;
     const second = vi.fn(() => true);
     registerRequesterFinalAttachment({ ...base, requesterTurnRunId: "run-new", append: second });
     registration.revoke();
-    expect(promote({ requesterTurnRunId: "run-new" })).toBe(true);
+    expect(promote({ requesterTurnRunId: "run-new", rearmGeneration })).toBe(true);
 
     if (state === "rotated") {
       lifecycle.generation = "generation-2";
       lifecycle.rotate?.(lifecycle.generation);
     }
-    finalize({ finalAssistantVisibleText: state === "rotated" ? "stale" : "new final" });
+    finalize({
+      rearmGeneration,
+      finalAssistantVisibleText: state === "rotated" ? "stale" : "new final",
+    });
     expect(append).not.toHaveBeenCalled();
     if (state === "rotated") {
       expect(second).not.toHaveBeenCalled();

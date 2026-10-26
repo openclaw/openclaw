@@ -33,6 +33,9 @@ it("keeps catalog ownership, defaults, and aliases aligned in replace mode", () 
   expect(cfg.agents?.defaults?.model).toEqual({ primary, fallbacks: [pro, vision] });
   expect(cfg.agents?.defaults?.imageModel).toEqual(selection(vision, imageFallback));
   expect(cfg.agents?.defaults?.models?.["chutes-fast"]).toBeUndefined();
+  expect(chutesCatalog.map(({ id }) => `chutes/${id}`)).toEqual(
+    expect.arrayContaining([primary, pro, vision, imageFallback]),
+  );
 });
 
 it("preserves authored zero prices, aliases, and selections without adding merge-mode pins", () => {

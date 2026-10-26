@@ -29,12 +29,13 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
   vi.useFakeTimers();
   const request = vi.fn<Parameters<typeof createTestGatewayClient>[0]>();
   responses.forEach((response) => request.mockReturnValueOnce(Promise.resolve(response)));
+  const list = vi.fn(() => ({ worktrees: [] }));
   const client = createTestGatewayClient((...args) => {
     if (args[0] === "worktrees.gc") {
       return request(...args);
     }
     expect(args[0]).toBe("worktrees.list");
-    return { worktrees: [] };
+    return list();
   });
   const source = createApplicationGateway(
     createApplicationGatewaySnapshot({
@@ -62,12 +63,12 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
     vi.useRealTimers();
     expect(timerCount).toBe(0);
   });
-  return { request, model, reconnect, notify };
+  return { request, list, model, reconnect, notify };
 }
 
 it("enqueues once, polls the same job serially, and settles only when cleanup completes", async () => {
   const slowPoll = createDeferred<WorktreesGcResult>();
-  const { request, model } = setup(queued, slowPoll.promise, completed);
+  const { request, list, model } = setup(queued, slowPoll.promise, completed);
   const settled = vi.fn();
   const pending = model.gc().then(settled);
   expect(model).toMatchObject({ operation: "gc", loading: true });
@@ -83,6 +84,7 @@ it("enqueues once, polls the same job serially, and settles only when cleanup co
   expect(request).toHaveBeenLastCalledWith("worktrees.gc", { jobId: "cleanup-job" });
   expect(model).toMatchObject({ operation: null, loading: false, error: null });
   expect(model.listLoaded).toBe(true);
+  expect(list).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -102,7 +104,7 @@ it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as 
   "ignores the old Gateway epoch %s",
   async (phase) => {
     const response = createDeferred<WorktreesGcResult>();
-    const { request, model, reconnect, notify } = setup(
+    const { request, list, model, reconnect, notify } = setup(
       ...(phase === "during enqueue" ? [response.promise] : [queued, response.promise]),
     );
     if (phase === "before enqueue") {
@@ -121,5 +123,6 @@ it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as 
     );
     expect(model).toMatchObject({ error: null, operation: null, loading: false });
     expect(model.listLoaded).toBe(false);
+    expect(list).not.toHaveBeenCalled();
   },
 );
