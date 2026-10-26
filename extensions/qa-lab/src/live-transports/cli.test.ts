@@ -27,17 +27,15 @@ vi.mock("./shared/live-transport-suite.runtime.js", () => {
 });
 // mock-isolation: Verify CLI dispatch without loading Telegram's live transport and suite runtime.
 vi.mock("./telegram/cli.runtime.js", () => ({ runQaTelegramCommand: mocks.runTelegram }));
-// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
+// mock-isolation: Count lazy adapter loads and inject failures without live transports.
 vi.mock("./discord/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.discord += 1;
   return { createDiscordQaTransportAdapter: mocks.createDiscordAdapter };
 });
-// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
 vi.mock("./slack/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.slack += 1;
   return { createSlackQaTransportAdapter: mocks.createSlackAdapter };
 });
-// mock-isolation: Count lazy adapter loads and inject factory failures without the live transport.
 vi.mock("./whatsapp/adapter.runtime.js", () => {
   mocks.adapterRuntimeLoads.whatsapp += 1;
   return { createWhatsAppQaTransportAdapter: mocks.createWhatsAppAdapter };
@@ -46,6 +44,11 @@ vi.mock("./whatsapp/adapter.runtime.js", () => {
 import { listLiveTransportQaCliRegistrations } from "./cli.js";
 
 const STANDARD_LANES = ["discord", "slack", "whatsapp"] as const;
+const adapters = {
+  discord: mocks.createDiscordAdapter,
+  slack: mocks.createSlackAdapter,
+  whatsapp: mocks.createWhatsAppAdapter,
+};
 const DEFAULT_OPTIONS = {
   allowFailures: false,
   alternateModel: undefined,
@@ -78,6 +81,14 @@ function registerCommand(commandName: string) {
   return qa;
 }
 
+function runCommand(commandName: string, ...args: string[]) {
+  return registerCommand(commandName).parseAsync(["node", "openclaw", commandName, ...args]);
+}
+
+function expectSuite(channelId: string, options: unknown) {
+  expect(mocks.runLiveTransportQaSuiteCommand).toHaveBeenLastCalledWith({ channelId, options });
+}
+
 describe("live transport QA contributions", () => {
   let previousExitCode: typeof process.exitCode;
   let stderrWrite: ReturnType<typeof vi.spyOn>;
@@ -108,65 +119,47 @@ describe("live transport QA contributions", () => {
   it.each(["slack", "whatsapp"] as const)(
     "routes the shipped %s command through the shared suite host",
     async (commandName) => {
-      const qa = registerCommand(commandName);
-      await qa.parseAsync(["node", "openclaw", commandName, "--scenario", `${commandName}-canary`]);
-
-      expect(mocks.runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
-        channelId: commandName,
-        options: expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }),
-      });
+      await runCommand(commandName, "--scenario", `${commandName}-canary`);
+      expectSuite(commandName, expect.objectContaining({ scenarioIds: [`${commandName}-canary`] }));
     },
   );
 
   it("parses standard live command options into suite inputs", async () => {
-    const qa = registerCommand("discord");
-    await qa.parseAsync(
-      `node openclaw discord --channel-driver crabline --repo-root /repo --output-dir /proof
+    const qa = await runCommand(
+      "discord",
+      ...`--channel-driver crabline --repo-root /repo --output-dir /proof
        --provider-mode mock-openai --model openai/primary --alt-model openai/alternate
        --scenario discord-canary --fast --allow-failures --sut-account qa-sut
        --credential-source convex --credential-role ci`.split(/\s+/),
     );
-    expect(mocks.runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
-      channelId: "discord",
-      options: {
-        ...DEFAULT_OPTIONS,
-        channelDriver: "crabline",
-        repoRoot: "/repo",
-        outputDir: "/proof",
-        providerMode: "mock-openai",
-        primaryModel: "openai/primary",
-        alternateModel: "openai/alternate",
-        scenarioIds: ["discord-canary"],
-        fastMode: true,
-        allowFailures: true,
-        sutAccountId: "qa-sut",
-        credentialSource: "convex",
-        credentialRole: "ci",
-      },
+    expectSuite("discord", {
+      ...DEFAULT_OPTIONS,
+      channelDriver: "crabline",
+      repoRoot: "/repo",
+      outputDir: "/proof",
+      providerMode: "mock-openai",
+      primaryModel: "openai/primary",
+      alternateModel: "openai/alternate",
+      scenarioIds: ["discord-canary"],
+      fastMode: true,
+      allowFailures: true,
+      sutAccountId: "qa-sut",
+      credentialSource: "convex",
+      credentialRole: "ci",
     });
-    const command = qa.commands[0];
-    if (!command) {
-      throw new Error("missing discord Commander command");
-    }
-    expect(command.helpInformation()).toContain("Usage: qa discord [options]");
+    expect(qa.commands[0]?.helpInformation()).toContain("Usage: qa discord [options]");
   });
 
   it("preserves standard command defaults, duplicate scenarios, and dispatch errors", async () => {
-    const qa = registerCommand("discord");
-    await qa.parseAsync([
-      "node",
-      "openclaw",
+    await runCommand(
       "discord",
       ...[" first ", " ", "first", "second"].flatMap((value) => ["--scenario", value]),
-    ]);
-    expect(mocks.runLiveTransportQaSuiteCommand).toHaveBeenLastCalledWith({
-      channelId: "discord",
-      options: { ...DEFAULT_OPTIONS, scenarioIds: ["first", "first", "second"] },
-    });
+    );
+    expectSuite("discord", { ...DEFAULT_OPTIONS, scenarioIds: ["first", "first", "second"] });
 
     const failure = new Error("discord suite failed");
     mocks.runLiveTransportQaSuiteCommand.mockRejectedValueOnce(failure);
-    await registerCommand("discord").parseAsync(["node", "openclaw", "discord"]);
+    await runCommand("discord");
     expect(stderrWrite).toHaveBeenCalledWith(`${failure.message}\n`);
     expect(process.exitCode).toBe(1);
   });
@@ -180,13 +173,8 @@ describe("live transport QA contributions", () => {
       if (!factory) {
         throw new Error(`missing ${commandName} QA adapter factory`);
       }
-      const create = {
-        discord: mocks.createDiscordAdapter,
-        slack: mocks.createSlackAdapter,
-        whatsapp: mocks.createWhatsAppAdapter,
-      }[commandName];
       const failure = new Error(`${commandName} adapter failed`);
-      create.mockRejectedValueOnce(failure);
+      adapters[commandName].mockRejectedValueOnce(failure);
 
       const pending = factory.create({
         adapterOptions: {},
@@ -208,9 +196,7 @@ describe("live transport QA contributions", () => {
   });
 
   it("keeps the specialized Telegram command runner", async () => {
-    const qa = registerCommand("telegram");
-    await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", "telegram-canary"]);
-
+    await runCommand("telegram", "--scenario", "telegram-canary");
     expect(mocks.runTelegram).toHaveBeenCalledWith({
       ...DEFAULT_OPTIONS,
       concurrency: undefined,
