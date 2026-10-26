@@ -46,9 +46,25 @@ const unsupportedLegacyIpv4Cases = `
   .split(/\s+/);
 
 const httpBaseUrlPolicyBuilders = [
-  ["allowed hostname", ssrfPolicyFromHttpBaseUrlAllowedHostname],
-  ["allowed origin", ssrfPolicyFromHttpBaseUrlAllowedOrigin],
-  ["fake-IP allowlist", ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist],
+  [
+    "allowed hostname",
+    ssrfPolicyFromHttpBaseUrlAllowedHostname,
+    { allowedHostnames: ["api.example.com"] },
+  ],
+  [
+    "allowed origin",
+    ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+    { allowedOrigins: ["https://api.example.com"] },
+  ],
+  [
+    "fake-IP allowlist",
+    ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+    {
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.example.com"],
+    },
+  ],
 ] as const;
 
 describe("SSRF policy", () => {
@@ -62,55 +78,27 @@ describe("SSRF policy", () => {
     }
   });
   it.each(httpBaseUrlPolicyBuilders)(
-    "%s ignores empty, invalid, and non-HTTP URLs",
-    (_name, build) => {
+    "%s normalizes HTTP base URLs and rejects invalid inputs",
+    (_name, build, expected) => {
       expect(build("")).toBeUndefined();
       expect(build("not-a-url")).toBeUndefined();
       expect(build("ftp://api.example.com")).toBeUndefined();
+      expect(build(" https://api.example.com/v1?token=redacted ")).toEqual(expected);
     },
   );
-  it("builds an allowed-hostname policy from HTTP base URLs", () => {
-    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
-      allowedHostnames: ["api.example.com"],
-    });
-  });
   it("builds an allowed-origin policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(" http://10.0.0.5:1234/v1 ")).toEqual({
       allowedOrigins: ["http://10.0.0.5:1234"],
     });
-    expect(
-      ssrfPolicyFromHttpBaseUrlAllowedOrigin("https://api.example.com/v1?token=redacted"),
-    ).toEqual({
-      allowedOrigins: ["https://api.example.com"],
-    });
   });
-  it("does not trust the hostname when the port differs", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {
-        allowedOrigins: ["http://10.0.0.5:1234"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://10.0.0.5:1234"],
-    });
-  });
-
-  it("supports IPv6 origins when the exact origin matches", () => {
-    expect(
-      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11434/v1/chat/completions"), {
-        allowedOrigins: ["http://[fd00::1]:11434"],
-      }),
-    ).toEqual({
-      allowedOrigins: ["http://[fd00::1]:11434"],
-      allowedHostnames: ["fd00::1"],
-    });
-  });
-  it("builds a host-scoped fake-IP policy from HTTP base URLs", () => {
-    expect(
-      ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(" https://api.example.com/v1 "),
-    ).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["api.example.com"],
+  it.each([
+    ["http://10.0.0.5:4321", "http://10.0.0.5:1234", {}],
+    ["http://[fd00::1]:11434", "http://[fd00::1]:11434", { allowedHostnames: ["fd00::1"] }],
+  ] as const)("trusts only exact origins: %s / %s", (url, origin, trusted) => {
+    const policy = { allowedOrigins: [origin] };
+    expect(resolveSsrFPolicyForUrl(new URL(`${url}/v1/chat/completions`), policy)).toEqual({
+      ...policy,
+      ...trusted,
     });
   });
   it("blocks reserved hostname with repeated trailing dots", () => {

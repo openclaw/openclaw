@@ -9,11 +9,11 @@ import {
   resolvePinnedHostnameWithPolicy,
   resolveSsrFPolicyForUrl,
   SsrFBlockedError,
+  type SsrFPolicy,
 } from "./ssrf.js";
 
 const ipv4 = { address: "160.79.104.10", family: 4 };
 const ipv6 = { address: "2607:6bc0::10", family: 6 };
-const publicLookup = () => vi.fn(async () => [ipv4]);
 
 function lookupResult(
   lookup: ReturnType<typeof createPinnedLookup>,
@@ -88,13 +88,20 @@ describe("ssrf pinning", () => {
     await expect(lookupResult(lookup, { all: true })).resolves.toEqual([ipv6]);
   });
 
-  it("rejects mixed public IPv4/private IPv6 answers before pinning", async () => {
-    await expect(
-      resolvePinnedHostnameWithPolicy("example.com", {
-        lookupFn: async () => [ipv4, { address: "fd00::1", family: 6 }],
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
-  });
+  it.each([
+    ["example.com", [ipv4, { address: "fd00::1", family: 6 }], undefined, 1],
+    ["8.8.2056", [ipv4], undefined, 0],
+    ["localhost", [{ address: "0.0.0.0", family: 4 }], { allowedHostnames: ["localhost"] }, 1],
+  ] satisfies Array<[string, Awaited<ReturnType<LookupFn>>, SsrFPolicy | undefined, number]>)(
+    "rejects unsafe DNS or literals for %s",
+    async (hostname, answers, policy, calls) => {
+      const lookupFn = vi.fn(async () => [...answers]);
+      await expect(resolvePinnedHostnameWithPolicy(hostname, { lookupFn, policy })).rejects.toThrow(
+        SsrFBlockedError,
+      );
+      expect(lookupFn).toHaveBeenCalledTimes(calls);
+    },
+  );
 
   it("fails loud when a pinned lookup is created without any addresses", () => {
     expect(() => createPinnedLookup({ hostname: "example.com", addresses: [] })).toThrow(
@@ -106,7 +113,7 @@ describe("ssrf pinning", () => {
     [" TRACKER.Example.COM... ", " tracker.example.com. "],
     ["ads.example.com", "*.example.com"],
   ])("blocks configured pattern %s / %s before DNS and allow rules", async (hostname, pattern) => {
-    const lookupFn = publicLookup();
+    const lookupFn = vi.fn(async () => [ipv4]);
     const policy = resolveSsrFPolicyForUrl(new URL("https://tracker.example.com"), {
       blockedHostnames: [pattern],
       allowedHostnames: [hostname.trim()],
@@ -121,15 +128,6 @@ describe("ssrf pinning", () => {
     expect(lookupFn).not.toHaveBeenCalled();
   });
 
-  it("blocks unsupported short-form IPv4 literals before DNS lookup", async () => {
-    const lookup = publicLookup();
-
-    await expect(resolvePinnedHostnameWithPolicy("8.8.2056", { lookupFn: lookup })).rejects.toThrow(
-      SsrFBlockedError,
-    );
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
   it("uses DNS family metadata for ordering (not address string heuristics)", async () => {
     const lookup: LookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 6 },
@@ -138,16 +136,5 @@ describe("ssrf pinning", () => {
 
     const pinned = await resolvePinnedHostname("example.com", lookup);
     expect(pinned.addresses).toEqual(["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
-  });
-
-  it("does not allow explicit localhost trust to resolve through an unspecified address", async () => {
-    const lookup = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]);
-
-    await expect(
-      resolvePinnedHostnameWithPolicy("localhost", {
-        lookupFn: lookup,
-        policy: { allowedHostnames: ["localhost"] },
-      }),
-    ).rejects.toThrow(SsrFBlockedError);
   });
 });
