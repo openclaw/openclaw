@@ -589,18 +589,13 @@ export function saveSettings(
     // through storage failure so recovery cannot replay an unchanged sibling layout.
     const storedNavigation = profileNavigation(source?.parsed, profileId);
     const changed: ProfileNavigation = {};
-    if (
-      writesShortcuts &&
-      JSON.stringify(navigation.railShortcuts) !== JSON.stringify(storedNavigation?.railShortcuts)
-    ) {
-      changed.railShortcuts = navigation.railShortcuts;
-    }
-    if (
-      writesGroups &&
-      JSON.stringify(navigation.personalSessionGroups) !==
-        JSON.stringify(storedNavigation?.personalSessionGroups)
-    ) {
-      changed.personalSessionGroups = navigation.personalSessionGroups;
+    for (const key of ["railShortcuts", "personalSessionGroups"] as const) {
+      if (
+        Object.hasOwn(navigation, key) &&
+        JSON.stringify(navigation[key]) !== JSON.stringify(storedNavigation?.[key])
+      ) {
+        Object.assign(changed, { [key]: navigation[key] });
+      }
     }
     if (Object.keys(changed).length > 0) {
       pendingNavigation[profileId] = { ...pendingNavigation[profileId], ...changed };

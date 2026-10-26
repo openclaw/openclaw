@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { USER_PREFS_VALUE_BYTES } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
 
 /** Personal references only: membership never grants access or changes session metadata. */
@@ -25,9 +26,8 @@ export function normalizePersonalSessionGroups(value: unknown): PersonalSessionG
   let bytes = 2; // JSON array brackets.
   for (const candidate of value.slice(0, MAX_GROUPS)) {
     const entry = asOptionalRecord(candidate);
-    const id = typeof entry?.id === "string" ? entry.id.trim() : "";
-    const label =
-      typeof entry?.label === "string" ? entry.label.trim().slice(0, MAX_LABEL_LENGTH) : "";
+    const id = normalizeOptionalString(entry?.id);
+    const label = normalizeOptionalString(entry?.label)?.slice(0, MAX_LABEL_LENGTH);
     if (!id || id.length > MAX_ID_LENGTH || !label || ids.has(id)) {
       continue;
     }
@@ -40,7 +40,7 @@ export function normalizePersonalSessionGroups(value: unknown): PersonalSessionG
     const keys = new Set<string>();
     if (Array.isArray(entry?.sessionKeys)) {
       for (const candidateKey of entry.sessionKeys.slice(0, MAX_SESSION_KEYS)) {
-        const key = typeof candidateKey === "string" ? candidateKey.trim() : "";
+        const key = normalizeOptionalString(candidateKey);
         if (!key || key.length > MAX_SESSION_KEY_LENGTH || keys.has(key)) {
           continue;
         }
