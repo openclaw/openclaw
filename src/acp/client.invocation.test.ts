@@ -65,14 +65,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([undefined, "/$bunfs/root/openclaw"])(
-  "uses the standalone executable without a loose entry (argv1=%s)",
-  async (argv1) => {
-    standalone(argv1);
-    await expectInvocation({ serverVerbose: true }, process.execPath, ["acp", "--verbose"]);
-  },
-);
-
 it("pins a loose entry symlink before the ACP arguments", async () => {
   const entry = path.join(tempDirs.make("openclaw-acp-loose-"), "openclaw.mjs");
   await writeFile(entry, "export {};\n");
@@ -88,7 +80,7 @@ it.each([
   { server: "self", strip: true },
   { server: "custom", strip: false },
 ])("scrubs the actual $server server environment", async ({ server, strip }) => {
-  standalone();
+  standalone(server === "default" ? "/$bunfs/root/openclaw" : undefined);
   process.env = {
     PATH: "/usr/bin",
     SKILL_SECRET: "skill-fixture",
@@ -103,9 +95,10 @@ it.each([
       serverCommand:
         server === "default" ? undefined : server === "self" ? process.execPath : "custom-acp",
       serverArgs: server === "custom" ? ["--custom"] : [],
+      serverVerbose: true,
     },
     server === "custom" ? "custom-acp" : process.execPath,
-    server === "custom" ? ["acp", "--custom"] : ["acp"],
+    server === "custom" ? ["acp", "--custom", "--verbose"] : ["acp", "--verbose"],
     {
       PATH: "/usr/bin",
       OPENCLAW_SHELL: "acp-client",

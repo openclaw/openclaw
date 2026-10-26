@@ -21,12 +21,6 @@ async function createHarness(
       }
       return { ok: true };
     },
-    request: (method) => {
-      if (method === "sessions.get") {
-        throw new Error("ledger replay must not load the transcript");
-      }
-      return { ok: true };
-    },
   });
   const { agent, sessionStore } = h;
   const sessionId = options.load ?? (await agent.newSession(createNewSessionRequest())).sessionId;

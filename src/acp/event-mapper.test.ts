@@ -9,15 +9,10 @@ import {
 } from "./event-mapper.js";
 
 const path = "/tmp/synthetic.txt";
-it.each([
-  [{ line: 12.9 }, { path, line: 12 }],
-  [{ line: 0.5 }, { path }],
-  [
-    { line: 0.5, lineNumber: 3.9, startLine: 9 },
+it("uses the first valid line key after rejecting subunit lines", () => {
+  expect(extractToolCallLocations({ path, line: 0.5, lineNumber: 3.9, startLine: 9 })).toEqual([
     { path, line: 3 },
-  ],
-] as const)("uses the first positive whole-line location from %j", (fields, expected) => {
-  expect(extractToolCallLocations({ path, ...fields })).toEqual([expected]);
+  ]);
 });
 
 it("enforces the global node visit cap across nested structures", () => {

@@ -149,18 +149,12 @@ it.each([
   },
 );
 
-it("keeps a distinct preamble with identical text and ignores another run", async () => {
+it("keeps a distinct preamble with identical text and ignores unprojected or foreign events", async () => {
   await h.chat("Answer.");
   await h.chat("", { replace: true });
+  await h.preamble("legacy", "Checking.", { preamble: undefined });
   await h.preamble("foreign", "Answer.", { runId: "other-run" });
   await h.preamble("unrelated", "Answer.", { preamble: {} });
   await h.finish("Answer.");
   expect(h.updates()).toEqual(["Answer.", "Answer."]);
-});
-it("keeps legacy events without projection metadata compatible", async () => {
-  await h.preamble("legacy", "Checking.", { preamble: undefined });
-  await h.round();
-  await h.chat("Done.");
-  await h.finish();
-  expect(h.updates()).toEqual([...readUpdates, "Done."]);
 });

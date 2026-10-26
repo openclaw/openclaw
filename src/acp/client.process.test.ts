@@ -139,11 +139,6 @@ setInterval(() => {}, 60_000);
           }
         });
       },
-    }).catch((error: unknown) => {
-      throw new Error(
-        `ACP client process failed: ${JSON.stringify({ prompted, quitSent })}\nstdout:\n${stdout.text()}\nstderr:\n${stderr.text()}`,
-        { cause: error },
-      );
     });
     expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
     if (handshake) {

@@ -74,11 +74,14 @@ describe("AcpTranslatorSessionUpdates", () => {
   });
 
   it.each([false, true])(
-    "drains admitted queued ledger updates during shutdown (first write fails: %s)",
+    "isolates session queues and drains them independently of delivery on shutdown (first write fails: %s)",
     async (firstFails) => {
       const writing = createDeferred();
       const release = createDeferred();
-      const { updates, ledger } = harness();
+      const delivery = createDeferred();
+      const { updates, ledger } = harness(
+        vi.fn().mockReturnValueOnce(delivery.promise).mockResolvedValue(undefined),
+      );
       const firstUpdate = textUpdate("first");
       const secondUpdate = textUpdate("second");
       ledger.recordUpdate.mockImplementationOnce(async () => {
@@ -90,78 +93,40 @@ describe("AcpTranslatorSessionUpdates", () => {
       });
       const first = updates.emit({ ...emission, update: firstUpdate });
       await writing.promise;
-      const second = updates.emit({ ...emission, update: secondUpdate });
+      const second = updates.emit({ ...emission, update: secondUpdate, waitForDelivery: false });
+      await updates.emit({
+        ...emission,
+        sessionId: "session-2",
+        sessionKey: "agent:main:session-2",
+      });
+      expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
+        "session-1",
+        "session-2",
+      ]);
       const stopped = vi.fn();
       const closing = updates.stop().then(stopped);
       try {
         await Promise.resolve();
         expect(stopped).not.toHaveBeenCalled();
         release.resolve();
-        await Promise.all([first, second, closing]);
-        expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
-          firstUpdate,
-          secondUpdate,
+        await second;
+        expect(
+          ledger.recordUpdate.mock.calls.map(([params]) => [params.sessionId, params.update]),
+        ).toEqual([
+          [session.sessionId, firstUpdate],
+          ["session-2", update],
+          [session.sessionId, secondUpdate],
         ]);
         expect(ledger.markIncomplete.mock.calls).toEqual(firstFails ? [[session]] : []);
+        await expect(Promise.race([first, Promise.resolve("pending")])).resolves.toBe("pending");
+        expect(stopped).not.toHaveBeenCalled();
+        delivery.resolve();
+        await Promise.all([first, closing]);
       } finally {
         release.resolve();
+        delivery.resolve();
         await Promise.allSettled([first, second, closing]);
       }
     },
   );
-
-  it("preserves ledger order without waiting for ACP delivery", async () => {
-    const delivery = createDeferred();
-    const recorded = createDeferred();
-    const { updates, ledger } = harness(
-      vi.fn().mockReturnValueOnce(delivery.promise).mockResolvedValue(undefined),
-    );
-    ledger.recordUpdate.mockImplementation(async () => {
-      recorded.resolve();
-    });
-    const firstUpdate = textUpdate("first");
-    const interruption = textUpdate("interrupted");
-    const first = updates.emit({ ...emission, update: firstUpdate });
-    await recorded.promise;
-    await updates.emit({ ...emission, update: interruption, waitForDelivery: false });
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
-      firstUpdate,
-      interruption,
-    ]);
-    await expect(Promise.race([first, Promise.resolve("pending")])).resolves.toBe("pending");
-    delivery.resolve();
-    await first;
-  });
-
-  it("does not let a stalled ledger session block another session", async () => {
-    const write = createDeferred();
-    const writing = createDeferred();
-    const { updates, ledger } = harness();
-    ledger.recordUpdate.mockImplementation(async ({ sessionId }) => {
-      if (sessionId === session.sessionId) {
-        writing.resolve();
-        await write.promise;
-      }
-    });
-    const stalled = updates.emit({ ...emission, waitForDelivery: false });
-    await writing.promise;
-    const queued = updates.emit({ ...emission, waitForDelivery: false });
-    await updates.emit({
-      ...emission,
-      sessionId: "session-2",
-      sessionKey: "agent:main:session-2",
-      waitForDelivery: false,
-    });
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
-      "session-1",
-      "session-2",
-    ]);
-    write.resolve();
-    await Promise.all([stalled, queued]);
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
-      "session-1",
-      "session-2",
-      "session-1",
-    ]);
-  });
 });
