@@ -46,6 +46,14 @@ const taskAction = (...actions: string[]) =>
   schtasksCalls.some(([action]) => action !== undefined && actions.includes(action));
 const killedOwner = () => spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
 const processList = (pid = 4242) => `"node.exe","${pid}","Console","1","1 K"`;
+const jsonResult = (value: object) => spawnSyncResult(JSON.stringify(value));
+function mockGracefulStop(stop: () => void) {
+  callGatewayCli.mockImplementation(async (options) => {
+    options.assertDispatchCurrent();
+    stop();
+    return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+  });
+}
 type ProcessCommand = Parameters<typeof spawnSync.mockImplementation>[0];
 function mockProcessCommands(
   command: ProcessCommand,
@@ -64,12 +72,10 @@ function mockOwnerlessInstalledGateway() {
     if (exe.endsWith("tasklist.exe")) {
       return spawnSyncResult(killedOwner() ? "No tasks" : processList());
     }
-    return spawnSyncResult(
-      JSON.stringify(
-        killedOwner()
-          ? []
-          : [{ ProcessId: GATEWAY_OWNER.pid, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
-      ),
+    return jsonResult(
+      killedOwner()
+        ? []
+        : [{ ProcessId: GATEWAY_OWNER.pid, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }],
     );
   });
 }
@@ -186,7 +192,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           ? [{ ProcessId: 6262, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }]
           : []),
       ].filter(({ ProcessId }) => !killed.has(ProcessId));
-      return spawnSyncResult(JSON.stringify(children));
+      return jsonResult(children);
     });
     inspectPortUsageMock.mockImplementation(async () => ({
       port: 18789,
@@ -242,8 +248,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
       mockWindowsTaskkillSuccess();
       mockLingeringGatewayListener(pid);
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
+      mockGracefulStop(() => {
         readGatewayOwnerLease.mockReturnValue(undefined);
         let replacementStarted = false;
         mockProcessCommands((exe) => {
@@ -264,7 +269,6 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
               : "No tasks",
           );
         });
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
       });
 
       const operation = control({ env, stdout, warn });
@@ -425,13 +429,11 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
         return stopped ? undefined : GATEWAY_OWNER;
       });
       if (mode === "graceful") {
-        callGatewayCli.mockImplementation(async (options) => {
-          options.assertDispatchCurrent();
+        mockGracefulStop(() => {
           readGatewayOwnerLease.mockImplementation(failRead);
           mockProcessCommands((exe) =>
             spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
           );
-          return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
         });
       }
       await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual(
@@ -475,9 +477,7 @@ describe("Scheduled Task settlement", () => {
       if (exe.endsWith("tasklist.exe")) {
         return spawnSyncResult(killed ? "No tasks" : '"node.exe","5151","Console","1","1 K"');
       }
-      return spawnSyncResult(
-        JSON.stringify([{ ProcessId: 5151, CommandLine: replacement.split("\r\n")[1] }]),
-      );
+      return jsonResult([{ ProcessId: 5151, CommandLine: replacement.split("\r\n")[1] }]);
     });
     await expect(
       stopRegisteredScheduledTask({
@@ -511,13 +511,11 @@ describe("Scheduled Task settlement", () => {
           return scheduledTaskProbeResult(taskAction("/End") ? 3 : 4);
         },
       );
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
+      mockGracefulStop(() => {
         exited = true;
         if (phase === "end") {
           changed = true;
         }
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
       });
       await expect(
         stopRegisteredScheduledTask({
@@ -585,28 +583,24 @@ describe("Scheduled Task settlement", () => {
           if (ready) {
             events.push("ready");
           }
-          return spawnSyncResult(
-            JSON.stringify({
-              state: events.includes("run") ? 4 : ready ? 3 : 4,
-              lastRunResult: events.includes("run")
-                ? 267009
-                : delayedResult && Date.now() < 500
-                  ? undefined
-                  : ready
-                    ? 0
-                    : 267009,
-              lastRunTime: "2026-09-27T00:00:00.0000000Z",
-            }),
-          );
+          return jsonResult({
+            state: events.includes("run") ? 4 : ready ? 3 : 4,
+            lastRunResult: events.includes("run")
+              ? 267009
+              : delayedResult && Date.now() < 500
+                ? undefined
+                : ready
+                  ? 0
+                  : 267009,
+            lastRunTime: "2026-09-27T00:00:00.0000000Z",
+          });
         }
         return spawnSyncResult(
           exe.endsWith("tasklist.exe") && !exited ? processList() : "No tasks",
         );
       });
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
+      mockGracefulStop(() => {
         exited = true;
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
       });
 
       const operation = restartScheduledTask({ env, stdout });
@@ -633,22 +627,18 @@ describe("Scheduled Task settlement", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockWindowsTaskkillSuccess();
     readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
-    callGatewayCli.mockImplementation(async (options) => {
-      options.assertDispatchCurrent();
+    mockGracefulStop(() => {
       readGatewayOwnerLease.mockReturnValue(undefined);
       spawnSync.mockImplementation((_exe, args) =>
         args?.includes("-EncodedCommand")
-          ? spawnSyncResult(
-              JSON.stringify({
-                state: 1,
-                enabled: false,
-                lastRunResult: 267009,
-                lastRunTime: "2026-09-27T00:00:00.0000000Z",
-              }),
-            )
+          ? jsonResult({
+              state: 1,
+              enabled: false,
+              lastRunResult: 267009,
+              lastRunTime: "2026-09-27T00:00:00.0000000Z",
+            })
           : spawnSyncResult("No tasks"),
       );
-      return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
     });
 
     await stopScheduledTask({ env, stdout });
@@ -675,13 +665,11 @@ describe("Scheduled Task settlement", () => {
     readGatewayOwnerLease.mockImplementation(() => (originalAlive ? GATEWAY_OWNER : undefined));
     spawnSync.mockImplementation((exe, args) => {
       if (args?.includes("-EncodedCommand")) {
-        return spawnSyncResult(
-          JSON.stringify({
-            state: 4,
-            lastRunResult: 267009,
-            lastRunTime: originalAlive ? "original" : "replacement",
-          }),
-        );
+        return jsonResult({
+          state: 4,
+          lastRunResult: 267009,
+          lastRunTime: originalAlive ? "original" : "replacement",
+        });
       }
       if (exe.endsWith("taskkill.exe") && args?.includes("4242")) {
         originalAlive = false;
@@ -719,10 +707,8 @@ describe("Scheduled Task settlement", () => {
       readGatewayOwnerLease.mockImplementation(() =>
         exited || failure === "no-owner" ? undefined : GATEWAY_OWNER,
       );
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
+      mockGracefulStop(() => {
         exited = true;
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
       });
       const push = schtasksCalls.push.bind(schtasksCalls);
       vi.spyOn(schtasksCalls, "push").mockImplementation((...calls) => {

@@ -105,12 +105,11 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
   try {
     let settled = false;
-    const pending = run()
-      .then((value) => ({ ok: true as const, value }))
-      .catch((error: unknown) => ({ ok: false as const, error }))
-      .finally(() => {
-        settled = true;
-      });
+    const pending = run();
+    const markSettled = () => {
+      settled = true;
+    };
+    void pending.then(markSettled, markSettled);
     await vi.waitFor(
       async () => {
         await vi.runAllTimersAsync();
@@ -118,11 +117,7 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
       },
       { timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS - 1000 },
     );
-    const result = await pending;
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
+    return await pending;
   } finally {
     vi.useRealTimers();
   }
@@ -465,13 +460,7 @@ describe("launchd install", () => {
 
   it("publishes the rewritten plist before restart bootstrap", async () => {
     state.serviceLoaded = false;
-    setLegacyGatewayLaunchAgentPlist(PLIST, [
-      "    <key>EnvironmentVariables</key>",
-      "    <dict>",
-      "      <key>OPENCLAW_SERVICE_VERSION</key>",
-      "      <string>2026.4.24</string>",
-      "    </dict>",
-    ]);
+    setGatewayPlist(["node", "gateway.js"], { OPENCLAW_SERVICE_VERSION: "2026.4.24" });
 
     const execLaunchctl = launchdExec.execLaunchctl;
     using launchctl = vi.spyOn(launchdExec, "execLaunchctl");
