@@ -96,13 +96,13 @@ async function runLocalCapability(argv: string[], agent = "ops"): Promise<void> 
 }
 
 it.each([
-  ["image generate", ["image", "generate", "--prompt", "a red square"]],
-  ["image describe", ["image", "describe", "--file", "input.png"]],
-  ["embedding create", ["embedding", "create", "--text", "hello", "--provider", "customacct"]],
-  ["audio transcribe", ["audio", "transcribe", "--file", "input.wav"]],
-  ["video generate", ["video", "generate", "--prompt", "a red square"]],
-  ["video describe", ["video", "describe", "--file", "input.mp4"]],
-])("infer %s uses only the durable owner’s saved credential", async (_name, argv) =>
+  ["image", "generate", "--prompt", "a red square"],
+  ["image", "describe", "--file", "input.png"],
+  ["embedding", "create", "--text", "hello", "--provider", "customacct"],
+  ["audio", "transcribe", "--file", "input.wav"],
+  ["video", "generate", "--prompt", "a red square"],
+  ["video", "describe", "--file", "input.mp4"],
+])("infer %s %s uses only the durable owner’s saved credential", async (...argv) =>
   withOpenClawTestState({ env: { [envKey]: apiKey } }, async (state) => {
     const agentDir = state.agentDir("ops");
     mocks.rawCfg = {

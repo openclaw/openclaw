@@ -85,12 +85,21 @@ function completion(text: string, stopReason = "stop", reasoning = false) {
   return { role: "assistant", stopReason, content };
 }
 
-function expectOutput(output: { text: string; mediaUrl: null | undefined; mediaUrls?: undefined }) {
-  expect(mocks.runtime.exit).not.toHaveBeenCalled();
-  expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ ok: true, outputs: [output] }),
-    2,
-  );
+async function expectOutcome(run: Promise<unknown>, error?: string, gateway = false) {
+  if (error) {
+    await expect(run).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(error);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  } else {
+    await run;
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    const output = { text: "complete answer", mediaUrl: gateway ? undefined : null };
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ok: true, outputs: [{ ...output, mediaUrls: undefined }] }),
+      2,
+    );
+  }
 }
 
 const target = 'for provider "openai" model "gpt-5.4"';
@@ -113,15 +122,7 @@ it.each<[string, string, string | undefined, string | undefined]>([
     ...completion(text, stopReason, Boolean(error)),
     ...(errorMessage ? { errorMessage } : {}),
   });
-  if (error) {
-    await expect(runModel()).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error.mock.calls.map((call) => call[0])).toEqual([error]);
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  } else {
-    await runModel();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expectOutput({ text: "complete answer", mediaUrl: null });
-  }
+  await expectOutcome(runModel(), error);
 });
 
 it.each<[string, string?, string?, string?]>([
@@ -136,19 +137,10 @@ it.each<[string, string?, string?, string?]>([
     summary,
     result: {
       payloads: [{ text: error ? "partial" : "complete answer" }],
-      ...(error
-        ? { meta: detail ? { error: { kind: "incomplete_turn", message: detail } } : {} }
-        : {}),
+      ...(detail ? { meta: { error: { kind: "incomplete_turn", message: detail } } } : {}),
     },
   });
-  if (error) {
-    await expect(runModel("--gateway")).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(error);
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  } else {
-    await runModel("--gateway");
-    expectOutput({ text: "complete answer", mediaUrl: undefined, mediaUrls: undefined });
-  }
+  await expectOutcome(runModel("--gateway"), error, true);
 });
 
 it.each([false, true])("gates --file on local image support: %s", async (images) => {

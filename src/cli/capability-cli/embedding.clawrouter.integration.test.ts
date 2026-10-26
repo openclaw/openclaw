@@ -8,6 +8,16 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { registerCapabilityCli } from "../capability-cli.js";
 
 it("creates qualified ClawRouter embeddings through the registered CLI without a chat catalog row", async () => {
+  const embeddingModel = "openai/text-embedding-3-large";
+  const inputs = ["hello", "world"];
+  const data = [
+    { index: 1, embedding: [0, 1, 0] },
+    { index: 0, embedding: [1, 0, 0] },
+  ];
+  const failures = [
+    ["openai/forbidden", 403, "model_not_allowed"],
+    ["openai/unknown", 404, "model_not_found"],
+  ] as const;
   const requests: Array<{ url?: string; authorization?: string; body: unknown }> = [];
   const fixture = await reserveTestPortListener({
     offsets: [0],
@@ -26,21 +36,10 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
             response.writeHead(404).end();
             return;
           }
-          const status =
-            body.model === "openai/forbidden" ? 403 : body.model === "openai/unknown" ? 404 : 200;
+          const failure = failures.find(([model]) => model === body.model);
+          const status = failure?.[1] ?? 200;
           response.writeHead(status, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify(
-              status === 200
-                ? {
-                    data: [
-                      { index: 1, embedding: [0, 1, 0] },
-                      { index: 0, embedding: [1, 0, 0] },
-                    ],
-                  }
-                : { error: { message: status === 403 ? "model_not_allowed" : "model_not_found" } },
-            ),
-          );
+          response.end(JSON.stringify(failure ? { error: { message: failure[2] } } : { data }));
         })().catch((error: unknown) =>
           response.destroy(error instanceof Error ? error : new Error(String(error))),
         );
@@ -61,13 +60,7 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
             },
           },
         },
-        memory: {
-          search: {
-            provider: "clawrouter",
-            model: "openai/text-embedding-3-large",
-            fallback: "none",
-          },
-        },
+        memory: { search: { provider: "clawrouter", model: embeddingModel, fallback: "none" } },
       });
       vi.stubEnv("CLAWROUTER_API_KEY", "synthetic-router-key");
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -84,60 +77,46 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
           "main",
           "--model",
           `clawrouter/${model}`,
-          "--text",
-          "hello",
-          "--text",
-          "world",
+          ...inputs.flatMap((text) => ["--text", text]),
           "--json",
         ];
         const program = new Command();
         await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
         await program.parseAsync(argv, { from: "user" });
       };
-      try {
-        await run("openai/text-embedding-3-large");
-        expect(output).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            ok: true,
-            provider: "openai-compatible",
-            model: "openai/text-embedding-3-large",
-            attempts: [],
-            outputs: [
-              { text: "hello", embedding: [1, 0, 0], dimensions: 3 },
-              { text: "world", embedding: [0, 1, 0], dimensions: 3 },
-            ],
-          }),
-          2,
-        );
-        for (const [model, status, message] of [
-          ["openai/forbidden", 403, "model_not_allowed"],
-          ["openai/unknown", 404, "model_not_found"],
-        ] as const) {
-          await expect(run(model)).rejects.toThrow("exit 1");
-          expect(errors.mock.calls.at(-1)?.[0]).toContain(`HTTP ${status}`);
-          expect(errors.mock.calls.at(-1)?.[0]).toContain(message);
-        }
-        // A later call must still work after both terminal failures; no alternate account or batch route is tried.
-        await run("openai/text-embedding-3-large");
-        expect(output).toHaveBeenCalledTimes(2);
-        expect(requests).toEqual(
-          [
-            "openai/text-embedding-3-large",
-            "openai/forbidden",
-            "openai/unknown",
-            "openai/text-embedding-3-large",
-          ].map((model) => ({
-            url: "/v1/embeddings",
-            authorization: "Bearer synthetic-router-key",
-            body: { model, input: ["hello", "world"] },
-          })),
-        );
-      } finally {
-        vi.restoreAllMocks();
-        vi.unstubAllEnvs();
+      await run(embeddingModel);
+      expect(output).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          ok: true,
+          provider: "openai-compatible",
+          model: embeddingModel,
+          attempts: [],
+          outputs: [
+            { text: "hello", embedding: [1, 0, 0], dimensions: 3 },
+            { text: "world", embedding: [0, 1, 0], dimensions: 3 },
+          ],
+        }),
+        2,
+      );
+      for (const [model, status, message] of failures) {
+        await expect(run(model)).rejects.toThrow("exit 1");
+        expect(errors.mock.calls.at(-1)?.[0]).toContain(`HTTP ${status}`);
+        expect(errors.mock.calls.at(-1)?.[0]).toContain(message);
       }
+      // A later call must still work after both terminal failures; no alternate account or batch route is tried.
+      await run(embeddingModel);
+      expect(output).toHaveBeenCalledTimes(2);
+      expect(requests).toEqual(
+        [embeddingModel, ...failures.map(([model]) => model), embeddingModel].map((model) => ({
+          url: "/v1/embeddings",
+          authorization: "Bearer synthetic-router-key",
+          body: { model, input: inputs },
+        })),
+      );
     });
   } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     fixture.listener.closeAllConnections();
     try {
       await fixture.releaseListener();
