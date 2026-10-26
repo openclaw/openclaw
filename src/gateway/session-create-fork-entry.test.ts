@@ -70,18 +70,16 @@ it.each([false, true])("preserves ancestry when replacing an adopted node: %s", 
 
 it("branches native CLI sessions with a one-shot fork resume, without mutating the parent", () => {
   const source = {
-    cliSessionBindings: {
-      "claude-cli": {
-        ...nativeBinding,
-        forceReuse: true,
-        reseedReceipt: {
-          version: 1 as const,
-          promptHash: "a".repeat(64),
-          localSessionId: "parent-generation",
-          userTurnDisposition: "omitted" as const,
-        },
+    ...bindings({
+      ...nativeBinding,
+      forceReuse: true,
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "parent-generation",
+        userTurnDisposition: "omitted",
       },
-    },
+    }),
     cliSessionIds: { "codex-cli": "codex-parent" },
   };
   useBackend();
