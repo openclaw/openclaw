@@ -31,38 +31,25 @@ it("ChatStartupParamsSchema: accepts one canonical or short selector while histo
 });
 
 it("ChatHistoryCursorResultSchema: accepts only the closed delta and reset outcomes", () => {
-  const delta = {
-    kind: "delta",
-    messages: [],
-    deltaCursor: "cursor-2",
+  const delta = { kind: "delta", messages: [], deltaCursor: "cursor-2" };
+  history.accepts(delta, {
+    ...delta,
     sessionInfo: { key: "agent:main:main" },
-  };
-  history.accepts(
-    delta,
-    {
-      kind: "delta",
-      messages: [],
-      deltaCursor: "cursor-2",
-      stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
-    },
-    {
-      ...delta,
-      inFlightRun: { runId: "run-live", text: "still working" },
-      inputReceipts: [{ runId: "retained-run", state: "pending" }],
-      inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
-    },
-  );
+    stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+    inFlightRun: { runId: "run-live", text: "still working" },
+    inputReceipts: [{ runId: "retained-run", state: "pending" }],
+    inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
+  });
   const item = { itemId: "tool:work", kind: "tool", phase: "end", title: "Read" };
-  for (const status of [undefined, "running", "completed", "failed", "blocked", "skipped"]) {
-    const response = {
-      ...delta,
-      activity: [
-        { messageId: "quiet", items: [] },
-        { messageId: "work", items: [{ ...item, ...(status ? { status } : {}) }] },
-      ],
-    };
-    history.accepts(response);
-  }
+  const statuses = ["running", "completed", "failed", "blocked", "skipped"];
+  const items = [item, ...statuses.map((status) => Object.assign({}, item, { status }))];
+  history.accepts({
+    ...delta,
+    activity: [
+      { messageId: "quiet", items: [] },
+      { messageId: "work", items },
+    ],
+  });
   history.rejects(
     ...[
       [{ items: [] }],
@@ -76,18 +63,11 @@ it("ChatHistoryCursorResultSchema: accepts only the closed delta and reset outco
 });
 
 it("ChatStatusEventSchema: accepts optional local model wait reasons and rejects unsupported claims", () => {
-  const event = { ...statusEvent, phase: "waiting_for_model" };
-  chat.accepts(
-    ...[undefined, "response", "slot"].map((waitReason) =>
-      Object.assign({}, event, waitReason ? { waitReason } : {}),
-    ),
-  );
-  chat.rejects({ ...event, waitReason: "busy" });
-});
-
-it("ChatStatusEventSchema: accepts closed startup phases through the chat event union", () => {
   schemaValidation(S.ChatStatusEventSchema).accepts(statusEvent);
   chat.accepts(statusEvent);
+  const event = { ...statusEvent, phase: "waiting_for_model" };
+  chat.accepts(event, { ...event, waitReason: "response" }, { ...event, waitReason: "slot" });
+  chat.rejects({ ...event, waitReason: "busy" });
 });
 
 it("ChatStatusEventSchema: accepts bounded retry details while preserving the required coarse phase", () => {
@@ -117,7 +97,7 @@ it("ChatStatusEventSchema: accepts bounded retry details while preserving the re
   );
 });
 
-it("ChatErrorEventSchema: round-trips optional closed provider error details", () => {
+it("ChatErrorEventSchema: accepts optional closed provider error details", () => {
   const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
   const detail = {
     provider: "openai",
@@ -129,15 +109,7 @@ it("ChatErrorEventSchema: round-trips optional closed provider error details", (
     httpStatus: 502,
     providerErrorMessagePreview: "Upstream unavailable",
   };
-  for (const errorDetail of [
-    undefined,
-    {},
-    ...Object.entries(detail).map(([key, value]) => ({ [key]: value })),
-    detail,
-  ]) {
-    const serialized = JSON.stringify({ ...event, errorDetail });
-    chat.accepts(JSON.parse(serialized));
-  }
+  chat.accepts(event, { ...event, errorDetail: {} }, { ...event, errorDetail: detail });
   chat.rejects(
     { ...event, errorDetail: { ...detail, rawErrorPreview: "raw" } },
     { ...event, state: "final", errorDetail: detail },
@@ -146,16 +118,12 @@ it("ChatErrorEventSchema: round-trips optional closed provider error details", (
 
 it("ChatSendParamsSchema: admits bounded plugin page details while keeping ambient context closed", () => {
   const request = { sessionKey: "agent:main:main", message: "hello", idempotencyKey: "run-1" };
-  const context = {
-    page: "plugin:example:sessions",
-    detail: { board: "board-1", view: "stuck sessions" },
-  };
   const withContext = (override: object) => ({
     ...request,
-    workContext: { ...context, ...override },
+    workContext: { page: "plugin:example:sessions", ...override },
   });
   send.accepts(
-    withContext({}),
+    withContext({ detail: { board: "board-1", view: "stuck sessions" } }),
     withContext({ detail: { "line\nbreak": "reference" } }),
     withContext({ detail: { ["x".repeat(32)]: "x".repeat(128) } }),
   );

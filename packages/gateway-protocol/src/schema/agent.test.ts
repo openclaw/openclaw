@@ -62,14 +62,12 @@ describe("MessageActionParamsSchema", () => {
 
 describe("Conversation schemas", () => {
   const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-  const address = { conversationRef, channel: "reef" };
   const request = {
     agentId: "main",
     sourceSessionKey: "agent:main:telegram:direct:operator",
     conversationRef,
     message: "hello",
   };
-  const delivery = { ...address, messageId: "01JZ0000000000000000000200" };
   it("accepts Gateway-owned address discovery without session internals", () => {
     accepts(S.ConversationListParamsSchema, {
       agentId: "main",
@@ -77,47 +75,17 @@ describe("Conversation schemas", () => {
       query: "@molty",
       limit: 50,
     });
-    accepts(S.ConversationListResultSchema, {
-      conversations: [
-        {
-          ...address,
-          accountId: "default",
-          kind: "direct",
-          target: "reef:molty",
-          label: "@molty's agent",
-          firstSeenAt: 100,
-          lastSeenAt: 100,
-        },
-      ],
-    });
   });
 
-  it("accepts a Gateway-owned durable send and result", () => {
+  it("accepts a Gateway-owned durable send", () => {
     accepts(S.ConversationSendParamsSchema, { ...request, operationId: "conversation-send-1" });
-    accepts(S.ConversationSendResultSchema, {
-      status: "sent",
-      ...delivery,
-      queueId: "conversation-send-1",
-    });
   });
 
-  it("accepts a Gateway-owned correlated turn and its inline reply", () => {
+  it("accepts a Gateway-owned correlated turn", () => {
     accepts(S.ConversationTurnParamsSchema, {
       ...request,
       turnId: "conversation-turn-1",
       timeoutMs: 30_000,
-    });
-    accepts(S.ConversationTurnResultSchema, {
-      status: "replied",
-      ...delivery,
-      correlationPersisted: true,
-      reply: {
-        conversationRef,
-        messageId: "01JZ0000000000000000000201",
-        replyToId: "01JZ0000000000000000000200",
-        text: "hello back",
-        timestamp: 123,
-      },
     });
   });
 

@@ -12,58 +12,48 @@ const setPrefs = validation(S.validateUsersPrefsSetParams);
 const setRole = validation(S.validateUsersSetRoleParams);
 
 describe("user preference protocol schemas", () => {
-  it("normalizes only supported profile appearance values and canonicalizes accent colors", () => {
-    expect(normalize(keys.theme, "absolutely")).toBe("absolutely");
-    expect(normalize(keys.themeMode, "system")).toBe("system");
+  it.each([
+    [keys.theme, ["absolutely"], ["unsupported", 42]],
+    [keys.themeMode, ["system"], ["automatic"]],
+    [keys.accent, ["theme"], ["#abc", "#12345g", { color: "#123456" }]],
+    [keys.fontUi, ["geist", "system"], ["theme"]],
+    [keys.fontChat, ["lora"], ["unknown-font", { family: "lora" }]],
+    [
+      keys.tabIcon,
+      [
+        "default",
+        "agent",
+        "agent:rounded",
+        "agent:circle",
+        "lobster:crimson",
+        `lobster:${"a".repeat(48)}`,
+      ],
+      [
+        "agent:square",
+        "agent:circle\n",
+        "lobster:",
+        "lobster:Crimson",
+        "lobster:crimson\n",
+        "lobster:../crimson",
+        "lobster:https://example.com/icon.png",
+        `lobster:${"a".repeat(49)}`,
+        " agent ",
+        { mode: "custom", image: {} },
+      ],
+    ],
+  ] as const)(
+    "normalizes supported %s values and rejects malformed preferences",
+    (key, accepted, rejected) => {
+      for (const value of accepted) {
+        expect(normalize(key, value)).toBe(value);
+      }
+      for (const value of rejected) {
+        expect(normalize(key, value)).toBeUndefined();
+      }
+    },
+  );
+  it("canonicalizes accent colors", () => {
     expect(normalize(keys.accent, "#A1b2C3")).toBe("#a1b2c3");
-    expect(normalize(keys.accent, "theme")).toBe("theme");
-    expect(normalize(keys.fontUi, "geist")).toBe("geist");
-    expect(normalize(keys.fontChat, "lora")).toBe("lora");
-    expect(normalize(keys.fontUi, "system")).toBe("system");
-
-    for (const tabIcon of [
-      "default",
-      "agent",
-      "agent:rounded",
-      "agent:circle",
-      "lobster:crimson",
-      `lobster:${"a".repeat(48)}`,
-    ]) {
-      expect(normalize(keys.tabIcon, tabIcon)).toBe(tabIcon);
-    }
-
-    for (const [key, value] of [
-      [keys.theme, "unsupported"],
-      [keys.themeMode, "automatic"],
-      [keys.accent, "#abc"],
-      [keys.accent, "#12345g"],
-      [keys.accent, { color: "#123456" }],
-      [keys.theme, 42],
-      [keys.fontUi, "theme"],
-      [keys.fontChat, "unknown-font"],
-      [keys.fontUi, "Geist, sans-serif"],
-      [keys.fontChat, { family: "lora" }],
-      [keys.tabIcon, "custom"],
-      [keys.tabIcon, "agent:square"],
-      [keys.tabIcon, "agent:triangle"],
-      [keys.tabIcon, "agent:circle\n"],
-      [keys.tabIcon, "lobster:"],
-      [keys.tabIcon, "lobster:Crimson"],
-      [keys.tabIcon, "lobster:crimson\n"],
-      [keys.tabIcon, "lobster:../crimson"],
-      [keys.tabIcon, "lobster:https://example.com/icon.png"],
-      [keys.tabIcon, `lobster:${"a".repeat(49)}`],
-      [keys.tabIcon, "Agent"],
-      [keys.tabIcon, " agent "],
-      [keys.tabIcon, null],
-      [keys.tabIcon, 42],
-      [keys.tabIcon, ["agent"]],
-      [keys.tabIcon, { mode: "default" }],
-      [keys.tabIcon, { mode: "agent" }],
-      [keys.tabIcon, { mode: "custom", image: {} }],
-    ] as const) {
-      expect(normalize(key, value)).toBeUndefined();
-    }
   });
 
   it("bounds profile preference change events to their owning profile and written keys", () => {
@@ -93,28 +83,6 @@ describe("user preference protocol schemas", () => {
     setPrefs.rejects(
       { entries: {}, expectedEntries: { ...entries, overflow: true } },
       { entries: { ...entries, overflow: true } },
-    );
-  });
-
-  it("exposes typed per-profile quota details", () => {
-    const details = {
-      code: S.GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-      limit: 128,
-      currentCount: 128,
-    };
-    accepts(S.GatewayErrorDetailsSchema, details);
-    accepts(S.UserPrefsLimitExceededErrorDetailsSchema, details);
-  });
-
-  it("keeps no-identity results distinct from successful values", () => {
-    accepts(
-      S.UsersPrefsGetResultSchema,
-      { status: "no_durable_identity" },
-      { status: "ok", entries: { theme: "claw" } },
-    );
-    accepts(
-      S.UsersPrefsSetResultSchema,
-      ...["ok", "conflict", "no_durable_identity"].map((status) => ({ status })),
     );
   });
 

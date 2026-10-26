@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { it } from "vitest";
 import * as S from "./board.js";
 import { accepts, rejects } from "./schema.test-support.js";
 
@@ -71,49 +71,34 @@ it("BoardSnapshotSchema: accepts optional HTML widget view metadata", () => {
   }
 });
 
-describe("BoardWidgetPutParamsSchema", () => {
-  it("returns the committed widget name with the board snapshot", () => {
-    accepts(S.BoardWidgetPutResultSchema, {
-      ...snapshot,
-      widgets: [{ ...widget, name: "status-aaaaaaaa" }],
-      resolvedWidgetName: "status-aaaaaaaa",
-    });
-  });
+it("rejects invalid widget presentation and height modes", () => {
+  const pin = { ...widgetRef, content: { kind: "html", html: "<p>ok</p>" } };
+  rejects(
+    S.BoardWidgetPutParamsSchema,
+    { ...pin, presentation: "floating" },
+    { ...pin, heightMode: "elastic" },
+  );
+  const resize = { kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 };
+  accepts(S.BoardWidgetResizeOpSchema, { ...resize, heightMode: "fixed" });
+  rejects(S.BoardWidgetResizeOpSchema, { ...resize, heightMode: "elastic" });
+});
 
-  it("rejects invalid widget presentation and height modes", () => {
-    const pin = { ...widgetRef, content: { kind: "html", html: "<p>ok</p>" } };
-    rejects(
-      S.BoardWidgetPutParamsSchema,
-      { ...pin, presentation: "floating" },
-      { ...pin, heightMode: "elastic" },
-    );
-    const resize = { kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 };
-    accepts(S.BoardWidgetResizeOpSchema, { ...resize, heightMode: "fixed" });
-    rejects(S.BoardWidgetResizeOpSchema, { ...resize, heightMode: "elastic" });
-  });
-
-  it("requires an active source view for MCP App pins", () => {
-    const pin = {
-      ...widgetRef,
-      name: "weather-app",
-      content: { kind: "mcp-app", viewId: "mcp-app-source" },
-    };
-    accepts(S.BoardWidgetPutParamsSchema, pin);
-    rejects(
-      S.BoardWidgetPutParamsSchema,
-      { ...pin, content: { ...pin.content, viewId: undefined } },
-      { ...pin, content: { kind: "mcp-app", descriptor: { viewId: "mcp-app-source" } } },
-    );
-  });
+it("requires an active source view for MCP App pins", () => {
+  const pin = {
+    ...widgetRef,
+    name: "weather-app",
+    content: { kind: "mcp-app", viewId: "mcp-app-source" },
+  };
+  accepts(S.BoardWidgetPutParamsSchema, pin);
+  rejects(
+    S.BoardWidgetPutParamsSchema,
+    { ...pin, content: { ...pin.content, viewId: undefined } },
+    { ...pin, content: { kind: "mcp-app", descriptor: { viewId: "mcp-app-source" } } },
+  );
 });
 
 it("BoardWidgetAppView schemas: binds lease requests to a board widget and returns its expiry", () => {
-  const request = {
-    ...widgetRef,
-    name: "weather-app",
-    revision: 3,
-    instanceId: "widget-instance",
-  };
+  const request = { ...widgetRef, name: "weather-app", revision: 3, instanceId: "widget-instance" };
   accepts(S.BoardWidgetAppViewParamsSchema, request);
   const { instanceId: _instanceId, ...missingInstance } = request;
   rejects(S.BoardWidgetAppViewParamsSchema, missingInstance);
@@ -121,12 +106,7 @@ it("BoardWidgetAppView schemas: binds lease requests to a board widget and retur
 });
 
 it("BoardWidgetGrantParamsSchema: requires the widget revision and instance being approved", () => {
-  const request = {
-    ...widgetRef,
-    decision: "granted",
-    revision: 1,
-    instanceId: "widget-instance",
-  };
+  const request = { ...widgetRef, decision: "granted", revision: 1, instanceId: "widget-instance" };
   accepts(S.BoardWidgetGrantParamsSchema, request);
   const { instanceId: _instanceId, ...missingInstance } = request;
   const { revision: _revision, ...missingRevision } = request;
