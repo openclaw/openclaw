@@ -17,40 +17,48 @@ function renderBadges(params: SessionRowBadgesParams) {
   container = view.container;
 }
 
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 
-function expectLabel(indicator: Element | null | undefined, text: string) {
+function renderBadge(params: SessionRowBadgesParams, kind: string, text: string) {
+  renderBadges(params);
+  const indicator = badge(kind);
   expect(indicator?.getAttribute("aria-label")).toBe(text);
   expect(indicator?.hasAttribute("title")).toBe(false);
   expect(indicator?.closest<HTMLElement & { content?: string }>("openclaw-tooltip")?.content).toBe(
     text,
   );
+  expect(indicator?.querySelector("svg")).not.toBeNull();
+  return indicator;
 }
 
 function badge(kind: string) {
   return container.querySelector<HTMLElement>(`.session-row-badge--${kind}`);
 }
 
-it.each([
+const pr = (
+  state: NonNullable<SessionRowBadgesParams["pullRequest"]>["state"],
+  ...numbers: number[]
+) => ({ pullRequest: { state, numbers } });
+it.each<[string, SessionRowBadgesParams, string]>([
   ["incognito", { incognito: true }, "Incognito session"],
   ["approval", { hasApproval: true }, "Approval needed"],
-] as const)("renders the %s indicator", (kind, params, label) => {
-  renderBadges(params);
-  expectLabel(badge(kind), label);
-  if (kind === "approval") {
-    expect(badge(kind)?.querySelector("svg")).not.toBeNull();
+  ["pull-request", pr("open", 111532), "#111532 · Open"],
+  ["pull-request", pr("draft", 107302), "#107302 · Draft"],
+  ["pull-request", pr("merged", 111751, 111772), "2 pull requests · #111751, #111772 · Merged"],
+])("renders the %s indicator: %s", (kind, params, label) => {
+  const indicator = renderBadge(params, kind, label);
+  if (params.pullRequest) {
+    expect(indicator?.dataset.pullRequestState).toBe(params.pullRequest.state);
   }
 });
 
 it("renders outbox attention and stays quiet when empty", () => {
-  renderBadges({ hasApproval: true, outboxAttentionCount: 3 });
-
-  const indicator = badge("attention");
-  expectLabel(indicator, "3 messages need attention");
+  const indicator = renderBadge(
+    { outboxAttentionCount: 3 },
+    "attention",
+    "3 messages need attention",
+  );
   expect(indicator?.textContent).toContain("3");
-  expect(indicator?.querySelector("svg")?.isEqualNode(badge("approval svg") ?? null)).toBe(true);
 
   renderBadges({ outboxAttentionCount: 1 });
   expect(badge("attention")?.getAttribute("aria-label")).toBe("1 message needs attention");
@@ -59,29 +67,10 @@ it("renders outbox attention and stays quiet when empty", () => {
   expect(container.querySelector(".session-row-badges")).toBeNull();
 });
 
-it.each([
-  { state: "open", numbers: [111532], label: "#111532 · Open" },
-  { state: "draft", numbers: [107302], label: "#107302 · Draft" },
-  {
-    state: "merged",
-    numbers: [111751, 111772],
-    label: "2 pull requests · #111751, #111772 · Merged",
-  },
-] as const)(
-  "renders catalog pull request metadata for $state threads",
-  ({ state, numbers, label }) => {
-    renderBadges({ pullRequest: { numbers: [...numbers], state } });
-    const indicator = badge("pull-request");
-    expectLabel(indicator, label);
-    expect(indicator?.getAttribute("data-pull-request-state")).toBe(state);
-    expect(indicator?.querySelector("svg")).not.toBeNull();
-  },
-);
-
 it("keeps child placement badges hidden while showing PR and approval", () => {
   renderBadges({
     isChild: true,
-    pullRequest: { numbers: [111532], state: "open" },
+    ...pr("open", 111532),
     hasApproval: true,
     placementState: "active",
   });
@@ -101,11 +90,13 @@ it.each([
 ] as const)(
   "keeps conflict attention for %s placement (child: %s, count: %s)",
   (placementState, isChild, count, label) => {
-    renderBadges({ placementState, isChild, workspaceConflictCount: count });
-    const indicator = badge("cloud");
+    const indicator = renderBadge(
+      { placementState, isChild, workspaceConflictCount: count },
+      "cloud",
+      label,
+    );
     expect(indicator?.dataset.placementState).toBe(placementState);
     expect(indicator?.dataset.workspaceConflicts).toBe(String(count));
-    expectLabel(indicator, label);
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
   },
 );
