@@ -461,6 +461,26 @@ that duration in the fallback warning without exposing raw error text. Return
 available; the warning includes their count. These diagnostics do not turn an
 incomplete operation into a successful call.
 
+## Network-derived results
+
+Set `resultContentSource: "network"` on a static tool when its result can
+contain externally controlled network content. OpenClaw then taints the rest of
+the turn and treats session-derived memory as untrusted provenance.
+
+```typescript
+tool({
+  name: "fetch_page",
+  description: "Fetch a page from the network.",
+  parameters: Type.Object({ url: Type.String() }),
+  resultContentSource: "network",
+  execute: ({ url }) => fetchPage(url),
+});
+```
+
+Declare this on the tool definition, not in the value returned by `execute`.
+Returning a similarly named field does not set result provenance. Factory tools
+declare `resultContentSource` on the concrete `AnyAgentTool` they return.
+
 ## Deliver the reply directly
 
 By default the model reads every tool result and writes the user-visible reply

@@ -77,6 +77,8 @@ export type ToolPluginToolDefinition<
     | {
         /** Optional schema for the JSON value returned in `AgentToolResult.details`. */
         outputSchema?: TSchema;
+        /** Tool results contain externally controlled network content. */
+        resultContentSource?: AnyAgentTool["resultContentSource"];
         /** Execute one concrete tool call and return either plain text or JSON-serializable data. */
         execute: (
           params: Static<TParamsSchema>,
@@ -93,6 +95,8 @@ export type ToolPluginToolDefinition<
         execute?: never;
         /** Factory tools declare output schemas on their returned `AnyAgentTool` objects. */
         outputSchema?: never;
+        /** Factory tools declare result content sources on their returned `AnyAgentTool` objects. */
+        resultContentSource?: never;
       }
   );
 
@@ -102,6 +106,7 @@ type DefinedToolPluginTool = {
   description: string;
   parameters: TSchema;
   outputSchema?: TSchema;
+  resultContentSource?: AnyAgentTool["resultContentSource"];
   optional: boolean;
   workspaceAccess?: boolean | "execute";
   execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
@@ -168,6 +173,7 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     description: definition.description,
     parameters: definition.parameters,
     outputSchema: definition.outputSchema,
+    resultContentSource: definition.resultContentSource,
     optional: definition.optional === true,
     workspaceAccess: definition.workspaceAccess,
     execute: definition.execute as DefinedToolPluginTool["execute"],
@@ -239,6 +245,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
             description: tool.description,
             parameters: tool.parameters,
             ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+            ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
             execute: async (toolCallId, params, signal, onUpdate) =>
               wrapToolPluginResult(
                 await execute(params, config, {
