@@ -249,7 +249,7 @@ export function projectTranscriptChain(
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
-  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName">,
+  props: Pick<ChatThreadProps, "assistantName" | "userId" | "userName" | "messageReactions">,
 ): TranscriptIndex {
   const cacheKey = [
     expandedToolCards,
@@ -257,6 +257,7 @@ export function projectTranscriptIndex(
     props.assistantName,
     props.userId,
     props.userName,
+    props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
     const loadedReplySources = new Map<string, LoadedReplySource>();
@@ -265,7 +266,10 @@ export function projectTranscriptIndex(
     const rows: TranscriptRow<ChatRenderItem>[] = [];
     const row = (item: ChatRenderItem, key = item.key): TranscriptRow<ChatRenderItem> => {
       const messages = chatItemGroups(item).flatMap((group) =>
-        group.messages.map(({ message }) => nativeHistoryMessageIdentity(message) ?? message),
+        group.messages.map(({ message }) => [
+          nativeHistoryMessageIdentity(message) ?? message,
+          props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+        ]),
       );
       const content = JSON.stringify(messages.length ? messages : item);
       return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };

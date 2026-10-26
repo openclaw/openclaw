@@ -138,6 +138,34 @@ it("changes the footprint revision when the same message ID receives new content
   expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
 });
 
+it("invalidates only a changed reaction row while retaining other cached footprints", () => {
+  const chain = projectHistory([
+    finalAnswer("answer", 2),
+    makeMessage("neighbor", 3, { role: "user" }),
+  ]);
+  const expanded = new Map<string, boolean>();
+  const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
+  const project = (reactions: Map<string, typeof summaries>) =>
+    projectTranscriptIndex(chain, expanded, { ...labels, messageReactions: reactions }).rows.filter(
+      (row) => row.kind === "item",
+    );
+  const before = project(new Map());
+  const reacted = project(new Map([["answer", summaries]]));
+  expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
+  expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
+  expect(reacted[1]!.revision).toBe(before[1]!.revision);
+  const replay = project(
+    new Map([
+      ["answer", summaries],
+      ["outside-window", summaries],
+    ]),
+  );
+  expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
+  expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
+    before.map((row) => row.revision),
+  );
+});
+
 describe("completed reply frame ownership", () => {
   function replyHistory(workRunIds: (string | undefined)[] = ["run-1"], prompt = true): unknown[] {
     return [
