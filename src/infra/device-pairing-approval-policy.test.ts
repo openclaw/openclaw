@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
@@ -24,27 +24,21 @@ const issueToken = (baseDir: string, generation: string, isIssuanceCurrent?: () 
 };
 
 async function withHeldPairingLock(work: (unlock: () => Promise<void>) => Promise<void>) {
-  const locked = createDeferredCore();
-  const release = createDeferredCore();
-  const holding = withDevicePairingLock(async () => {
-    locked.resolve();
-    await release.promise;
-  });
-  await locked.promise;
-  try {
-    await work(async () => {
-      release.resolve();
-      await holding;
-    });
-  } finally {
-    release.resolve();
+  const gate = createEnteredGate();
+  const holding = withDevicePairingLock(gate.wait);
+  await gate.entered;
+  const unlock = async () => {
+    gate.release();
     await holding;
+  };
+  try {
+    await work(unlock);
+  } finally {
+    await unlock();
   }
 }
 
-beforeAll(async () => {
-  await roots.setup();
-});
+beforeAll(() => roots.setup());
 afterAll(async () => {
   await closeStateDatabaseForTest();
   await roots.cleanup();
