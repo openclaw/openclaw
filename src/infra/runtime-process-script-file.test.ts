@@ -11,6 +11,10 @@ import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js"
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 const node = resolveTestNodeExecPath();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it("runs and removes retained programs without source neighbors", () => {
   const root = directories.make("runtime-script-bootstrap-");
@@ -69,51 +73,42 @@ it("runs and removes retained programs without source neighbors", () => {
 it("passes required flags as data to the tested runtime", () => {
   const root = directories.make("runtime-script-required-flag-");
   const script = createRuntimeProcessScriptFile("nodeRuntimeProbe", { parentDirectory: root });
-  try {
-    const probe = (flag: string) =>
-      spawnSync(node, [fileURLToPath(script.url), flag], {
-        encoding: "utf8",
-        timeout: 5000,
-        env: {},
-      });
-    const supported = probe("--max-old-space-size");
-    expect(supported.status, supported.stderr).toBe(0);
-    expect(supported.stdout).toBe(node);
-    const unsupported = probe("--openclaw-unsupported-'\";process.exit(42)");
-    expect(unsupported.status, unsupported.stderr).toBe(0);
-    expect(unsupported.stdout).toBe("");
-  } finally {
-    script.dispose();
-  }
+  using _ = { [Symbol.dispose]: script.dispose };
+  const probe = (flag: string) =>
+    spawnSync(node, [fileURLToPath(script.url), flag], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {},
+    });
+  const supported = probe("--max-old-space-size");
+  expect(supported.status, supported.stderr).toBe(0);
+  expect(supported.stdout).toBe(node);
+  const unsupported = probe("--openclaw-unsupported-'\";process.exit(42)");
+  expect(unsupported.status, unsupported.stderr).toBe(0);
+  expect(unsupported.stdout).toBe("");
 });
 
 it("uses embedded self dispatch while keeping external runtime scripts physical", () => {
   const root = directories.make("runtime-script-dispatch-");
   vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", () => true);
   vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "fixture" });
-  try {
-    const embedded = prepareRuntimeProcessScriptInvocation("updateStateSizes", process.execPath, {
-      parentDirectory: root,
-    });
-    expect(embedded.argv).toEqual([
-      process.execPath,
-      "--no-install",
-      expect.stringMatching(/update-state-sizes\.entry\.[cm]?[jt]s$/),
-    ]);
-    expect(fs.readdirSync(root)).toEqual([]);
-    embedded.dispose();
-    const external = prepareRuntimeProcessScriptInvocation("updateStateSizes", "/external/node", {
-      parentDirectory: root,
-    });
-    try {
-      expect(external.argv[0]).toBe("/external/node");
-      expect(fs.existsSync(expectDefined(external.argv[1], "physical script entry"))).toBe(true);
-    } finally {
-      external.dispose();
-    }
-    expect(fs.readdirSync(root)).toEqual([]);
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
+  const embedded = prepareRuntimeProcessScriptInvocation("updateStateSizes", process.execPath, {
+    parentDirectory: root,
+  });
+  expect(embedded.argv).toEqual([
+    process.execPath,
+    "--no-install",
+    expect.stringMatching(/update-state-sizes\.entry\.[cm]?[jt]s$/),
+  ]);
+  expect(fs.readdirSync(root)).toEqual([]);
+  embedded.dispose();
+  const external = prepareRuntimeProcessScriptInvocation("updateStateSizes", "/external/node", {
+    parentDirectory: root,
+  });
+  {
+    using _ = { [Symbol.dispose]: external.dispose };
+    expect(external.argv[0]).toBe("/external/node");
+    expect(fs.existsSync(expectDefined(external.argv[1], "physical script entry"))).toBe(true);
   }
+  expect(fs.readdirSync(root)).toEqual([]);
 });

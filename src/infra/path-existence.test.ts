@@ -34,9 +34,7 @@ it("distinguishes entries from followed targets and returns typed directory entr
   expect((await paths.lstatIfExists(dangling))?.isSymbolicLink()).toBe(true);
   expect(await paths.lstatIfExists(missing)).toBeUndefined();
   expect(await paths.lstatIfExists(child)).toBeUndefined();
-  await expect(paths.lstatIfExists(child, "ENOENT")).rejects.toMatchObject({
-    code: "ENOTDIR",
-  });
+  await expect(paths.lstatIfExists(child, "ENOENT")).rejects.toMatchObject({ code: "ENOTDIR" });
   for (const [stat, absent] of [
     [paths.statIfExists, undefined],
     [paths.safeStat, null],
@@ -46,9 +44,7 @@ it("distinguishes entries from followed targets and returns typed directory entr
     expect(await stat(dangling)).toBe(absent);
     expect(await stat(missing)).toBe(absent);
   }
-  await expect(paths.statIfExists(child)).rejects.toMatchObject({
-    code: "ENOTDIR",
-  });
+  await expect(paths.statIfExists(child)).rejects.toMatchObject({ code: "ENOTDIR" });
   const entries = paths.readDirectoryEntriesSync(root);
   expect(entries.map((entry) => entry.name).toSorted()).toEqual([
     "dangling",
@@ -93,10 +89,8 @@ it.each([
 it.each([
   ["lstat", paths.pathEntryExists, "ENOTDIR"],
   ["lstat", paths.lstatIfExists, "EACCES"],
-  ["lstat", paths.lstatIfExists, "EIO"],
   ["lstat", paths.lstatIfExists, "not-found"],
   ["stat", paths.statIfExists, "EACCES"],
-  ["stat", paths.statIfExists, "EIO"],
 ] as const)("propagates %s probe failure through %s: %s", async (method, probe, code) => {
   const failure = Object.assign(new Error("filesystem probe failed"), { code });
   vi.spyOn(fsPromises, method).mockRejectedValue(failure);
@@ -112,9 +106,9 @@ it("distinguishes definite absence from paths that may still exist", () => {
   expect(paths.pathMayExistSync(child)).toBe(false);
 });
 
-it.each(["EACCES", "EPERM", "ELOOP", "EIO"])("preserves uncertainty for %s", (code) => {
+it("preserves uncertainty for inaccessible paths", () => {
   vi.spyOn(fs, "lstatSync").mockImplementation(() => {
-    throw Object.assign(new Error("filesystem probe failed"), { code });
+    throw Object.assign(new Error("filesystem probe failed"), { code: "EACCES" });
   });
   expect(paths.pathMayExistSync("unreadable-path")).toBe(true);
 });

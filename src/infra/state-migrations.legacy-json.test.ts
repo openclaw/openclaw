@@ -1,13 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineLegacyJsonStateMigration } from "../plugin-sdk/runtime-doctor-migrations.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { detectLegacyStateMigrations } from "./state-migrations.doctor.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
 
@@ -23,43 +20,35 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   };
 });
 
-describe("legacy JSON plugin migration diagnostics", () => {
-  let state: OpenClawTestState;
-  let sourcePath: string;
+afterEach(() => {
+  vi.restoreAllMocks();
+  registry.entries = [];
+});
 
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "legacy-json-doctor" });
-    sourcePath = state.statePath("legacy.json");
-    registry.entries = [
-      {
-        pluginId: "fixture",
-        migration: defineLegacyJsonStateMigration({
-          id: "fixture-json",
-          label: "Fixture legacy state",
-          resolvePath: (stateDir) => path.join(stateDir, "legacy.json"),
-          parse: (value) => (Array.isArray(value) ? value : null),
-          namespace: "legacy",
-          maxEntries: 10,
-          describeEntries: () => ({
-            preview: ["Fixture legacy state"],
-            change: () => "Imported fixture legacy state",
-          }),
-          toRows: (values) => values.map((value, index) => ({ key: String(index), value })),
-        }),
-      },
-    ];
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    registry.entries = [];
-    await state.cleanup();
-  });
-
-  describe.each(["detection", "migration"] as const)("%s", (phase) => {
-    it.each(["EACCES", "unrecognized shape"])(
-      "reports %s without importing or archiving the source",
-      async (fault) => {
+describe.each(["detection", "migration"] as const)("legacy JSON %s", (phase) => {
+  it.each(["EACCES", "unrecognized shape"])(
+    "reports %s without importing or archiving the source",
+    async (fault) =>
+      withOpenClawTestState({ label: "legacy-json-doctor" }, async (state) => {
+        const sourcePath = state.statePath("legacy.json");
+        registry.entries = [
+          {
+            pluginId: "fixture",
+            migration: defineLegacyJsonStateMigration({
+              id: "fixture-json",
+              label: "Fixture legacy state",
+              resolvePath: (stateDir) => path.join(stateDir, "legacy.json"),
+              parse: (value) => (Array.isArray(value) ? value : null),
+              namespace: "legacy",
+              maxEntries: 10,
+              describeEntries: () => ({
+                preview: ["Fixture legacy state"],
+                change: () => "Imported fixture legacy state",
+              }),
+              toRows: (values) => values.map((value, index) => ({ key: String(index), value })),
+            }),
+          },
+        ];
         const source = "{}";
         await fs.writeFile(sourcePath, source, "utf8");
         const readFile = fs.readFile.bind(fs);
@@ -100,21 +89,14 @@ describe("legacy JSON plugin migration diagnostics", () => {
           warnings = result.warnings;
         }
 
-        expect(warnings).toEqual(
-          fault === "EACCES"
-            ? [
-                expect.stringContaining(
-                  `Failed ${phase === "detection" ? "detecting" : "migrating"} Fixture legacy state:`,
-                ),
-              ]
-            : [],
-        );
+        const action = phase === "detection" ? "detecting" : "migrating";
+        const warning = expect.stringContaining(`Failed ${action} Fixture legacy state:`);
+        expect(warnings).toEqual(fault === "EACCES" ? [warning] : []);
         if (fault === "EACCES") {
           expect(warnings[0]).toContain(fault);
         }
         await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
         await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
-  });
+      }),
+  );
 });
