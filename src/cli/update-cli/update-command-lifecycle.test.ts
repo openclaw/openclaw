@@ -220,6 +220,13 @@ import {
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
+function finalize(
+  options: Parameters<typeof updateFinalizeCommand>[0] = {},
+  runIds?: Parameters<typeof updateFinalizeCommand>[1],
+) {
+  return updateFinalizeCommand({ json: true, yes: true, ...options }, runIds);
+}
+
 function convergeCurrent(overrides: Partial<Parameters<typeof convergeUpdatePlugins>[0]> = {}) {
   return convergeUpdatePlugins({
     coreAlreadyCurrent: true,
@@ -345,26 +352,19 @@ describe("update plugin lifecycle lease boundaries", () => {
       if (phase === "uncertain") {
         mocks.verifyGateway.mockRejectedValueOnce(cleanup);
       }
-      const command = updateFinalizeCommand({
-        json: true,
-        yes: true,
-        timeout: returned ? undefined : "5",
-      });
+      const command = finalize({ timeout: returned ? undefined : "5" });
       if (phase === "uncertain") {
         const error = await command.catch((reason: unknown) => reason);
         expect(hasCommandProcessCleanupError(error)).toBe(true);
         expect(collectNestedErrorCandidates(error)).toContain(cleanup);
         expect(listUpdateRuns()[0]?.status).toBe("running");
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectNoCalls(defaultRuntime.writeJson, mocks.triage);
         return;
       }
       const recovery = { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
       if (returned) {
         await expect(command).rejects.toMatchObject({ code: 1 });
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "error", recovery }),
-        );
+        expectPartialCall(defaultRuntime.writeJson, { status: "error", recovery });
       } else {
         await expect(command).rejects.toBe(failure);
       }
@@ -418,7 +418,7 @@ describe("update plugin lifecycle lease boundaries", () => {
           },
         );
       }
-      const finalization = updateFinalizeCommand({ json: true, yes: true });
+      const finalization = finalize();
       if (operation === "write-provisional") {
         await expect(finalization).rejects.toMatchObject({ code: 1 });
       } else {
@@ -524,14 +524,14 @@ describe("update plugin lifecycle lease boundaries", () => {
         recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.4" },
       });
       closeOpenClawStateDatabaseForTest();
-      expect(listUpdateRuns()[0]?.steps).toContainEqual(
-        expect.objectContaining({ step: "finalize:doctor", status: "failed", exitCode: 23 }),
-      );
-      expect(listUpdateRuns()[0]?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "finalize:package-rollback-not-needed",
-          status: "skipped",
-        }),
+      expect(listUpdateRuns()[0]?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ step: "finalize:doctor", status: "failed", exitCode: 23 }),
+          expect.objectContaining({
+            step: "finalize:package-rollback-not-needed",
+            status: "skipped",
+          }),
+        ]),
       );
     },
   );
@@ -546,9 +546,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
         new Error("Doctor failed"),
       );
-      await expect(updateFinalizeCommand({ json: true, yes: true })).rejects.toThrow(
-        "Doctor failed",
-      );
+      await expect(finalize()).rejects.toThrow("Doctor failed");
       const run = listUpdateRuns()[0]!;
       expect(run).toMatchObject({
         status: inherited ? "running" : "failed",
@@ -698,9 +696,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       timeoutMs: 1_000,
     });
     expectLifecycleBoundary(mocks.events, "handoff-records");
-    expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceRuntimePrepared: true }),
-    );
+    expectPartialCall(completeSourceUpdateRuntime, { sourceRuntimePrepared: true });
   });
 
   it.each(["success", "doctor", "plugins"])(
@@ -756,11 +752,9 @@ describe("update plugin lifecycle lease boundaries", () => {
   );
 
   it.each([undefined, "5"])("forwards the finalizer Doctor timeout %s", async (timeout) => {
-    await updateFinalizeCommand({
+    await finalize({
       channel: "stable",
       deferCompletionCache: true,
-      json: true,
-      yes: true,
       timeout,
     });
     const expected = expect.objectContaining({
@@ -806,25 +800,19 @@ describe("update plugin lifecycle lease boundaries", () => {
           return "completed";
         });
       // An explicit phase budget bypasses the native database-size probe.
-      const error = await custody.settle(
-        updateFinalizeCommand({ json: true, yes: true, timeout: "5" }),
-        cleanup,
-        () => {
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-          expect(listUpdateRuns()[0]?.status).toBe("running");
-          expect(mocks.triage).not.toHaveBeenCalled();
-          if (phase === "preflight") {
-            expect(runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
-          }
-        },
-      );
+      const error = await custody.settle(finalize({ timeout: "5" }), cleanup, () => {
+        expectNoCalls(defaultRuntime.writeJson, mocks.triage);
+        expect(listUpdateRuns()[0]?.status).toBe("running");
+        if (phase === "preflight") {
+          expect(runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+        }
+      });
       if (cleanup === "uncertain") {
         expect(error).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
         if (failed) {
           expect(collectNestedErrorCandidates(error)).toContain(originalError);
         }
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
+        expectNoCalls(defaultRuntime.writeJson, mocks.triage);
         expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
         if (phase === "recovery") {
           expect(listUpdateRuns()[0]?.status).toBe("running");
@@ -835,9 +823,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(mocks.triage).toHaveBeenCalledOnce();
       } else {
         expect(error).toBeUndefined();
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "ok", mode: "finalize" }),
-        );
+        expectPartialCall(defaultRuntime.writeJson, { status: "ok", mode: "finalize" });
         expect(listUpdateRuns()[0]?.status).toBe("succeeded");
       }
     },
@@ -890,9 +876,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         });
       }
       const error = await custody.settle(
-        updateFinalizeCommand({ json: true, yes: true, timeout: "5", deferCompletionCache: true }, [
-          "synthetic-retained-run",
-        ]),
+        finalize({ timeout: "5", deferCompletionCache: true }, ["synthetic-retained-run"]),
         cleanup,
         () => {
           expectCustodyHeld();
@@ -949,25 +933,21 @@ describe("update plugin lifecycle lease boundaries", () => {
       } else {
         mocks.doctorWarnings = [warning];
       }
-      await updateFinalizeCommand(
+      await finalize(
         {
-          json: true,
-          yes: true,
           deferCompletionCache: true,
           timeout: source === "restoration" ? "5" : undefined,
         },
         source === "restoration" ? [] : undefined,
       );
 
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "warning",
-          restart: false,
-          postUpdate: expect.objectContaining({
-            doctor: { status: "warning", warnings: [warning] },
-          }),
+      expectPartialCall(defaultRuntime.writeJson, {
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: { status: "warning", warnings: [warning] },
         }),
-      );
+      });
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
