@@ -109,15 +109,7 @@ export async function runExplicitResetCases(
       [sessionKey]: { sessionId, updatedAt: Date.now(), ...entry },
     });
     const result = await initSessionState({
-      ctx: {
-        Body: body,
-        From: "reset-user",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
+      ctx: { Body: body, SessionKey: sessionKey, Provider: "telegram" },
       cfg: { session: { store: storePath } },
     });
     results.push({ name, body, result, stored: readSessionStore(storePath) });
