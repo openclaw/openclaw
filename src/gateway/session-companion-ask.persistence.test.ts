@@ -23,9 +23,14 @@ vi.mock("../agents/simple-completion-runtime.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["missing", "replaced", "reset with the same id", "claimed by another writer"] as const)(
+it.each<[string, Partial<InternalSessionEntry> | undefined]>([
+  ["missing", undefined],
+  ["replaced", { sessionId: "replacement" }],
+  ["reset with the same id", { lifecycleRevision: "replacement-lifecycle" }],
+  ["claimed by another writer", { activeWriterRunId: "replacement-writer" }],
+])(
   "refuses companion history persistence when the session is %s before admission",
-  async (change) => {
+  async (_change, replacement) => {
     await withOpenClawTestState({ label: "companion-seed-owner" }, async () => {
       runEmbeddedAgent.mockClear();
       const prepare = internalSessionEffects.prepareInternalSessionEffectsSession;
@@ -43,22 +48,9 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
       vi.spyOn(SessionManager, "openAsync").mockImplementationOnce(async (...args) => {
         const manager = await open(...args);
         const target = expectDefined(prepared, "prepared companion session");
-        changedEntry =
-          change === "missing"
-            ? undefined
-            : {
-                ...target.sessionEntry,
-                ...(change === "replaced" ? { sessionId: "replacement" } : {}),
-                ...(change === "reset with the same id"
-                  ? { lifecycleRevision: "replacement-lifecycle" }
-                  : {}),
-                ...(change === "claimed by another writer"
-                  ? { activeWriterRunId: "replacement-writer" }
-                  : {}),
-              };
-        if (changedEntry) {
+        if (replacement) {
           changedEntry = expectDefined(
-            await replaceSessionEntry(target, changedEntry),
+            await replaceSessionEntry(target, { ...target.sessionEntry, ...replacement }),
             "replacement companion session",
           );
         } else {
