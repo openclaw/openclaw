@@ -83,7 +83,8 @@ async function open(owner: Overlay) {
 }
 const frame = () =>
   new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    // Anchor updates can run later in the same animation frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
   });
 function expectAnchored(surface: HTMLElement, element: Element) {
   const source = element.getBoundingClientRect(),

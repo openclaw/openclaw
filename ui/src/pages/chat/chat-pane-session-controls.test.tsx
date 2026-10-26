@@ -745,6 +745,7 @@ describe("chat pane model controls", () => {
       ),
     ).toBe(true);
     const steering = steerQueuedChatMessage(state, steer.id);
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "chat.send",
