@@ -65,6 +65,13 @@ function writePlugin(dir: string, id: string, allowed: boolean) {
   }
 }
 
+function expectRecovery(request: PluginInstallRequestContext | null, id: string, allowed: boolean) {
+  expect(request).toMatchObject({ bundledPluginId: id, allowInvalidConfigRecovery: allowed });
+  expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
+    allowed ? "allow-plugin-recovery" : "deny",
+  );
+}
+
 describe("plugin install recovery source ownership", () => {
   beforeEach(() => {
     fixture.bundledPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-owner-"));
@@ -112,7 +119,6 @@ describe("plugin install recovery source ownership", () => {
       expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
         ownsRecovery && allowed ? "allow-plugin-recovery" : "deny",
       );
-
       if (spec === "@fixture/recovery@1.2.3") {
         for (const source of ["npm", "clawhub"] as const) {
           const selected = resolvePluginInstallRequestContext({ rawSpec: spec, source });
@@ -130,10 +136,7 @@ describe("plugin install recovery source ownership", () => {
 
   it("uses bundled recovery for a canonical plugin ID", () => {
     const request = parseInstallRequest("bundled-demo");
-    expect(request).toMatchObject({
-      bundledPluginId: "bundled-demo",
-      allowInvalidConfigRecovery: true,
-    });
+    expectRecovery(request, "bundled-demo", true);
   });
 
   it.each([
@@ -145,13 +148,7 @@ describe("plugin install recovery source ownership", () => {
       const localPath = path.join(fixture.bundledPath, "local-plugin");
       writePlugin(localPath, "local-demo", allowed);
       const request = parseInstallRequest(`${prefix}${localPath}`);
-      expect(request).toMatchObject({
-        bundledPluginId: "local-demo",
-        allowInvalidConfigRecovery: allowed,
-      });
-      expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
-        allowed ? "allow-plugin-recovery" : "deny",
-      );
+      expectRecovery(request, "local-demo", allowed);
     },
   );
 

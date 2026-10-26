@@ -32,15 +32,16 @@ function runtimeErrors(): string[] {
   return mocks.defaultRuntime.error.mock.calls.map(([message]) => String(message));
 }
 
-function expectNoRuntimeOutput() {
-  for (const method of ["writeJson", "error", "exit"] as const) {
-    expect(mocks.defaultRuntime[method]).not.toHaveBeenCalled();
+async function expectFailure(command: string, args: string[], json: boolean, message: string) {
+  await expect(parse(command, args)).rejects.toThrow(json ? message : "__exit__:1");
+  expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+  if (json) {
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  } else {
+    expect(runtimeErrors()).toEqual([expect.stringContaining(message)]);
+    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
-}
-
-function expectNoGmailCalls() {
-  expect(mocks.runGmailSetup).not.toHaveBeenCalled();
-  expect(mocks.runGmailService).not.toHaveBeenCalled();
 }
 
 describe("webhooks cli", () => {
@@ -58,14 +59,10 @@ describe("webhooks cli", () => {
     ["run", "--tailscale", "offf", "Invalid --tailscale (must be funnel, serve, or off)."],
   ])("rejects invalid gmail %s %s=%j", async (command, flag, value, message, json = false) => {
     const args = [flag, value, ...(json ? ["--json"] : [])];
-    if (json) {
-      await expect(parse(command, args)).rejects.toThrow(message);
-      expectNoRuntimeOutput();
-    } else {
-      await expect(parse(command, args)).rejects.toThrow("__exit__:1");
-      expect(runtimeErrors().join("\n")).toContain(message);
+    await expectFailure(command, args, json, message);
+    for (const runner of [mocks.runGmailSetup, mocks.runGmailService]) {
+      expect(runner).not.toHaveBeenCalled();
     }
-    expectNoGmailCalls();
   });
 
   it.each([
@@ -79,17 +76,7 @@ describe("webhooks cli", () => {
     const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
     runner.mockRejectedValueOnce(error);
     const args = json ? ["--json"] : [];
-    if (json) {
-      await expect(parse(command, args)).rejects.toThrow("Gmail failed: Authorization: Bearer");
-      expectNoRuntimeOutput();
-    } else {
-      await expect(parse(command, args)).rejects.toThrow("__exit__:1");
-      expect(runtimeErrors()).toEqual([
-        expect.stringContaining("Gmail failed: Authorization: Bearer"),
-      ]);
-      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
-    }
+    await expectFailure(command, args, json, "Gmail failed: Authorization: Bearer");
     expect(runner).toHaveBeenCalledOnce();
     const output = [...mocks.runtimeLogs, ...runtimeErrors()].join("\n");
     for (const privateValue of [error.name, secret]) {

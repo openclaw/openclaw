@@ -113,47 +113,29 @@ it("lints installed runtime dependencies without executing code or reading host 
   const peer = path.join(physical, "peer");
   const transitive = path.join(project, "node_modules", "transitive");
   const development = path.join(project, "node_modules", "development");
+  const pkg = (dir: string, name: string, version: string, source?: string, metadata = {}) => ({
+    dir,
+    manifest: { name, version, ...metadata },
+    source,
+  });
   const packages = [
-    {
-      dir: project,
-      manifest: {
-        name: "plugin",
-        version: "1.0.0",
-        dependencies: { direct: "1.0.0" },
-        devDependencies: { development: "1.0.0" },
-      },
-      source: "throw new Error('must not execute plugin');",
-    },
-    {
-      dir: direct,
-      manifest: {
-        name: "direct",
-        version: "1.0.0",
-        dependencies: { transitive: "2.0.0" },
-        peerDependencies: { peer: "3.0.0" },
-      },
-    },
-    {
-      dir: transitive,
-      manifest: { name: "transitive", version: "2.0.0" },
-      source: "Buffer.concat = () => null;",
-    },
-    {
-      dir: peer,
-      manifest: { name: "peer", version: "3.0.0" },
-      source: "eval('must not execute peer');",
-    },
-    {
-      dir: development,
-      manifest: { name: "development", version: "1.0.0" },
-      source: "Array.prototype.push = () => 0;",
-    },
+    pkg(project, "plugin", "1.0.0", "throw new Error('must not execute plugin');", {
+      dependencies: { direct: "1.0.0" },
+      devDependencies: { development: "1.0.0" },
+    }),
+    pkg(direct, "direct", "1.0.0", undefined, {
+      dependencies: { transitive: "2.0.0" },
+      peerDependencies: { peer: "3.0.0" },
+    }),
+    pkg(transitive, "transitive", "2.0.0", "Buffer.concat = () => null;"),
+    pkg(peer, "peer", "3.0.0", "eval('must not execute peer');"),
+    pkg(development, "development", "1.0.0", "Array.prototype.push = () => 0;"),
   ];
-  for (const pkg of packages) {
-    await fs.mkdir(pkg.dir, { recursive: true });
-    await fs.writeFile(path.join(pkg.dir, "package.json"), JSON.stringify(pkg.manifest));
-    if (pkg.source) {
-      await fs.writeFile(path.join(pkg.dir, "index.js"), pkg.source);
+  for (const entry of packages) {
+    await fs.mkdir(entry.dir, { recursive: true });
+    await fs.writeFile(path.join(entry.dir, "package.json"), JSON.stringify(entry.manifest));
+    if (entry.source) {
+      await fs.writeFile(path.join(entry.dir, "index.js"), entry.source);
     }
   }
   await fs.symlink(direct, path.join(project, "node_modules", "direct"), "junction");
@@ -164,20 +146,10 @@ it("lints installed runtime dependencies without executing code or reading host 
     scannedPackages: 4,
     scannedFiles: 3,
     warnings: [
-      expect.objectContaining({
-        packageName: "peer",
-        packageVersion: "3.0.0",
-        ruleId: "runtime-code-generation",
-        file: "index.js",
-        line: 1,
-      }),
-      expect.objectContaining({
-        packageName: "transitive",
-        packageVersion: "2.0.0",
-        ruleId: "builtin-patch",
-        file: "index.js",
-        line: 1,
-      }),
-    ],
+      ["peer", "3.0.0", "runtime-code-generation"],
+      ["transitive", "2.0.0", "builtin-patch"],
+    ].map(([packageName, packageVersion, ruleId]) =>
+      expect.objectContaining({ packageName, packageVersion, ruleId, file: "index.js", line: 1 }),
+    ),
   });
 });

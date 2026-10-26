@@ -5,14 +5,8 @@ import type { PluginRecord } from "../plugins/registry.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 
-type SnapshotPlugin = {
-  id: string;
-  enabled: boolean;
-  name?: string;
-  trust?: PluginRecord["trust"];
-  commands?: string[];
-  agentHarnessIds?: string[];
-};
+type SnapshotPlugin = Pick<PluginRecord, "id" | "enabled"> &
+  Partial<Pick<PluginRecord, "name" | "trust" | "commands" | "agentHarnessIds">>;
 
 function mockPluginListSnapshot(
   plugins: SnapshotPlugin[],

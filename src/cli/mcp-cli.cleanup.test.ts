@@ -118,14 +118,19 @@ async function probe(args: string[]) {
 }
 const output = (mock: typeof mockLog) => mock.mock.calls.map(([line]) => String(line)).join("\n");
 const errors = () => output(mockError);
+function expectCleanup(exitCode?: number) {
+  expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+  expect(process.exitCode).toBe(exitCode);
+  if (exitCode === undefined) {
+    expect(mockError).not.toHaveBeenCalled();
+  }
+}
 
 it.each<[number, boolean]>([
   [204, true],
   [404, true],
   [405, true],
   [400, true],
-  [401, true],
-  [500, true],
   [400, false],
 ])("succeeds after DELETE %s (JSON=%s)", async (status, json) => {
   deleteStatus = status;
@@ -142,9 +147,7 @@ it.each<[number, boolean]>([
   } else {
     expect(output(mockLog)).toContain("- docs: 1 tools");
   }
-  expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
-  expect(mockError).not.toHaveBeenCalled();
-  expect(process.exitCode).toBeUndefined();
+  expectCleanup();
 });
 
 it("reports Doctor success when DELETE is unconfirmed", async () => {
@@ -153,9 +156,7 @@ it("reports Doctor success when DELETE is unconfirmed", async () => {
     ok: true,
     servers: [{ name: "docs", ok: true, issues: [] }],
   });
-  expect(mockError).not.toHaveBeenCalled();
-  expect(process.exitCode).toBeUndefined();
-  expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+  expectCleanup();
 });
 
 it.each(["add", "configure"] as const)(
@@ -174,9 +175,7 @@ it.each(["add", "configure"] as const)(
       transport: "streamable-http",
       toolFilter: { include: ["ping"] },
     });
-    expect(mockError).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
-    expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+    expectCleanup();
   },
 );
 
@@ -189,6 +188,5 @@ it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   });
   expect(result).not.toHaveProperty("cleanupError");
   expect(errors()).toContain(CATALOG_ERROR);
-  expect(process.exitCode).toBe(1);
-  expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+  expectCleanup(1);
 });

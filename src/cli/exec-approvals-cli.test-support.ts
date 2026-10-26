@@ -84,8 +84,7 @@ function resetLocalSnapshot() {
 }
 
 vi.mock("./gateway-rpc.js", () => ({
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params, extra),
+  callGatewayFromCli: mocks.callGatewayFromCli,
 }));
 
 vi.mock("./local-state-owner.js", () => ({
@@ -164,13 +163,9 @@ export function resetExecApprovalsCliMocks(): void {
   resetLocalSnapshot();
   runtimeLogs.length = 0;
   runtimeErrors.length = 0;
-  callGatewayFromCli.mockClear();
-  readBestEffortConfig.mockClear();
-  defaultRuntime.log.mockClear();
-  defaultRuntime.error.mockClear();
-  defaultRuntime.writeStdout.mockClear();
-  defaultRuntime.writeJson.mockClear();
-  defaultRuntime.exit.mockClear();
+  for (const mock of [callGatewayFromCli, readBestEffortConfig, ...Object.values(defaultRuntime)]) {
+    mock.mockClear();
+  }
 }
 
 export async function runApprovalsCommand(args: string[]): Promise<void> {
