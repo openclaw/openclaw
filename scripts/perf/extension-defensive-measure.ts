@@ -76,7 +76,7 @@ let lastLine: unknown;
 const progress = createClickClackAgentProgressPublisher({
   client: {
     publishEphemeral: async (frame) => {
-      if (frame.payload.line) {
+      if (frame.payload?.line) {
         lastLine = frame.payload.line;
       }
     },
