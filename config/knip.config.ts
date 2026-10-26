@@ -414,6 +414,7 @@ const repositoryScriptEntries = [
   "scripts/perf/catalog-retained-data-measure.ts!",
   "scripts/perf/disk-budget-scan.ts!",
   "scripts/perf/git-operation-allocation-measure.ts!",
+  "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/mcp-namespace-result-measure.ts!",
   "scripts/perf/model-catalog-read-startup-measure.mjs!",
   "scripts/perf/model-stream-scheduler-measure.ts!",
