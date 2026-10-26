@@ -11,7 +11,7 @@ import {
   detachActiveEmbeddedRun as clearNative,
 } from "../../embedded-agent-runner/runs.js";
 
-const producers = new Map<EmbeddedAgentQueueHandle, { finish(): void; settled: Promise<void> }>();
+const producers = new Map<EmbeddedAgentQueueHandle, { finish(): Promise<void> }>();
 
 type OperationIdentity = Pick<
   Parameters<typeof createReplyOperation>[0],
@@ -76,9 +76,7 @@ export async function detachActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   _sessionKey: string,
 ) {
-  const producer = producers.get(handle);
-  producer?.finish();
-  await producer?.settled;
+  await producers.get(handle)?.finish();
 }
 
 /** Own a real producer so Stop joins its completion, not a fabricated abort receipt. */

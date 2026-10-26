@@ -29,16 +29,14 @@ function attach(operation: ReplyOperation) {
 }
 
 function requesterTurn() {
+  const identity = { sessionKey: "global", sessionId: "requester-session", agentId: "main" };
   const operation = createReplyOperation({
-    sessionKey: "global",
-    sessionId: "requester-session",
-    agentId: "main",
+    ...identity,
     resetTriggered: false,
     target: captureSessionTarget({
+      ...identity,
       storeScope: storePath,
-      sessionKey: "global",
-      incarnation: "requester-session",
-      agentId: "main",
+      incarnation: identity.sessionId,
     }),
   });
   operation.setPhase("running");
@@ -88,7 +86,7 @@ it.each([
   "does not borrow live requester ownership across a different %s",
   (_difference, overrides) => {
     requesterTurn();
-    expect(isClaimedByLiveRequesterTurn({ ...child(), ...overrides })).toBe(false);
+    expect(isClaimedByLiveRequesterTurn(child(overrides))).toBe(false);
   },
 );
 

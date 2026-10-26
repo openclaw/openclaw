@@ -99,27 +99,21 @@ describe("subagent execution observation", () => {
   it("reports pause age only for a continuable yielded leaf", () => {
     const now = 2_000_000_000_000;
     const pausedAt = now - 90_000_000;
-    const paused = (id: string, overrides: Partial<SubagentRunRecord> = {}) =>
-      run(id, {
+    const age = (overrides: Partial<SubagentRunRecord> = {}) => {
+      const entry = run("paused", {
         pauseReason: "sessions_yield",
         execution: { status: "terminal", endedAt: pausedAt },
         ...overrides,
       });
-    const age = (entry: SubagentRunRecord) =>
-      resolveYieldedLeafPausedForMs(entry, observeSubagentExecution(entry, []), now);
+      return resolveYieldedLeafPausedForMs(entry, observeSubagentExecution(entry, []), now);
+    };
 
-    expect(age(paused("future", { execution: { status: "terminal", endedAt: now + 5 } }))).toBe(0);
-    expect(age(paused("collector", { collect: true }))).toBeUndefined();
+    expect(age({ execution: { status: "terminal", endedAt: now + 5 } })).toBe(0);
+    expect(age({ collect: true })).toBeUndefined();
     expect(
-      age(
-        paused("resumed", {
-          execution: { status: "running", startedAt: pausedAt, endedAt: pausedAt },
-        }),
-      ),
+      age({ execution: { status: "running", startedAt: pausedAt, endedAt: pausedAt } }),
     ).toBeUndefined();
-    expect(
-      age(run("finished", { execution: { status: "terminal", endedAt: pausedAt } })),
-    ).toBeUndefined();
-    expect(age(paused("no-timestamp", { execution: { status: "terminal" } }))).toBeUndefined();
+    expect(age({ pauseReason: undefined })).toBeUndefined();
+    expect(age({ execution: { status: "terminal" } })).toBeUndefined();
   });
 });
