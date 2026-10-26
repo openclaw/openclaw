@@ -59,28 +59,33 @@ async function createNativeFixture(
   const livePhases: NativePhase[] = [];
   let emptyTerminalInjections = 0;
   const upstreamAbort = new AbortController();
-  const server = http.createServer(async (request, response) => {
+  const respond = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     try {
       const body = (await buffer(request)).toString("utf8");
       // A 426 selects HTTP immediately instead of retrying this SSE-only fixture.
       if (request.url === "/v1/responses" && request.method === "GET") {
-        return void response.writeHead(426).end();
+        response.writeHead(426).end();
+        return;
       }
       if (request.url !== "/v1/responses" || request.method !== "POST") {
-        return void response.writeHead(404).end();
+        response.writeHead(404).end();
+        return;
       }
       const parsed: unknown = JSON.parse(body);
       if (!isJsonObject(parsed)) {
-        return void response.writeHead(400).end();
+        response.writeHead(400).end();
+        return;
       }
       const account = request.headers.authorization;
       requests.push({ body: parsed, account });
       requestReceived.resolve();
       if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
-        return void response.writeHead(401).end();
+        response.writeHead(401).end();
+        return;
       }
       if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
-        return void response.writeHead(400).end();
+        response.writeHead(400).end();
+        return;
       }
       const actionPhase = phase === "action" || phase === "side";
       if (actionPhase) {
@@ -178,6 +183,9 @@ async function createNativeFixture(
       failures.push(error);
       response.writeHead(500).end();
     }
+  };
+  const server = http.createServer((request, response) => {
+    void respond(request, response);
   });
   cleanups.push(async () => {
     upstreamAbort.abort();

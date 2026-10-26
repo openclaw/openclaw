@@ -119,7 +119,7 @@ export async function startStaticRegistry(
     encodedPackageName: encodeURIComponent(pkg.packageName).replace("%40", "@"),
     versionsByVersion: new Map(pkg.versions.map((entry) => [entry.version, entry])),
   }));
-  const server = http.createServer(async (request, response) => {
+  const respond = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const pathname = new URL(request.url ?? "/", baseUrl).pathname;
     const send = (body: string | Buffer | object, code = 200) => {
       const binary = Buffer.isBuffer(body);
@@ -179,7 +179,10 @@ export async function startStaticRegistry(
       }
     }
 
-    send(`not found: ${pathname}`, 404);
+    return send(`not found: ${pathname}`, 404);
+  };
+  const server = http.createServer((request, response) => {
+    void respond(request, response);
   });
   const baseUrl = await listenLoopback(server);
   servers.push(server);

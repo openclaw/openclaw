@@ -16,7 +16,7 @@ const cleanups: Array<() => void | Promise<void>> = [];
 const credentials = { password: "synthetic-password" };
 
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -81,7 +81,7 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
   });
   return {
     stop: () => service.stopNode("node-1"),
-    async observe(requester?: DesktopObserveRequester, stream?: PassThrough) {
+    observe: async (requester?: DesktopObserveRequester, stream?: PassThrough) => {
       const pending = service.observe({ nodeId: "node-1", control: false, credentials, requester });
       if (stream) {
         await gate.reached.promise;
