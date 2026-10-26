@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { text } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloPlugin } from "../extensions/zalo/api.js";
 import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
@@ -31,50 +32,42 @@ function installConfig() {
   return cfg;
 }
 
+function send(message: string, media: string, assertDirectAdapterHandoff: () => void) {
+  return runMessageAction({
+    cfg: installConfig(),
+    action: "send",
+    params: { channel: "zalo", to: "dm-chat", message, media },
+    skipQueue: true,
+    suppressTranscriptMirror: true,
+    assertDirectAdapterHandoff,
+  });
+}
+
 describe("Zalo core message delivery", () => {
   it.each([false, true])(
     "sends whitespace-media text and propagates API rejection (%s)",
     async (fail) => {
       await withOpenClawTestState({ prefix: "zalo-message-delivery-" }, async () => {
         const requests: Array<{ path: string | undefined; body: string }> = [];
+        const assertDirectAdapterHandoff = vi.fn();
         const fixture = await reserveTestPortListener({
           offsets: [0],
           createListener: () =>
-            createServer((request, response) => {
-              let body = "";
-              request.setEncoding("utf8");
-              request.on("data", (chunk: string) => {
-                body += chunk;
-              });
-              request.on("end", () => {
-                requests.push({ path: request.url, body });
-                response.writeHead(200, { "content-type": "application/json" });
-                response.end(
-                  JSON.stringify(
-                    fail
-                      ? { ok: false, description: "fixture provider unavailable" }
-                      : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
-                  ),
-                );
-              });
+            createServer(async (request, response) => {
+              requests.push({ path: request.url, body: await text(request) });
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify(
+                  fail
+                    ? { ok: false, description: "fixture provider unavailable" }
+                    : { ok: true, result: { message_id: "z-msg-with-blank-media" } },
+                ),
+              );
             }),
         });
-        vi.stubEnv("ZALO_API_URL", `http://127.0.0.1:${fixture.claim.port}/zalo/`);
-        const assertDirectAdapterHandoff = vi.fn();
         try {
-          const delivery = runMessageAction({
-            cfg: installConfig(),
-            action: "send",
-            params: {
-              channel: "zalo",
-              to: "dm-chat-blank-media",
-              message: "hello there",
-              media: "   ",
-            },
-            skipQueue: true,
-            suppressTranscriptMirror: true,
-            assertDirectAdapterHandoff,
-          });
+          vi.stubEnv("ZALO_API_URL", `http://127.0.0.1:${fixture.claim.port}/zalo/`);
+          const delivery = send("hello there", "   ", assertDirectAdapterHandoff);
           if (fail) {
             await expect(delivery).rejects.toThrow("fixture provider unavailable");
           } else {
@@ -91,7 +84,7 @@ describe("Zalo core message delivery", () => {
           expect(requests).toEqual([
             {
               path: "/zalo/bottest-zalo-token/sendMessage",
-              body: JSON.stringify({ chat_id: "dm-chat-blank-media", text: "hello there" }),
+              body: JSON.stringify({ chat_id: "dm-chat", text: "hello there" }),
             },
           ]);
           expect(assertDirectAdapterHandoff).toHaveBeenCalled();
@@ -115,22 +108,10 @@ describe("Zalo core message delivery", () => {
       const fetch = vi.spyOn(globalThis, "fetch");
       const authorityError = new Error("source authority revoked");
       let current = true;
-      const delivery = runMessageAction({
-        cfg: installConfig(),
-        action: "send",
-        params: {
-          channel: "zalo",
-          to: "dm-chat-photo",
-          message: "caption",
-          media: "https://example.com/photo.jpg",
-        },
-        skipQueue: true,
-        suppressTranscriptMirror: true,
-        assertDirectAdapterHandoff: () => {
-          if (!current) {
-            throw authorityError;
-          }
-        },
+      const delivery = send("caption", "https://example.com/photo.jpg", () => {
+        if (!current) {
+          throw authorityError;
+        }
       });
       await started.promise;
       current = false;

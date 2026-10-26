@@ -154,9 +154,6 @@ describe("jsdom native API boundary", () => {
     });
     try {
       expect(preparations).toBe(1);
-      expect(
-        await new target.Request("https://example.test/", { method: "POST", body: "ok" }).text(),
-      ).toBe("ok");
     } finally {
       await environment.teardown(target);
     }

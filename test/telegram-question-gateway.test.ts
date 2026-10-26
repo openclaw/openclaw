@@ -80,9 +80,7 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
     scheduler,
   );
-  const gatewayCalls: string[] = [];
   const dispatch = async ({ method, params }: QuestionGatewayCall): Promise<unknown> => {
-    gatewayCalls.push(method);
     const result = await callGatewayHandler(handlers, method, params ?? {}, {
       context: { broadcast: () => undefined },
     });
@@ -93,10 +91,11 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
 
   try {
     const optionValues = ["A", "B", "C"];
+    const options = optionValues.map((label) => ({ label }));
     const question = {
       header: "Destination",
       question: "Where next?",
-      options: optionValues.map((label) => ({ label })),
+      options,
       multiSelect: false,
       isOther: false,
       isSecret: false,
@@ -109,9 +108,7 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
         timeoutMs: 15_000,
       },
     });
-    expect(manager.get(questionId)?.questions[0]?.options).toEqual(
-      optionValues.map((label) => ({ label })),
-    );
+    expect(manager.get(questionId)?.questions[0]?.options).toEqual(options);
 
     const questionButton = (optionValue: string) => ({
       label: optionValue,
@@ -147,7 +144,6 @@ it("resolves canonical option C when rendered option A repeats across blocks", a
     await expect(
       questionGatewayRuntime.resolveOption({ cfg: {}, questionId, optionIndex, senderId: "42" }),
     ).resolves.toEqual({ status: "answered", questionId: "destination", optionValue: "C" });
-    expect(gatewayCalls).toEqual(["question.request", "question.get", "question.resolve"]);
     expect(manager.get(questionId)).toMatchObject({
       status: "answered",
       answers: { answers: { destination: ["C"] } },

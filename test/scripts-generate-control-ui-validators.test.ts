@@ -5,21 +5,16 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generator = "scripts/generate-control-ui-validators.mts";
 const node = resolveTestNodeExecPath();
-let scratch: string | undefined;
-afterEach(() => {
-  if (scratch) {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("generates identical standalone validators across physical pnpm layouts without hiding schema drift", async () => {
   // Only TypeBox must be physically relocated. Other pinned tools retain their installed owners.
-  fs.mkdirSync(path.join(repoRoot, ".artifacts"), { recursive: true });
-  scratch = fs.mkdtempSync(path.join(repoRoot, ".artifacts", "validator-layouts-"));
+  const scratch = tempDirs.make("validator-layouts-");
   const closure = await build({
     absWorkingDir: repoRoot,
     entryPoints: [generator],
@@ -93,10 +88,9 @@ it("generates identical standalone validators across physical pnpm layouts witho
     expect(run("--check").status).toBe(0);
     // Freshness must notice an actual public schema constraint change, not merely edited output.
     if (layout === "hoisted") {
-      const schema = path.join(root, "packages/gateway-protocol/src/schema/sessions-reactions.ts");
-      const source = fs.readFileSync(schema, "utf8");
+      const source = fs.readFileSync(reactions, "utf8");
       expect(source).toContain("maxLength: 32");
-      fs.writeFileSync(schema, source.replace("maxLength: 32", "maxLength: 31"));
+      fs.writeFileSync(reactions, source.replace("maxLength: 32", "maxLength: 31"));
       const stale = run("--check");
       expect(stale.status).toBe(1);
       expect(stale.stderr).toContain("activity.js is stale");

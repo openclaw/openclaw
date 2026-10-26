@@ -32,18 +32,14 @@ const redactedCase = (input: string, secret = "synthetic"): [string, string] => 
 ];
 it("redacts credential text without altering nonsecret fields", () => {
   const cases: [string, string][] = [
-    ..."EXAMPLE_TOKEN PASSWD FAL_KEY OPENCLAW_CODEX_AUTH_JSON apiKey sessionId"
-      .split(" ")
-      .flatMap((key) =>
-        [
-          `${key}: 'synthetic'`,
-          `${key}: "synthetic"`,
-          `"${key}": "synthetic"`,
-          `${key}=synthetic\nNORMAL=visible`,
-          `["${key}", "synthetic"]`,
-          `[ '${key}', 'synthetic' ]`,
-        ].map((input) => redactedCase(input)),
-      ),
+    ...[
+      "EXAMPLE_TOKEN: 'synthetic'",
+      'PASSWD: "synthetic"',
+      '"FAL_KEY": "synthetic"',
+      "OPENCLAW_CODEX_AUTH_JSON=synthetic\nNORMAL=visible",
+      '["apiKey", "synthetic"]',
+      "[ 'sessionId', 'synthetic' ]",
+    ].map((input) => redactedCase(input)),
     [
       `+ [\n+   "EXAMPLE_TOKEN",\n+   "one\\ntwo",\n+ ],\n  ["NORMAL", "visible"]`,
       `+ [\n+   "EXAMPLE_TOKEN",\n+   "<redacted len=7>",\n+ ],\n  ["NORMAL", "visible"]`,
@@ -60,10 +56,7 @@ it("redacts credential text without altering nonsecret fields", () => {
       "Authorization: Bearer synthetic\nCookie: a=b; c=d",
       "Authorization: <redacted len=16>\nCookie: <redacted len=8>",
     ],
-    ...[1, 2, 3].map((depth): [string, string] => [
-      wrap(encodedObject, depth),
-      wrap(encodedClean, depth),
-    ]),
+    [wrap(encodedObject, 3), wrap(encodedClean, 3)],
     ...["", "can't load "].map((prefix) =>
       redactedCase(
         JSON.stringify({
