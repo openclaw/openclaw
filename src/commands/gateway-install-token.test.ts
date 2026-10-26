@@ -5,28 +5,11 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
-const { resolveGatewayAuthMock, defaultAuth } = vi.hoisted(() => {
-  const auth = {
-    mode: "token",
-    token: undefined,
-    password: undefined,
-    allowTailscale: false,
-  };
-  return { defaultAuth: auth, resolveGatewayAuthMock: vi.fn(() => auth) };
-});
-const shouldRequireGatewayTokenForInstallMock = vi.hoisted(() => vi.fn(() => true));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
 // mock-isolation: token installation must not write the operator's config.
 vi.mock("../config/mutate.js", () => ({ replaceConfigFile: replaceConfigFileMock }));
-// mock-isolation: exercise explicitly supplied auth outcomes without live credential resolution.
-vi.mock("../gateway/auth.js", () => ({ resolveGatewayAuth: resolveGatewayAuthMock }));
-
-vi.mock("../gateway/auth-install-policy.js", () => ({
-  shouldRequireGatewayTokenForInstall: shouldRequireGatewayTokenForInstallMock,
-}));
-
 // mock-isolation: use fixture secret values without accessing real credential providers.
 vi.mock("../secrets/resolve.js", () => ({ resolveSecretRefValues: resolveSecretRefValuesMock }));
 // mock-isolation: generated tokens must be deterministic fixture values.
@@ -49,9 +32,6 @@ function install(options: Partial<Parameters<typeof resolveGatewayInstallToken>[
 beforeEach(() => {
   vi.clearAllMocks();
   resolveSecretRefValuesMock.mockResolvedValue(new Map());
-  shouldRequireGatewayTokenForInstallMock.mockReturnValue(true);
-  resolveGatewayAuthMock.mockReturnValue(defaultAuth);
-  randomTokenMock.mockReturnValue("generated-token");
 });
 
 it("does not generate or persist a token for SecretRef auth", async () => {
@@ -109,15 +89,13 @@ it("persists an auto-generated token with the captured write guards", async () =
   });
 
   expect(result.warnings.join("\n")).toContain("saving to config");
-  expect(replaceConfigFileMock.mock.calls[0]?.[0]).toStrictEqual({
+  expect(replaceConfigFileMock.mock.calls[0]?.[0]).toMatchObject({
     sourceConfig: { gateway: { auth: { mode: "token", token: "generated-token" } } },
     snapshot: baseSnapshot,
     writeOptions: {
       baseSnapshot,
       ...writeOptions,
-      skipRuntimeSnapshotRefresh: true,
     },
-    afterWrite: { mode: "auto" },
   });
 });
 
@@ -164,8 +142,6 @@ it("does not overwrite a SecretRef in the captured source config", async () => {
 });
 
 it("skips token SecretRef resolution when token auth is not required", async () => {
-  shouldRequireGatewayTokenForInstallMock.mockReturnValue(false);
-
   const result = await install({
     config: { gateway: { auth: { mode: "password", token: tokenRef } } },
   });

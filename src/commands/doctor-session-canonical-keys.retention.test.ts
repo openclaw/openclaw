@@ -18,61 +18,50 @@ describe("doctor canonical session-key retention repair", () => {
         "shared",
         ["main", "ops"],
       );
+      const key = "agent:main:shared";
+      const previousId = "destination-only-previous";
 
-      insert(
-        "agent:main:shared",
-        { sessionId: "destination-only-previous", updatedAt: 4 },
-        "destination-only history",
-      );
+      insert(key, { sessionId: previousId, updatedAt: 4 }, "destination-only history");
       replaceSessionEntrySync(
-        { ...scope(), sessionKey: "agent:main:shared" },
-        {
-          previousSessionId: "destination-only-previous",
-          sessionId: "retained-destination",
-          updatedAt: 5,
-        },
+        { ...scope(), sessionKey: key },
+        { previousSessionId: previousId, sessionId: "retained-destination", updatedAt: 5 },
       );
-      const destinationDatabase = database();
-      const destination = sessionSqlFixture(destinationDatabase.db);
+      const destination = sessionSqlFixture(database().db);
       destination`UPDATE session_windows SET reason = 'recovery'
-        WHERE session_id = 'destination-only-previous'`.run();
+        WHERE session_id = ${previousId}`.run();
 
       insert(
-        "agent:main:shared ",
-        { previousSessionId: "destination-only-previous", sessionId: "winner", updatedAt: 20 },
+        `${key} `,
+        { previousSessionId: previousId, sessionId: "winner", updatedAt: 20 },
         "winner history",
         "ops",
       );
       const source = sessionSqlFixture(database("ops").db);
       for (const [label, sourceSessionKey] of [
-        ["winner", "agent:main:shared "],
-        ["loser", "agent:main:shared"],
+        ["winner", `${key} `],
+        ["loser", key],
       ] as const) {
         source`INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at)
           VALUES (${label + "-conversation"}, 'webchat', 'default', 'direct', ${label}, ${label}, '{}', 10, 10)`.run();
         source`INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at)
           VALUES (${label + "-operation"}, 'turn', ${label + "-conversation"}, ${sourceSessionKey}, ${label + "-hash"}, 'sent', 10, 10)`.run();
       }
-      insert("agent:main:shared", { sessionId: "loser", updatedAt: 10 }, "loser history", "ops");
+      insert(key, { sessionId: "loser", updatedAt: 10 }, "loser history", "ops");
 
       const report = await repair();
 
-      expect(load("agent:main:shared", "main")?.entry.sessionId).toBe("winner");
-      expect(load("agent:main:shared ", "ops")).toBeUndefined();
-      expect(load("agent:main:shared", "ops")).toBeUndefined();
-      await transcript("agent:main:shared", "winner", "winner history");
-      await transcript("agent:main:shared", "loser");
-      await transcript(
-        "agent:main:shared",
-        "destination-only-previous",
-        "destination-only history",
-      );
+      expect(load(key, "main")?.entry.sessionId).toBe("winner");
+      expect(load(`${key} `, "ops")).toBeUndefined();
+      expect(load(key, "ops")).toBeUndefined();
+      await transcript(key, "winner", "winner history");
+      await transcript(key, "loser");
+      await transcript(key, previousId, "destination-only history");
       expect(
         destination`SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id`.all(),
-      ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
+      ).toEqual([{ operation_id: "winner-operation", source_session_key: key }]);
       expect(
         destination`SELECT previous_session_id, session_entry_provenance FROM session_windows WHERE session_id = 'winner'`.get(),
-      ).toEqual({ previous_session_id: "destination-only-previous", session_entry_provenance: 1 });
+      ).toEqual({ previous_session_id: previousId, session_entry_provenance: 1 });
       expect(
         source`SELECT operation_id FROM conversation_deliveries ORDER BY operation_id`.all(),
       ).toEqual([]);

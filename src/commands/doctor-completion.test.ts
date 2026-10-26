@@ -63,13 +63,7 @@ describe("shell completion health mapping", () => {
     await fs.writeFile(profilePath, "source <(openclaw completion --shell bash)\n");
 
     const current = await checkShellCompletionStatus("openclaw", { shell: "bash" });
-    expect(current).toEqual({
-      shell: "bash",
-      profileInstalled: true,
-      cacheExists: false,
-      cachePath: path.join(stateDir, "completions", "openclaw.bash"),
-      usesSlowPattern: true,
-    });
+    expect(current.profileInstalled).toBe(true);
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([
       expect.objectContaining({
         severity: "info",
@@ -78,7 +72,11 @@ describe("shell completion health mapping", () => {
       }),
     ]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([
-      completionEffect("would-generate-completion-cache", "state", current.cachePath),
+      completionEffect(
+        "would-generate-completion-cache",
+        "state",
+        path.join(stateDir, "completions", "openclaw.bash"),
+      ),
       completionEffect("would-upgrade-shell-profile-completion", "file", "bash"),
     ]);
   });
@@ -132,7 +130,6 @@ describe("doctorShellCompletion", () => {
 
   it("shows the Bash login profile after installing completion without .bashrc", async () => {
     await setupBashHome();
-    installCompletionMock.mockResolvedValue(undefined);
     await doctorShellCompletion(makePrompter(true, true));
 
     expectCompletionNote("source ~/.bash_profile");

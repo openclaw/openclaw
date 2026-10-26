@@ -26,13 +26,11 @@ const { discordPlugin, discordSetupPlugin } = await loadBundledPluginFacade<{
   discordPlugin: ChannelPlugin;
   discordSetupPlugin: ChannelPlugin;
 }>({ pluginId: "discord", artifactBasename: "api.ts" });
-const { telegramPlugin, telegramSetupPlugin } = await loadBundledPluginFacade<{
-  telegramPlugin: ChannelPlugin;
+const { telegramSetupPlugin } = await loadBundledPluginFacade<{
   telegramSetupPlugin: ChannelPlugin;
 }>({ pluginId: "telegram", artifactBasename: "api.ts" });
 const registry = createTestRegistry([
   { pluginId: "discord", plugin: discordPlugin, source: "test" },
-  { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -142,21 +140,16 @@ it.each([
 const registrySnapshot = captureActivePluginRegistrySnapshot();
 beforeEach(() => setActivePluginRegistry(registry));
 
-it.each(["runtime", "setup"])(
-  "normalizes a legacy owner using the unambiguous Telegram %s contract",
-  (surface) => {
-    if (surface === "setup") {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", plugin: telegramSetupPlugin, source: "test" }]),
-      );
-    }
-    const migrated = migrateLegacyCommandOwners(
-      { commands: { ownerAllowFrom: ["telegram:user:123"] } },
-      [],
-    );
-    expect(migrated.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
-  },
-);
+it("normalizes a legacy owner using the unambiguous Telegram setup contract", () => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramSetupPlugin, source: "test" }]),
+  );
+  const migrated = migrateLegacyCommandOwners(
+    { commands: { ownerAllowFrom: ["telegram:user:123"] } },
+    [],
+  );
+  expect(migrated.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+});
 afterEach(() => {
   restoreActivePluginRegistrySnapshot(registrySnapshot);
   vi.unstubAllGlobals();

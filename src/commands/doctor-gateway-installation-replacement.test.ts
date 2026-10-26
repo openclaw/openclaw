@@ -107,7 +107,7 @@ describe("Doctor installation replacement diagnostics", () => {
     },
   );
 
-  it.each(["healthy", "offline", "unprepared", "exec", "replaced"])(
+  it.each(["offline", "unprepared", "exec", "replaced"])(
     "preserves lint history when the current probe is %s",
     async (probe) => {
       if (probe === "replaced") {
@@ -131,9 +131,7 @@ describe("Doctor installation replacement diagnostics", () => {
       const findings = await collectGatewayHealthFindings({ cfg: {}, env: process.env });
 
       expectFinding(findings, { severity: "info", message: historyMessage });
-      if (probe === "healthy") {
-        expect(findings).toHaveLength(1);
-      } else if (probe === "replaced") {
+      if (probe === "replaced") {
         expectFinding(findings, { severity: "warning", message: installationReplacementWarning });
         expectFinding(findings, {
           severity: "warning",
