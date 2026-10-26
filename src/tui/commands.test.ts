@@ -73,11 +73,11 @@ describe("getSlashCommands", () => {
   ])("keeps /%s completion on /%s", (name, alias, level) => {
     for (const local of [false, true]) {
       const commands = getSlashCommands({ local, thinkingLevels: levels("max") });
-      const canonical = commands.find((entry) => entry.name === name);
-      const alternate = commands.find((entry) => entry.name === alias);
-      expect(alternate?.getArgumentCompletions?.(level)).toEqual(
-        canonical?.getArgumentCompletions?.(level),
-      );
+      for (const command of [name, alias]) {
+        expect(
+          commands.find((entry) => entry.name === command)?.getArgumentCompletions?.(level),
+        ).toEqual(choices(level));
+      }
       expect(shouldSubmitExactArgumentCompletion(`/${alias} ${level}`, commands)).toBe(true);
     }
   });
@@ -144,49 +144,31 @@ describe("getSlashCommands", () => {
       expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t", "auth"]),
     );
     expect(getSlashCommands().map(({ name }) => name)).not.toContain("auth");
+    const help = helpText({ local: true });
+    for (const text of [
+      "/goal start <objective>",
+      "/goal edit <objective>",
+      "/btw <side question>",
+    ]) {
+      expect(help).toContain(text);
+    }
+    for (const text of ["/btw [side question]", "/commands", "/status"]) {
+      expect(help).not.toContain(text);
+    }
   });
 });
 
 describe("helpText", () => {
   it.each([
-    [
-      "session thinking levels",
-      { ...minimax, thinkingLevels: levels("off", "max") },
-      ["/think <off|max|default>"],
-      [],
-    ],
-    ["provider thinking fallback", minimax, ["/think <off|adaptive|default>"], []],
-    [
-      "default resets",
-      undefined,
-      [
-        "/model <provider/model|default>",
-        /\/think <[^>]+\|default>/u,
-        "/fast <status|auto|on|off|default>",
-      ],
-      [],
-    ],
-    [
-      "required local arguments",
-      { local: true },
-      ["/goal start <objective>", "/goal edit <objective>", "/btw <side question>"],
-      ["/btw [side question]"],
-    ],
-    ["local command visibility", { local: true }, [], ["/commands", "/status"]],
-  ] satisfies [string, Options, (string | RegExp)[], string[]][])(
-    "documents %s",
-    (_name, options, included, excluded) => {
-      const output = helpText(options);
-      for (const text of included) {
-        if (typeof text === "string") {
-          expect(output).toContain(text);
-        } else {
-          expect(output).toMatch(text);
-        }
-      }
-      for (const text of excluded) {
-        expect(output).not.toContain(text);
-      }
-    },
-  );
+    [{ ...minimax, thinkingLevels: levels("off", "max") }, "/think <off|max|default>"],
+    [minimax, "/think <off|adaptive|default>"],
+  ] satisfies [Options, string][])("documents thinking levels for %j", (options, expected) => {
+    expect(helpText(options)).toContain(expected);
+  });
+  it("documents default resets", () => {
+    const output = helpText();
+    expect(output).toContain("/model <provider/model|default>");
+    expect(output).toMatch(/\/think <[^>]+\|default>/u);
+    expect(output).toContain("/fast <status|auto|on|off|default>");
+  });
 });
