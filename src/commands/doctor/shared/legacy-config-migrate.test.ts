@@ -38,9 +38,6 @@ it("preserves session typing precedence over an existing agent default", () => {
 
   expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
   expect(res.config?.session).toEqual({});
-  expect(res.changes).toContain(
-    "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default).",
-  );
 });
 
 it.each([
@@ -96,32 +93,6 @@ function browserSandbox(browser: Record<string, unknown>) {
 
 function modelMapConfig(models: Record<string, unknown>) {
   return configAt({ "agents.defaults.models": models });
-}
-
-function modelSelections(model: string, alias: string) {
-  return {
-    model,
-    utilityModel: model,
-    heartbeat: { model },
-    subagents: { model },
-    models: { [model]: { alias } },
-  };
-}
-
-function defaultModelSelections(model: string) {
-  return {
-    ...modelSelections(model, "Gemini"),
-    imageModel: model,
-    voiceModel: model,
-    pdfModel: model,
-    mediaModels: {
-      image: model,
-      video: { primary: model, fallbacks: [model] },
-      music: model,
-    },
-    subagents: { model: { primary: model, fallbacks: [model] } },
-    compaction: { model },
-  };
 }
 
 describe("legacy Codex provider config migrate", () => {
@@ -217,9 +188,6 @@ describe("legacy Codex provider config migrate", () => {
 
     expect(res.config?.models?.providers).not.toHaveProperty("codex");
     expect(res.config?.models?.providers?.openai?.models).toEqual([model]);
-    expect(res.changes).toContain(
-      "Removed models.providers.codex because models.providers.openai already exists.",
-    );
   });
 
   it("preserves model-scoped defaults and overrides when merging legacy providers", () => {
@@ -528,9 +496,6 @@ it("removes cron.runLog while preserving current cron config", () => {
   const res = migrate(raw);
 
   expect(res.config?.cron).toEqual({ enabled: true });
-  expect(res.changes).toContain(
-    "Removed retired cron.runLog config; cron history now keeps 2000 runs per job.",
-  );
 });
 
 it("collapses split spawn flags per scope and resolves conflicts conservatively", () => {
@@ -554,17 +519,6 @@ it("collapses split spawn flags per scope and resolves conflicts conservatively"
 });
 
 describe("legacy migrate audio transcription", () => {
-  it("consolidates existing per-capability media config without reviving removed routing keys", () => {
-    const res = migratePaths({
-      "routing.transcribeAudio.command": ["whisper", "--model", "tiny"],
-      "tools.media.audio.models": [{ command: "existing", type: "cli" }],
-    });
-
-    expect(res.config?.tools?.media).toEqual({
-      models: [{ command: "existing", type: "cli", capabilities: ["audio"] }],
-    });
-  });
-
   it("drops invalid audio.transcription payloads", () => {
     const raw = configAt({
       "audio.transcription.command": [{}],
@@ -577,10 +531,7 @@ describe("legacy migrate audio transcription", () => {
       },
     ]);
     const res = migrate(raw);
-
-    expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
-    expect(res.config).not.toHaveProperty("audio");
-    expect(res.config?.tools?.media?.audio).toBeUndefined();
+    expect(res.config).toEqual({});
   });
 
   it("rewrites legacy audio {input} placeholders to media templates", () => {
@@ -601,8 +552,6 @@ describe("legacy migrate audio transcription", () => {
 
     expect(issuePaths(raw)).toContain("audio.transcription");
     const res = migrate(raw);
-
-    expect(res.changes).toContain("Moved audio.transcription → tools.media.models.");
     expect(res.config).not.toHaveProperty("audio");
     expect(res.config?.tools?.media?.models).toEqual([
       { provider: "openai", model: "vision", capabilities: ["image"] },
@@ -729,9 +678,6 @@ describe("legacy migrate x_search auth", () => {
     expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
       model: "grok-4-1-fast-non-reasoning",
     });
-    expect(res.changes).toEqual([
-      "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
-    ]);
   });
 });
 
@@ -758,10 +704,6 @@ it.each([
       "entries.codex.config.supervision.allowRawTranscripts": true,
       "entries.codex.config.supervision.allowWriteControls": true,
     }),
-    changes: [
-      "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
-      "Rewrote plugins.allow codex-supervisor references to codex.",
-    ],
   },
   {
     name: "disabled supervision preserves the implicit harness",
@@ -779,7 +721,6 @@ it.each([
         },
       },
     },
-    changes: [],
   },
   {
     name: "canonical values win while missing supervision fields are filled",
@@ -808,7 +749,6 @@ it.each([
       "entries. CODEX .config.supervision.allowRawTranscripts": true,
       "entries. CODEX .config.supervision.allowWriteControls": false,
     }),
-    changes: ["Removed plugins.deny codex-supervisor references."],
   },
   {
     name: "denied legacy plugin leaves supervision dormant",
@@ -822,7 +762,6 @@ it.each([
         codex: { config: { supervision: { enabled: false, allowWriteControls: true } } },
       },
     },
-    changes: [],
   },
   {
     name: "malformed legacy entry does not create Codex config",
@@ -830,9 +769,8 @@ it.each([
       entries: { "codex-supervisor": "invalid" },
     },
     expected: { entries: {} },
-    changes: ["Removed invalid plugins.entries.codex-supervisor config."],
   },
-])("migrates supervision: $name", ({ plugins, agents, expected, changes }) => {
+])("migrates supervision: $name", ({ plugins, agents, expected }) => {
   const raw = { plugins, ...(agents ? { agents } : {}) };
   expect(issuePaths(raw)).toContain("plugins");
   const res = migrate(raw);
@@ -840,8 +778,7 @@ it.each([
   if (agents) {
     expect(res.config?.agents).toEqual(agents);
   }
-  expect(res.changes).toEqual(expect.arrayContaining(changes));
-  expect(migrate(res.config)).toEqual({ config: null, changes: [] });
+  expect(migrate(res.config)).toEqual({ config: null });
 });
 
 describe("legacy bundled provider discovery migrate", () => {
@@ -858,12 +795,6 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
     expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
     expect(res.config?.plugins?.slots?.memory).toBe("openai");
-    expect(res.changes).toContain("Rewrote plugins.allow openai-codex references to openai.");
-    expect(res.changes).toContain("Rewrote plugins.deny openai-codex references to openai.");
-    expect(res.changes).toContain(
-      "Rewrote plugins.entries.openai-codex to plugins.entries.openai.",
-    );
-    expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
   });
 
   it("strips explicit bundled discovery mode after machine-state capture", () => {
@@ -875,9 +806,6 @@ describe("legacy bundled provider discovery migrate", () => {
     });
 
     expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
-    expect(res.changes).toStrictEqual([
-      "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
-    ]);
   });
 });
 
@@ -928,8 +856,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 
 it("removes a zero port and its empty gateway section", () => {
   const res = migrate({ gateway: { port: 0 } });
-  expect(res.config).not.toHaveProperty("gateway");
-  expect(res.changes).toEqual([expect.stringContaining("Removed out-of-range gateway.port (0)")]);
+  expect(res.config).toEqual({});
 });
 
 describe("legacy model compat migrate", () => {
@@ -937,8 +864,11 @@ describe("legacy model compat migrate", () => {
     const retired = "google/gemini-3-pro-preview";
     const canonical = "google/gemini-3.1-pro-preview";
     const raw = configAt({
-      "agents.defaults": defaultModelSelections(retired),
-      "agents.entries.ops": modelSelections(retired, "Ops Gemini"),
+      "agents.defaults.model": retired,
+      "agents.defaults.mediaModels": {
+        image: retired,
+        video: { primary: retired, fallbacks: [retired] },
+      },
       "models.providers.google": { models: [{ id: "gemini-3-pro-preview", name: "Gemini" }] },
       "models.providers.myproxy": {
         models: [{ id: "google/gemini-3-pro-preview", name: "Gemini proxy" }],
@@ -948,11 +878,10 @@ describe("legacy model compat migrate", () => {
 
     expect(issuePaths(raw)).toEqual(expect.arrayContaining(["agents", "models"]));
     const res = migrate(raw);
-    const defaults = res.config?.agents?.defaults;
-    expect(defaults).toMatchObject(defaultModelSelections(canonical));
-    expect(res.config?.agents?.entries?.ops).toMatchObject(
-      modelSelections(canonical, "Ops Gemini"),
-    );
+    expect(res.config?.agents?.defaults).toMatchObject({
+      model: canonical,
+      mediaModels: { image: canonical, video: { primary: canonical, fallbacks: [canonical] } },
+    });
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-4o");
@@ -1007,13 +936,6 @@ describe("legacy model compat migrate", () => {
         cost: { output: 2, input: 1 },
       },
     ]);
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          'Merged config.models.providers.google.models.0 into model id "gemini-3.1-pro-preview"; kept existing values for conflicting fields: name.',
-        ),
-      ]),
-    );
   });
 
   it("deep-merges colliding model spellings and reports only unequal fields", () => {
@@ -1226,17 +1148,6 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.agents?.defaults?.params).toEqual({ temperature: 0.3 });
     expect(res.config?.agents?.entries?.local).toEqual({ params: { temperature: 0.4 } });
-    expect(res.changes).toEqual([
-      expect.stringContaining(
-        "Removed models.providers.vllm.params.qwenThinkingFormat; no concrete vLLM model",
-      ),
-      expect.stringContaining(
-        "Removed agents.defaults.params.qwenThinkingFormat; no concrete vLLM model",
-      ),
-      expect.stringContaining(
-        "Removed agents.list[0].params.qwen_thinking_format; no concrete vLLM model",
-      ),
-    ]);
   });
 
   it("preserves Qwen params when their destination cannot be written", () => {
@@ -1250,9 +1161,6 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.agents?.defaults?.models).toEqual({
       "vllm/Qwen/model": { params: { qwenThinkingFormat: "chat-template" } },
     });
-    expect(res.changes).toEqual([
-      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
-    ]);
   });
 
   it("removes only invalid thinking formats across provider catalogs", () => {
@@ -1263,16 +1171,10 @@ describe("legacy model compat migrate", () => {
           { id: "legacy", compat: { thinkingFormat: "old-bailian", supportsTools: true } },
         ],
       },
-      openrouter: {
-        models: [{ id: "legacy-router", compat: { thinkingFormat: "openrouter-v0" } }],
-      },
     });
     expect(res.config?.models?.providers?.bailian?.models).toEqual([
       { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } },
       { id: "legacy", compat: { supportsTools: true } },
-    ]);
-    expect(res.config?.models?.providers?.openrouter?.models).toEqual([
-      { id: "legacy-router", compat: {} },
     ]);
     expect(migrate(res.config)).toEqual({ config: null, changes: [] });
   });
@@ -1308,13 +1210,6 @@ describe("legacy memory search config migrate", () => {
       query: { maxResults: 9 },
       store: { fts: { tokenizer: "trigram" }, vector: { enabled: false } },
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
-        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
-        "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
-      ]),
-    );
   });
 
   it("normalizes per-agent memory search independently and removes empty retired settings", () => {

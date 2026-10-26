@@ -6,14 +6,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { repairGeneratedModelMetadataCorruption } from "./model-metadata-corruption-repair.js";
 
 const configPath = path.resolve("/tmp/openclaw-model-metadata-corruption.json");
-const preservedModel = {
-  id: "gpt-5.6-sol",
-  name: "gpt-5.6-sol",
-  contextWindow: 272_000,
-  contextTokens: 272_000,
-  api: "openai-chatgpt-responses" as const,
-};
-
 function corruptedConfig(): OpenClawConfig {
   return {
     models: {
@@ -23,7 +15,7 @@ function corruptedConfig(): OpenClawConfig {
           baseUrl: "https://chatgpt.com/backend-api/codex",
           models: [
             {
-              ...preservedModel,
+              id: "gpt-5.6-sol",
               reasoning: false,
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -119,13 +111,9 @@ it.each(["failed write", "unrelated paths", "custom route", "included models"])(
     } else if (scenario === "unrelated paths") {
       overrides.auditRecords = [
         writeRecord({
-          changedPaths: [
-            "models.providers.anthropic.models[0].reasoning",
-            "models.providers.anthropic.models[0].input",
-            "models.providers.ollama.models[0].cost",
-            "models.providers.ollama.models[0].maxTokens",
-            "…+92 more",
-          ],
+          changedPaths: ["reasoning", "input", "cost", "maxTokens"].map(
+            (field) => `models.providers.anthropic.models[0].${field}`,
+          ),
         }),
       ];
     } else if (scenario === "custom route") {

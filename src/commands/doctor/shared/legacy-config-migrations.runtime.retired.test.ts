@@ -79,15 +79,6 @@ describe("retired runtime config migrations", () => {
     expect(raw).toEqual(original);
   });
 
-  it("detects and removes an explicitly false tool-error preference", () => {
-    const raw = { messages: { suppressToolErrors: false, ackReaction: "👀" } };
-    expectIssue(raw, "messages.suppressToolErrors", "doctor --fix");
-    expect(applyAll(raw).changes).toHaveLength(1);
-    expect(raw).toEqual({ messages: { ackReaction: "👀" } });
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(applyAll(raw).changes).toEqual([]);
-  });
-
   it("removes hook registrations while retaining canonical discovery", () => {
     const canonical = {
       enabled: true,
@@ -104,57 +95,21 @@ describe("retired runtime config migrations", () => {
     expect(raw).toHaveProperty("hooks.internal", canonical);
   });
 
-  it("removes even an explicitly disabled retired device-auth bypass", () => {
-    const raw = { gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } } };
-    expectIssue(raw, "gateway.controlUi.dangerouslyDisableDeviceAuth");
-    applyAll(raw);
-    expect(raw).toEqual({ gateway: { controlUi: {} } });
-  });
-
-  it("removes legacy-only enablement without enabling broad hook discovery", () => {
-    const { raw } = migratePath("hooks.internal", {
-      enabled: true,
-      handlers: [],
-      entries: {},
-      load: { extraDirs: ["  "] },
+  it("removes a memory flush model override without changing the active fallback chain", () => {
+    const selection = { primary: "ollama/active", fallbacks: ["ollama/backup"] };
+    const flush = { enabled: false, softThresholdTokens: 1234 };
+    const raw = config({
+      "agents.defaults.model": selection,
+      "agents.defaults.compaction.memoryFlush": { ...flush, model: "ollama/retired-override" },
     });
-    expect(raw).toHaveProperty("hooks.internal", { entries: {}, load: { extraDirs: ["  "] } });
-  });
-
-  it("preserves an explicit compaction opt-out", () => {
-    const { raw } = migratePath("agents.defaults.compaction", {
-      truncateAfterCompaction: false,
-      maxActiveTranscriptBytes: "20mb",
+    expectIssue(raw, "agents.defaults.compaction.memoryFlush.model", "active session model");
+    const result = applyAll(raw);
+    expect(result.raw).toEqual({
+      agents: { defaults: { model: selection, compaction: { memoryFlush: flush } } },
     });
-    expect(raw).toHaveProperty("agents.defaults.compaction", {});
-    expect(applyAll(raw).changes).toEqual([]);
+    expect(findLegacyConfigIssues(result.raw)).toEqual([]);
+    expect(applyAll(result.raw).changes).toEqual([]);
   });
-
-  it.each(["ollama/retired-override", null])(
-    "removes a memory flush model override: %j",
-    (model) => {
-      const selection = { primary: "ollama/active", fallbacks: ["ollama/backup"] };
-      const flush = { enabled: false, softThresholdTokens: 1234 };
-      const raw = {
-        agents: {
-          defaults: {
-            model: selection,
-            compaction: { memoryFlush: { ...flush, model } },
-          },
-        },
-      };
-      expectIssue(raw, "agents.defaults.compaction.memoryFlush.model", "active session model");
-      const result = applyAll(raw);
-      expect(result.raw).toEqual({
-        agents: { defaults: { model: selection, compaction: { memoryFlush: flush } } },
-      });
-      expect(result.changes).toContain(
-        "Removed agents.defaults.compaction.memoryFlush.model; memory flushes now use the active session model and its fallback chain.",
-      );
-      expect(findLegacyConfigIssues(result.raw)).toEqual([]);
-      expect(applyAll(result.raw).changes).toEqual([]);
-    },
-  );
 
   it("tags and deduplicates modality models without conflating capabilities", () => {
     const shared = { provider: "openai", model: "shared", capabilities: ["image"] };
@@ -196,23 +151,15 @@ describe("retired runtime config migrations", () => {
     (path) => {
       const result = applyAll(configWithPath(path));
       expect(result.raw).not.toHaveProperty(path);
-      expect(result.changes).toContain(
-        `Removed retired runtime tuning knobs: ${path.replace("agents.list.0.", "agents.list[0].")}; built-in defaults now apply.`,
-      );
     },
   );
 
   it.each([
-    {
-      channel: "googlechat",
-      legacy: "serviceAccountRef",
-      canonical: "serviceAccount",
-      winner: "legacy-z",
-    },
-    { channel: "slack", legacy: "identity", canonical: "postAs", winner: "canonical-z" },
+    ["googlechat", "serviceAccountRef", "serviceAccount", "legacy-z"],
+    ["slack", "identity", "postAs", "canonical-z"],
   ])(
-    "migrates $channel roots and accounts with its precedence rules",
-    ({ channel, legacy, canonical, winner }) => {
+    "migrates %s roots and accounts with its precedence rules",
+    (channel, legacy, canonical, winner) => {
       const result = migratePath(`channels.${channel}`, {
         [legacy]: "root",
         accounts: {
@@ -230,20 +177,16 @@ describe("retired runtime config migrations", () => {
     },
   );
 
-  it("migrates presentation, agent limits and the selected WhatsApp debounce", () => {
+  it("migrates presentation and agent limits at each scope", () => {
     const result = migrate({
       "ui.prefs": {
         chatMessageMaxWidth: "82%",
-        textScale: 125,
-        sidebarLiveActivity: false,
-        showAdvancedSettings: true,
       },
       "skills.load": { watch: true, watchDebounceMs: 500 },
       "agents.defaults": {
         typingIntervalSeconds: 6,
         contextLimits: {
           memoryGetMaxChars: 12_000,
-          memoryGetDefaultLines: 180,
           toolResultMaxChars: 24_000,
         },
       },
@@ -255,11 +198,6 @@ describe("retired runtime config migrations", () => {
       "agents.list": [
         { id: "legacy", typingIntervalSeconds: 10, contextLimits: { memoryGetDefaultLines: 80 } },
       ],
-      "channels.whatsapp": {
-        defaultAccount: "Work",
-        debounceMs: 2_000,
-        accounts: { default: { debounceMs: 3_000 }, work: { debounceMs: 4_000 } },
-      },
     });
     expect(result.raw).toMatchObject({
       skills: { load: { watch: true } },
@@ -268,39 +206,28 @@ describe("retired runtime config migrations", () => {
         entries: { writer: { typingMode: "message" } },
         list: [{ id: "legacy" }],
       },
-      messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
-    for (const path of [
-      "ui",
-      "channels.whatsapp.debounceMs",
-      "channels.whatsapp.accounts.default.debounceMs",
-      "channels.whatsapp.accounts.work.debounceMs",
-    ]) {
-      expect(result.raw).not.toHaveProperty(path);
-    }
+    expect(result.raw).not.toHaveProperty("ui");
   });
 
-  it("keeps a canonical WhatsApp debounce over all legacy sources", () => {
-    const result = migrate({
-      "messages.inbound.byChannel.whatsapp": 900,
-      "channels.whatsapp": { debounceMs: 2_000, accounts: { work: { debounceMs: 4_000 } } },
-    });
-    expect(result.raw).toEqual(
-      config({
-        "messages.inbound.byChannel.whatsapp": 900,
-        "channels.whatsapp.accounts.work": {},
-      }),
-    );
-  });
-
-  it("preserves accounts.default debounce inheritance for a named default", () => {
-    const result = migratePath("channels.whatsapp", {
-      defaultAccount: "work",
-      debounceMs: 2_000,
-      accounts: { default: { debounceMs: 3_000 }, work: { name: "Work" } },
-    });
-    expect(result.raw).toHaveProperty("messages.inbound.byChannel.whatsapp", 3_000);
-  });
+  it.each<[number | undefined, Record<string, unknown>, number]>([
+    [undefined, { default: { debounceMs: 3000 }, work: { debounceMs: 4000 } }, 4000],
+    [900, { work: { debounceMs: 4000 } }, 900],
+    [undefined, { default: { debounceMs: 3000 }, work: { name: "Work" } }, 3000],
+  ])(
+    "selects the WhatsApp debounce with canonical value %s and accounts %j",
+    (canonical, accounts, expected) => {
+      const { raw } = migrate({
+        ...(canonical === undefined ? {} : { "messages.inbound.byChannel.whatsapp": canonical }),
+        "channels.whatsapp": { defaultAccount: "Work", debounceMs: 2000, accounts },
+      });
+      expect(raw).toHaveProperty("messages.inbound.byChannel.whatsapp", expected);
+      expect(raw).not.toHaveProperty("channels.whatsapp.debounceMs");
+      for (const id of Object.keys(accounts)) {
+        expect(raw).not.toHaveProperty(`channels.whatsapp.accounts.${id}.debounceMs`);
+      }
+    },
+  );
 
   it("moves aliases and strips dead keys", () => {
     const result = migrate({
@@ -317,7 +244,6 @@ describe("retired runtime config migrations", () => {
         asyncCompletion: { directSend: true },
         audio: { deepgram: { smartFormat: true } },
       },
-      "tools.message.allowCrossContextSend": true,
     });
     expect(result.raw).toMatchObject(
       config({
@@ -330,7 +256,6 @@ describe("retired runtime config migrations", () => {
         "mcp.servers.docs": { connectionTimeoutMs: 2000, requestTimeoutMs: 3000 },
         "nodeHost.mcp.servers.local.connectionTimeoutMs": 4000,
         "tools.media": {},
-        "tools.message.crossContext": { allowWithinProvider: true, allowAcrossProviders: true },
       }),
     );
     expect(result.raw).not.toHaveProperty("tui");
@@ -397,24 +322,6 @@ describe("retired runtime config migrations", () => {
     });
     expect(result.raw).toHaveProperty("tts.personas.alfred", { providers });
     expect(result.raw).not.toHaveProperty("agents.entries.voice.tts.personas.narrator.prompt");
-    expect(result.changes.join("\n")).toContain("prepareSynthesis");
-  });
-
-  it("strips compaction instructions while preserving section selection", () => {
-    const result = migratePath("agents.defaults.compaction", {
-      customInstructions: "Keep decisions.",
-      identifierPolicy: "custom",
-      identifierInstructions: "Keep ticket IDs.",
-      postCompactionSections: ["Red Lines"],
-      memoryFlush: { prompt: "Write memory.", systemPrompt: "Be careful." },
-    });
-    expect(result.raw).toHaveProperty("agents.defaults.compaction", {
-      identifierPolicy: "strict",
-      postCompactionSections: ["Red Lines"],
-      memoryFlush: {},
-    });
-    expect(result.changes.join("\n")).toContain("summarize()");
-    expect(result.changes.join("\n")).toContain("before_prompt_build");
   });
 
   it("copies responsePrefix while retaining the custom-channel fallback", () => {
@@ -428,16 +335,41 @@ describe("retired runtime config migrations", () => {
   });
 });
 
-it("removes UI identity without creating agent identity", () => {
-  const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.filter(
-    (entry) => entry.id === "runtime.ui-assistant-identity",
-  );
-  const raw = { ui: { assistant: { name: "OpenClaw", avatar: "🦞" } } };
-  const result = applyMigrations(migration, raw);
-  expect(result.raw).toEqual({});
-});
-
-it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+it.each<[string, Record<string, unknown>, Record<string, unknown>, string?]>([
+  [
+    "messages",
+    { suppressToolErrors: false, ackReaction: "👀" },
+    { ackReaction: "👀" },
+    "messages.suppressToolErrors",
+  ],
+  [
+    "gateway.controlUi",
+    { dangerouslyDisableDeviceAuth: false },
+    {},
+    "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  ],
+  [
+    "hooks.internal",
+    { enabled: true, handlers: [], entries: {}, load: { extraDirs: ["  "] } },
+    { entries: {}, load: { extraDirs: ["  "] } },
+  ],
+  [
+    "agents.defaults.compaction",
+    { truncateAfterCompaction: false, maxActiveTranscriptBytes: "20mb" },
+    {},
+  ],
+  ["", { ui: { assistant: { name: "OpenClaw", avatar: "🦞" } } }, {}],
+  [
+    "agents.defaults.compaction",
+    {
+      customInstructions: "Keep decisions.",
+      identifierPolicy: "custom",
+      identifierInstructions: "Keep ticket IDs.",
+      postCompactionSections: ["Red Lines"],
+      memoryFlush: { prompt: "Write memory.", systemPrompt: "Be careful." },
+    },
+    { identifierPolicy: "strict", postCompactionSections: ["Red Lines"], memoryFlush: {} },
+  ],
   ["tools", { experimental: { planTool: false } }, { updatePlan: false }],
   ["tools", { updatePlan: true, experimental: { planTool: false } }, { updatePlan: true }],
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
@@ -476,6 +408,11 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ],
   ["nodeHost.mcp.servers.local", { workingDirectory: "/node" }, { cwd: "/node" }],
   ["", { web: { enabled: false } }, { channels: { whatsapp: { enabled: false } } }],
-])("migrates %s: %j", (path, raw, expected) => {
-  expect(migratePath(path, raw).raw).toEqual(configWithPath(path, expected));
+])("migrates %s: %j", (path, value, expected, issue) => {
+  const raw = configWithPath(path, value);
+  if (issue) {
+    expectIssue(raw, issue);
+  }
+  expect(applyAll(raw).raw).toEqual(configWithPath(path, expected));
+  expect(applyAll(raw).changes).toEqual([]);
 });

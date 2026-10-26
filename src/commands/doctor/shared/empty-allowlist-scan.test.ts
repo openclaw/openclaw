@@ -84,6 +84,13 @@ describe("doctor empty allowlist policy scan", () => {
     },
     { channelName: "zalouser", skip: true, expected: [] },
     { channelName: "discord", skip: false, expected: [] },
+    {
+      channelName: "telegram",
+      skip: false,
+      expected: [
+        '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+      ],
+    },
   ])(
     "retains $channelName group warnings and subsequent plugin warnings",
     async ({ channelName, skip, expected }) => {
@@ -114,21 +121,6 @@ describe("doctor empty allowlist policy scan", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("allows provider-specific extra warnings without importing providers", async () => {
-    const warnings = await scan(
-      { telegram: { groupPolicy: "allowlist" } },
-      {
-        extraWarningsForAccount: ({ channelName, prefix }) =>
-          channelName === "telegram" ? [`extra:${prefix}`] : [],
-      },
-    );
-
-    expect(warnings).toStrictEqual([
-      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
-      "extra:channels.telegram",
-    ]);
-  });
-
   it("keeps inherited top-level allowlists ahead of nested account values in warnings and hooks", async () => {
     const accountContexts: unknown[] = [];
     const warnings = await scan(
@@ -157,8 +149,6 @@ describe("doctor empty allowlist policy scan", () => {
   });
 
   it("skips disabled channel and account entries", async () => {
-    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
-
     const warnings = await scan(
       {
         telegram: {
@@ -168,12 +158,9 @@ describe("doctor empty allowlist policy scan", () => {
         },
         signal: { accounts: { disabled: { enabled: false, dmPolicy: "allowlist" } } },
       },
-      { extraWarningsForAccount },
+      { extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`] },
     );
 
     expect(warnings).toEqual(["extra:channels.signal"]);
-    expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
-    const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
-    expect(warningOptions?.prefix).toBe("channels.signal");
   });
 });

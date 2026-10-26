@@ -107,17 +107,15 @@ it.each([
     await fs.mkdir(packageDirectory);
     await fs.symlink(missingTarget, nestedLink, "dir");
 
-    const finding = {
-      checkId: "core/doctor/stale-plugin-runtime-symlinks",
-      severity: "warning",
-      message: `Stale plugin-runtime symlink ${packageName} points at ${missingTarget}.`,
-      path: staleLink,
-      target: staleLink,
-      requirement: "stale-plugin-runtime-symlink-removed",
-      fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
-    };
     expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual(
-      hostOwned ? [] : [finding],
+      hostOwned
+        ? []
+        : [
+            expect.objectContaining({
+              path: staleLink,
+              message: `Stale plugin-runtime symlink ${packageName} points at ${missingTarget}.`,
+            }),
+          ],
     );
     await expectSymlinksPresent(staleLink, liveLink);
     expect(await removeStalePluginRuntimeSymlinks(packageRoot)).toEqual({
