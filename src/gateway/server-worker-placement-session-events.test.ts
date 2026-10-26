@@ -205,13 +205,10 @@ it("finishes background reconciliation after the notifying session request close
       }
     });
     const reconcileActive = vi.fn(async () => {});
-    const retirementPlacements = {
-      ...placementAsyncDefaults(),
-      getManyAsync: retirementReads,
-    } as RuntimeOptions["placements"];
+    vi.spyOn(placements, "getManyAsync").mockImplementation(retirementReads);
     const warn = vi.fn();
     const sidecar = await runWithSpawnBroker(broker, () =>
-      startRuntime(time, reconcileActive, warn, retirementPlacements, () => reconciled.resolve()),
+      startRuntime(time, reconcileActive, warn, placements, () => reconciled.resolve()),
     );
     try {
       await reconciled.promise;
@@ -243,10 +240,8 @@ it("reports a failed reconciliation queued by a session change without leaking r
   const retirementReads = vi.fn(async () => {
     throw new Error("Worker environment inventory has closed");
   });
-  const placements = {
-    ...placementAsyncDefaults(),
-    getManyAsync: retirementReads,
-  } as RuntimeOptions["placements"];
+  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  vi.spyOn(placements, "getManyAsync").mockImplementation(retirementReads);
   const sidecar = await startRuntime(time, reconcileActive, warn, placements);
   let scheduledWake: void | Promise<void> = undefined;
   try {
@@ -282,18 +277,16 @@ it("runs the periodic recovery after an in-flight identity-only pass", async () 
   const reconcileActive = vi.fn(async () => {});
   const warn = vi.fn();
   let reconciled = createDeferredCore();
-  const placements = {
-    ...placementAsyncDefaults(),
-    getManyAsync: async () => {
-      retirementStarted.resolve();
-      await releaseRetirement.promise;
-      return new Map();
-    },
-  } as RuntimeOptions["placements"];
+  const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  vi.spyOn(placements, "getManyAsync").mockImplementation(async () => {
+    retirementStarted.resolve();
+    await releaseRetirement.promise;
+    return new Map();
+  });
   const sidecar = await startRuntime(time, reconcileActive, warn, placements, () =>
     reconciled.resolve(),
   );
-  let scheduledWake: void | Promise<void>;
+  let scheduledWake: void | Promise<void> = undefined;
   try {
     await reconciled.promise;
     reconciled = createDeferredCore();
