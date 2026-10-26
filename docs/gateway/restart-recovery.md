@@ -86,8 +86,6 @@ and what the automatic resume looks like.
 During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
-Session display rows warm in the background. A keyed read prepares its requested
-rows without waiting for the rest of the roster.
 
 Startup orphan marking runs after plugin loading and startup completion. It uses
 the existing active-session index to exclude archived rows before inspecting
