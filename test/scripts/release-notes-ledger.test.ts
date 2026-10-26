@@ -73,7 +73,6 @@ function contributionLedger({
     [...nodes.keys()],
     nodes,
     new Map(),
-    new Map(),
     { issuesByPullRequest: new Map() },
     priorRecord,
     new Set(sourcePullRequests),
@@ -124,7 +123,7 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
-  it("rebuilds seeded references and credits without duplicating resolved issues", () => {
+  it("rebuilds seeded references without trusting old credits", () => {
     const related = "Related #45, OpenClaw/imsg#141, #67.";
     const priorRecord = contributionRecordFor({
       source: recordSection(
@@ -158,7 +157,7 @@ describe("renderContributionRecordEntry", () => {
       now: "2026-07-09T00:00:00Z",
     });
 
-    const line = `- **PR #125** ${related} Thanks @carol and @alice and @bob.`;
+    const line = `- **PR #125** ${related} Thanks @carol.`;
     expect(result.ledger).toContain(line);
     expect(renderContributionRecordEntry(result.pullRequests[0])).toBe(line);
   });
