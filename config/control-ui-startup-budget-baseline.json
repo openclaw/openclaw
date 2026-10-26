@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271048,
-  "reason": "Fresh same-host builds at base 394ce384 and code 97b42ed measure startup 271080 to 271048 B gzip with five JS and one CSS requests unchanged; Chat saves 164 B and New saves 2840 B/two requests. New first-action task CPU improves 39.41% locally and 12.77% at 100 ms HTTP latency; four-phase task medians improve 8.37%/4.17% with lower p95. Ratchet to the measured head; retain disclosed small verification-wall and idle-rendering tails in PR #184994 evidence.",
+  "startupJsGzipBytes": 271066,
+  "reason": "Same-host base 394ce384 and production 134b824 measure startup 271080 to 271066 B gzip, with five JS and one CSS requests unchanged. New Session saves 2818 B and two requests, with model-action CPU down 39.41% locally and 12.77% at 100 ms HTTP. Roster, Worktrees and Claws readiness and CPU are qualified with retained A/A cohorts; accept the documented roughly 10 ms idle CSS relocation. Set the ratchet to the actual measured CSS-repaired head, including its 18 B build variation from the previous measurement.",
   "updatedAt": "2026-10-26"
 }
