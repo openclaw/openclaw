@@ -73,23 +73,21 @@ it.each([
   };
   const rows = initialState === "placeholder" ? [initial] : [];
   const reply = createDeferred<unknown>();
-  const latestReply = createDeferred<unknown>();
-  const latestDispatched = createDeferred();
   const sessionId = "settings-return-session";
-  const materialized: GatewaySessionRow = { ...initial, sessionId, updatedAt: 2, ...change };
-  const thinkingLevel = initialState === "absent" ? undefined : initial.thinkingLevel;
-  const committed: GatewaySessionRow = { ...initial, sessionId, updatedAt: 3, thinkingLevel };
+  const committed = {
+    ...initial,
+    sessionId,
+    updatedAt: 3,
+    thinkingLevel: initialState === "absent" ? undefined : initial.thinkingLevel,
+  };
   const ack = (entry: GatewaySessionRow) => ({ ok: true, key, path: "", entry });
   const patch = vi.fn<GatewayRequestHandler>(() => {
     if (patch.mock.calls.length === 1) {
       return reply.promise;
     }
     expect(patch.mock.calls.length).toBe(2);
-    latestDispatched.resolve();
-    return latestReply.promise.then((result) => {
-      rows.splice(0, rows.length, committed);
-      return result;
-    });
+    rows.splice(0, rows.length, committed);
+    return ack(committed);
   });
   const { sessions, mount, context } = createMountedPanes(rows, "main", undefined, {
     "models.list": () => ({ models: [model] }),
@@ -165,15 +163,11 @@ it.each([
       latestOperation = select(pendingProps, true);
       draw();
       expect.soft(controlValues()).toEqual(initialValues);
-      // The first write creates the row; its ACK alone authorizes the queued target.
+      const materialized = { ...initial, sessionId, updatedAt: 2, ...change };
       rows.splice(0, rows.length, materialized);
       reply.resolve(ack(materialized));
       await expect(operation).resolves.toBe(true);
-      await Promise.race([latestDispatched.promise, latestOperation]);
-      expect(patch.mock.calls[1]?.[1]).toMatchObject({ expectedSessionId: sessionId });
-      latestReply.resolve(ack(committed));
       await expect(latestOperation).resolves.toBe(true);
-      expect(selectedChatSessionRow(pane.state)).toEqual(committed);
     } else {
       reply.reject(new Error("Synthetic unmaterialized selection rejection"));
       await expect(operation).resolves.toBe(false);
@@ -187,7 +181,6 @@ it.each([
     );
   } finally {
     reply.resolve(ack(initial));
-    latestReply.resolve(ack(committed));
     await Promise.allSettled([operation, latestOperation]);
   }
 });

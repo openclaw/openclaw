@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -52,12 +53,21 @@ const viewer = (
 
 it("projects native identities and mentions through the People body without sending or closing on rejection", async () => {
   const composer = composerFixture("chat", "Review this");
+  const access = composer.mentionAccess()!;
+  const pending = createDeferred<UsersMentionableResult>();
+  composer.request.mockReturnValueOnce(pending.promise);
   const mentions = createChatMobilePeopleMentions(composer.mentionAccess);
   const release = mentions.activate();
   onTestFinished(release);
+  const shared = access.request();
+  expect(composer.request).toHaveBeenCalledTimes(1);
+  pending.resolve(people);
+  const read = await shared;
   await vi.advanceTimersByTimeAsync(0);
   expect(mentions.status).toBe("ready");
-  expect(composer.request).toHaveBeenCalledTimes(1);
+  expect(read?.result).toEqual(people);
+  expect(mentions.read()?.result).toBe(read?.result);
+  expect(access.read()?.result).toBe(read?.result);
   const owner = human("owner", "Avery Owner");
   const alex = {
     identity: { type: "profile" as const, id: "profile-alex-online" },
@@ -136,9 +146,12 @@ it("projects native identities and mentions through the People body without send
   composer.refresh();
   await vi.advanceTimersByTimeAsync(0);
   composer.expectValue("Review @Alex ", [mention("profile-alex-online", 7, 12)]);
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
   expect(close).toHaveBeenCalledOnce();
   expect(composer.send).not.toHaveBeenCalled();
   composer.replaceOwner();
+  expect(read?.insert("profile-alex-offline")).toBe(false);
+  expect(access.read()).toBeNull();
   participantMention.click();
   expect(mentions.status).toBe("insert-rejected");
   expect(close).toHaveBeenCalledOnce();

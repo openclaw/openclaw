@@ -6,7 +6,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
-  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
@@ -231,30 +230,3 @@ it.each(["pending", "denied"])(
     expect(menu.activeLabel()).toBe("Fresh");
   },
 );
-
-it("shares native mention lookup with external insertion and retires captured access on owner change", async () => {
-  const view = composerFixture("chat", "Before after");
-  const access = view.mentionAccess()!;
-  const pending = createDeferred<UsersMentionableResult>();
-  view.request.mockReturnValueOnce(pending.promise);
-  const first = access.request("Al");
-  const second = access.request("Al");
-  expect(view.request).toHaveBeenCalledTimes(1);
-  pending.resolve(people);
-  const [read, shared] = await Promise.all([first, second]);
-  expect(read?.result).toEqual(people);
-  expect(shared?.result).toBe(read?.result);
-  expect(access.read("Al")?.result).toBe(read?.result);
-  const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.setSelectionRange(7, 12);
-  expect(read?.insert("profile-alex-online")).toBe(true);
-  view.refresh();
-  await vi.advanceTimersByTimeAsync(0);
-  view.expectValue("Before @Alex ", [mention("profile-alex-online", 7, 12)]);
-  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
-  expect(view.send).not.toHaveBeenCalled();
-  view.replaceOwner();
-  expect(read?.insert("profile-alex-offline")).toBe(false);
-  expect(access.read("Al")).toBeNull();
-  expect(view.value().draft).toBe("Before @Alex ");
-});
