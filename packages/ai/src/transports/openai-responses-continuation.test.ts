@@ -221,7 +221,8 @@ describe("OpenAI Responses continuation", () => {
 
   it("fingerprints mutable history without serializing the whole prefix", () => {
     const text = "history payload".repeat(2_000);
-    const item = { type: "message", role: "user", content: [{ type: "input_text", text }] };
+    const content = { type: "input_text", text };
+    const item = { type: "message", role: "user", content: [content] };
     const input = [item];
     const encodedText = JSON.stringify(text);
     const expected = hash(
@@ -235,7 +236,7 @@ describe("OpenAI Responses continuation", () => {
       expect(
         stringify.mock.calls.filter(([value]) => value !== null && typeof value === "object"),
       ).toHaveLength(0);
-      item.content[0].text = `${text} edited`;
+      content.text = `${text} edited`;
       expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
     } finally {
       stringify.mockRestore();

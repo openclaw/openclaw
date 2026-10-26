@@ -71,7 +71,7 @@ const fixtures = Array.from({ length: turns }, (_, index) => {
     ...(index > 0 ? { previous_response_id: `resp_${index - 1}` } : {}),
     input: history.slice(),
   };
-  const output: ResponsesContinuationState["lastResponseItems"] = [
+  const output = [
     {
       type: "message",
       id: `msg_${index}`,
@@ -86,7 +86,7 @@ const fixtures = Array.from({ length: turns }, (_, index) => {
         },
       ],
     },
-  ];
+  ] satisfies ResponsesContinuationState["lastResponseItems"];
   history.push(...output);
   return { request, response: { id: `resp_${index}`, output } };
 });
