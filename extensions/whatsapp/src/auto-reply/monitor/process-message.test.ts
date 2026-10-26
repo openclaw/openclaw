@@ -3,7 +3,6 @@ import { createTestWebInboundMessage } from "../../inbound/test-message.test-hel
 
 const {
   resolvePolicyMock,
-  buildContextMock,
   isControlCommandMessageMock,
   replyPlanParamsMock,
   runChannelInboundEventParamsMock,
@@ -16,7 +15,6 @@ const {
   dmRouteTargetMock,
 } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
-  buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
   replyPlanParamsMock: vi.fn(),
   runChannelInboundEventParamsMock: vi.fn(),
@@ -50,15 +48,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
   return {
     ...actual,
-    prepareWhatsAppInboundContext: async (
-      params: Parameters<typeof actual.prepareWhatsAppInboundContext>[0],
-    ) => {
-      const prepared = await actual.prepareWhatsAppInboundContext(params);
-      return {
-        ...prepared,
-        ctxPayload: buildContextMock(params),
-      };
-    },
+    prepareWhatsAppInboundContext: vi.fn(actual.prepareWhatsAppInboundContext),
     createWhatsAppReplyPlan: (...args: unknown[]) => {
       const params = args[0] as { replyResolver?: unknown };
       replyPlanParamsMock(params);
@@ -132,9 +122,11 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
 
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { attachWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
+import { prepareWhatsAppInboundContext } from "./inbound-dispatch.js";
 import { blockedAdmission, createMonitorContext } from "./monitor.test-support.js";
 import { processMessage } from "./process-message.js";
 
+const buildContextMock = vi.mocked(prepareWhatsAppInboundContext);
 function makePolicy() {
   return {
     account: { accountId: "default", authDir: "/tmp/wa-test-auth", groups: {} },
@@ -196,7 +188,7 @@ function callProcessMessage({
 
 describe("processMessage inbound context", () => {
   beforeEach(() => {
-    buildContextMock.mockReset();
+    buildContextMock.mockClear();
     isControlCommandMessageMock.mockReset().mockReturnValue(false);
     resolvePolicyMock.mockReset().mockReturnValue(makePolicy());
     replyPlanParamsMock.mockClear();
@@ -209,50 +201,25 @@ describe("processMessage inbound context", () => {
     inboundDebugMock.mockClear();
     dmRouteTargetMock.mockReset().mockReturnValue(null);
     clearInternalHooks();
-    buildContextMock.mockImplementation(
-      (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
-        GroupSystemPrompt: params.groupSystemPrompt,
-        Body: params.combinedBody ?? "",
-      }),
-    );
   });
 
   afterEach(clearInternalHooks);
 
   describe.each(["group", "direct"] as const)("%s system prompt selection", (kind) => {
-    it.each<{
-      name: string;
-      targetId: string;
-      entries?: Record<string, { systemPrompt?: string | null }>;
-      expected?: string;
-    }>([
-      { name: "no target", targetId: "", entries: { "*": { systemPrompt: "wildcard" } } },
-      { name: "absent map", targetId: "specific" },
-      {
-        name: "trimmed specific entry",
-        targetId: "specific",
-        entries: { specific: { systemPrompt: "  chosen  " }, "*": { systemPrompt: "wildcard" } },
-        expected: "chosen",
-      },
-      {
-        name: "wildcard fallback",
-        targetId: "specific",
-        entries: { "*": { systemPrompt: "wildcard" } },
-        expected: "wildcard",
-      },
-      {
-        name: "whitespace suppresses wildcard",
-        targetId: "specific",
-        entries: { specific: { systemPrompt: "   " }, "*": { systemPrompt: "wildcard" } },
-      },
-      { name: "missing prompt", targetId: "specific", entries: { specific: {} } },
-      {
-        name: "null falls back to wildcard",
-        targetId: "specific",
-        entries: { specific: { systemPrompt: null }, "*": { systemPrompt: "wildcard" } },
-        expected: "wildcard",
-      },
-    ])("forwards $name into inbound context", async ({ targetId, entries, expected }) => {
+    type Prompts = Record<string, { systemPrompt?: string | null }>;
+    const prompts = (specific?: string | null): Prompts => ({
+      specific: { systemPrompt: specific },
+      "*": { systemPrompt: "wildcard" },
+    });
+    it.each<[string, string, Prompts | undefined, string | undefined]>([
+      ["no target", "", prompts(), undefined],
+      ["absent map", "specific", undefined, undefined],
+      ["trimmed specific entry", "specific", prompts("  chosen  "), "chosen"],
+      ["wildcard fallback", "specific", { "*": { systemPrompt: "wildcard" } }, "wildcard"],
+      ["whitespace suppresses wildcard", "specific", prompts("   "), undefined],
+      ["missing prompt", "specific", { specific: {} }, undefined],
+      ["null falls back to wildcard", "specific", prompts(null), "wildcard"],
+    ])("forwards %s into inbound context", async (_name, targetId, entries, expected) => {
       const otherMap = { "*": { systemPrompt: "wrong conversation kind" } };
       resolvePolicyMock.mockReturnValue({
         ...makePolicy(),
@@ -331,15 +298,7 @@ describe("processMessage inbound context", () => {
 
   it("passes pending history to context and clears it after dispatch", async () => {
     const historyKey = "whatsapp:default:group:123@g.us";
-    const entries = [
-      {
-        sender: "Alice (+15550002222)",
-        body: "quiet pending context",
-        timestamp: 1710000000,
-        id: "quiet-msg-1",
-        senderJid: "15550002222@s.whatsapp.net",
-      },
-    ];
+    const entries = [{ sender: "Alice (+15550002222)", body: "quiet pending context" }];
     const groupHistories = new Map([[historyKey, entries]]);
 
     await callProcessMessage({ groupHistories });
@@ -355,27 +314,6 @@ describe("processMessage inbound context", () => {
     async (enabled) => {
       const internalReceived = vi.fn();
       registerInternalHook("message:received", internalReceived);
-      buildContextMock.mockImplementationOnce(() => ({
-        Body: "hi",
-        BodyForCommands: "hi",
-        RawBody: "hi",
-        CommandBody: "hi",
-        From: GROUP_JID,
-        To: "+15550001111",
-        SessionKey: baseRoute.sessionKey,
-        AccountId: "default",
-        MessageSid: "msg1",
-        SenderId: "+15550002222",
-        SenderName: "Alice",
-        SenderE164: "+15550002222",
-        Timestamp: 1710000000,
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        SuppressMessageReceivedHooks: true,
-        OriginatingChannel: "whatsapp",
-        OriginatingTo: GROUP_JID,
-        GroupSubject: "Test Group",
-      }));
 
       await callProcessMessage({
         cfg: enabled ? { channels: { whatsapp: { pluginHooks: { messageReceived: true } } } } : {},
@@ -391,26 +329,27 @@ describe("processMessage inbound context", () => {
         to: "+15550001111",
         provider: "whatsapp",
         surface: "whatsapp",
-        threadId: undefined,
         senderId: "+15550002222",
         senderName: "Alice",
-        senderUsername: undefined,
         senderE164: "+15550002222",
-        guildId: undefined,
-        channelName: undefined,
-        topicName: undefined,
+      };
+      const message = {
+        from: GROUP_JID,
+        content: "hi",
+        timestamp: 1710000000,
+        messageId: "msg1",
+      };
+      const channelContext = {
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: GROUP_JID,
       };
       expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
       expect(runMessageReceivedMock).toHaveBeenCalledWith(
         {
-          from: GROUP_JID,
-          content: "hi",
-          timestamp: 1710000000,
-          threadId: undefined,
-          messageId: "msg1",
+          ...message,
           senderId: "+15550002222",
           sessionKey: baseRoute.sessionKey,
-          runId: undefined,
           metadata: {
             ...metadata,
             originatingChannel: "whatsapp",
@@ -419,9 +358,7 @@ describe("processMessage inbound context", () => {
           },
         },
         {
-          channelId: "whatsapp",
-          accountId: "default",
-          conversationId: GROUP_JID,
+          ...channelContext,
           sessionKey: baseRoute.sessionKey,
           messageId: "msg1",
           senderId: "+15550002222",
@@ -434,16 +371,7 @@ describe("processMessage inbound context", () => {
         type: "message",
         action: "received",
         sessionKey: baseRoute.sessionKey,
-        context: {
-          from: GROUP_JID,
-          content: "hi",
-          timestamp: 1710000000,
-          channelId: "whatsapp",
-          accountId: "default",
-          conversationId: GROUP_JID,
-          messageId: "msg1",
-          metadata,
-        },
+        context: { ...message, ...channelContext, metadata },
         timestamp: undefined,
         messages: [],
       });
@@ -451,14 +379,6 @@ describe("processMessage inbound context", () => {
   );
 
   it("passes one lifecycle and owning dispatcher through the portable turn boundary", async () => {
-    buildContextMock.mockImplementationOnce(() => ({
-      Body: "hi",
-      RawBody: "hi",
-      CommandBody: "hi",
-      SessionKey: baseRoute.sessionKey,
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-    }));
     const lifecycle = {
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(async () => undefined),
