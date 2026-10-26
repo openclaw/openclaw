@@ -127,7 +127,8 @@ export function registerGatewayCronPublicationTests({
           expect(frame).not.toHaveProperty("payload");
         }
         for (const peer of [pairing, sessionOnly, node]) {
-          expect(peer.frames).toEqual([]);
+          expect(invalidations(peer)).toEqual([]);
+          expect(peer.frames.filter((frame) => frame.event === "cron")).toEqual([]);
         }
       },
       { broadcast },

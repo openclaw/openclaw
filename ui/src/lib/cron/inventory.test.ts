@@ -22,6 +22,7 @@ import { createInitialCronState } from "./state.ts";
 const hello: GatewayHelloOk = {
   type: "hello-ok",
   protocol: 4,
+  auth: { role: "operator", scopes: ["operator.read"] },
   features: { events: ["cron.inventory.changed"] },
 };
 const query = {
@@ -270,6 +271,24 @@ it("absorbs definition bursts during a read and publishes only the trailing auth
   await vi.advanceTimersByTimeAsync(50);
   expect((await first).jobs).toEqual([]);
   expect((await joined).jobs).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("retires cached visibility when the connection's profile access changes", async () => {
+  vi.useFakeTimers();
+  const request = createGatewayRequestMock()
+    .mockResolvedValueOnce(page())
+    .mockResolvedValue(page([]));
+  const { client } = fixture(request);
+  expect((await readCronInventory(client, query)).jobs).toHaveLength(1);
+  receiveCronInventoryEvent(client, {
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "profile-identity" },
+  });
+  const current = readCronInventory(client, query);
+  await vi.advanceTimersByTimeAsync(50);
+  expect((await current).jobs).toEqual([]);
   expect(request).toHaveBeenCalledTimes(2);
 });
 

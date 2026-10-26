@@ -59,7 +59,9 @@ export function isCronInventoryInvalidation(
     event.event === "config.changed" ||
     (event.event === "sessions.changed" &&
       isRecord(event.payload) &&
-      ["sharing", "delete", "reset", "archive"].includes(String(event.payload.reason))) ||
+      ["sharing", "profile-identity", "delete", "reset", "archive"].includes(
+        String(event.payload.reason),
+      )) ||
     (event.event === "cron" && !hasCronInventoryEvents(snapshot))
   );
 }
@@ -93,7 +95,7 @@ export function clearCronInventory(client: GatewayBrowserClient): void {
   }
 }
 
-export function invalidateCronInventory(client: GatewayBrowserClient): void {
+function invalidateCronInventory(client: GatewayBrowserClient): void {
   const owner = inventories.get(client);
   if (!owner) {
     return;
@@ -129,8 +131,8 @@ export function receiveCronInventoryEvent(client: GatewayBrowserClient, event: G
     ) {
       return;
     }
-    // SAFETY: The authenticated cron publisher owns this bounded runtime projection.
     const runtime = {
+      // SAFETY: The authenticated cron publisher owns this bounded runtime projection.
       ...(payload as Omit<Runtime, "revision">),
       revision: ++owner.runtimeRevision,
     };
