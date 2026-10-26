@@ -1,4 +1,6 @@
 /* @vitest-environment jsdom */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import {
@@ -44,13 +46,10 @@ function draft(name: string): FileDraft {
 }
 
 function button(modal: HTMLElement, text: string): HTMLButtonElement {
-  const found = [...modal.querySelectorAll("button")].find((entry) =>
-    entry.textContent?.includes(text),
+  return expectDefined(
+    [...modal.querySelectorAll("button")].find((entry) => entry.textContent?.includes(text)),
+    `Missing dialog button: ${text}`,
   );
-  if (!found) {
-    throw new Error(`Missing dialog button: ${text}`);
-  }
-  return found;
 }
 
 it("keeps focus on the copy action when its feedback changes", async () => {
@@ -67,13 +66,8 @@ it("keeps focus on the copy action when its feedback changes", async () => {
 });
 
 it("ignores a copy completion after the review is dismissed", async () => {
-  let finishCopy!: (copied: boolean) => void;
-  clipboard.copy.mockImplementation(
-    () =>
-      new Promise<boolean>((resolve) => {
-        finishCopy = resolve;
-      }),
-  );
+  const pending = Promise.withResolvers<boolean>();
+  clipboard.copy.mockReturnValue(pending.promise);
   const entry = draft("pending.md");
   const result = reviewFileDrafts([entry]);
   const { modal } = await waitForRenderedModalDialog(document.body);
@@ -81,7 +75,7 @@ it("ignores a copy completion after the review is dismissed", async () => {
   expect(clipboard.copy).toHaveBeenCalledOnce();
   button(modal, "Keep").click();
   await result;
-  finishCopy(true);
+  pending.resolve(true);
   await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
   expect(entry.discard).not.toHaveBeenCalled();
 });

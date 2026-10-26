@@ -76,23 +76,15 @@ it.each(["session", "agent", "incarnation", "visibility"] as const)(
   "rejects a visible View all callback after its %s changes",
   async (retirement) => {
     const { element, button, value, navigate } = await mountOutputs();
-    const retired = { ...value, outputs: { ...value.outputs! } };
-    switch (retirement) {
-      case "session":
-        element.props = { ...retired, sessionKey: "agent:main:other" };
-        break;
-      case "agent":
-        element.props = { ...retired, currentAgentId: "other" };
-        break;
-      case "incarnation":
-        element.props = {
-          ...retired,
-          selectedSession: { ...value.selectedSession!, sessionId: "session-2" },
-        };
-        break;
-      case "visibility":
-        element.presented = false;
-        break;
+    if (retirement === "visibility") {
+      element.presented = false;
+    } else {
+      const patch = {
+        session: { sessionKey: "agent:main:other" },
+        agent: { currentAgentId: "other" },
+        incarnation: { selectedSession: { ...value.selectedSession!, sessionId: "session-2" } },
+      }[retirement];
+      element.props = { ...value, outputs: { ...value.outputs! }, ...patch };
     }
     button.click();
     expect(navigate).not.toHaveBeenCalled();

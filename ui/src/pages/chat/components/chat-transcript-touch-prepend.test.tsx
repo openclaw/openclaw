@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import type { JSX } from "@solidjs/web";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { contact, mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
@@ -23,18 +22,21 @@ it.each([
   "keeps the committed rows and message lookup together while a touch holds a prepend, idle=$idleBeforeRelease, outside contact=$outsideContact",
   async ({ idleBeforeRelease, outsideContact }) => {
     const transcript = createTestTranscript("touch-map");
-    const messageElements = transcript.renderSession(
+    const refs = transcript.renderSession(
       "agent:main:touch-map",
       (session) => session.messageElements,
     );
-    const contentRows = (key: string, content: JSX.Element): TestContentRow[] => [
-      { kind: "content", key, content },
+    const contentRows = (key: string, ids: string[]): TestContentRow[] => [
+      {
+        kind: "content",
+        key,
+        content: ids.map((id) => (
+          <div ref={refs.forKey(`${key}-${id}`)} class="chat-bubble" data-message-id={id}>
+            {id}
+          </div>
+        )),
+      },
     ];
-    const message = (ref: string, id: string) => (
-      <div ref={messageElements.forKey(ref)} class="chat-bubble" data-message-id={id}>
-        {id}
-      </div>
-    );
     const syncRows = (key: string, ids: string[]) => {
       const rows = new Map(ids.map((id) => [id, key]));
       session.syncMessageRows(rows, rows);
@@ -48,21 +50,21 @@ it.each([
           bubbles: true,
         }),
       );
-    const initial = contentRows("retained-row", message("initial-retained", "retained"));
-    const next = contentRows(
-      "expanded-row",
-      <>
-        {message("older", "older")}
-        {message("expanded-retained", "retained")}
-      </>,
-    );
+    const initial = contentRows("retained-row", ["retained"]);
+    const next = contentRows("expanded-row", ["older", "retained"]);
     const { container, session, renderRows } = await mountTestTranscript(
       "touch-map",
       initial,
       transcript,
     );
-    const expectRows = (key: string) =>
+    const expectRows = (key: string, older: string | null) => {
       expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([key]);
+      expect(container.textContent?.includes("older")).toBe(older !== null);
+      expect([session.activeMessageId(["retained"]), session.activeMessageId(["older"])]).toEqual([
+        "retained",
+        older,
+      ]);
+    };
     try {
       syncRows("retained-row", ["retained"]);
       renderRows(initial);
@@ -79,20 +81,10 @@ it.each([
       }
       syncRows("expanded-row", ["older", "retained"]);
       renderRows(next);
-      expectRows("retained-row");
-      expect(container.textContent).not.toContain("older");
-      expect([session.activeMessageId(["retained"]), session.activeMessageId(["older"])]).toEqual([
-        "retained",
-        null,
-      ]);
+      expectRows("retained-row", null);
       touch("touchend", bubble, remaining, [owned]);
       renderRows(next);
-      expectRows("expanded-row");
-      expect(container.textContent).toContain("older");
-      expect([session.activeMessageId(["retained"]), session.activeMessageId(["older"])]).toEqual([
-        "retained",
-        "older",
-      ]);
+      expectRows("expanded-row", "older");
     } finally {
       transcript.dispose();
       if (idleBeforeRelease) {
