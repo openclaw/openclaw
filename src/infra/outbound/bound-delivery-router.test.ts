@@ -15,17 +15,22 @@ import {
 } from "./session-binding-service.js";
 
 const TARGET_SESSION_KEY = "agent:main:subagent:child";
+const conversation = (conversationId: string) => ({
+  channel: "richchat",
+  accountId: "runtime",
+  conversationId,
+});
 
 function createRuntimeBinding(
   conversationId: string,
   boundAt = 1,
-  conversation: Partial<SessionBindingRecord["conversation"]> = {},
+  overrides: Partial<SessionBindingRecord["conversation"]> = {},
 ): SessionBindingRecord {
   return {
     bindingId: `runtime:${conversationId}`,
     targetSessionKey: TARGET_SESSION_KEY,
     targetKind: "subagent",
-    conversation: { channel: "richchat", accountId: "runtime", conversationId, ...conversation },
+    conversation: { ...conversation(conversationId), ...overrides },
     status: "active",
     boundAt,
   };
@@ -79,20 +84,10 @@ it.each([
     const route = await resolveBoundDeliveryDestination({
       targetSessionKey,
       requester:
-        requesterConversationId === undefined
-          ? undefined
-          : {
-              channel: "richchat",
-              accountId: "runtime",
-              conversationId: requesterConversationId,
-            },
+        requesterConversationId === undefined ? undefined : conversation(requesterConversationId),
     });
 
-    if (expectedConversationId !== undefined) {
-      expect(route?.conversation.conversationId).toBe(expectedConversationId);
-    } else {
-      expect(route).toBeNull();
-    }
+    expect(route && route.conversation.conversationId).toBe(expectedConversationId ?? null);
   },
 );
 

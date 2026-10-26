@@ -53,53 +53,16 @@ function extractOutboundBlock(source: string, file: string): string {
   expect(braceStart, `${file} should define outbound object`).toBeGreaterThanOrEqual(0);
 
   let depth = 0;
-  let state: "code" | "single" | "double" | "template" | "lineComment" | "blockComment" = "code";
-  for (let i = braceStart; i < source.length; i += 1) {
-    const current = source[i];
-    const next = source[i + 1];
-
-    if (state === "lineComment") {
-      if (current === "\n") {
-        state = "code";
-      }
-      continue;
-    }
-    if (state === "blockComment") {
-      if (current === "*" && next === "/") {
-        state = "code";
-        i += 1;
-      }
-      continue;
-    }
-    if (state === "single" || state === "double" || state === "template") {
-      if (current === "\\" && next) {
-        i += 1;
-        continue;
-      }
-      const quote = { single: "'", double: '"', template: "`" }[state];
-      if (current === quote) {
-        state = "code";
-      }
-      continue;
-    }
-
-    if (current === "/" && (next === "/" || next === "*")) {
-      state = next === "/" ? "lineComment" : "blockComment";
-      i += 1;
-      continue;
-    }
-    if (current === "'" || current === '"' || current === "`") {
-      state = current === "'" ? "single" : current === '"' ? "double" : "template";
-      continue;
-    }
-    if (current === "{") {
+  // Consume comments and quoted strings whole so their braces do not affect depth.
+  const tokens =
+    /\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|`(?:\\[\s\S]|[^`\\])*`|[{}]/g;
+  for (const token of source.slice(braceStart).matchAll(tokens)) {
+    if (token[0] === "{") {
       depth += 1;
-      continue;
-    }
-    if (current === "}") {
+    } else if (token[0] === "}") {
       depth -= 1;
       if (depth === 0) {
-        return source.slice(braceStart, i + 1);
+        return source.slice(braceStart, braceStart + token.index + 1);
       }
     }
   }

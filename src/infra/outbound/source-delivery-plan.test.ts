@@ -45,16 +45,14 @@ function deliveryOutcome(
 }
 const slackDestination = { channel: "slack", to: "channel:C1" };
 const slackSend = { tool: "message", provider: "slack", to: "channel:C1" };
+const outcomeFlags = (verified: boolean, unverified = false) => ({
+  satisfiesSourceDelivery: verified,
+  verifiedMessageToolDelivery: verified,
+  unverifiedMessageToolDelivery: unverified,
+});
 
 describe("source delivery plan", () => {
   it("normalizes message-tool delivery outcomes against the planned source target", () => {
-    const destination = {
-      channel: "feishu",
-      to: "oc_123",
-      accountId: "bot-a",
-      threadId: 456,
-    };
-
     const target = {
       tool: "message",
       provider: "message",
@@ -62,10 +60,15 @@ describe("source delivery plan", () => {
       to: "oc_123:topic:456",
       text: "done",
     };
-    expect(deliveryOutcome(target, destination)).toEqual({
-      satisfiesSourceDelivery: true,
-      verifiedMessageToolDelivery: true,
-      unverifiedMessageToolDelivery: false,
+    expect(
+      deliveryOutcome(target, {
+        channel: "feishu",
+        to: "oc_123",
+        accountId: "bot-a",
+        threadId: 456,
+      }),
+    ).toEqual({
+      ...outcomeFlags(true),
       visibleDeliveries: [{ via: "message_tool", verifiedTarget: true, target }],
     });
   });
@@ -80,21 +83,18 @@ describe("source delivery plan", () => {
     });
     expect(outcome).toEqual({
       visibleDeliveries: [{ via: "message_tool", verifiedTarget: true, target: slackSend }],
-      verifiedMessageToolDelivery: verified,
-      satisfiesSourceDelivery: verified,
-      unverifiedMessageToolDelivery: false,
+      ...outcomeFlags(verified),
     });
   });
 
   it("matches source targets through the same provider normalization used by delivery", () => {
     expect(
-      deliveryOutcome({ provider: "message", to: "channel:C1" }, slackDestination)
-        .verifiedMessageToolDelivery,
-    ).toBe(true);
-    expect(
-      deliveryOutcome({ provider: "discord", to: "channel:C1" }, slackDestination)
-        .verifiedMessageToolDelivery,
-    ).toBe(false);
+      ["message", "discord"].map(
+        (provider) =>
+          deliveryOutcome({ provider, to: "channel:C1" }, slackDestination)
+            .verifiedMessageToolDelivery,
+      ),
+    ).toEqual([true, false]);
   });
 
   it.each([
@@ -120,20 +120,12 @@ describe("source delivery plan", () => {
   it.each([
     ["different topics in the same chat", { to: "-100:topic:111" }, { to: "-100:topic:462" }],
     [
-      "suppressed implicit threading",
+      "suppressed thread",
       { to: "-100", threadImplicit: true, threadSuppressed: true },
       { to: "-100:topic:462" },
     ],
-    [
-      "explicit send thread taking precedence over its topic suffix",
-      { to: "-100:topic:462", threadId: "111" },
-      { to: "-100:topic:462" },
-    ],
-    [
-      "explicit source thread taking precedence over its topic suffix",
-      { to: "-100:topic:462" },
-      { to: "-100:topic:462", threadId: 111 },
-    ],
+    ["explicit send thread", { to: "-100:topic:462", threadId: "111" }, { to: "-100:topic:462" }],
+    ["explicit source thread", { to: "-100:topic:462" }, { to: "-100:topic:462", threadId: 111 }],
     ["missing observed recipient", { to: undefined }, { to: "123456" }],
     [
       "different account owners",
@@ -143,10 +135,6 @@ describe("source delivery plan", () => {
   ] as const)("requires matching conversation and thread evidence: %s", (_name, sent, source) => {
     expect(
       deliveryOutcome({ provider: "telegram", ...sent }, { channel: "telegram", ...source }),
-    ).toMatchObject({
-      verifiedMessageToolDelivery: false,
-      satisfiesSourceDelivery: false,
-      unverifiedMessageToolDelivery: true,
-    });
+    ).toMatchObject(outcomeFlags(false, true));
   });
 });
