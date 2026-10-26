@@ -111,8 +111,6 @@ it("keeps guarded local-filesystem uploads as paths inside the policy guard", as
 it("rejects paths outside the allowed directory before native upload", async () => {
   const error = "Invalid path: must stay within inbound media directory";
   resolvePaths.mockResolvedValueOnce({ ok: false, error });
-  const missing = "/tmp/openclaw/uploads/missing.txt";
-  const selector = { inputRef: undefined, element: "input[type=file]", paths: [missing] };
-  await expect(upload(selector)).rejects.toThrow(error);
+  await expect(upload({ inputRef: undefined, element: "input[type=file]" })).rejects.toThrow(error);
   expect(setInputFiles).not.toHaveBeenCalled();
 });

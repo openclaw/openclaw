@@ -17,24 +17,6 @@ vi.mock("./control-auth.js", () => ({
 }));
 const { fetchBrowserJson } = await import("./client-fetch.js");
 
-const cases = [
-  {
-    name: "registered bridge password wins over Gateway auth",
-    serverAuth: { password: "fixture-bridge-password" },
-    configuredAuth: { token: "fixture-unrelated-gateway-token" },
-    bridgeAuth: { password: "fixture-bridge-password" },
-    status: 200,
-  },
-  {
-    name: "empty explicit auth wins over registered and configured auth",
-    serverAuth: { token: "fixture-token" },
-    configuredAuth: { token: "fixture-token" },
-    bridgeAuth: { token: "fixture-token" },
-    headers: { Authorization: "" },
-    status: 401,
-  },
-];
-
 describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
   beforeEach(() => {
     // Match existing real-HTTP browser fixtures; never route synthetic auth to a proxy.
@@ -42,7 +24,7 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
       vi.stubEnv(key, "");
       vi.stubEnv(key.toLowerCase(), "");
     }
-    fixture.configuredAuth = {};
+    fixture.configuredAuth = { token: "fixture-token" };
   });
   afterEach(() => vi.unstubAllEnvs());
 
@@ -67,22 +49,24 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
     }
   });
 
-  it.each(cases)("$name", async (testCase) => {
+  it.each([
+    { auth: { password: "fixture-password" }, headers: undefined, status: 200 },
+    { auth: { token: "fixture-token" }, headers: { Authorization: "" }, status: 401 },
+  ])("respects bridge auth and explicit headers ($status)", async ({ auth, headers, status }) => {
     const requests: number[] = [];
     await withServer(
       (req, res) => {
-        const status = isAuthorizedBrowserRequest(req, testCase.serverAuth) ? 200 : 401;
-        requests.push(status);
-        res.writeHead(status, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(status === 200 ? { ok: true } : { error: "Unauthorized" }));
+        const responseStatus = isAuthorizedBrowserRequest(req, auth) ? 200 : 401;
+        requests.push(responseStatus);
+        res.writeHead(responseStatus, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(responseStatus === 200 ? { ok: true } : { error: "Unauthorized" }));
       },
       async (baseUrl) => {
         const port = Number(new URL(baseUrl).port);
-        fixture.configuredAuth = testCase.configuredAuth;
-        setBridgeAuthForPort(port, testCase.bridgeAuth);
+        setBridgeAuthForPort(port, auth);
         try {
-          const request = fetchBrowserJson(`${baseUrl}/`, { headers: testCase.headers });
-          if (testCase.status === 200) {
+          const request = fetchBrowserJson(`${baseUrl}/`, { headers });
+          if (status === 200) {
             await expect(request).resolves.toEqual({ ok: true });
           } else {
             await expect(request).rejects.toMatchObject({
@@ -90,7 +74,7 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
               status: 401,
             });
           }
-          expect(requests).toEqual([testCase.status]);
+          expect(requests).toEqual([status]);
         } finally {
           deleteBridgeAuthForPort(port);
         }

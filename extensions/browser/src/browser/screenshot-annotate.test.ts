@@ -8,8 +8,11 @@ import {
   scaleAnnotations,
 } from "./screenshot-annotate.js";
 
+const button = { ref: "e1", role: "button", name: "Submit" };
+const buttonBox = { x: 100, y: 200, width: 50, height: 20 };
+const sample: AnnotationItem[] = [{ ...button, number: 1, box: buttonBox }];
 const sampleInputs: RawAnnotationInput[] = [
-  { ref: "e1", role: "button", name: "Submit", doc: { x: 100, y: 200, width: 50, height: 20 } },
+  { ...button, doc: buttonBox },
   { ref: "e2", role: "link", doc: { x: 300, y: 1500, width: 80, height: 18 } },
 ];
 
@@ -21,13 +24,7 @@ it("subtracts scroll from doc coords", () => {
   });
 
   expect(plan.annotations).toEqual([
-    {
-      ref: "e1",
-      number: 1,
-      role: "button",
-      name: "Submit",
-      box: { x: 100, y: -800, width: 50, height: 20 },
-    },
+    { ...button, number: 1, box: { ...buttonBox, y: -800 } },
     { ref: "e2", number: 2, role: "link", box: { x: 300, y: 500, width: 80, height: 18 } },
   ]);
   expect(plan.overlayItems).toEqual([
@@ -86,16 +83,6 @@ it("returns an IIFE selecting overlay attr", () => {
   expect(script).toContain("[data-openclaw-labels]");
   expect(script).toMatch(/^\(\s*\(\s*\)\s*=>\s*\{/);
 });
-const sample: AnnotationItem[] = [
-  {
-    ref: "e1",
-    number: 1,
-    role: "button",
-    name: "Submit",
-    box: { x: 100, y: 200, width: 50, height: 20 },
-  },
-];
-
 it.each([
   [1, 1, { x: 100, y: 200, width: 50, height: 20 }],
   [0.5, 0.485, { x: 50, y: 97, width: 25, height: 10 }],
