@@ -23,6 +23,10 @@ export {
   type SessionPendingInputPage,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
+export {
+  readSessionPendingInputInterruption,
+  type SessionPendingInputInterruption,
+} from "./session-accessor.pending-input-interruption.js";
 export type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,

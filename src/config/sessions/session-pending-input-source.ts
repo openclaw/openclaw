@@ -14,6 +14,8 @@ export async function readPendingInputSource(
   scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
+  /** Also report whether a found pending row already reached the transcript. */
+  { commitEvidence = false }: { commitEvidence?: boolean } = {},
 ) {
   const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
   if (memory) {
@@ -72,6 +74,7 @@ export async function readPendingInputSource(
     sessionId: captured.sessionId,
     idempotencyKey,
     pendingOnly,
+    ...(commitEvidence ? { commitEvidence: true as const } : {}),
   };
   const target = captureSessionStoreReadTarget(
     captured,
