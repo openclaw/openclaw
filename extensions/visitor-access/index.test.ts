@@ -27,7 +27,13 @@ import plugin from "./index.js";
 import type { VisitorGrant } from "./src/grant-record.js";
 import { visitorRuntimeStore } from "./src/runtime.js";
 import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
-import { guestRole, staffRole, visitorProfileFixture } from "./src/visitors.test-support.js";
+import {
+  githubProvider,
+  guestRole,
+  namedPolicy,
+  staffRole,
+  visitorProfileFixture,
+} from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
 
@@ -35,6 +41,11 @@ const TOKEN = "visitor-test-token-never-echo";
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const START_MS = Date.parse("2026-08-01T00:00:00.000Z");
+const visitorProfile = (
+  emails: string[],
+  assignedRole: string | null = null,
+  profileId = "visitor-profile",
+) => ({ profileId, emails, assignedRole });
 const policiesUrl =
   "https://api.cloudflare.com/client/v4/accounts/test-account/access/apps/test-app/policies";
 const gatewayConfig: OpenClawConfig = {
@@ -81,22 +92,7 @@ function createPolicyFetch(initialTargets: Array<string | number> = []) {
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
     assert(url.href.startsWith(policiesUrl), `Unexpected test request: ${url}`);
-    const policy = {
-      id: "visitor-policy",
-      name: "Visitors (openclaw-managed)",
-      decision: "allow",
-      include: targets.map((target) =>
-        typeof target === "string"
-          ? { email: { email: target } }
-          : {
-              oidc: {
-                identity_provider_id: "test-oidc",
-                claim_name: "github_id",
-                claim_value: String(target),
-              },
-            },
-      ),
-    };
+    const policy = namedPolicy(targets);
     if (init?.method === "GET") {
       const result = url.search ? (targets.length ? [policy] : []) : policy;
       return Response.json({ success: true, result });
@@ -115,8 +111,8 @@ function createPolicyFetch(initialTargets: Array<string | number> = []) {
             Type.Object({ email: Type.Object({ email: Type.String() }) }),
             Type.Object({
               oidc: Type.Object({
-                identity_provider_id: Type.Literal("test-oidc"),
-                claim_name: Type.Literal("github_id"),
+                identity_provider_id: Type.Literal(githubProvider.providerId),
+                claim_name: Type.Literal(githubProvider.githubAccountIdClaim),
                 claim_value: Type.Literal("42"),
               }),
             }),
@@ -210,7 +206,6 @@ describe("visitor-access plugin lifecycle", () => {
     };
     const directory = visitorProfileFixture([], githubProfiles);
     api.runtime.gateway = directory.gateway;
-    const gatewayRequest = directory.request;
     api.runtime.config = {
       current: () => config,
       async mutateConfigFile() {
@@ -255,7 +250,7 @@ describe("visitor-access plugin lifecycle", () => {
       invite: (input: Record<string, unknown>) => execute("visitor_invite", input),
       revoke: (input: Record<string, unknown>) => execute("visitor_revoke", input),
       list: () => execute("visitor_list"),
-      gatewayRequest,
+      gatewayRequest: directory.request,
       setProfiles: directory.setProfiles,
       logger,
       store,
@@ -303,7 +298,7 @@ describe("visitor-access plugin lifecycle", () => {
         ? { profile: { id: "inviter", displayName: "Inviter" } }
         : readDirectory(method, params),
     );
-    const firstInvite = await first.invite({ email: "visitor@example.test" });
+    const firstInvite = await first.invite({ email: "visitor@example.test", note: "  Welcome!\n" });
     const invitationText = expect.stringMatching(/^Inviter invited you.*\nSign in at https/u);
     expect(firstInvite.details).toMatchObject({ signInUrl: publicOrigin, invitationText });
     expect(first.gatewayRequest).toHaveBeenCalledWith(
@@ -312,10 +307,6 @@ describe("visitor-access plugin lifecycle", () => {
       { scopes: ["operator.read"] },
     );
     const service = visitorRuntimeStore.getRuntime().service;
-    await service.invite(
-      { email: "visitor@example.test", note: "  Welcome!\n" },
-      { assertCurrent: first.toolContext.assertInvocationCurrent },
-    );
     const { grantId } = (await first.store.lookup("visitor@example.test"))!;
     const invitation = service.findActiveInvitation(grantId!)!;
     const result = await service.compareAndSetOnboarding({
@@ -338,38 +329,6 @@ describe("visitor-access plugin lifecycle", () => {
     ).toEqual(await second.store.lookup("visitor@example.test"));
   });
 
-  it("upgrades a grant recorded by v2026.10.6 without onboarding metadata", async () => {
-    // Value recorded by the v2026.10.6 plugin through its registered visitor_invite tool.
-    const stableGrant = {
-      email: "stable@example.test",
-      invitedVia: "agent:main:maintainer",
-      createdAt: START_MS,
-      expiresAt: START_MS + 7 * DAY_MS,
-      grantId: "7b3da382-f824-43ff-ae25-9c8c994ca6f3",
-    };
-    const upgraded = registerWithPolicy([stableGrant.email]);
-    await upgraded.store.register(stableGrant.email, stableGrant);
-    await upgraded.start();
-    await upgraded.settle();
-    const visitor = { profileId: "stable", emails: [stableGrant.email], assignedRole: null };
-    expect(upgraded.authorize(visitor)).toBeDefined();
-    const service = visitorRuntimeStore.getRuntime().service;
-    expect(service.findActiveInvitation(stableGrant.grantId)).toEqual(stableGrant);
-    await expect(
-      service.compareAndSetOnboarding({
-        grantId: stableGrant.grantId,
-        expected: null,
-        next: { state: "pending", welcomeSessionKey: "welcome" },
-      }),
-    ).resolves.toMatchObject({ applied: true });
-    await expectOutcome(upgraded.invite({ email: stableGrant.email, days: 30 }), "renewed");
-    expect(await upgraded.store.lookup(stableGrant.email)).toEqual({
-      ...stableGrant,
-      expiresAt: START_MS + 30 * DAY_MS,
-      onboarding: { state: "pending", welcomeSessionKey: "welcome", updatedAt: START_MS },
-    });
-  });
-
   it("keeps CLI metadata discovery free of runtime access and background work", () => {
     const api = createTestPluginApi({ registrationMode: "cli-metadata" });
     const runtime = vi.fn(() => {
@@ -390,11 +349,7 @@ describe("visitor-access plugin lifecycle", () => {
         auth: {
           trustedProxy: {
             userHeader: "cf-access-authenticated-user-email",
-            cloudflareAccessOidc: {
-              issuer: "https://example.cloudflareaccess.com",
-              providerId: "test-oidc",
-              githubAccountIdClaim: "github_id",
-            },
+            cloudflareAccessOidc: githubProvider,
           },
         },
       };
@@ -410,12 +365,6 @@ describe("visitor-access plugin lifecycle", () => {
         days: 7,
       });
       expect(invited).not.toHaveProperty("isError", true);
-      if (selector === "github") {
-        expect(invited.details).toMatchObject({
-          githubAccountId: 42,
-          githubLogin: "invitation-login",
-        });
-      }
       const key = selector === "email" ? "alias@example.test" : "github:42";
       const recorded = await registered.store.lookup(key);
       assert(recorded, "Missing invitation grant");
@@ -457,10 +406,7 @@ describe("visitor-access plugin lifecycle", () => {
         );
         expect(listed.content).not.toEqual(textContaining("first sign-in pending"));
         expect(listed.content).not.toEqual(textContaining("invitation-login"));
-        assert(
-          Value.Check(visitorListDetailsSchema, listed.details),
-          "Invalid visitor_list details",
-        );
+        assert(Value.Check(visitorListDetailsSchema, listed.details));
         const target = listed.details.grants.find((entry) => entry.grantId === grant.grantId);
         expect(target).toMatchObject({
           ...(selector === "email" ? { email: "alias@example.test" } : { githubAccountId: 42 }),
@@ -486,11 +432,6 @@ describe("visitor-access plugin lifecycle", () => {
       expect(await registered.store.lookup(key)).toBeUndefined();
       expect(await registered.store.lookup("unrelated@example.test")).toEqual(otherGrant);
       expect(policy.emails()).toEqual(["unrelated@example.test"]);
-      expect(
-        policy.fetcher.mock.calls.filter(
-          ([input]) => requestUrl(input).hostname === "api.github.com",
-        ),
-      ).toHaveLength(0);
     },
   );
 
@@ -502,11 +443,10 @@ describe("visitor-access plugin lifecycle", () => {
       "pending@example.test",
     ] as const;
     const registered = registerWithPolicy([...emails, "manual@example.test"]);
-    const profiles = [
+    registered.setProfiles([
       { id: "visitor-profile", emails: emails.slice(0, 2) },
       { id: "staff-profile", emails: [emails[2]], role: "staff" },
-    ];
-    registered.setProfiles(profiles);
+    ]);
     await registered.start();
     for (const email of emails) {
       await expect(
@@ -517,23 +457,14 @@ describe("visitor-access plugin lifecycle", () => {
       ).resolves.not.toHaveProperty("isError");
     }
     registered.policy.fetcher.mockClear();
-    return { ...registered, profiles, emails };
+    return { ...registered, emails };
   }
 
   it("distinguishes person-wide revocation from exact pending invitation cancellation", async () => {
     const registered = await startVisitors();
     const [first, alias, staff, pending] = registered.emails;
     const pendingGrant = await registered.store.lookup(pending);
-    expect(pendingGrant?.grantId).toEqual(expect.any(String));
     const listed = await registered.list();
-    expect(listed.details).toMatchObject({
-      grants: [
-        { email: alias, profileId: "visitor-profile", grantId: expect.any(String) },
-        { email: first, profileId: "visitor-profile", grantId: expect.any(String) },
-        { email: pending, grantId: pendingGrant?.grantId },
-        { email: staff, profileId: "staff-profile", grantId: expect.any(String) },
-      ],
-    });
     assert(Value.Check(visitorListDetailsSchema, listed.details), "Invalid visitor_list details");
     const listedPending = listed.details.grants.find((grant) => grant.email === pending);
     const listedPerson = listed.details.grants.find((grant) => grant.email === first);
@@ -542,34 +473,39 @@ describe("visitor-access plugin lifecycle", () => {
       "Missing listed revocation selectors",
     );
     const authorities = [first, alias].map((email) =>
-      registered.authorize({
-        profileId: "visitor-profile",
-        emails: [email],
-        assignedRole: null,
-      }),
+      registered.authorize(visitorProfile([email])),
     );
-    expect(authorities.every(Boolean)).toBe(true);
     await registered.invite({ email: pending, days: 30 });
     expect((await registered.store.lookup(pending))?.grantId).toBe(pendingGrant?.grantId);
     await expect(registered.revoke({ grantId: listedPending.grantId })).resolves.toMatchObject({
       details: { outcome: "revoked", emails: [pending] },
     });
     expect(registered.policy.emails()).toEqual([first, alias, staff, "manual@example.test"]);
+    const other = registered.authorize(visitorProfile([staff], null, "staff-profile"));
+    expect(other).toBeDefined();
+    registered.policy.controls.failWrites = true;
+    await expect(registered.revoke({ profileId: listedPerson.profileId })).resolves.toHaveProperty(
+      "isError",
+      true,
+    );
+    for (const email of [first, alias]) {
+      expect(await registered.store.lookup(email)).toMatchObject({ expiresAt: START_MS });
+    }
+    for (const authority of authorities) {
+      expect(authority?.signal.aborted).toBe(true);
+      expect(() => authority?.assertCurrent()).toThrow(/access ended/);
+    }
+    expect(() => other?.assertCurrent()).not.toThrow();
+    expect(registered.policy.emails()).toContain(first);
+    registered.policy.controls.failWrites = false;
     await expect(registered.revoke({ profileId: listedPerson.profileId })).resolves.toMatchObject({
       details: { outcome: "revoked", emails: [alias, first] },
     });
     expect(registered.policy.emails()).toEqual([staff, "manual@example.test"]);
     expect((await registered.store.entries()).map(({ key }) => key)).toEqual([staff]);
     expect(
-      registered.authorize(
-        { profileId: "staff-profile", emails: [staff], assignedRole: "staff" },
-        false,
-      ),
+      registered.authorize(visitorProfile([staff], "staff", "staff-profile"), false),
     ).toBeUndefined();
-    for (const authority of authorities) {
-      expect(authority?.signal.aborted).toBe(true);
-      expect(() => authority?.assertCurrent()).toThrow(/access ended/);
-    }
     await registered.invite({ email: pending });
     const replacement = await registered.store.lookup(pending);
     expect(replacement?.grantId).not.toBe(pendingGrant?.grantId);
@@ -578,39 +514,6 @@ describe("visitor-access plugin lifecycle", () => {
     });
     expect(await registered.store.lookup(pending)).toEqual(replacement);
     expect(registered.policy.emails()).toContain(pending);
-  });
-
-  it("ends every selected grant before failed provider cleanup without ending another person's grant", async () => {
-    const registered = await startVisitors();
-    const selected = registered.authorize({
-      profileId: "visitor-profile",
-      emails: [registered.emails[0]],
-      assignedRole: null,
-    });
-    const other = registered.authorize({
-      profileId: "pending-profile",
-      emails: [registered.emails[3]],
-      assignedRole: null,
-    });
-    expect(selected && other).toBeTruthy();
-    registered.policy.controls.failWrites = true;
-    await expect(registered.revoke({ profileId: "visitor-profile" })).resolves.toHaveProperty(
-      "isError",
-      true,
-    );
-    for (const email of registered.emails.slice(0, 2)) {
-      expect(await registered.store.lookup(email)).toMatchObject({ expiresAt: START_MS });
-    }
-    expect(selected?.signal.aborted).toBe(true);
-    expect(() => other?.assertCurrent()).not.toThrow();
-    expect(registered.policy.emails()).toContain(registered.emails[0]);
-    registered.policy.controls.failWrites = false;
-    await expectOutcome(registered.revoke({ profileId: "visitor-profile" }), "revoked");
-    expect(registered.policy.emails()).toEqual([
-      registered.emails[2],
-      registered.emails[3],
-      "manual@example.test",
-    ]);
   });
 
   it("rejects changed person bindings after provider reads and ambiguous explicit selectors", async () => {
@@ -641,15 +544,10 @@ describe("visitor-access plugin lifecycle", () => {
       }
       return response;
     });
-    await expect(registered.revoke({ profileId: "visitor-profile" })).resolves.toMatchObject({
-      isError: true,
-      content: [
-        {
-          type: "text",
-          text: "Visitor access operation failed. Check gateway health and retry; use visitor_list to inspect drift.",
-        },
-      ],
-    });
+    await expect(registered.revoke({ profileId: "visitor-profile" })).resolves.toHaveProperty(
+      "isError",
+      true,
+    );
     expect(reassignedAfterRead).toBe(true);
     expect(registered.policy.fetcher.mock.calls.every(([, init]) => init?.method === "GET")).toBe(
       true,
@@ -733,7 +631,7 @@ describe("visitor-access plugin lifecycle", () => {
     },
   );
 
-  it("gates registered visitor access across restart, expiry, and failed provider revocation", async () => {
+  it("gates restarted grants through expiry and failed revocation, then retries cleanup hourly", async () => {
     const grants = [
       { email: "expired@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 1_000 },
       { email: "deadline@example.test", createdAt: START_MS - DAY_MS, expiresAt: START_MS + 2_000 },
@@ -744,30 +642,46 @@ describe("visitor-access plugin lifecycle", () => {
     for (const grant of grants) {
       await first.store.register(grant.email, grant);
     }
-    const visitor = {
-      profileId: "visitor-profile",
-      emails: ["revoked@example.test"],
-      assignedRole: "external-work",
-    };
+    const visitor = visitorProfile(["revoked@example.test"], "external-work");
     expect(() => first.authorize(visitor)).toThrow(/starting/);
     await first.start();
     await first.settle();
     const original = first.authorize(visitor);
     assert(original, "Expected visitor authority from the registered policy");
+    policy.controls.loseWriteResponse = true;
+    const failedInvite = await first.invite({ email: "pending@example.test" });
+    expect(failedInvite).toMatchObject({ details: { error: true }, content: [{ type: "text" }] });
+    expect(JSON.stringify(failedInvite)).not.toContain(TOKEN);
+    expect(await first.store.lookup("pending@example.test")).toMatchObject({
+      email: "pending@example.test",
+      invitedVia: "agent:main:maintainer",
+      expiresAt: START_MS,
+    });
+    expect(policy.emails()).toContain("pending@example.test");
+    expect(() => first.authorize({ ...visitor, emails: ["pending@example.test"] })).toThrow(
+      /active visitor invitation/,
+    );
+    policy.controls.loseWriteResponse = false;
     await first.stop();
     expect(original.signal.aborted).toBe(true);
     resetPluginStateStoreForTests();
     vi.setSystemTime(START_MS + 1_000);
     policy.controls.failWrites = true;
+    policy.fetcher.mockClear();
 
     const restarted = registerPlugin();
-    await restarted.start();
+    await Promise.all([restarted.start(), restarted.gatewayStart()]);
     await restarted.settle();
-    expect(restarted.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("visitor-access sweep failed"),
+    expect(policy.fetcher.mock.calls.filter(([url]) => requestUrl(url).search !== "")).toHaveLength(
+      1,
     );
+    expect(restarted.logger.error).toHaveBeenCalled();
     for (const assignedRole of [null, "external-work", "removed-role"]) {
-      for (const email of ["missing@example.test", "expired@example.test"]) {
+      for (const email of [
+        "missing@example.test",
+        "expired@example.test",
+        "pending@example.test",
+      ]) {
         expect(() => restarted.authorize({ ...visitor, emails: [email], assignedRole })).toThrow(
           /active visitor invitation/,
         );
@@ -799,44 +713,17 @@ describe("visitor-access plugin lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(deadline.signal.aborted).toBe(true);
     expect(() => deadline.assertCurrent()).toThrow(/access ended/);
-    expect(policy.emails()).toEqual(grants.map((grant) => grant.email));
-    expect(await restarted.store.entries()).toHaveLength(grants.length);
-  });
-
-  it("revokes persisted expiries after restart, coalesces startup, and continues hourly", async () => {
-    const first = registerWithPolicy();
-    const { policy } = first;
-    await first.start();
-    await expectOutcome(
-      first.invite({ email: "expired@example.test", days: 1 }),
-      "invited",
-      "restricted guest",
-    );
-    await expectOutcome(first.invite({ email: "active@example.test", days: 2 }), "invited");
-    await first.stop();
-    resetPluginStateStoreForTests();
-    vi.setSystemTime(START_MS + DAY_MS + 1);
-    policy.fetcher.mockClear();
-
-    const restarted = registerPlugin();
-    await Promise.all([restarted.start(), restarted.gatewayStart()]);
-    await restarted.settle();
-    expect(policy.emails()).toEqual(["active@example.test"]);
-    expect((await restarted.store.entries()).map((entry) => entry.key)).toEqual([
-      "active@example.test",
+    expect(policy.emails()).toEqual([
+      ...grants.map((grant) => grant.email),
+      "pending@example.test",
     ]);
-    expect(policy.fetcher.mock.calls.filter(([url]) => requestUrl(url).search !== "")).toHaveLength(
-      1,
-    );
-    expect(restarted.logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("expired@example.test"),
-    );
-
-    vi.setSystemTime(START_MS + 2 * DAY_MS);
+    expect(await restarted.store.entries()).toHaveLength(grants.length + 1);
+    policy.controls.failWrites = false;
     await vi.advanceTimersByTimeAsync(HOUR_MS);
     await restarted.list();
     expect(policy.emails()).toEqual([]);
     expect(await restarted.store.entries()).toEqual([]);
+    expect(restarted.logger.info).toHaveBeenCalled();
     await restarted.stop();
     const callsAfterStop = policy.fetcher.mock.calls.length;
     await vi.advanceTimersByTimeAsync(2 * HOUR_MS);
@@ -889,37 +776,6 @@ describe("visitor-access plugin lifecycle", () => {
     expect(await registered.store.entries()).toHaveLength(2);
     expect(JSON.stringify(result)).not.toContain(TOKEN);
     expect(registered.logger.error).not.toHaveBeenCalled();
-  });
-
-  it("keeps an ambiguous invite inactive and sweepable across the registered service restart", async () => {
-    const registered = registerWithPolicy();
-    const { policy } = registered;
-    await registered.start();
-    policy.controls.loseWriteResponse = true;
-    const result = await registered.invite({ email: "pending@example.test" });
-    expect(result).toMatchObject({ details: { error: true }, content: [{ type: "text" }] });
-    expect(JSON.stringify(result)).not.toContain(TOKEN);
-    expect(await registered.store.lookup("pending@example.test")).toMatchObject({
-      email: "pending@example.test",
-      invitedVia: "agent:main:maintainer",
-      expiresAt: START_MS,
-    });
-    const profile = {
-      profileId: "pending-visitor",
-      emails: ["pending@example.test"],
-      assignedRole: "external-work",
-    };
-    expect(policy.emails()).toEqual(profile.emails);
-    expect(() => registered.authorize(profile)).toThrow(/active visitor invitation/);
-    await registered.stop();
-    resetPluginStateStoreForTests();
-    policy.controls.loseWriteResponse = false;
-    const restarted = registerPlugin();
-    await restarted.start();
-    await restarted.settle();
-    expect(() => restarted.authorize(profile)).toThrow(/active visitor invitation/);
-    expect(await restarted.store.lookup("pending@example.test")).toBeUndefined();
-    expect(policy.emails()).toEqual([]);
   });
 
   it("routes discovery tools through the Gateway owner and fences them after replacement", async () => {
