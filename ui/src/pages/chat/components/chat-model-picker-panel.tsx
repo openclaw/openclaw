@@ -155,14 +155,14 @@ export function ChatModelPickerPanel(panel: {
         ...providerGroups.flatMap(([provider, group]) =>
           group.lead
             .map((entry) =>
-              Object.assign(modelOptionSearchRow(entry, modelSearchProps), {
+              Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
                 provider,
                 list: provider,
               }),
             )
             .concat(
               group.more.map((entry) =>
-                Object.assign(modelOptionSearchRow(entry, modelSearchProps), {
+                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }), {
                   provider,
                   more: true,
                   list: `${provider}:more`,

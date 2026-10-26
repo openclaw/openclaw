@@ -89,29 +89,27 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
   return createMemo(() => optionPresentation(props));
 }
 
-export function modelOptionSearchRow(
-  entry: ChatModelPickerOptionProps["entry"],
-  options: Omit<ModelPresentationProps, "entry">,
-): ChatModelSearchRow {
+export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
   const selected = isModelPickerOptionSelected(
-    entry,
+    options.entry,
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const runtimeLabel = formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId)?.label ?? "";
-  const resetsPin = entry.isDefault && options.sessionModelPinned;
-  const onModelSetup = optionNeedsAuth(entry) ? options.onModelSetup : undefined;
+  const runtimeLabel =
+    formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const onModelSetup = optionNeedsAuth(options.entry) ? options.onModelSetup : undefined;
   return {
-    key: modelPickerOptionKey(entry),
-    name: formatModelLabel(entry).toLocaleLowerCase(),
-    keywords: [entry.isDefault ? t("chat.modelControls.default") : "", runtimeLabel]
+    key: modelPickerOptionKey(options.entry),
+    name: formatModelLabel(options.entry).toLocaleLowerCase(),
+    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
-    providerLabel: providerDisplayLabel(entry.provider).toLocaleLowerCase(),
-    reference: entry.value,
+    providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
+    reference: options.entry.value,
     selected,
     hasShortcut: !selected,
-    disabled: options.disabled || Boolean(entry.disabled && !onModelSetup && !resetsPin),
+    disabled: options.disabled || Boolean(options.entry.disabled && !onModelSetup && !resetsPin),
   };
 }
 
