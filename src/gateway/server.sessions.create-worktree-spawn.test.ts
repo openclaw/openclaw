@@ -407,6 +407,7 @@ test.each(["startup", "source settlement"] as const)(
               withCommit: async (commit) => {
                 await withCommit(commit);
                 sourceSettled = true;
+                invocation.abort(new Error("Stop after child commit"));
                 // Model source settlement failure after the real child write has completed.
                 throw new Error("Source settlement stopped after child commit");
               },
@@ -424,7 +425,9 @@ test.each(["startup", "source settlement"] as const)(
         sessionId: entry?.sessionId,
         lifecycleRevision: entry?.lifecycleRevision,
       });
-      invocation.abort(new Error("Stop after child commit"));
+      if (failure === "startup") {
+        invocation.abort(new Error("Stop after child commit"));
+      }
       return entry;
     });
     const result = await withPluginRuntimeGatewayContextResolver(
@@ -467,7 +470,6 @@ test.for(["invocation", "configured"] as const)(
       config: getRuntimeConfig(),
       countActiveRuns: () => 0,
     });
-    const spawnRuntime = await import("../agents/subagents/spawn/subagent-spawn.runtime.js");
     const publishChild = vi.spyOn(spawnRuntime, "upsertSessionEntryCore");
     const held = createDeferredCore<() => void>();
     const release = createDeferredCore();
