@@ -173,6 +173,8 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|2",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        // The frame census retains native methods and supplies their original receivers through .call.
+        "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.
         "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
         // The owner probe executes its selected trusted source expression rather than a copied implementation.
