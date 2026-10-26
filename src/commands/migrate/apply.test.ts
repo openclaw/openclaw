@@ -21,12 +21,12 @@ vi.mock("../../config/paths.js", async (importActual) => {
   };
 });
 
-function buildEmptyPlan(): MigrationPlan {
+function buildPlan(items: MigrationPlan["items"] = []): MigrationPlan {
   return {
     providerId: "codex",
     source: "/tmp/codex",
-    summary: summarizeMigrationItems([]),
-    items: [],
+    summary: summarizeMigrationItems(items),
+    items,
   };
 }
 
@@ -34,8 +34,8 @@ function makeProvider(overrides: Partial<MigrationProviderPlugin> = {}) {
   return {
     id: "codex",
     label: "Codex",
-    plan: vi.fn(async () => buildEmptyPlan()),
-    apply: vi.fn(async () => buildEmptyPlan()),
+    plan: vi.fn(async () => buildPlan()),
+    apply: vi.fn(async () => buildPlan()),
     ...overrides,
   };
 }
@@ -54,9 +54,7 @@ describe("runMigrationApply", () => {
     stateDir = await suiteTempDirs.setup();
   });
 
-  afterAll(async () => {
-    await suiteTempDirs.cleanup();
-  });
+  afterAll(() => suiteTempDirs.cleanup());
 
   it("refuses a supplied provider before planning or applying under a live Gateway", async () => {
     using _ = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
@@ -82,7 +80,7 @@ describe("runMigrationApply", () => {
         label: "Fixture",
         plan: async () => {
           expect(readLifecycleWriteCustody()).toEqual([]);
-          return buildEmptyPlan();
+          return buildPlan();
         },
         apply: async () => {
           entered.resolve();
@@ -90,7 +88,7 @@ describe("runMigrationApply", () => {
           if (fail) {
             throw new Error("migration failed");
           }
-          return buildEmptyPlan();
+          return buildPlan();
         },
       });
       const running = run(provider, { configOverride: {} }).catch((error: unknown) => error);
@@ -110,11 +108,7 @@ describe("runMigrationApply", () => {
   it("uses the resolved provider id when forwarding Codex options", async () => {
     const provider = makeProvider();
     const providerOptions = { configPatchMode: "return", verifyPluginApps: true } as const;
-    await run(provider, {
-      yes: true,
-      configOverride: {},
-      ...providerOptions,
-    });
+    await run(provider, { yes: true, configOverride: {}, ...providerOptions });
 
     const context = expect.objectContaining({ providerOptions });
     expect(provider.plan).toHaveBeenCalledWith(context);
@@ -122,9 +116,7 @@ describe("runMigrationApply", () => {
   });
 
   it("returns partial item failures to embedded callers with report metadata", async () => {
-    const partial = buildEmptyPlan();
-    partial.summary = { ...partial.summary, total: 1, errors: 1 };
-    partial.items = [
+    const partial = buildPlan([
       {
         id: "memory:one",
         kind: "memory",
@@ -133,7 +125,7 @@ describe("runMigrationApply", () => {
         reason: "copy failed",
         details: { recoveryPath: "/tmp/staged-memory" },
       },
-    ];
+    ]);
     const provider = makeProvider({ apply: vi.fn(async () => partial) });
     const result = await run(provider, { yes: true, allowPartialResult: true });
 
