@@ -1,11 +1,10 @@
 import type { BigIntStats } from "node:fs";
 import { availableParallelism } from "node:os";
-import type { Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PackageFileHashJob, HashResult } from "./package-update-integrity-hasher.types.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
 
@@ -103,7 +102,7 @@ export function createPackageFileHasher(fallback: PackageFileHasher["hash"]): Pa
     if (!slot && slots.length < width) {
       try {
         const url = resolveRuntimeProcessEntrypointUrl("packageIntegrityHasher");
-        const worker = createCpuTrackedWorker(url, {
+        const worker = new Worker(url, {
           execArgv: resolveRuntimeWorkerThreadExecArgv(url),
           // Builtin-only reads need no ambient preload or compile-cache writes.
           env: {},
