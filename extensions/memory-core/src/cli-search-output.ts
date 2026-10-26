@@ -5,6 +5,7 @@ import {
   shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 
 export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolean): void {
   if ("status" in result) {
@@ -36,9 +37,12 @@ export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolea
   }
   const lines: string[] = [];
   for (const hit of result.results) {
+    const displayPath = sanitizeTerminalText(shortenHomePath(hit.path));
+    // Keep snippet line breaks without letting file content act as terminal controls.
+    const snippet = hit.snippet.split("\n").map(sanitizeTerminalText).join("\n");
     lines.push(
-      `${theme.success(hit.score.toFixed(3))} ${theme.accent(`${shortenHomePath(hit.path)}:${hit.startLine}-${hit.endLine}`)}`,
-      theme.muted(hit.snippet),
+      `${theme.success(hit.score.toFixed(3))} ${theme.accent(`${displayPath}:${hit.startLine}-${hit.endLine}`)}`,
+      theme.muted(snippet),
       "",
     );
   }
