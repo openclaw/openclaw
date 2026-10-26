@@ -10,11 +10,7 @@ const backends: StorageBackend[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     try {
-      await Promise.all(
-        backends.splice(0).map(async (backend) => {
-          await backend.close?.();
-        }),
-      );
+      await Promise.all(backends.splice(0).map((backend) => backend.close?.()));
     } finally {
       cleanup();
     }
@@ -57,8 +53,7 @@ it("publishes once without clobbering bytes or leaving staging files", async () 
 
 it("lists prefixes, reports metadata and space, and deletes idempotently", async () => {
   const { backend, directory } = await openBackend();
-  const first = "backups/day-1/a.bin",
-    second = "backups/day-2/b.bin";
+  const [first, second] = ["backups/day-1/a.bin", "backups/day-2/b.bin"];
   for (const key of [first, second, "other.bin"]) {
     await backend.putObject(key, bytes("second"), {});
   }
