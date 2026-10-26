@@ -267,7 +267,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     // Changed replay inputs must not reuse facts from the removed tool call.
     const call = requireAssistantMessage(assistant).content[0];
-    if (call.type !== "toolCall") {
+    if (!call || call.type !== "toolCall") {
       throw new Error("expected image tool call");
     }
     call.name = "";
