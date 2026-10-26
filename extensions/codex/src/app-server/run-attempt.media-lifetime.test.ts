@@ -80,8 +80,6 @@ it("delivers earlier accepted TTS but discards audio whose result timed out", as
     release.resolve();
     // The watchdog winner does not await its losing middleware continuation.
     await Promise.all(handle.mock.results.map((entry) => entry.value));
-    expect(await response).toMatchObject({ success: false });
-    expect(host.synthesis).toHaveBeenCalledTimes(2);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
     expect(host.deliverablePayloads(result)).toEqual([

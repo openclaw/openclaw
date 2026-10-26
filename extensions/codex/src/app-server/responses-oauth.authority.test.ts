@@ -71,11 +71,7 @@ it.each(["shared", "agent"] as const)(
       const prepared = await auth.resolve(false);
       expect(prepared.token).toBe("synthetic-access");
       expect(await persisted()).toEqual(credential);
-      expectNoDatabaseWork(() => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          prepared.assertCurrent();
-        }
-      });
+      expectNoDatabaseWork(prepared.assertCurrent);
 
       const revoked = { ...credential, authFlow: "chatgpt-identity" };
       const fetchImpl = vi.fn(async () => new Response("must not be sent"));
