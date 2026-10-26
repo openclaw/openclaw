@@ -4,7 +4,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveUserPath } from "../infra/home-dir.js";
 import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
-import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import {
+  buildUpdateRehearsalPathEnv,
+  resolveUpdateRehearsalCronDefaultStoreKey,
+  UPDATE_REHEARSAL_CRON_IDENTITY_ENV,
+} from "../infra/update-rehearsal-paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import {
   createRehearsalPathInspector,
@@ -108,6 +112,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
   const stateDir = params.stateDir;
   const env = params.env;
   const assertOwner = params.assertCurrent;
+  const cronIdentity = env[UPDATE_REHEARSAL_CRON_IDENTITY_ENV];
   assertOwner();
   if (
     env.OPENCLAW_STATE_DIR !== stateDir ||
@@ -131,6 +136,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     ...buildUpdateRehearsalPathEnv(stateDir),
+    [UPDATE_REHEARSAL_CRON_IDENTITY_ENV]: cronIdentity,
     OPENCLAW_OAUTH_DIR: env.OPENCLAW_OAUTH_DIR,
   };
   const cleared = [
@@ -172,6 +178,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     }
   };
   assertEnv();
+  resolveUpdateRehearsalCronDefaultStoreKey(env);
   const { identities, inspectPath } = createRehearsalPathInspector(
     stateDir,
     params.pluginCodeLinks ?? [],
