@@ -38,10 +38,10 @@ describe("session row provenance", () => {
     expect(provenance.mergeRow(accepted, cached).label).toBe("Current");
   });
 
-  it("orders rows by server clocks before read revision", () => {
+  it("admits unsampled writes and orders sampled rows before read revision", () => {
     const provenance = createSessionRowProvenance();
-    const initial = row({ label: "Initial", snapshotAt: 0 });
-    const updated = row({ label: "Updated", updatedAt: 1 });
+    const initial = row({ label: "Initial", snapshotAt: 100, updatedAt: 10 });
+    const updated = row({ label: "Updated", updatedAt: 20 });
     provenance.observeReadRow(initial, 2);
     provenance.observeReadRow(updated, 1);
     const merged = provenance.mergeRow(initial, updated);
