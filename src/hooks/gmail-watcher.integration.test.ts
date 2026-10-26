@@ -21,6 +21,7 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   it("stopGmailWatcher removes gog and its credential-helper descendant", async ({ signal }) => {
     const receipts = await openFixtureReceiptChannel();
+    const wait = <T>(work: Promise<T>) => withinTest(work, signal);
     const tmpDir = mkdtempSync(join(tmpdir(), "openclaw-gog-integration-"));
     const pids: number[] = [];
     onTestFinished(async () => {
@@ -50,7 +51,7 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
       'import { renameSync, writeFileSync } from "node:fs";',
       'process.on("SIGTERM", () => {});',
       "setInterval(() => {}, 1000);",
-      `writeFileSync(${JSON.stringify(`${helperPidPath}.tmp`)}, String(process.pid));`,
+      `writeFileSync(${JSON.stringify(`${helperPidPath}.tmp`)}, [process.ppid, process.pid].join(" "));`,
       `renameSync(${JSON.stringify(`${helperPidPath}.tmp`)}, ${JSON.stringify(helperPidPath)});`,
       `sendReceipt(${JSON.stringify(helperPidPath)}, "ready");`,
     ]);
@@ -58,13 +59,9 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     const gogScript = join(tmpDir, "gog");
     writeScript(gogScript, [
       "#!/bin/bash",
-      'SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"',
       'case "$*" in',
       '  *"watch start"*) echo "[gog] watch registered"; exit 0 ;;',
       '  *"watch serve"*)',
-      // The helper reports readiness only after both complete PID files exist.
-      '    echo $$ > "$SCRIPT_DIR/gog.pid.tmp"',
-      '    mv "$SCRIPT_DIR/gog.pid.tmp" "$SCRIPT_DIR/gog.pid"',
       `    ${JSON.stringify(process.execPath)} ${JSON.stringify(helperPath)} &`,
       "    trap 'echo \"[gog] SIGTERM (child NOT killed)\"; exit 0' TERM",
       "    while true; do sleep 0.3; done ;;",
@@ -73,24 +70,21 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     chmodSync(gogScript, 0o755);
 
     vi.stubEnv("PATH", `${tmpDir}:${process.env["PATH"] ?? ""}`);
-    const result = await withinTest(
+    const result = await wait(
       startGmailWatcher(createGmailConfig("integration@example.com"), {
         scheduler: createTestGatewayScheduler(),
         signal,
       }),
-      signal,
     );
 
     expect(result.started).toBe(true);
 
-    await withinTest(receipts.waitFor(join(tmpDir, "helper.pid"), "ready"), signal);
+    await wait(receipts.waitFor(helperPidPath, "ready"));
 
-    for (const name of ["gog", "helper"]) {
-      pids.push(Number.parseInt(readFileSync(join(tmpDir, `${name}.pid`), "utf8").trim(), 10));
-    }
+    pids.push(...readFileSync(helperPidPath, "utf8").split(" ").map(Number));
     expect(pids.map(alive)).toEqual([true, true]);
 
-    await withinTest(stopGmailWatcher(), signal);
+    await wait(stopGmailWatcher());
 
     // The watcher joins its leader and escalation, but exposes no descendant reap receipt.
     await Promise.all(pids.map((pid) => waitForProcessExit(pid, signal)));

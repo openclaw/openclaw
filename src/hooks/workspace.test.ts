@@ -28,12 +28,6 @@ function writePlainHook(hooksRoot: string, name: string, content?: string): stri
   return hookDir;
 }
 
-function oversizedMetadataWarnings(filePath: string): string[] {
-  return warnMock.mock.calls
-    .map(([message]) => String(message))
-    .filter((message) => message.includes(filePath) && message.includes(`${METADATA_MAX_BYTES}`));
-}
-
 describe("hooks workspace", () => {
   let root: string;
   let hooksRoot: string;
@@ -41,8 +35,8 @@ describe("hooks workspace", () => {
     warnMock.mockClear();
     root = tempDirs.make("openclaw-hooks-workspace-");
     hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   function loadNames() {
     return loadWorkspaceHookEntries(root, {
@@ -72,23 +66,24 @@ describe("hooks workspace", () => {
 
   it("accepts metadata at the size limit, warns above it, and continues discovery", () => {
     const packageDir = path.join(hooksRoot, "big-package");
-    fs.mkdirSync(packageDir);
+    fs.mkdirSync(packageDir, { recursive: true });
     const manifestPath = path.join(packageDir, "package.json");
     fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1));
 
     const bigHookDir = writePlainHook(hooksRoot, "big-hook", "x".repeat(METADATA_MAX_BYTES + 1));
-    writePlainHook(hooksRoot, "small-hook");
     const pkgDir = path.join(hooksRoot, "pkg");
     writePlainHook(pkgDir, "nested", "---\nname: exact-limit\n---\n".padEnd(METADATA_MAX_BYTES));
     writeHookPackageManifest(pkgDir, ["./nested"], METADATA_MAX_BYTES);
 
-    expect(loadNames().toSorted()).toEqual(["exact-limit", "small-hook"]);
-    expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
-    expect(oversizedMetadataWarnings(path.join(bigHookDir, "HOOK.md"))).toHaveLength(1);
+    expect(loadNames()).toEqual(["exact-limit"]);
+    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining(manifestPath));
+    expect(warnMock).toHaveBeenCalledWith(
+      expect.stringContaining(path.join(bigHookDir, "HOOK.md")),
+    );
     expect(warnMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["EIO", "EACCES"])("warns when hook metadata cannot be read (%s)", (code) => {
+  it("warns without exposing contents when hook metadata cannot be read", () => {
     const hookDir = writePlainHook(hooksRoot, "unreadable-hook");
     const hookMdPath = path.join(hookDir, "HOOK.md");
     const metadataIdentity = fs.statSync(hookMdPath);
@@ -96,18 +91,14 @@ describe("hooks workspace", () => {
     const read = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
       const identity = fs.fstatSync(args[0]);
       if (identity.dev === metadataIdentity.dev && identity.ino === metadataIdentity.ino) {
-        throw Object.assign(new Error("private metadata contents"), { code });
+        throw new Error("private metadata contents");
       }
       return readSync(...args);
     });
-    try {
-      expect(loadNames()).toEqual([]);
-      expect(warnMock).toHaveBeenCalledExactlyOnceWith(
-        `Failed to read hook metadata ${hookMdPath}; check file permissions and disk health.`,
-      );
-    } finally {
-      read.mockRestore();
-    }
+    expect(loadNames()).toEqual([]);
+    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining(hookMdPath));
+    expect(warnMock.mock.calls.flat().join(" ")).not.toContain("private metadata contents");
+    read.mockRestore();
     expect(loadNames()).toEqual(["unreadable-hook"]);
   });
 

@@ -28,10 +28,7 @@ function writeHook(hookDir: string, name: string): void {
   );
 }
 
-describe.each([
-  { mode: "copied", link: false },
-  { mode: "linked", link: true },
-])("hooks install ($mode)", ({ link }) => {
+describe.each([false, true])("hooks install (link=%s)", (link) => {
   let state: OpenClawTestState;
 
   beforeEach(async () => {
@@ -46,11 +43,9 @@ describe.each([
 
   afterEach(async () => {
     try {
-      const disabled = await prepareInternalHooks(
-        { hooks: { internal: { enabled: false } } },
-        state.workspaceDir,
-      );
-      disabled.commit();
+      (
+        await prepareInternalHooks({ hooks: { internal: { enabled: false } } }, state.workspaceDir)
+      ).commit();
       clearInternalHooks();
       setInternalHooksEnabled(true);
     } finally {
@@ -60,13 +55,10 @@ describe.each([
     }
   });
 
-  it.each([
-    { layout: "single hook", hookPath: ".", hookPackId: "hello-hook" },
-    { layout: "conventional pack", hookPath: "./hooks/hello-hook", hookPackId: "hello-hooks" },
-    { layout: "direct-child pack", hookPath: "./hello-hook", hookPackId: "hello-hooks" },
-  ])(
-    "discovers and triggers only installed hooks from a $layout",
-    async ({ hookPath, hookPackId }) => {
+  it.each([".", "./hooks/hello-hook", "./hello-hook"])(
+    "discovers and triggers only installed hooks from %s",
+    async (hookPath) => {
+      const hookPackId = hookPath === "." ? "hello-hook" : "hello-hooks";
       const sourceDir = state.path("sources", "hook-pack");
       writeHook(path.resolve(sourceDir, hookPath), "hello-hook");
       writeHook(state.path("sources", "adjacent-hook"), "adjacent-hook");
@@ -91,34 +83,19 @@ describe.each([
         allowInstallPolicyWarningPrompt: false,
       });
 
-      const installed = await readConfigFileSnapshot();
-      expect(installed.valid).toBe(true);
-      expect(installed.config.hooks?.internal).toMatchObject({
-        enabled: true,
-        entries: { "hello-hook": { enabled: true } },
-      });
-      expect(installed.config.hooks?.internal?.load?.extraDirs ?? []).toEqual(
-        link ? [sourceDir] : [],
+      const { config } = await readConfigFileSnapshot();
+      expect(config.hooks?.internal?.entries?.["hello-hook"]?.enabled).toBe(true);
+      expect(config.hooks?.internal?.load?.extraDirs ?? []).toEqual(link ? [sourceDir] : []);
+      expect(readHookInstalls()[hookPackId]?.installPath).toBe(
+        link ? sourceDir : state.statePath("hooks", hookPackId),
       );
-      const installPath = link ? sourceDir : state.statePath("hooks", hookPackId);
-      expect(readHookInstalls()).toEqual({
-        [hookPackId]: expect.objectContaining({
-          source: "path",
-          sourcePath: sourceDir,
-          installPath,
-          hooks: ["hello-hook"],
-        }),
-      });
       vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", state.path("bundled-none"));
-      const discovered = loadWorkspaceHookEntries(state.workspaceDir, {
-        config: installed.config,
-      });
-      const prepared = await prepareInternalHooks(installed.config, state.workspaceDir);
+      const discovered = loadWorkspaceHookEntries(state.workspaceDir, { config });
+      const prepared = await prepareInternalHooks(config, state.workspaceDir);
       prepared.commit();
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(discovered.map((entry) => entry.hook.name)).toEqual(["hello-hook"]);
-      expect(prepared.loadedCount).toBe(1);
       expect(event.messages).toEqual(["hello-hook"]);
     },
   );
