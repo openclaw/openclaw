@@ -287,6 +287,30 @@ it.each([
   });
 });
 
+it.each([undefined, 1])("preserves visible history and offset metadata: %s", async (offset) => {
+  const messages = [
+    { role: "assistant", content: "visible", ...(offset ? { __openclaw: { seq: 2 } } : {}) },
+  ];
+  runtime.readChatHistoryPage.mockResolvedValueOnce({
+    messages,
+    pagination: {
+      offset: offset ?? 0,
+      totalMessages: offset ? 82 : 81,
+      rawPageMessages: offset ? 80 : 81,
+    },
+  });
+  const result = await history({ limit: 1, offset });
+  expect(result).toHaveProperty("messages", messages);
+  if (offset === undefined) {
+    expect(result).not.toHaveProperty("offset");
+  } else {
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+      expect.objectContaining({ offset, max: 1 }),
+    );
+    expect(result).toMatchObject({ offset, nextOffset: 81, hasMore: true, totalMessages: 82 });
+  }
+});
+
 it.each([undefined, "205000"])(
   "bounds embedded history and continues from retained rows with maxBytes %s",
   async (maxBytes) => {
@@ -300,8 +324,7 @@ it.each([undefined, "205000"])(
       pagination: { offset: 0, totalMessages: 6, rawPageMessages: 6 },
     });
 
-    const result = await history({ limit: "6", offset: 0, maxBytes });
-    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 6 }));
+    const result = await history({ limit: 6, offset: 0, maxBytes });
     const count = maxBytes === undefined ? 5 : 2;
     expect(result).toMatchObject({
       messages: messages.slice(-count),
@@ -365,6 +388,12 @@ it("continues a retained anchored page through its original transcript source", 
       pageCursor: cursor,
     }),
   );
+});
+
+it("normalizes string history limits before calling the shared owner", async () => {
+  await history({ limit: "2" });
+
+  expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
 });
 
 it.each([

@@ -32,6 +32,7 @@ function inGateway(context: GatewayRequestContext, run: () => Promise<void>) {
 
 function recorder(boardSnapshot: BoardSnapshot = snapshot) {
   const calls: Array<[string, Record<string, unknown>]> = [];
+  const commands: unknown[] = [];
   const callGateway: InProcessGatewayCaller = async <T>(
     method: string,
     params: Record<string, unknown>,
@@ -51,6 +52,7 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
       agentSessionKey: snapshot.sessionKey,
     }),
     calls,
+    commands,
   };
 }
 
@@ -94,10 +96,18 @@ it("declares dashboard actions without overriding widget placement", () => {
     expect(Value.Check(tool.parameters, args)).toBe(valid);
   const directoryDescription = tool.description.slice(0, 177);
   expect(tool.requiredClientCaps).toBeUndefined();
+  expect(tool.description).toContain("stable names");
+  expect(tool.description).toContain("sm=3x3");
   expect(directoryDescription).not.toMatch(/keep .*inline/i);
   expect(directoryDescription).toMatch(/widget_put.*plugin.*only/i);
   expect(tool.description).not.toMatch(/show_widget|widget_code|\bpin\b/);
   expect(tool.parameters).toMatchObject({ additionalProperties: false });
+  expect(tool.parameters).toHaveProperty(
+    "properties.action.enum",
+    "read tab_create tab_update tab_delete tabs_reorder widget_put widget_move widget_resize widget_remove focus_tab set_presentation set_default_presentation".split(
+      " ",
+    ),
+  );
   accepts({ action: "widget_move", name: "status" });
   accepts({ action: "widget_put", name: "work-item", ...pluginContent() });
   accepts({ action: "unknown" }, false);
@@ -157,15 +167,28 @@ it("dispatches through the admitted Gateway and fences replacement or retirement
   expect(admitted.requests).toHaveLength(3);
   expect(admitted.requests.slice(0, 2)).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ params: { sessionKey: snapshot.sessionKey } }),
-      expect.objectContaining({ params: { key: snapshot.sessionKey } }),
+      expect.objectContaining({
+        type: "req",
+        id: expect.stringMatching(/^plugin-subagent-/u),
+        method: "board.get",
+        params: expect.objectContaining({ sessionKey: "agent:main:main" }),
+      }),
+      expect.objectContaining({
+        method: "sessions.describe",
+        params: expect.objectContaining({ key: "agent:main:main" }),
+      }),
     ]),
   );
-  expect(admitted.requests[2]?.params).toEqual({
-    key: snapshot.sessionKey,
-    boardFace: "dashboard",
-    boardPresentation: "expanded",
-  });
+  expect(admitted.requests[2]).toEqual(
+    expect.objectContaining({
+      method: "sessions.patch",
+      params: {
+        key: "agent:main:main",
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
+      },
+    }),
+  );
   expect(replacement.requests).toEqual([]);
   expect(admitted.broadcastToConnIds).toHaveBeenCalledOnce();
   expect(replacement.broadcastToConnIds).not.toHaveBeenCalled();
@@ -215,6 +238,7 @@ it.each([
 ])("rejects invalid presentation command %j before broadcasting", async (args, message) => {
   const harness = recorder();
   await expect(harness.tool.execute("command", args)).rejects.toThrow(message);
+  expect(harness.commands).toEqual([]);
   expect(harness.calls).toEqual([]);
 });
 
@@ -264,14 +288,13 @@ it.each([
   const harness = recorder();
   const gateway = createGatewayAffinityHarness(0);
   gateway.context.getClientConnIds = () => new Set(["control-ui-1", "control-ui-2"]);
+  gateway.broadcastToConnIds.mockImplementation((_event: string, payload: unknown) => {
+    harness.commands.push(payload);
+  });
   await inGateway(gateway.context, async () => {
     const result = await harness.tool.execute("command", { action, ...args });
     expect(harness.calls).toEqual([]);
-    expect(gateway.broadcastToConnIds).toHaveBeenCalledWith(
-      "board.command",
-      { sessionKey: snapshot.sessionKey, command },
-      new Set(["control-ui-1", "control-ui-2"]),
-    );
+    expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
     expect(result.details).toEqual({ ok: true, delivered: 2 });
   });
 });
