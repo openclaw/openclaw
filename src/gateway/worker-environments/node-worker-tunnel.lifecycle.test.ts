@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import path from "node:path";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -71,10 +72,6 @@ async function currentNodeHost() {
   nodeTransport.listCurrentNodes = async () => nodes;
   return nodes[0]!.workerHost;
 }
-const nextImmediate = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 async function expectPending(promise: Promise<unknown>) {
   const settled = vi.fn();
   void promise.then(settled, settled);
@@ -528,16 +525,6 @@ describe("node worker tunnel lifetime", () => {
     await manager.stop(record.environmentId, 3, "provider-destroyed");
   });
 
-  it("reuses only the exact same epoch binding", async () => {
-    const manager = createManager();
-
-    const first = await manager.start(startRequest());
-    await expect(manager.start(startRequest())).resolves.toBe(first);
-    await expect(manager.start({ ...startRequest(), sessionId: "session-other" })).rejects.toThrow(
-      "binding changed",
-    );
-  });
-
   it("closes remote-exec workspaces without requiring an embedded worker lifetime command", async () => {
     record.profileSnapshot = { ...record.profileSnapshot, executionMode: "remote-exec" };
     delete (await currentNodeHost()).environmentSession;
@@ -553,7 +540,7 @@ describe("node worker tunnel lifetime", () => {
     expect(transfer.close).toHaveBeenCalledExactlyOnceWith(record.environmentId);
   });
 
-  it("stops a completed turn's environment before exposing its replacement", async () => {
+  it("reuses only an exact binding and stops a completed owner before exposing its replacement", async () => {
     const stopped = createDeferred();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       expect(request.isDispatchAuthorized()).toBe(true);
@@ -565,6 +552,10 @@ describe("node worker tunnel lifetime", () => {
       launchNodeWorker: async (request) => completedReceipt(request.input),
     });
     const first = await manager.start(startRequest());
+    await expect(manager.start(startRequest())).resolves.toBe(first);
+    await expect(manager.start({ ...startRequest(), sessionId: "session-other" })).rejects.toThrow(
+      "binding changed",
+    );
     await expect(launchTurn(first)).resolves.toMatchObject({ code: 0 });
     record.ownerEpoch = 3;
     const replacing = manager.start({ ...startRequest(), ownerEpoch: 3 });
