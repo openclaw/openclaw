@@ -68,6 +68,11 @@ function beforeRemove(effect: (target: string) => void | Promise<void>) {
   });
 }
 
+function isInsideIdentity(target: string, identity: fsSync.BigIntStats) {
+  const parent = fsSync.lstatSync(path.dirname(target), { bigint: true, throwIfNoEntry: false });
+  return parent?.dev === identity.dev && parent.ino === identity.ino;
+}
+
 function failUnlinkOnce(shouldFail: (file: fsSync.PathLike) => boolean, error: Error) {
   let injected = false;
   const unlink = fs.unlink.bind(fs);
@@ -390,15 +395,7 @@ describe("installPackageDir rollback", () => {
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
       let pauseConsumed = false;
       beforeRemove(async (target) => {
-        const candidate = fsSync.lstatSync(path.dirname(target), {
-          bigint: true,
-          throwIfNoEntry: false,
-        });
-        if (
-          !pauseConsumed &&
-          candidate?.dev === publishedIdentity.dev &&
-          candidate.ino === publishedIdentity.ino
-        ) {
+        if (!pauseConsumed && isInsideIdentity(target, publishedIdentity)) {
           pauseConsumed = true;
           paused.resolve();
           await release.promise;
@@ -457,15 +454,7 @@ describe("installPackageDir rollback", () => {
           target,
           options,
         ) {
-          const current = fsSync.lstatSync(path.dirname(path.join(this.rootReal, target)), {
-            bigint: true,
-            throwIfNoEntry: false,
-          });
-          if (
-            !injected &&
-            current?.dev === publishedIdentity.dev &&
-            current.ino === publishedIdentity.ino
-          ) {
+          if (!injected && isInsideIdentity(path.join(this.rootReal, target), publishedIdentity)) {
             injected = true;
             throw ioError;
           }
