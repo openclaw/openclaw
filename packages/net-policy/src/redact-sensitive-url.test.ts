@@ -45,6 +45,10 @@ it.each([
     "https://example.com/cb#access_token%3D***%26keep%3Dvisible",
   ],
   [
+    "https://storage.googleapis.com/example-bucket/report.pdf?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Date=20260101T000000Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=0123456789abcdef",
+    "https://storage.googleapis.com/example-bucket/report.pdf?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Date=20260101T000000Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=***",
+  ],
+  [
     "https://example.com/?keep=one&keep=two&token=a&token=b",
     "https://example.com/?keep=one&keep=two&token=***",
   ],
@@ -102,6 +106,7 @@ it("matches the auth-oriented query params used by MCP SSE config redaction", ()
   expect(isSensitiveUrlQueryParamName("code")).toBe(true);
   expect(isSensitiveUrlQueryParamName("x-amz-signature")).toBe(true);
   expect(isSensitiveUrlQueryParamName("X-Amz-Security-Token")).toBe(true);
+  expect(isSensitiveUrlQueryParamName("X-Goog-Signature")).toBe(true);
   expect(isSensitiveUrlQueryParamName("id_token")).toBe(true);
   expect(isSensitiveUrlQueryParamName("app_secret")).toBe(true);
   expect(isSensitiveUrlQueryParamName("client_se\u3164cret")).toBe(true);
