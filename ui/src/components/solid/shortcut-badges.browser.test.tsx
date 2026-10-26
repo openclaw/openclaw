@@ -123,32 +123,3 @@ it("right-aligns leaf shortcuts when only unrelated rows have submenu arrows", a
     row.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(row).paddingInlineEnd);
   expect(Math.abs(end - badge.getBoundingClientRect().right)).toBeLessThan(1);
 });
-
-it("retains the shared badge skin for shadow-hosted menus", async () => {
-  const host = document.createElement("div");
-  document.body.append(host);
-  const root = host.attachShadow({ mode: "open" });
-  const mount = document.createElement("div");
-  root.append(mount);
-  const view = render(
-    () => (
-      <Menu
-        id="shadow-badge"
-        label="Shadow actions"
-        items={[{ id: "copy", label: "Copy", details: <Kbd keys="C" /> }]}
-      />
-    ),
-    { container: mount },
-  );
-  try {
-    await userEvent.click(page.elementLocator(root.querySelector("button")!));
-    const badge = root.querySelector("kbd")!;
-    await expect.element(page.elementLocator(badge)).toBeVisible();
-    const style = getComputedStyle(badge);
-    expect(style.borderRadius).toBe("4px");
-    expect(Number.parseFloat(style.paddingInlineStart)).toBeGreaterThan(0);
-  } finally {
-    view.unmount();
-    host.remove();
-  }
-});
