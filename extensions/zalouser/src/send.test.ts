@@ -49,49 +49,36 @@ describe("zalouser send helpers", () => {
     });
   });
 
-  it("combines earlier chunks with a failed chunk's partial receipt without duplicate parts", async () => {
-    const cause = new Error("voice send failed");
-    mockSendText
-      .mockResolvedValueOnce(sendResult("mid-first"))
-      .mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
-        const accepted = sendResult("mid-caption");
-        await onDeliveryResult?.(accepted);
-        throw cause;
+  it.each(["send", "receipt"] as const)("retains acceptance on %s failure", async (failure) => {
+    const cause = new Error("delivery failed");
+    const fail = () => {
+      throw cause;
+    };
+    const nested = failure === "send";
+    const ids = nested ? ["first", "caption"] : ["first"];
+    mockSendText.mockResolvedValueOnce(sendResult("first"));
+    if (nested) {
+      mockSendText.mockImplementationOnce(async (_thread, _text, _options, report) => {
+        await report?.(sendResult("caption"));
+        return fail();
       });
-
-    await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toMatchObject({
+    }
+    const onDeliveryResult = nested ? undefined : fail;
+    await expect(
+      sendMessageZalouser("thread", "a".repeat(2001), { onDeliveryResult }),
+    ).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
-      message: "voice send failed",
+      message: cause.message,
       cause,
       deliveryResult: {
-        messageIds: ["mid-first", "mid-caption"],
+        messageIds: ids,
         receipt: {
-          parts: [
-            expect.objectContaining({ platformMessageId: "mid-first" }),
-            expect.objectContaining({ platformMessageId: "mid-caption" }),
-          ],
+          parts: ids.map((platformMessageId) => expect.objectContaining({ platformMessageId })),
         },
         visibleReplySent: true,
       },
     });
-  });
-
-  it("retains provider acceptance when the delivery callback fails", async () => {
-    const cause = new Error("receipt persistence failed");
-    mockSendText.mockResolvedValueOnce(sendResult("mid-accepted"));
-
-    await expect(
-      sendMessageZalouser("thread", "a".repeat(2001), {
-        onDeliveryResult: () => {
-          throw cause;
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      cause,
-      deliveryResult: { messageIds: ["mid-accepted"], visibleReplySent: true },
-    });
-    expect(mockSendText).toHaveBeenCalledOnce();
+    expect(mockSendText).toHaveBeenCalledTimes(ids.length);
   });
 
   it.each(["newline", "media caption"] as const)(

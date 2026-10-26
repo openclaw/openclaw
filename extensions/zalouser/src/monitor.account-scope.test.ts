@@ -23,18 +23,8 @@ import {
 type ListenerParams = Parameters<typeof import("./zalo-js.js").startZaloListener>[0];
 
 it("publishes ready and scopes DM pairing-store reads and requests to accountId", async () => {
-  const readAllowFromStore = vi.fn(
-    async (
-      channelOrParams: string | { accountId?: string },
-      _env?: NodeJS.ProcessEnv,
-      accountId?: string,
-    ) => {
-      const scopedAccountId =
-        typeof channelOrParams === "object" && channelOrParams !== null
-          ? channelOrParams.accountId
-          : accountId;
-      return scopedAccountId === "beta" ? [] : ["attacker"];
-    },
+  const readAllowFromStore = vi.fn(async ({ accountId }: { accountId?: string }) =>
+    accountId === "beta" ? [] : ["attacker"],
   );
   const upsertPairingRequest = vi.fn(
     async (_params: { channel: string; id: string; accountId?: string }) => ({
@@ -109,8 +99,7 @@ it("publishes ready and scopes DM pairing-store reads and requests to accountId"
     }
   });
 
-  expect(readAllowFromStore).toHaveBeenCalledOnce();
-  expect(readAllowFromStore.mock.calls[0]?.[0]).toMatchObject({
+  expect(readAllowFromStore).toHaveBeenCalledExactlyOnceWith({
     channel: "zalouser",
     accountId: "beta",
   });
