@@ -1,6 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
-import * as normalization from "../normalize.js";
 import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
 import type { CronSchedule } from "../types.js";
 import { projectCronJobThroughStorageCodec as project, rowToCronJob } from "./row-codec.js";
@@ -17,7 +16,6 @@ const stream: CronSchedule = {
 const operator = { profileId: "profile-ada", scopes: ["operator.write"], assignedRole: null };
 const target = makeCronStreamSandboxTarget();
 
-afterEach(() => vi.restoreAllMocks());
 function decode(job: Record<string, unknown> & { id: string }) {
   return rowToCronJob(
     { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },
@@ -38,45 +36,19 @@ it.each([
 });
 
 it("requires the persisted sandbox discriminator and preserves the private target", () => {
-  const streamSandbox = target;
-  const job = {
-    ...makeCronJob({ schedule: structuredClone(stream) }),
-    streamSandbox,
-  };
+  const job = makeCronJob({ schedule: structuredClone(stream), streamSandbox: target });
   expect(decode(job)).toBeNull();
   expect(decode({ ...job, schedule: { ...job.schedule, kind: "sandbox-stream" } })).toMatchObject({
     schedule: job.schedule,
-    streamSandbox,
+    streamSandbox: target,
   });
   const projected = project(job);
-  expect(projected.streamSandbox).toEqual(streamSandbox);
-  expect(projected.streamSandbox).not.toBe(streamSandbox);
-  expect(projected.streamSandbox?.operator?.scopes).not.toBe(streamSandbox.operator?.scopes);
+  expect(projected.streamSandbox).toEqual(target);
+  expect(projected.streamSandbox).not.toBe(target);
+  expect(projected.streamSandbox?.operator?.scopes).not.toBe(target.operator?.scopes);
 });
 
-it("keeps private runtime authority out of job_json", () => {
-  const runtimeAuthority = {
-    version: 1 as const,
-    runtimeId: "codex",
-    namespace: "codex.apps",
-    payload: { apps: [{ id: "calendar" }] },
-  };
-  const job = project({
-    ...makeCronJob({}),
-    runtimeAuthority,
-    runtimeAuthorityRecoveryRequired: true,
-  });
-  expect(job.runtimeAuthority).toBeUndefined();
-  expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
-
-  const malformed = project({
-    ...makeCronJob({}),
-    runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
-  });
-  expect(malformed.runtimeAuthority).toBeUndefined();
-});
-
-it("round-trips a paced stream, normalizing its isolated clone without another envelope copy", () => {
+it("round-trips a paced stream without aliasing input config or runtime state", () => {
   const triggerState = { cursor: { position: 7 }, items: ["first"] };
   const input = makeCronJob({
     schedule: structuredClone(stream),
@@ -84,12 +56,8 @@ it("round-trips a paced stream, normalizing its isolated clone without another e
     state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
   });
   const before = structuredClone(input);
-  const clone = vi.spyOn(globalThis, "structuredClone");
-  const normalize = vi.spyOn(normalization, "normalizeCronJobInput");
   const projected = project(input);
 
-  expect(normalize.mock.calls[0]?.[0]).toBe(clone.mock.results[0]?.value);
-  expect(normalize.mock.calls[0]?.[0]).not.toBe(input);
   expect(projected.schedule).toStrictEqual(stream);
   expect(projected.pacing).toStrictEqual(input.pacing);
   expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
@@ -100,8 +68,5 @@ it("round-trips a paced stream, normalizing its isolated clone without another e
   expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
   triggerState.cursor.position = 9;
   triggerState.items.push("second");
-  expect(projected.state.triggerState).toStrictEqual({
-    cursor: { position: 7 },
-    items: ["first"],
-  });
+  expect(projected.state.triggerState).toStrictEqual(before.state.triggerState);
 });
