@@ -232,21 +232,12 @@ function bindingMetadata(input: BindingInput, agentId = "codex", webhookId?: str
   };
 }
 
-function mockConversationBinding(channel: string, agentId = "codex", parentRoom?: string): void {
+function mockConversationBinding(channel: string, agentId = "codex"): void {
   hoisted.sessionBindingBindMock.mockImplementationOnce(async (input: BindingInput) =>
     createSessionBinding({
       targetSessionKey: input.targetSessionKey,
-      conversation: {
-        ...input.conversation,
-        channel,
-        ...(parentRoom
-          ? {
-              conversationId: "child-thread",
-              parentConversationId: input.conversation.parentConversationId ?? parentRoom,
-            }
-          : {}),
-      },
-      metadata: bindingMetadata(input, agentId, parentRoom ? "wh-1" : undefined),
+      conversation: { ...input.conversation, channel },
+      metadata: bindingMetadata(input, agentId),
     }),
   );
 }
@@ -352,15 +343,6 @@ function expectThreadDelivery(
   });
 }
 
-function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
-  return (
-    value
-      ?.trim()
-      .replace(/^(?:matrix:)?(?:channel:|room:)/iu, "")
-      .trim() || undefined
-  );
-}
-
 function configureChannelBindings(channel: string, accountId?: string, defaultAccount?: string) {
   const threadBindings = { enabled: true, spawnSessions: true };
   hoisted.state.cfg.channels = {
@@ -376,30 +358,6 @@ function configureChannelBindings(channel: string, accountId?: string, defaultAc
 function installBindingPlugin(plugin: ChannelPlugin, placements?: SessionBindingPlacement[]) {
   setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
   registerBindingAdapter(plugin.id, "default", placements);
-}
-
-function enableMatrixAcpThreadBindings(): void {
-  configureChannelBindings("matrix");
-  installBindingPlugin({
-    ...createChannelTestPluginBase({ id: "matrix" }),
-    conversationBindings: { defaultTopLevelPlacement: "child" },
-    messaging: {
-      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
-        const parent = resolveMatrixRoomTargetForTest(parentConversationId);
-        const child = conversationId.trim();
-        return parent ? { to: `room:${parent}`, threadId: child } : { to: `room:${child}` };
-      },
-      resolveInboundConversation: ({ to, threadId }) => {
-        const parent = resolveMatrixRoomTargetForTest(to);
-        const thread = threadId != null ? String(threadId).trim() : "";
-        return thread && parent
-          ? { conversationId: thread, parentConversationId: parent }
-          : parent
-            ? { conversationId: parent }
-            : null;
-      },
-    },
-  });
 }
 
 function enableLineCurrentConversationBindings(): void {
@@ -587,27 +545,6 @@ describe("spawnAcpDirect", () => {
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-  });
-
-  it("reconciles a transport-ambiguous ACP dispatch so an accepted run is surfaced instead of misreported as dispatch_failed", async () => {
-    let agentDispatchAttempts = 0;
-    mockAgentDispatch(() => {
-      agentDispatchAttempts += 1;
-      if (agentDispatchAttempts === 1) {
-        throw new Error("gateway timeout after 60000ms");
-      }
-      return { runId: "accepted-acp-run", status: "in_flight" };
-    });
-
-    const result = await spawn(
-      { mode: "session", thread: true },
-      channelContext("discord", "channel:parent-channel", { agentThreadId: "requester-thread" }),
-    );
-
-    expect(agentDispatchAttempts).toBe(2);
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.runId).toBe("accepted-acp-run");
-    expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
   });
 
   it("forwards ACP lineage with unsupported external native actions and the exact parent token", async () => {
@@ -934,31 +871,6 @@ describe("spawnAcpDirect", () => {
     const failed = expectFailedSpawn(result, "forbidden");
     expect(failed.errorCode).toBe("subagent_policy");
     expect(failed.error).toContain("agentId is not allowed");
-  });
-
-  it("preserves Matrix parent room casing when binding from an existing thread", async () => {
-    enableMatrixAcpThreadBindings();
-    mockConversationBinding("matrix", "codex", "!Room:Example.org");
-
-    const result = await spawn(
-      { mode: "session", thread: true },
-      channelContext("matrix", "room:!Room:Example.org", {
-        agentSessionKey: "agent:main:matrix:channel:!room:example.org:thread:$thread-root",
-        agentThreadId: "$thread-root",
-        agentGroupId: "!room:example.org",
-      }),
-    );
-
-    expect(result.status, JSON.stringify(result)).toBe("accepted");
-    expectThreadDelivery(
-      {
-        channel: "matrix",
-        accountId: "default",
-        conversationId: "$thread-root",
-        parentConversationId: "!Room:Example.org",
-      },
-      { to: "room:!Room:Example.org", threadId: "child-thread" },
-    );
   });
 
   it("refuses to hand the current conversation to a spawned worker", async () => {

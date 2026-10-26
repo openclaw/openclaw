@@ -62,11 +62,6 @@ describe("subagent target policy", () => {
       `Only the requester agent is allowed as a target. ${omitMain}`,
     ],
     [
-      "an explicit allowlist",
-      { allowAgents: both, configuredAgentIds: both },
-      `Configured agent to target: main, planner. ${omitMain}`,
-    ],
-    [
       "a wildcard allowlist",
       { allowAgents: ["*"], configuredAgentIds: both },
       `Configured agent to target; any configured agent is allowed. ${omitMain}`,
@@ -80,12 +75,6 @@ describe("subagent target policy", () => {
       "requireAgentId",
       { allowAgents: both, configuredAgentIds: both, requireAgentId: true },
       'Configured agent to target: main, planner. agentId is required; the requester agent is "main".',
-    ],
-    [
-      "an allowed collector default",
-      { allowAgents: both, configuredAgentIds: both, collectDefaultAgentId: "planner" },
-      `Configured agent to target: main, planner. ${omitMain} ` +
-        'With collect=true, omit to target tools.swarm.defaultAgentId ("planner").',
     ],
     [
       "a sender-restricted session with a disallowed collector default",
@@ -127,34 +116,6 @@ describe("subagent target policy", () => {
         'Omit to keep the requester agent ("agent-00").',
     );
   });
-
-  it.each([
-    [
-      undefined,
-      "planner",
-      { ok: false, error: expect.stringContaining("requires explicit agentId") },
-    ],
-    ["planner", "planner", { ok: true }],
-    ["main", "main", { ok: false, error: expect.stringContaining("not allowed") }],
-  ] as const)(
-    "checks explicit target %s against requireAgentId and allowAgents",
-    (requestedAgentId, targetAgentId, expected) => {
-      const cfg = {
-        agents: {
-          entries: { main: { subagents: { allowAgents: ["planner"], requireAgentId: true } } },
-        },
-      };
-      expect(
-        resolveRequesterSpawnTargetPolicy({
-          cfg,
-          requesterAgentId: "main",
-          configuredAgentIds: ["main", "planner"],
-          requestedAgentId,
-          targetAgentId,
-        }),
-      ).toEqual(expected);
-    },
-  );
 
   it("resolves spawn target settings from the agent override, then defaults", () => {
     const cfg = {

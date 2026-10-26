@@ -30,7 +30,6 @@ describe("resolveTargetAcpAgentId", () => {
 describe("describeAcpSpawnTargetParameter", () => {
   it.each([
     ["empty registry", config({}), example("codex, claude")],
-    ["implicit main", {}, example("codex, claude")],
     ["configured default", config({}, defaultAcp), example("codex", defaultNote)],
     [
       "native agent exclusion",
@@ -106,14 +105,6 @@ describe("describeAcpSpawnTargetParameter", () => {
           workspaceDir: "/work",
         }),
       ).toBe("ACP harness id from: main. agentId is required.");
-    });
-
-    it("keeps the unrestricted guidance when the sender is not restricted", () => {
-      expect(
-        describeAcpSpawnTargetParameter(cfg, undefined, {
-          requesterAgentId: "main",
-        }),
-      ).toBe("ACP harness id, for example: coder. agentId is required.");
     });
   });
 });

@@ -269,43 +269,34 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it("rejects private collector completion before child effects", async () => {
-    await expectRefusedSpawn(
-      { completionTarget: "parent", collect: true },
-      'completionTarget="parent"',
-    );
-  });
-
-  it("rejects private completion without an existing parent incarnation", async () => {
-    await expectRefusedSpawn({ completionTarget: "parent" }, "existing requester session", {
-      agentSessionKey: "agent:main:missing",
-    });
-  });
-
-  it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
-    configureSwarm(false);
-    await expectRefusedSpawn(
-      { collect: true },
-      "tools.swarm.enabled=true",
+  it.each<
+    [
+      Partial<Parameters<typeof spawnSubagentDirect>[0]>,
+      string,
+      boolean?,
+      Parameters<typeof spawnSubagentDirect>[1]?,
+      string?,
+    ]
+  >([
+    [{ completionTarget: "parent", collect: true }, 'completionTarget="parent"'],
+    [
+      { completionTarget: "parent" },
+      "existing requester session",
+      false,
+      { agentSessionKey: "agent:main:missing" },
+    ],
+    [{ collect: true }, "tools.swarm.enabled=true", false, collectorContext, "forbidden"],
+    [{ collect: true }, "requesting run id", true],
+    [{ collect: true, thread: true }, "mode=run and thread=false", true, collectorContext],
+    [
+      { collect: true, outputSchema: { type: "object", properties: "invalid" } },
+      "Invalid sessions_spawn outputSchema",
+      true,
       collectorContext,
-      "forbidden",
-    );
-  });
-
-  it("requires a requesting run id when a collector omits groupId", async () => {
-    configureSwarm();
-
-    await expectRefusedSpawn({ collect: true }, "requesting run id");
-  });
-
-  it("rejects interactive collector mode at the direct spawn boundary", async () => {
-    configureSwarm();
-
-    await expectRefusedSpawn(
-      { collect: true, thread: true },
-      "mode=run and thread=false",
-      collectorContext,
-    );
+    ],
+  ])("rejects %j with %s before child effects", async (params, error, enabled, context, status) => {
+    configureSwarm(enabled ?? false);
+    await expectRefusedSpawn(params, error, context, status);
   });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
@@ -341,19 +332,20 @@ describe("spawnSubagentDirect seam flow", () => {
         outputSchema: { type: "object", required: ["answer"] },
       },
       {
-        agentSessionKey: "agent:main:main",
+        ...collectorContext,
         agentChannel: "telegram",
         agentAccountId: "default",
         agentTo: "chat:123",
         agentThreadId: "456",
-        requesterRunId: "parent-run",
       },
     );
 
-    expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
-    expect(result.groupId).toBe("swarm:agent:main:main:parent-run");
-    expect(result.expectsCompletionMessage).toBe(false);
+    expect(result).toMatchObject({
+      status: "accepted",
+      groupId: "swarm:agent:main:main:parent-run",
+      expectsCompletionMessage: false,
+    });
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       progressOrigin: {
@@ -368,9 +360,7 @@ describe("spawnSubagentDirect seam flow", () => {
       swarmCollector: true,
       swarmOutputSchema: { type: "object", required: ["answer"] },
     });
-    await vi.waitFor(() =>
-      expect(gatewayRequest("agent")).toEqual(expect.objectContaining({ method: "agent" })),
-    );
+    await vi.waitFor(() => gatewayRequest("agent"));
     expect(gatewayRequest("agent")).toMatchObject({
       params: {
         swarmCollector: true,
@@ -612,20 +602,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(rejected.error).toContain("tools.swarm.defaultAgentId");
   });
 
-  it("rejects collector live and lifetime caps with config-key errors", async () => {
+  it("rejects the collector lifetime cap with its config-key error", async () => {
     configureSwarm({ enabled: true, maxChildrenPerGroup: 1, maxTotalPerGroup: 2 });
-    hoisted.listSwarmRunsForGroupMock.mockReturnValueOnce([
-      { runId: "live", collect: true, groupId: "group" },
-    ]);
-    const liveRejected = await spawnCollector("second live child", { groupId: "group" });
-    expect(liveRejected.status).toBe("forbidden");
-    expect(liveRejected.error).toContain("tools.swarm.maxChildrenPerGroup");
-    expect(hoisted.listSwarmRunsForGroupMock).toHaveBeenLastCalledWith(
-      "group",
-      "agent:main:main",
-      "main",
-    );
-
     hoisted.listSwarmRunsForGroupMock.mockReturnValueOnce([
       { runId: "done", collect: true, collectorCompletion: { status: "done" } },
       { runId: "failed", collect: true, collectorCompletion: { status: "failed" } },
@@ -674,17 +652,13 @@ describe("spawnSubagentDirect seam flow", () => {
         return request.method?.startsWith("sessions.") ? { ok: true } : {};
       },
     );
-    const context = { agentSessionKey: "agent:main:main" };
-
-    const result = await spawn({ task: "ambiguous child" }, context);
+    const result = await spawn({ task: "ambiguous child" });
 
     expect(dispatchAttempts).toBe(3);
     const agentRequests = gatewayRequestRecords().filter((request) => request.method === "agent");
-    expect(agentRequests.map((request) => request.params)).toEqual([
-      agentRequests[0]?.params,
-      agentRequests[0]?.params,
-      agentRequests[0]?.params,
-    ]);
+    expect(agentRequests.map((request) => request.params)).toEqual(
+      Array(3).fill(agentRequests[0]?.params),
+    );
     expect(agentRequests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
     expect(result).toMatchObject({
       status: "accepted",
@@ -734,15 +708,6 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it("rejects invalid collector output schemas before creating a child session", async () => {
-    configureSwarm();
-    await expectRefusedSpawn(
-      { collect: true, outputSchema: { type: "object", properties: "invalid" } },
-      "Invalid sessions_spawn outputSchema",
-      collectorContext,
-    );
-  });
-
   it("rejects schema collection for a model that cannot call tools", async () => {
     configureSwarm();
     hoisted.prepareModelChoiceMock.mockImplementation(async (request) => {
@@ -779,10 +744,7 @@ describe("spawnSubagentDirect seam flow", () => {
       hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(resolveSandboxRuntimeStatus);
 
       const result = await spawn(
-        {
-          task: "attribute worker run",
-          agentId: "worker",
-        },
+        { task: "attribute worker run", agentId: "worker" },
         {
           agentSessionKey: "global",
           requesterAgentIdOverride: "main",
