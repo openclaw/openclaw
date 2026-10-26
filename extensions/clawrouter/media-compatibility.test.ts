@@ -10,6 +10,17 @@ import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { withClawRouterAudioFixture } from "./audio-transcription.test-support.js";
 
+function imageModel(id: string, input: Array<"text" | "image">) {
+  return {
+    id,
+    name: id,
+    input,
+    reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    maxTokens: 1024,
+  };
+}
+
 describe("ClawRouter configured media compatibility", () => {
   it.each([
     "explicit image",
@@ -45,21 +56,7 @@ describe("ClawRouter configured media compatibility", () => {
               }
               res.setHeader("content-type", "text/event-stream");
               res.end(
-                "data: " +
-                  JSON.stringify({
-                    id: "fixture",
-                    object: "chat.completion.chunk",
-                    created: 0,
-                    model: "gpt-4.1",
-                    choices: [
-                      {
-                        index: 0,
-                        delta: { role: "assistant", content: "synthetic image description" },
-                        finish_reason: "stop",
-                      },
-                    ],
-                  }) +
-                  "\n\ndata: [DONE]\n\n",
+                'data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"synthetic image description"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
               );
             })().catch((error: unknown) =>
               res.destroy(error instanceof Error ? error : new Error(String(error))),
@@ -77,22 +74,13 @@ describe("ClawRouter configured media compatibility", () => {
                     request: { allowPrivateNetwork: true },
                     models: [
                       {
-                        id: "gpt-4.1",
-                        name: "Fixture vision",
-                        reasoning: false,
-                        input: selection === "no image capability" ? ["text"] : ["text", "image"],
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        ...imageModel(
+                          "gpt-4.1",
+                          selection === "no image capability" ? ["text"] : ["text", "image"],
+                        ),
                         contextWindow: 8192,
-                        maxTokens: 1024,
                       },
-                      {
-                        id: "fixture-text",
-                        name: "Fixture text-only primary",
-                        input: ["text"],
-                        reasoning: false,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        maxTokens: 1024,
-                      },
+                      imageModel("fixture-text", ["text"]),
                     ],
                   },
                 },
@@ -100,21 +88,16 @@ describe("ClawRouter configured media compatibility", () => {
               tools: {
                 media: {
                   image: { enabled: true },
-                  ...(selection === "automatic image" ||
-                  selection === "native image" ||
-                  selection === "no image capability"
-                    ? {}
-                    : {
-                        models: [
+                  models:
+                    selection === "explicit image" || selection === "capability-less image"
+                      ? [
                           {
                             provider: "clawrouter",
                             model: "gpt-4.1",
-                            ...(selection === "explicit image"
-                              ? { capabilities: ["image" as const] }
-                              : {}),
+                            ...(selection === "explicit image" ? { capabilities: ["image"] } : {}),
                           },
-                        ],
-                      }),
+                        ]
+                      : undefined,
                 },
               },
             };
@@ -128,18 +111,16 @@ describe("ClawRouter configured media compatibility", () => {
                 model: selection === "native image" ? "gpt-4.1" : "fixture-text",
               },
             });
-            if (selection === "no image capability") {
-              expect(result.text).toBeUndefined();
-              expect(result.decision).toMatchObject({ outcome: "skipped" });
-              expect(requests.filter(({ url }) => url !== "/v1/catalog")).toHaveLength(0);
-              return;
-            }
-            if (selection === "native image") {
+            if (selection === "no image capability" || selection === "native image") {
               expect(result.text).toBeUndefined();
               expect(result.decision).toMatchObject({
                 outcome: "skipped",
-                nativeVisionActive: true,
-                attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+                ...(selection === "native image"
+                  ? {
+                      nativeVisionActive: true,
+                      attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+                    }
+                  : {}),
               });
               expect(requests.filter(({ url }) => url !== "/v1/catalog")).toHaveLength(0);
               return;

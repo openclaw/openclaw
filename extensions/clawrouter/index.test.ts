@@ -3,11 +3,10 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const providerAuthRuntimeMocks = vi.hoisted(() => ({
-  resolveApiKeyForProvider: vi.fn(),
-}));
+const providerAuthRuntimeMocks = vi.hoisted(() => ({ resolveApiKeyForProvider: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
@@ -111,6 +110,10 @@ function catalogContext(
 
 describe("ClawRouter plugin", () => {
   let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+  const prepare = (context = dynamicModelContext()) =>
+    provider.prepareDynamicModel?.(context as never);
+  const expectPrepared = async (context = dynamicModelContext()) =>
+    expect(await prepare(context)).toMatchObject({ id: "openai/gpt-5.5" });
   const resolveLevels = (efforts?: string[], agentRuntime?: string) =>
     provider
       .resolveThinkingProfile?.({
@@ -127,9 +130,7 @@ describe("ClawRouter plugin", () => {
     provider = await registerSingleProviderPlugin(plugin);
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("resolves authoritative catalog thinking profiles without inventing minimal", () => {
     const efforts = ["none", "low", "medium", "high", "xhigh", "max"];
@@ -177,12 +178,12 @@ describe("ClawRouter plugin", () => {
         { apiKey: "runtime-proxy-key", requestId: "automatic-call-id" },
       );
 
+      expect(calls[0]?.id).toBe("claude-sonnet-4-6");
       expect(calls[0]?.headers).toEqual({
         "x-request-id": "request-1",
         "X-ClawRouter-Client": "openclaw",
         Authorization: "Bearer runtime-proxy-key",
       });
-      expect(calls[0]?.id).toBe("claude-sonnet-4-6");
       expect(calls[0]?.params).toBeUndefined();
     },
   );
@@ -207,19 +208,20 @@ describe("ClawRouter plugin", () => {
     dispatch(streamModel(), { requestId: `${longRunId}:model:2` });
     dispatch(streamModel(), { requestId: "turn-😀:model:3" });
 
-    expect(calls[0]?.headers).toMatchObject({
+    const [first, second, third] = calls.map((call) => call.headers);
+    expect(first).toMatchObject({
       "x-clawrouter-client": "managed-openclaw",
       "X-ClawRouter-Agent-Id": "main",
       "X-ClawRouter-Project-Id": "fakeco",
       Authorization: "Bearer runtime-proxy-key",
     });
-    expect(calls[0]?.headers?.["X-ClawRouter-Session-Id"]).toHaveLength(256);
-    expect(calls[0]?.headers?.["X-ClawRouter-Session-Id"]).toMatch(/~[a-f0-9]{16}$/u);
-    expect(calls[0]?.headers?.["X-Request-ID"]).toHaveLength(128);
-    expect(calls[0]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:1$/u);
-    expect(calls[1]?.headers?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:2$/u);
-    expect(calls[1]?.headers?.["X-Request-ID"]).not.toBe(calls[0]?.headers?.["X-Request-ID"]);
-    expect(calls[2]?.headers?.["X-Request-ID"]).toMatch(/^turn-_~[a-f0-9]{16}:model:3$/u);
+    expect(first?.["X-ClawRouter-Session-Id"]).toHaveLength(256);
+    expect(first?.["X-ClawRouter-Session-Id"]).toMatch(/~[a-f0-9]{16}$/u);
+    expect(first?.["X-Request-ID"]).toHaveLength(128);
+    expect(first?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:1$/u);
+    expect(second?.["X-Request-ID"]).toMatch(/~[a-f0-9]{16}:model:2$/u);
+    expect(second?.["X-Request-ID"]).not.toBe(first?.["X-Request-ID"]);
+    expect(third?.["X-Request-ID"]).toMatch(/^turn-_~[a-f0-9]{16}:model:3$/u);
   });
 
   it("sanitizes Unicode attribution to distinct printable ASCII ByteStrings", () => {
@@ -374,7 +376,7 @@ describe("ClawRouter plugin", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const context = dynamicModelContext();
-    const first = provider.prepareDynamicModel?.(context as never);
+    const first = prepare(context);
     try {
       await Promise.race([firstStarted.promise, first]);
       const other = await provider.prepareDynamicModel?.({
@@ -393,12 +395,8 @@ describe("ClawRouter plugin", () => {
       await first;
     }
     expect(await first).toMatchObject({ id: "openai/gpt-5.5" });
-    expect(await provider.prepareDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
-    expect(
-      await provider.prepareDynamicModel?.({ ...context, modelId: "not-granted" } as never),
-    ).toBeUndefined();
+    await expectPrepared(context);
+    expect(await prepare({ ...context, modelId: "not-granted" })).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -415,12 +413,8 @@ describe("ClawRouter plugin", () => {
     );
     const context = dynamicModelContext();
 
-    expect(await provider.prepareDynamicModel?.(context as never)).toMatchObject({
-      id: "openai/gpt-5.5",
-    });
-    await expect(provider?.prepareDynamicModel?.(context as never)).rejects.toThrow(
-      "catalog unavailable",
-    );
+    await expectPrepared(context);
+    await expect(prepare(context)).rejects.toThrow("catalog unavailable");
   });
 
   it("dispatches replay and tool policies by upstream protocol family", () => {
@@ -442,4 +436,3 @@ describe("ClawRouter plugin", () => {
     });
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

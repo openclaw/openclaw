@@ -12,6 +12,8 @@ function toolSchema(name: string, parameters: unknown) {
 }
 const object = (properties: Record<string, unknown>) => ({ type: "object", properties });
 const emptyObject = object({});
+const bareObject = { type: "object" };
+const array = (items: unknown) => ({ type: "array", items });
 function normalize(tools: unknown[], modelId = "perplexity/sonar-pro") {
   return provider.normalizeToolSchemas?.(schemaContext(modelId, tools));
 }
@@ -37,14 +39,13 @@ function schemaContext(modelId: string, tools: unknown[]) {
 
 it("normalizes exec-like object maps", () => {
   const tools = toolSchema("exec", {
-    type: "object",
-    properties: {
+    ...object({
       env: {
-        type: "object",
-        patternProperties: { "^.*$": { type: "object" } },
-        additionalProperties: { type: "object" },
+        ...bareObject,
+        patternProperties: { "^.*$": bareObject },
+        additionalProperties: bareObject,
       },
-    },
+    }),
     additionalProperties: false,
   });
 
@@ -57,32 +58,39 @@ it("normalizes exec-like object maps", () => {
   ]);
 });
 
-it("normalizes nested unions, arrays, and definitions", () => {
-  const tools = toolSchema("nested", {
-    type: "object",
-    anyOf: [
-      { type: "object", additionalProperties: true },
-      {
-        type: "array",
-        items: object({ value: { anyOf: [{ type: "object" }, { type: "string" }] } }),
-      },
-    ],
-    $defs: {
-      metadata: { type: "object", patternProperties: { ".*": { type: "string" } } },
+const nestedUnion = (value: unknown) =>
+  array(object({ value: { anyOf: [value, { type: "string" }] } }));
+it.each([
+  [
+    "nested unions, arrays, and definitions",
+    {
+      ...bareObject,
+      anyOf: [{ ...bareObject, additionalProperties: true }, nestedUnion(bareObject)],
+      $defs: { metadata: { ...bareObject, patternProperties: { ".*": { type: "string" } } } },
     },
-  });
-
-  expect(normalize(tools)?.[0]?.parameters).toEqual({
-    ...emptyObject,
-    anyOf: [
-      emptyObject,
-      {
-        type: "array",
-        items: object({ value: { anyOf: [emptyObject, { type: "string" }] } }),
-      },
-    ],
-    $defs: { metadata: emptyObject },
-  });
+    {
+      ...emptyObject,
+      anyOf: [emptyObject, nestedUnion(emptyObject)],
+      $defs: { metadata: emptyObject },
+    },
+  ],
+  [
+    "dependentSchemas and unevaluatedProperties containers",
+    {
+      ...emptyObject,
+      dependentSchemas: { x: { ...bareObject, additionalProperties: false } },
+      unevaluatedProperties: bareObject,
+      additionalItems: { ...bareObject, additionalProperties: false },
+    },
+    {
+      ...emptyObject,
+      dependentSchemas: { x: emptyObject },
+      unevaluatedProperties: emptyObject,
+      additionalItems: emptyObject,
+    },
+  ],
+])("normalizes %s", (_name, input, expected) => {
+  expect(normalize(toolSchema("nested", input))?.[0]?.parameters).toEqual(expected);
 });
 
 it("treats union types containing object as object schemas", () => {
@@ -100,25 +108,6 @@ it("treats union types containing object as object schemas", () => {
     "union.parameters.properties.payload.additionalProperties",
     "union.parameters.properties.payload.properties",
   ]);
-});
-
-it("traverses dependentSchemas and unevaluatedProperties containers", () => {
-  const tools = toolSchema("containers", {
-    type: "object",
-    properties: {},
-    dependentSchemas: {
-      x: { type: "object", additionalProperties: false },
-    },
-    unevaluatedProperties: { type: "object" },
-    additionalItems: { type: "object", additionalProperties: false },
-  });
-
-  expect(normalize(tools)?.[0]?.parameters).toEqual({
-    ...emptyObject,
-    dependentSchemas: { x: emptyObject },
-    unevaluatedProperties: emptyObject,
-    additionalItems: emptyObject,
-  });
 });
 
 it("routes only Perplexity models through the plugin-local normalizer", () => {
