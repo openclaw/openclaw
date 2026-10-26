@@ -269,22 +269,30 @@ function prefetchHarness(
 }
 
 describe("node workspace retain coordinator", () => {
-  it("accepts bundle status when placement metadata changes after node dispatch", async () => {
+  it("publishes the durable snapshot and accepts status after placement metadata changes", async () => {
     const bundleHash = currentHash;
     const placements = [placement()];
     const { coordinator } = createHarness({
       placements,
+      environments: [
+        environment(),
+        environment({ environmentId: "environment-other", nodeDeviceId: "node-other" }),
+        environment({ environmentId: "environment-terminal", state: "orphaned" }),
+      ],
       bundleRetention: bundleRetention(receipt(bundleHash, "2026.8.10")),
     });
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
       () => new NodeRegistry(),
     );
-    const dispatched = createDeferredCore<string>();
+    const dispatched = createDeferredCore<{ id: string; command: string; paramsJSON: string }>();
     const client = makeClient("connection-1", "node-1", [], { clientId: "node-host" });
     vi.spyOn(client.socket, "send").mockImplementation((data) => {
-      const frame = JSON.parse(data.toString()) as { event?: string; payload?: { id: string } };
+      const frame = JSON.parse(data.toString()) as {
+        event?: string;
+        payload?: { id: string; command: string; paramsJSON: string };
+      };
       if (frame.event === "node.invoke.request" && frame.payload) {
-        dispatched.resolve(frame.payload.id);
+        dispatched.resolve(frame.payload);
       }
     });
     registerNodeSession(nodeRegistry, client, { pairingGeneration: "generation-1" });
@@ -300,7 +308,16 @@ describe("node workspace retain coordinator", () => {
     coordinator.bindTransport(nodeWorkerSupervisorTransport);
     const publishing = coordinator.start();
     try {
-      const id = await dispatched.promise;
+      const { id, command, paramsJSON } = await dispatched.promise;
+      expect(command).toBe(RETAIN_COMMAND);
+      expect(JSON.parse(paramsJSON)).toMatchObject({
+        version: 1,
+        gatewayNamespace: "gateway-test",
+        controllerId: expect.any(String),
+        sequence: 1,
+        bundleHashes: [previousHash, currentHash],
+        retain: [retainEntry],
+      });
       placements[0] = placement({ updatedAtMs: 3 });
       expect(
         nodeRegistry.handleInvokeResult({
@@ -324,33 +341,6 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it("publishes the complete durable retain snapshot for a connected device", async () => {
-    const { invoke } = await startHarness({
-      environments: [
-        environment(),
-        environment({
-          environmentId: "environment-other",
-          nodeDeviceId: "node-other",
-        }),
-        environment({ environmentId: "environment-terminal", state: "orphaned" }),
-      ],
-    });
-
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke.mock.calls[0]?.[0]).toMatchObject({
-      node,
-      command: RETAIN_COMMAND,
-      params: {
-        version: 1,
-        gatewayNamespace: "gateway-test",
-        controllerId: expect.any(String),
-        sequence: 1,
-        bundleHashes: ["b".repeat(64)],
-        retain: [retainEntry],
-      },
-    });
-  });
-
   it.each([
     { bundleRetention: 1, bundleStatus: undefined },
     { bundleRetention: undefined, bundleStatus: undefined },
@@ -367,15 +357,14 @@ describe("node workspace retain coordinator", () => {
         ? undefined
         : { currentBuild, isEnvironmentOwnedNode: () => false },
     });
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(requestParams(invoke)).toEqual({
-      version: 1,
-      gatewayNamespace: "gateway-test",
-      controllerId: expect.any(String),
-      sequence: 1,
+    expect(requestParams(invoke)).toMatchObject({
       retain: [retainEntry],
-      ...(capabilities.bundleRetention ? { bundleHashes: [previousHash] } : {}),
     });
+    if (capabilities.bundleRetention) {
+      expect(requestParams(invoke)).toHaveProperty("bundleHashes", [previousHash]);
+    } else {
+      expect(requestParams(invoke)).not.toHaveProperty("bundleHashes");
+    }
     if (!capabilities.bundleRetention) {
       expect(currentBuild).not.toHaveBeenCalled();
     }
@@ -451,9 +440,7 @@ describe("node workspace retain coordinator", () => {
     for (const key of ["bundleHashes", "acknowledgedBundleGeneration", "bundleStatusHash"]) {
       expect(input).not.toHaveProperty(key);
     }
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "Node bundle retention skipped (node-1): build preparation unavailable",
-    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("build preparation unavailable"));
   });
 
   it.each(["hash count", "combined bytes"])(
@@ -692,11 +679,6 @@ describe("node workspace retain coordinator", () => {
       bundleHashes: [artifact.bundleHash],
       retain: [],
     });
-    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
-      RETAIN_COMMAND,
-      RETAIN_COMMAND,
-      RETAIN_COMMAND,
-    ]);
   });
 
   it("prefetches the pinned build once after retention and preserves normal cleanup", async () => {

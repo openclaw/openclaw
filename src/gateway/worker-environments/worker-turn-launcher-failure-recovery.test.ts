@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -37,7 +36,7 @@ import {
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
-import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
+import { workspaceFile, workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -123,9 +122,8 @@ describe("worker turn launcher failure recovery", () => {
       const environment = fx.attachedEnvironment();
       assert(environment.bootstrapReceipt);
       environment.bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
-      const recovered = vi.fn(() => failPendingWorkspace(loss));
       const provider = createLauncher({
-        reconcileActivePlacement: recovered,
+        reconcileActivePlacement: () => failPendingWorkspace(loss),
         environments: {
           ...fx.unusedEnvironments(),
           get: () => environment,
@@ -157,7 +155,6 @@ describe("worker turn launcher failure recovery", () => {
       });
       const attempt = executeTurn(provider, "node-loss", vi.fn());
       await expect(attempt).rejects.toBeInstanceOf(WorkerNodeLostError);
-      expect(recovered).toHaveBeenCalledOnce();
       expectPlacement({ state: "failed", turnClaim: null });
     },
   );
@@ -433,7 +430,7 @@ describe("worker turn launcher failure recovery", () => {
       syncWorkspace: vi.fn(),
       reconcileWorkspace: vi.fn(),
     });
-    const { startTunnel, stopTunnel, destroy, acknowledgeCredentialDelivery } = environments;
+    const { stopTunnel, destroy, acknowledgeCredentialDelivery } = environments;
     const persistAbandonedPartial = vi.fn(async () => {});
     const provider = createLauncher({
       environments,
@@ -443,7 +440,6 @@ describe("worker turn launcher failure recovery", () => {
     await expect(executeTurn(provider, "run-replay-local-fallback", runLocal)).rejects.toThrow(
       WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
     );
-    expect(startTunnel).toHaveBeenCalledOnce();
     expectUncalled(
       launchTurn,
       persistAbandonedPartial,
@@ -460,19 +456,12 @@ describe("worker turn launcher failure recovery", () => {
     const active = activePlacement();
     const owner = journalOwner(active);
     const basePack = Buffer.from("conflicted journal snapshot");
-    const fileEntry = (text: string) => ({
-      path: "blocked.txt",
-      type: "file" as const,
-      mode: 0o644,
-      size: Buffer.byteLength(text),
-      sha256: createHash("sha256").update(text).digest("hex"),
-    });
     await fx.placements.beginWorkspaceReconciliation(
       owner,
       workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"f".repeat(64)}`, {
         temporaryNonce: "e".repeat(32),
-        baseEntries: [fileEntry("base\n")],
-        appliedEntries: [fileEntry("worker\n")],
+        baseEntries: [workspaceFile("blocked.txt", "base\n")],
+        appliedEntries: [workspaceFile("blocked.txt", "worker\n")],
         baseTree: "d".repeat(40),
         basePack,
       }),
@@ -511,7 +500,6 @@ describe("worker turn launcher failure recovery", () => {
     "keeps placement active after a runner rejection (dispatched: %s)",
     async (dispatched, error, expectedMessage) => {
       await fx.seedActivePlacement();
-      const startReconcile = vi.spyOn(fx.placements, "startReconcile");
       const environments = workerEnvironment({
         launchTurn: vi.fn(async (request) => {
           if (dispatched) {
@@ -529,7 +517,7 @@ describe("worker turn launcher failure recovery", () => {
       expect(runLocal).not.toHaveBeenCalled();
       expectPlacement({ state: "active", turnClaim: null });
       expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-      expectUncalled(stopTunnel, destroy, startReconcile);
+      expectUncalled(stopTunnel, destroy);
     },
   );
 

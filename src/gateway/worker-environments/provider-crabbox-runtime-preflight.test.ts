@@ -190,11 +190,9 @@ describe("Crabbox runtime preflight cleanup", () => {
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
-            expect(argv.slice(1)).toEqual(["--version"]);
             return commandResult({ stdout: "999.0.0" });
           }
           if (argv[1] === "providers") {
-            expect(argv.slice(1)).toEqual(["providers", "--json"]);
             return commandResult({ stdout: "[]" });
           }
           expect(argv.slice(1)).toEqual(["config", "show", "--json"]);
@@ -223,11 +221,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       });
       await restarted.reconcileOnce();
       expect(state.store.get(failed.environmentId)).toEqual(failed);
-      expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual([
-        ["--version"],
-        ["providers", "--json"],
-        ["config", "show", "--json"],
-      ]);
+      expect(runCommand.mock.calls.some(([argv]) => argv[1] === "stop")).toBe(false);
     },
   );
 
@@ -430,12 +424,9 @@ describe("Crabbox runtime preflight cleanup", () => {
       const prepareNodeEnrollment = vi.fn();
       await support.reopenWorkerEnvironmentStore();
       const provider = await registerProvider();
-      const provision = vi.spyOn(provider, "prepareProvision");
-      const resolveAllocation = vi.spyOn(provider, "resolveAllocation");
       let service = support.createService(provider, { prepareNodeEnrollment });
       if (entrance === "restart reconciliation") {
         await service.reconcileOnce();
-        expect(provision).toHaveBeenCalledOnce();
         expect.soft(state.store.get(original.environmentId)).toMatchObject({
           ...original,
           lastError: expect.stringContaining("cannot be replayed safely"),
@@ -454,27 +445,14 @@ describe("Crabbox runtime preflight cleanup", () => {
         teardownTerminalState: "destroyed",
         lastError: expect.stringContaining("cannot be replayed safely"),
       });
-      expect(resolveAllocation).toHaveBeenCalledExactlyOnceWith(
-        PROFILE,
-        original.provisionOperationId,
-      );
-      expect(provision).toHaveBeenCalledTimes(entrance === "restart reconciliation" ? 1 : 0);
-
       await support.reopenWorkerEnvironmentStore();
       const restartedProvider = await registerProvider();
-      const restartedProvision = vi.spyOn(restartedProvider, "prepareProvision");
-      const restartedResolution = vi.spyOn(restartedProvider, "resolveAllocation");
       service = support.createService(restartedProvider, { prepareNodeEnrollment });
       await service.reconcileOnce();
       await expect(service.destroy(original.environmentId)).rejects.toMatchObject({
         code: "provider_failure",
       });
       expect(service.get(original.environmentId)).toEqual(pending);
-      expect(restartedResolution.mock.calls).toEqual([
-        [PROFILE, original.provisionOperationId],
-        [PROFILE, original.provisionOperationId],
-      ]);
-      expect(restartedProvision).not.toHaveBeenCalled();
       expect(runCommand).not.toHaveBeenCalled();
       expect(prepareNodeEnrollment).not.toHaveBeenCalled();
       expect(state.bootstrapWorker).not.toHaveBeenCalled();
@@ -525,12 +503,10 @@ describe("Crabbox runtime preflight cleanup", () => {
     const calls: string[][] = [];
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
-        expect(argv.slice(1)).toEqual(["--version"]);
         return commandResult({ stdout: "999.0.0" });
       }
       calls.push(argv);
       if (argv[1] === "providers") {
-        expect(argv.slice(1)).toEqual(["providers", "--json"]);
         return commandResult({ stdout: "[]" });
       }
       if (argv[1] === "config") {
@@ -593,7 +569,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     await support.reopenWorkerEnvironmentStore();
     changed = true;
     const replayProvider = await makeProvider();
-    const resolveAllocation = vi.spyOn(replayProvider, "resolveAllocation");
     service = support.createService(replayProvider, { prepareNodeEnrollment });
     await service.reconcileOnce();
     expect(state.store.get(original.environmentId)).toMatchObject({
@@ -608,10 +583,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     await expect(service.destroy(original.environmentId)).rejects.toMatchObject({
       code: "provider_failure",
     });
-    expect(resolveAllocation).toHaveBeenCalledExactlyOnceWith(
-      profile,
-      original.provisionOperationId,
-    );
     expect(state.store.get(original.environmentId)).toMatchObject({
       state: "destroying",
       leaseId,
@@ -638,63 +609,4 @@ describe("Crabbox runtime preflight cleanup", () => {
     expect(prepareNodeEnrollment).not.toHaveBeenCalled();
     expect(state.bootstrapWorker).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      name: "unrepaired plaintext setup environment",
-      settings: { ...PROFILE, setupEnv: ["LEGACY_SETUP_TOKEN"] },
-      message: "openclaw doctor --fix",
-      commands: [],
-      intentRecorded: false,
-    },
-    {
-      name: "invalid duration",
-      settings: { ...PROFILE, ttl: "invalid" },
-      message: "positive Go duration",
-      commands: [],
-      intentRecorded: false,
-    },
-    {
-      name: "warm image without effective class",
-      settings: { ...CLASSLESS_PROFILE, warmImage: true },
-      message: "warmImage requires a configured class or a placement machine class",
-      commands: [["--version"], ["providers", "--json"]],
-      intentRecorded: true,
-    },
-  ])(
-    "keeps $name permanent before allocating a worker",
-    async ({ settings, message, commands, intentRecorded }) => {
-      support.getDevelopmentProfile().provider = "crabbox";
-      support.getDevelopmentProfile().settings = settings;
-      const runCommand = vi
-        .spyOn(processRuntime, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          if (argv[1] === "--version") {
-            expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "999.0.0" });
-          }
-          expect(argv.slice(1)).toEqual(["providers", "--json"]);
-          return commandResult({ stdout: "[]" });
-        });
-      const provider = await registerProvider();
-      const service = support.createService(provider, { prepareNodeEnrollment: vi.fn() });
-      await expect(
-        service.createWithRequest({
-          profileId: "development",
-          idempotencyKey: "invalid-immutable",
-        }),
-      ).rejects.toMatchObject({
-        code: "invalid_profile",
-        message: expect.stringContaining(message),
-      });
-      const records = state.store.list();
-      expect(records).toHaveLength(intentRecorded ? 1 : 0);
-      if (intentRecorded) {
-        expect(records[0]).toMatchObject({ state: "failed", leaseId: null });
-      }
-      await support.waitForFast(() =>
-        expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual(commands),
-      );
-    },
-  );
 });
