@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
@@ -232,37 +231,6 @@ describe("node worker launch adapter", () => {
 
   registerNodeLaunchAdapterNativeInferenceSuite();
 
-  it("cancels an in-flight status wait through its terminal receipt", async () => {
-    const node = nodeProof();
-    node.workerHost.statusWait = 1;
-    const entered = createDeferred();
-    const cancellation = new Error("status wait cancelled");
-    const sleep = vi.fn(async () => {});
-    replyAfterDispatch(
-      (request) => {
-        if (request.command === "worker.launch.v1") {
-          return wire(receipt(input, "running"));
-        }
-        expect(request.params).toHaveProperty("waitMs");
-        return new Promise((_, reject) => {
-          request.signal?.addEventListener("abort", () => reject(cancellation), { once: true });
-          entered.resolve();
-        });
-      },
-      (request) => {
-        expect(request.isDispatchAuthorized()).toBe(true);
-        return wire(receipt(input, "cancelled"));
-      },
-    );
-    configure({ nodes: async () => [node], sleep });
-    const launching = launch({ signal: controller.signal });
-    await entered.promise;
-    controller.abort(cancellation);
-    await expect(launching).resolves.toEqual(receipt(input, "cancelled"));
-    expect(sleep).not.toHaveBeenCalled();
-    expectCommands(invoke, ["launch", "status", "cancel"]);
-  });
-
   it.each([
     [0, false, 60_000, undefined],
     [2, false, 60_000, undefined],
@@ -295,7 +263,7 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it.each(["disconnect", "missing receipt", "older replacement"] as const)(
+  it.each(["disconnect", "RPC timeout", "missing receipt", "older replacement"] as const)(
     "reacquires the node and replays the launch after %s",
     async (recovery) => {
       let node = nodeProof();
@@ -304,10 +272,16 @@ describe("node worker launch adapter", () => {
       }
       let launches = 0;
       let discoveries = 0;
+      if (recovery === "RPC timeout") {
+        vi.useFakeTimers();
+      }
       invoke.mockImplementation(async (request) => {
         if (request.command === "worker.launch.v1") {
           expect(request.params).toEqual(input);
           request.onDispatchReady?.(`invoke-${++launches}`);
+          if (recovery === "RPC timeout" && launches === 1) {
+            return await new Promise<never>(() => {});
+          }
           if (recovery === "disconnect" && launches === 1) {
             return wireError("DISCONNECTED", "node disconnected");
           }
@@ -333,10 +307,18 @@ describe("node worker launch adapter", () => {
         nodes: async () => [recovery === "disconnect" ? nodeProof(`conn-${++discoveries}`) : node],
         sleep: async () => {},
       });
-      await expect(launch()).resolves.toEqual(receipt(input, "completed"));
+      const result = expect(
+        launch(recovery === "RPC timeout" ? { timeoutMs: 90_000, signal: controller.signal } : {}),
+      ).resolves.toEqual(receipt(input, "completed"));
+      if (recovery === "RPC timeout") {
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(launches).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await result;
       expectCommands(
         invoke,
-        recovery === "disconnect"
+        recovery === "disconnect" || recovery === "RPC timeout"
           ? ["launch", "launch"]
           : ["launch", "status", "launch", ...(recovery === "older replacement" ? ["status"] : [])],
       );
@@ -545,15 +527,17 @@ describe("node worker launch adapter", () => {
   });
 
   it.each(["launch", "status", "cancel"] as const)(
-    "preserves the node rejection and command when %s fails",
+    "preserves the command and bounded, redacted node rejection when %s fails",
     async (failedCommand) => {
+      const secret = "synthetic-worker-launch-secret-value";
       const rejection = "INVALID_REQUEST: prepared workspace binding is missing";
+      const wireRejection = `${rejection} token=${secret}\n${"x".repeat(2_048)}; field assignment is invalid`;
       const cancellationRejection = "INVALID_REQUEST: cancellation identity is invalid";
       replyAfterDispatch(
         (request) =>
           request.command === "worker.launch.v1" && failedCommand !== "launch"
             ? wire(receipt(input, "running"))
-            : wireError("INVALID_REQUEST", rejection),
+            : wireError("INVALID_REQUEST", wireRejection),
         () =>
           failedCommand === "cancel"
             ? wireError("INVALID_REQUEST", cancellationRejection)
@@ -563,12 +547,20 @@ describe("node worker launch adapter", () => {
 
       const error: unknown = await launch().catch((failure: unknown) => failure);
       expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) {
+        throw new Error("expected a launch error");
+      }
       const diagnostic = formatErrorMessage(error);
       expect(diagnostic).toContain(rejection);
+      expect(diagnostic).toContain("field assignment is invalid");
+      expect(error.message).not.toContain(secret);
       expect(diagnostic).toContain(`worker.${failedCommand}.v1`);
       if (failedCommand === "cancel") {
         expect(diagnostic).toContain(cancellationRejection);
         expect(diagnostic).toContain("cancellation could not be confirmed");
+      } else {
+        expect(error.message).not.toContain("\n");
+        expect(error.message.length).toBeLessThanOrEqual(1_024);
       }
       expectCommands(
         invoke,
@@ -577,99 +569,78 @@ describe("node worker launch adapter", () => {
     },
   );
 
-  it("bounds and redacts node rejection details before exposing the launch error", async () => {
-    const secret = "synthetic-worker-launch-secret-value";
-    replyAfterDispatch(() =>
-      wireError(
-        "INVALID_REQUEST",
-        `invalid descriptor token=${secret}\n${"x".repeat(2_048)}; field assignment is invalid`,
-      ),
-    );
-    const error: unknown = await launch().catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(Error);
-    if (!(error instanceof Error)) {
-      throw new Error("expected a launch error");
-    }
-    expect(error.message).toContain("invalid descriptor");
-    expect(error.message).toContain("field assignment is invalid");
-    expect(error.message).not.toContain(secret);
-    expect(error.message).not.toContain("\n");
-    expect(error.message.length).toBeLessThanOrEqual(1_024);
-  });
-
-  it("retries a timed-out launch RPC within its deadline", async () => {
-    let timedCalls = 0;
-    replyAfterDispatch(async (request) => {
-      if (request.command === "worker.launch.v1") {
-        timedCalls += 1;
-        return timedCalls === 1
-          ? await new Promise<never>(() => {})
-          : wire(receipt(input, "completed"));
+  it.each([
+    "hosting withdrawn",
+    "unsettled receipts",
+    "dispatch authority closed",
+    "status wait",
+  ] as const)("settles cancellation with independent authority after %s", async (cause) => {
+    let launched = false;
+    let dispatchAuthorized = true;
+    const cancelAuthorized = vi.fn(() => true);
+    const sleep = vi.fn(async () => {
+      if (cause === "dispatch authority closed") {
+        dispatchAuthorized = false;
+      } else {
+        controller.abort();
       }
+    });
+    const cancelResponses =
+      cause === "unsettled receipts"
+        ? [wire(null), wire(receipt(input, "running")), wire(receipt(input, "cancelled"))]
+        : [wire(receipt(input, "cancelled"))];
+    invoke.mockImplementation(async (request) => {
+      if (request.command === "worker.cancel.v1") {
+        expect(request.isDispatchAuthorized()).toBe(true);
+        expect(request.params).toMatchObject({
+          launchId: input.launchId,
+          planHash: nodeWorkerPlanHash(input),
+        });
+        return cancelResponses.shift()!;
+      }
+      if (cause === "status wait" && request.command === "worker.status.v1") {
+        expect(request.params).toHaveProperty("waitMs");
+        return await new Promise<never>((_, reject) => {
+          const cancellation = new Error("status wait cancelled");
+          request.signal?.addEventListener("abort", () => reject(cancellation), { once: true });
+          queueMicrotask(() => controller.abort(cancellation));
+        });
+      }
+      launched = true;
+      request.onDispatchReady?.("invoke-1");
       return wire(receipt(input, "running"));
     });
-    vi.useFakeTimers();
-    configure({ sleep: async () => {} });
-    const result = expect(
-      launch({ timeoutMs: 90_000, signal: controller.signal }),
-    ).resolves.toEqual(receipt(input, "completed"));
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(timedCalls).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await result;
-    expect(timedCalls).toBe(2);
-  });
-
-  it.each(["hosting withdrawn", "unsettled receipts", "dispatch authority closed"] as const)(
-    "settles cancellation with independent authority after %s",
-    async (cause) => {
-      let launched = false;
-      let dispatchAuthorized = true;
-      const cancelAuthorized = vi.fn(() => true);
-      const cancelResponses =
-        cause === "unsettled receipts"
-          ? [wire(null), wire(receipt(input, "running")), wire(receipt(input, "cancelled"))]
-          : [wire(receipt(input, "cancelled"))];
-      invoke.mockImplementation(async (request) => {
-        if (request.command === "worker.cancel.v1") {
-          expect(request.params).toMatchObject({
-            launchId: input.launchId,
-            planHash: nodeWorkerPlanHash(input),
-          });
-          return cancelResponses.shift()!;
+    configure({
+      nodes: async () => {
+        const node = nodeProof("conn-1", launched && cause === "hosting withdrawn" ? 0 : 2);
+        if (cause === "status wait") {
+          node.workerHost.statusWait = 1;
         }
-        launched = true;
-        request.onDispatchReady?.("invoke-1");
-        return wire(receipt(input, "running"));
-      });
-      configure({
-        nodes: async () => [nodeProof("conn-1", launched && cause === "hosting withdrawn" ? 0 : 2)],
-        sleep: async () => {
-          if (cause === "dispatch authority closed") {
-            dispatchAuthorized = false;
-          } else {
-            controller.abort();
-          }
-        },
-      });
+        return [node];
+      },
+      sleep,
+    });
 
-      await expect(
-        launch({
-          signal: controller.signal,
-          isDispatchAuthorized: () => dispatchAuthorized,
-          isCancellationAuthorized: cancelAuthorized,
-        }),
-      ).resolves.toEqual(receipt(input, "cancelled"));
-      expect(cancelAuthorized).toHaveBeenCalled();
-      expect(
-        invoke.mock.calls.filter(([request]) => request.command === "worker.cancel.v1"),
-      ).toHaveLength(cause === "unsettled receipts" ? 3 : 1);
-      expect(invoke.mock.calls.at(-1)?.[0].node.workerHost.capacity).toEqual({
-        total: 2,
-        available: cause === "hosting withdrawn" ? 0 : 2,
-      });
-    },
-  );
+    await expect(
+      launch({
+        signal: controller.signal,
+        isDispatchAuthorized: () => dispatchAuthorized,
+        isCancellationAuthorized: cancelAuthorized,
+      }),
+    ).resolves.toEqual(receipt(input, "cancelled"));
+    expect(cancelAuthorized).toHaveBeenCalled();
+    if (cause === "status wait") {
+      expect(sleep).not.toHaveBeenCalled();
+      expectCommands(invoke, ["launch", "status", "cancel"]);
+    }
+    expect(
+      invoke.mock.calls.filter(([request]) => request.command === "worker.cancel.v1"),
+    ).toHaveLength(cause === "unsettled receipts" ? 3 : 1);
+    expect(invoke.mock.calls.at(-1)?.[0].node.workerHost.capacity).toEqual({
+      total: 2,
+      available: cause === "hosting withdrawn" ? 0 : 2,
+    });
+  });
 
   it("reports unknown cancellation outcome after a hard cancellation deadline", async () => {
     vi.useFakeTimers();
