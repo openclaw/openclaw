@@ -1,18 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 
 function dockerResult(stdout = "", stderr = "", code = 0) {
   return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), code };
 }
-function finding(suffix: string, severity = "warn") {
-  return expect.objectContaining({ checkId: `sandbox.browser_container.${suffix}`, severity });
+function finding(suffix: string, severity = "warn", extra = {}) {
+  return expect.objectContaining({
+    checkId: `sandbox.browser_container.${suffix}`,
+    severity,
+    ...extra,
+  });
 }
-beforeEach(() => {
-  vi.useRealTimers();
-});
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 describe("security audit sandbox browser findings", () => {
   it.each([
@@ -22,9 +21,7 @@ describe("security audit sandbox browser findings", () => {
       ports: "",
       expected: [
         finding("hash_label_missing"),
-        expect.objectContaining({
-          checkId: "sandbox.browser_container.hash_epoch_stale",
-          severity: "warn",
+        finding("hash_epoch_stale", "warn", {
           detail: expect.stringContaining("openclaw-sbx-browser-old"),
         }),
       ],

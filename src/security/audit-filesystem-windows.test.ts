@@ -1,15 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
-
-const windowsAuditEnv = {
-  USERNAME: "Tester",
-  USERDOMAIN: "DESKTOP-TEST",
-};
 
 function windowsAclQueryResult(
   command: string,
@@ -43,13 +37,11 @@ function windowsAclQueryResult(
 describe("security audit filesystem Windows findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
 
-  let nativeModeEnv: ReturnType<typeof captureEnv>;
   beforeEach(() => {
-    nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
     // The injected Windows helper fixture exercises the supported command fallback.
-    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
   });
-  afterEach(() => nativeModeEnv.restore());
+  afterEach(() => vi.unstubAllEnvs());
 
   beforeAll(() => tempCases.setup());
   afterAll(() => tempCases.cleanup());
@@ -67,7 +59,7 @@ describe("security audit filesystem Windows findings", () => {
         includeFilesystem: true,
         configSnapshot: null,
         platform: "win32",
-        env: windowsAuditEnv,
+        env: { USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" },
         execIcacls: async (cmd: string, args: string[]) =>
           windowsAclQueryResult(cmd, args, stateGrant),
       },

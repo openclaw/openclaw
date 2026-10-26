@@ -19,11 +19,17 @@ function withAuditState(
   });
 }
 
-const skillFinding = (dir: string) =>
+const skillFinding = (dir: string, extra = {}) =>
   expect.objectContaining({
     checkId: "skills.code_safety",
     severity: "critical",
     detail: expect.stringContaining(dir),
+    ...extra,
+  });
+const scanFailed = (detail: string) =>
+  expect.objectContaining({
+    checkId: "skills.code_safety.scan_failed",
+    detail: expect.stringContaining(detail),
   });
 
 async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-procedure") {
@@ -78,9 +84,7 @@ it.each([
       (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
     );
     expect(critical).toHaveLength(2);
-    for (const dir of workshopDirs) {
-      expect(critical.some((finding) => finding.detail.includes(dir))).toBe(true);
-    }
+    expect(critical).toEqual(expect.arrayContaining(workshopDirs.map((dir) => skillFinding(dir))));
   });
 });
 
@@ -100,12 +104,7 @@ it("reports an unreadable grouping directory without skipping readable siblings"
     try {
       const findings = await collectInstalledSkillsCodeSafetyFindings(state);
       expect(findings).toContainEqual(skillFinding(skillDir));
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "skills.code_safety.scan_failed",
-          detail: expect.stringContaining(unreadable),
-        }),
-      );
+      expect(findings).toContainEqual(scanFailed(unreadable));
     } finally {
       opendirSpy.mockRestore();
     }
@@ -124,12 +123,7 @@ it.each(["contained", "escaping"] as const)("audits %s grouping symlinks", async
       location === "contained" ? [skillFinding(skillDir)] : [],
     );
     if (location === "escaping") {
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "skills.code_safety.scan_failed",
-          detail: expect.stringContaining("outside its configured root"),
-        }),
-      );
+      expect(findings).toContainEqual(scanFailed("outside its configured root"));
     }
   });
 });
@@ -142,12 +136,8 @@ it("audits child skills even when the Workshop container has a stray definition"
     const skillDir = await writeAuditSkill(workshopDir, true, "child-procedure");
 
     const findings = await collectInstalledSkillsCodeSafetyFindings(state);
-    expect(findings.filter((finding) => finding.checkId === "skills.code_safety")).toMatchObject([
-      {
-        severity: "critical",
-        title: expect.stringContaining("child-procedure"),
-        detail: expect.stringContaining(skillDir),
-      },
+    expect(findings.filter((finding) => finding.checkId === "skills.code_safety")).toEqual([
+      skillFinding(skillDir, { title: expect.stringContaining("child-procedure") }),
     ]);
   });
 });
