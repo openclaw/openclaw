@@ -2,41 +2,27 @@ import { expect, it } from "vitest";
 import { buildStatusChannelsTableRows } from "./channels-table.js";
 import { buildStatusAgentTableRows, buildStatusChannelDetailSections } from "./report-tables.js";
 
-type Agent = Parameters<typeof buildStatusAgentTableRows>[0]["agentStatus"]["agents"][number];
-const agent = (id: string, overrides: Partial<Agent> = {}): Agent => ({
-  id,
-  sessionsCount: 0,
-  sessionsPath: `/tmp/${id}.json`,
-  ...overrides,
-});
-const colors = { ok: (value: string) => `ok(${value})`, warn: (value: string) => `warn(${value})` };
-type RowCells = [string, string, string, string, string];
-const rowColumns = ["Agent", "BootstrapFile", "Sessions", "Active", "Store"];
-const row = (cells: RowCells) =>
-  Object.fromEntries(rowColumns.map((key, index) => [key, cells[index]]));
-
 it("neutralizes untrusted table fields before styling and preserves store line breaks", () => {
   const hostile = (text: string) => `\u001b]0;title\u0007\u001b[2J${text}\u0007\r\nnext\tcell`;
   const safe = (text: string) => `${text}\\r\\nnext\\tcell`;
   const warn = (text: string) => `\u001b[33m${text}\u001b[0m`;
-  expect(
-    buildStatusChannelsTableRows({
-      rows: [
-        {
-          id: "evil",
-          label: hostile("Channel"),
-          enabled: true,
-          state: "ok",
-          detail: hostile("Detail"),
-        },
-      ],
-      channelIssues: [{ channel: "evil", message: hostile("Issue") }],
-      ok: colors.ok,
-      warn,
-      muted: colors.ok,
-      accentDim: colors.ok,
-    }),
-  ).toEqual([
+  const colors = { ok: (value: string) => `ok(${value})`, warn };
+  const channels = buildStatusChannelsTableRows({
+    rows: [
+      {
+        id: "evil",
+        label: hostile("Channel"),
+        enabled: true,
+        state: "ok",
+        detail: hostile("Detail"),
+      },
+    ],
+    channelIssues: [{ channel: "evil", message: hostile("Issue") }],
+    ...colors,
+    muted: colors.ok,
+    accentDim: colors.ok,
+  });
+  expect(channels).toEqual([
     {
       Channel: safe("Channel"),
       Enabled: "ok(ON)",
@@ -44,43 +30,41 @@ it("neutralizes untrusted table fields before styling and preserves store line b
       Detail: `${safe("Detail")} · ${warn(`gateway: ${safe("Issue")}`)}`,
     },
   ]);
-  expect(
-    buildStatusAgentTableRows({
-      agentStatus: {
-        agents: [
-          agent(hostile("agent"), {
-            name: hostile("Name"),
-            status: "degraded",
-            sessionsPath: hostile("/tmp/store"),
-            admissionRefusal: { reason: hostile("Refused"), repairHint: hostile("Recover") },
-          }),
-        ],
-      },
-      ok: colors.ok,
-      warn,
-    }),
-  ).toEqual([
-    row([
-      `${safe("agent")} (${safe("Name")})${warn(" (degraded)")}`,
-      "unknown",
-      "unavailable",
-      warn("refused"),
-      `${safe("/tmp/store")}\n${safe("Refused")}\n${safe("Recover")}`,
-    ]),
-  ]);
-  expect(
-    buildStatusChannelDetailSections({
-      details: [
+  const agents = buildStatusAgentTableRows({
+    agentStatus: {
+      agents: [
         {
-          title: hostile("Accounts"),
-          columns: [hostile("Account"), "Status"],
-          rows: [{ [hostile("Account")]: hostile("account"), Status: "WARN" }],
+          id: hostile("agent"),
+          sessionsCount: 0,
+          name: hostile("Name"),
+          status: "degraded",
+          sessionsPath: hostile("/tmp/store"),
+          admissionRefusal: { reason: hostile("Refused"), repairHint: hostile("Recover") },
         },
       ],
-      ok: colors.ok,
-      warn,
-    }),
-  ).toEqual([
+    },
+    ...colors,
+  });
+  expect(agents).toEqual([
+    {
+      Agent: `${safe("agent")} (${safe("Name")})${warn(" (degraded)")}`,
+      BootstrapFile: "unknown",
+      Sessions: "unavailable",
+      Active: warn("refused"),
+      Store: `${safe("/tmp/store")}\n${safe("Refused")}\n${safe("Recover")}`,
+    },
+  ]);
+  const details = buildStatusChannelDetailSections({
+    details: [
+      {
+        title: hostile("Accounts"),
+        columns: [hostile("Account"), "Status"],
+        rows: [{ [hostile("Account")]: hostile("account"), Status: "WARN" }],
+      },
+    ],
+    ...colors,
+  });
+  expect(details).toEqual([
     {
       title: safe("Accounts"),
       columns: [
