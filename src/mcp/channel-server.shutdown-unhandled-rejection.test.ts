@@ -1,8 +1,8 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
-  lastTransport: null as { onclose?: (() => void) | undefined } | null,
+  transport: { onclose: undefined as (() => void) | undefined },
   serverClose: vi.fn(async () => {}),
   bridgeClose: vi.fn(async () => {
     throw new Error("close boom");
@@ -10,13 +10,9 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@modelcontextprotocol/server/stdio", () => ({
-  StdioServerTransport: class MockStdioServerTransport {
-    onclose?: () => void;
-
-    constructor() {
-      state.lastTransport = this;
-    }
-  },
+  StdioServerTransport: vi.fn(function () {
+    return state.transport;
+  }),
 }));
 
 vi.mock("@modelcontextprotocol/server", () => ({
@@ -45,50 +41,37 @@ vi.mock("./channel-bridge.js", () => ({
   },
 }));
 
-describe("serveOpenClawChannelMcp shutdown", () => {
-  const unhandledRejections: unknown[] = [];
-  const onUnhandledRejection = (reason: unknown) => {
-    unhandledRejections.push(reason);
-  };
+const onUnhandledRejection = vi.fn<(reason: unknown) => void>();
 
-  afterEach(() => {
-    process.off("unhandledRejection", onUnhandledRejection);
-    unhandledRejections.length = 0;
-    state.lastTransport = null;
-    state.serverClose.mockClear();
-    state.bridgeClose.mockClear();
-  });
+afterEach(() => {
+  process.off("unhandledRejection", onUnhandledRejection);
+  onUnhandledRejection.mockClear();
+  state.transport = { onclose: undefined };
+  state.serverClose.mockClear();
+  state.bridgeClose.mockClear();
+});
 
-  it.each([false, true])(
-    "closes every owner without unhandled rejections (aggregate=%s)",
-    async (aggregate) => {
-      if (aggregate) {
-        state.serverClose.mockRejectedValueOnce(new Error("server close boom"));
-      }
-      process.on("unhandledRejection", onUnhandledRejection);
-      const { serveOpenClawChannelMcp } = await import("./channel-server.js");
-      const servePromise = serveOpenClawChannelMcp({ verbose: false });
-      const transport = await vi.waitFor(() => {
-        if (!state.lastTransport) {
-          throw new Error("MCP stdio transport was not created");
-        }
-        return state.lastTransport;
-      });
-      transport.onclose?.();
-      if (aggregate) {
-        const error = await servePromise.catch((caught: unknown) => caught);
-        expect(error).toBeInstanceOf(AggregateError);
-        expect((error as AggregateError).errors).toEqual([
-          expect.objectContaining({ message: "close boom" }),
-          expect.objectContaining({ message: "server close boom" }),
-        ]);
-      } else {
-        await expect(servePromise).rejects.toThrow("close boom");
-      }
-      await setImmediate();
-      expect(unhandledRejections).toStrictEqual([]);
-      expect(state.bridgeClose).toHaveBeenCalledTimes(1);
-      expect(state.serverClose).toHaveBeenCalledTimes(1);
-    },
-  );
+it.each([false, true])("settles channel shutdown (aggregate=%s)", async (aggregate) => {
+  if (aggregate) {
+    state.serverClose.mockRejectedValueOnce(new Error("server close boom"));
+  }
+  process.on("unhandledRejection", onUnhandledRejection);
+  const { serveOpenClawChannelMcp } = await import("./channel-server.js");
+  const servePromise = serveOpenClawChannelMcp({ verbose: false });
+  await vi.waitFor(() => expect(state.transport.onclose).toBeTypeOf("function"));
+  state.transport.onclose?.();
+  if (aggregate) {
+    const error = await servePromise.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "close boom" }),
+      expect.objectContaining({ message: "server close boom" }),
+    ]);
+  } else {
+    await expect(servePromise).rejects.toThrow("close boom");
+  }
+  await setImmediate();
+  expect(onUnhandledRejection).not.toHaveBeenCalled();
+  expect(state.bridgeClose).toHaveBeenCalledTimes(1);
+  expect(state.serverClose).toHaveBeenCalledTimes(1);
 });
