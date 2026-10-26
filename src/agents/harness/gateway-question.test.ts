@@ -39,16 +39,9 @@ function expectUncalled(...mocks: Array<ReturnType<typeof vi.fn>>) {
   }
 }
 
-const questions = [
-  {
-    id: "answer",
-    header: "Answer",
-    question: "What should happen?",
-    isOther: true,
-    options: [],
-  },
-] as const;
-const secretQuestions = [{ id: "answer", header: "Answer", question: "Input", isSecret: true }];
+const baseQuestion = { id: "answer", header: "Answer", question: "What should happen?" };
+const questions = [{ ...baseQuestion, isOther: true, options: [] }] as const;
+const secretQuestions = [{ ...baseQuestion, isSecret: true }];
 
 function startQuestion(
   sessionKey: string,
@@ -74,8 +67,12 @@ function cancelQuestion(
   return cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply", authority });
 }
 
-function claimQuestion(sessionKey: string, text = "Continue") {
-  return claimPendingAgentQuestionAnswer({ sessionKey, text });
+function claimQuestion(
+  sessionKey: string,
+  text = "Continue",
+  options: Omit<Parameters<typeof claimPendingAgentQuestionAnswer>[0], "sessionKey" | "text"> = {},
+) {
+  return claimPendingAgentQuestionAnswer({ sessionKey, text, ...options });
 }
 
 function reserveQuestion(sessionKey: string, gatewayCall: AgentHarnessQuestionGatewayCall) {
@@ -244,17 +241,14 @@ describe("gateway harness questions", () => {
       let replacementController: AbortController | undefined;
       try {
         await promptDelivered.promise;
-        const claimParams = {
-          sessionKey,
-          text: "example-input",
+        claim = claimQuestion(sessionKey, "example-input", {
           sourceRecorder,
           persist: legacyPersist,
           authority: {
-            kind: "source-bound" as const,
+            kind: "source-bound",
             assertCurrent: () => source.signal.throwIfAborted(),
           },
-        };
-        claim = claimPendingAgentQuestionAnswer(claimParams).catch((error: unknown) => error);
+        }).catch((error: unknown) => error);
         if (change === "unstaged") {
           expect(await claim).toBe(true);
           await expect(question).resolves.toMatchObject({ status: "answered" });
@@ -280,9 +274,7 @@ describe("gateway harness questions", () => {
         expect(await claim).toBeInstanceOf(QuestionDispatchRefusedError);
         if (change === "uncommitted" || change === "question-replaced") {
           await expect(
-            claimPendingAgentQuestionAnswer({
-              sessionKey,
-              text: "replacement-input",
+            claimQuestion(sessionKey, "replacement-input", {
               persist: async () => {},
               authority: { kind: "source-bound", assertCurrent: () => {} },
             }),
@@ -351,9 +343,7 @@ describe("gateway harness questions", () => {
         preparation.release();
         expect(await attempt).toBeInstanceOf(PreparedQuestionAnswerRefusedError);
         expect(gatewayCall).not.toHaveBeenCalled();
-        await expect(
-          claimPendingAgentQuestionAnswer({ sessionKey, text: "fresh answer" }),
-        ).resolves.toBe(true);
+        await expect(claimQuestion(sessionKey, "fresh answer")).resolves.toBe(true);
         expect(gatewayCall).toHaveBeenCalledOnce();
         expect(persist).toHaveBeenCalledOnce();
         expect(prepare).toHaveBeenCalledOnce();

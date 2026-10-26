@@ -9,7 +9,6 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
-  appendTranscriptMessage,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
@@ -148,10 +147,9 @@ async function createTranscript(sessionId: string, content = "current") {
   const stateDir = tempDirs.make();
   const target = createTurnTarget(path.join(stateDir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-  const current = await appendTranscriptMessage(target, {
-    message: { role: "user", content },
-    now: 1_000,
-  });
+  const append = (role: "user" | "assistant", text: string, now: number, parentId?: string) =>
+    appendTurnMessage(target, role, text, now, parentId);
+  const current = await append("user", content, 1_000);
   assert(current?.anchor, "expected admitted transcript entry");
   const admission = {
     ...current.anchor,
@@ -159,7 +157,7 @@ async function createTranscript(sessionId: string, content = "current") {
     role: "user" as const,
   } satisfies TranscriptTurnAdmission;
   const database = openOpenClawAgentDatabase({ agentId: "main", path: admission.storePath });
-  return { stateDir, target, current, anchor: current.anchor, admission, database };
+  return { stateDir, target, append, current, anchor: current.anchor, admission, database };
 }
 
 describe("context-engine turn outbox", () => {
@@ -311,14 +309,11 @@ describe("context-engine turn outbox", () => {
         current: admitted,
         admission,
         database,
+        append,
       } = await createTranscript(accepted ? "recovered-turn" : "unaccepted-turn", "first");
-      enqueueContextEngineTurnIntent({
-        admission,
-        database,
-        engineId: "test",
-      });
-      const terminal = await appendTurnMessage(
-        target,
+      const owner = { database, engineId: "test" };
+      enqueueContextEngineTurnIntent({ ...owner, admission });
+      const terminal = await append(
         "assistant",
         accepted ? "first answer" : "rejected fallback",
         2_000,
@@ -327,13 +322,12 @@ describe("context-engine turn outbox", () => {
       assert(terminal?.anchor, "expected terminal transcript entry");
       if (accepted) {
         acceptContextEngineTurnIntent({
+          ...owner,
           boundary: { admission, terminal: terminal.anchor },
-          database,
-          engineId: "test",
-          runtimeContext: { ...runtimeContext },
+          runtimeContext,
         });
       }
-      const current = await appendTurnMessage(target, "user", "second", 3_000, terminal.messageId);
+      const current = await append("user", "second", 3_000, terminal.messageId);
       assert(current?.anchor, "expected current transcript entry");
       const currentAdmission = {
         ...current.anchor,
