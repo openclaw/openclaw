@@ -8,6 +8,7 @@ import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import * as toast from "../lib/toast.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -15,8 +16,8 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -801,13 +802,11 @@ describe("personal navigation rail", () => {
 
   it("paints a burst of unloaded pins together without changing their saved order", async () => {
     const { sidebar, sessions, result, dom } = await fixture();
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++frameId, callback);
-      return frameId;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
+    vi.stubGlobal("requestAnimationFrame", framesClock.request);
+    vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
     const keys = Array.from({ length: 30 }, (_, index) => `agent:other:pin-${index}`);
     const reads = keys.map(() =>
       createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>(),

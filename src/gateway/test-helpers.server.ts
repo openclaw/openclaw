@@ -70,6 +70,7 @@ import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
   createGatewayTestState,
+  createCompactionResult,
   cronIsolatedRun,
   embeddedRunMock,
   gatewayReplyMock,
@@ -356,16 +357,9 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   }
   embeddedRunMock.endWaiters.clear();
   embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset().mockResolvedValue({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
+  embeddedRunMock.compactEmbeddedAgentSession
+    .mockReset()
+    .mockResolvedValue(createCompactionResult());
 }
 
 async function removeGatewayTestDir(dir: string) {

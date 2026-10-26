@@ -18,6 +18,10 @@ import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
@@ -447,10 +451,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           const result = await runUtf8CommandWithTimeout(
             [
               nodeRunner,
-              path.join(
-                params.root,
-                "dist",
-                runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl({
+                  ...runtimeProcessEntrypoints.updateMigratedFinalize,
+                  root: params.root,
+                }),
+                nodeRunner,
               ),
               "--post-core",
             ],

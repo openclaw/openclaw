@@ -5,6 +5,8 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 
 type Worker<Operations extends SqliteWorkerOperations> = Pick<
   SqliteWorkerStore<Operations>,
@@ -35,4 +37,11 @@ export function interceptPendingInputWorker(
           }),
       );
     });
+}
+
+export function createPendingHistoryFixture(name: string, sessionId = name) {
+  const scope = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId };
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+  return { scope, database };
 }

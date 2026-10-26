@@ -28,10 +28,10 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as utils from "../../utils.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as shared from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
@@ -264,11 +264,7 @@ beforeEach(async () => {
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("keeps repair pending with a real state owner and unavailable systemd inspection", async () => {
   native.realOwner = true;

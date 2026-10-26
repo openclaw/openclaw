@@ -179,6 +179,63 @@ it.each(["The report", ""])("delivers a real file share with caption %j", async 
   });
 });
 
+it.each([
+  { filename: "reply.mp3", audioAsVoice: true, voice: true },
+  { filename: "reply.wav", audioAsVoice: true, voice: true },
+  { filename: "reply.mp3", audioAsVoice: undefined, voice: false },
+  { filename: "reply.ogg", audioAsVoice: true, voice: false },
+  { filename: "report.pdf", audioAsVoice: true, voice: false },
+])("delivers $filename with audioAsVoice=$audioAsVoice as voice=$voice", async (row) => {
+  await withTalk(async ({ ctx, directory, requests, bytes: pdf }) => {
+    const bytes = row.filename.endsWith(".wav")
+      ? Buffer.concat([
+          Buffer.from("RIFF"),
+          Buffer.alloc(4),
+          Buffer.from("WAVEfmt "),
+          Buffer.alloc(48),
+        ])
+      : row.filename.endsWith(".ogg")
+        ? Buffer.concat([
+            Buffer.from("OggS"),
+            Buffer.alloc(24),
+            Buffer.from("OpusHead"),
+            Buffer.alloc(32),
+          ])
+        : row.filename.endsWith(".mp3")
+          ? Buffer.concat([Buffer.from("ID3"), Buffer.alloc(61)])
+          : pdf;
+    const mediaUrl = path.join(directory, row.filename);
+    await writeFile(mediaUrl, bytes);
+    const result = await send({ ...ctx, mediaUrl, audioAsVoice: row.audioAsVoice });
+    const shareRequest = requests.find(({ url }) => url.pathname.endsWith("/shares"));
+    const share = new URLSearchParams(shareRequest?.body.toString());
+    expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({
+      caption: "The report",
+      replyTo: 41,
+      ...(row.voice ? { messageType: "voice-message" } : {}),
+    });
+    expect(requests.find(({ method }) => method === "PUT")?.body).toEqual(bytes);
+    expect(result.receipt.parts).toMatchObject([
+      { platformMessageId: "42", kind: row.voice ? "voice" : "media" },
+    ]);
+    expect(result.receipt.replyToId).toBe("41");
+  });
+});
+
+it("requires native delivery instead of a bot-only URL link for a voice request", async () => {
+  await withTalk(async ({ ctx, requests }) => {
+    await expect(
+      send({
+        ...ctx,
+        cfg: botOnlyConfig(ctx),
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    ).rejects.toThrow(/apiUser.*apiPassword/u);
+    expect(requests).toEqual([]);
+  });
+});
+
 it("requires API credentials before reading or uploading the attachment", async () => {
   await withTalk(async ({ ctx, requests }) => {
     const cfg = {

@@ -336,6 +336,14 @@ inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
 
+Activity recaps are shared Gateway metadata under the owning agent's utility
+route, including recaps of operator-created sessions. They do not inherit the
+operator's model policy, so recap calls can continue after a role model-policy
+revocation is acknowledged. Requesting a recap refresh still requires session
+write access; that permission queues the same service-owned work rather than
+delegating the caller's model authority. Disable the owning agent's utility
+routing to stop recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
+
 Native Codex staff work without a model policy has a limited attribution case
 when qualified native hooks are disabled or unavailable: previously accepted
 unrestricted input mixed with other work may continue under the receiver's valid

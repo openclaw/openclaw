@@ -6,6 +6,7 @@ import {
   createSignal,
   For,
   getOwner,
+  lazy,
   Match,
   onSettled,
   runWithOwner,
@@ -23,6 +24,8 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -32,14 +35,17 @@ import {
 import {
   StreamGroup,
   StreamPartView,
-  WorkGroupSummary,
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { ChatSourcePreviews } from "./chat-source-previews.tsx";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
+import "../../../styles/chat/source-previews.css";
+
+const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
+  export: "ChatSourcePreviews",
+});
 
 type AgentRunFrameOptions = {
   basePath?: string;
@@ -311,6 +317,7 @@ function RunFrame(props: FrameProps) {
                     item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
+                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
                       bubbleMode: options().streamOptions.bubbleMode,
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
@@ -348,7 +355,10 @@ function RunFrame(props: FrameProps) {
               {(group) => (
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <BrowserTabPreviews previews={state().workPreviews.get(group().key)} />
+                  <BrowserTabPreviews
+                    previews={state().workPreviews.get(group().key)}
+                    mediaReadAllowed={options().streamOptions.mediaReadAllowed}
+                  />
                 </>
               )}
             </Match>
@@ -356,10 +366,14 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
-    <ChatSourcePreviews
-      sources={state().sourcePreviews}
-      fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
-    />,
+    <Show when={state().sourcePreviews.length > 0}>
+      <ChatLazyBoundary>
+        <ChatSourcePreviews
+          sources={state().sourcePreviews}
+          fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+        />
+      </ChatLazyBoundary>
+    </Show>,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}

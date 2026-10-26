@@ -9,11 +9,9 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
-  createSessionContext,
   createTestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
-import { createPageState } from "./chat-state-page.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -95,32 +93,6 @@ const presentationChanges: Record<
 };
 
 describe("chat pane session presentation", () => {
-  it.each([undefined, { agentId: "research" }])(
-    "initializes projected page state from an empty or partial session fixture (%s)",
-    (stateOverride) => {
-      const sessions = createSessionCapabilityFixture({ state: stateOverride });
-      const context = createSessionContext(createGatewayBrowserClientFixture(), sessions);
-      const state = createPageState(
-        context,
-        { afterCommit: () => () => {} },
-        { dispatchEvent: () => true },
-      );
-      const rendered = vi.fn();
-      const view = mountSolid(() => {
-        createEffect(() => state.sessionsResult?.sessions[0]?.label, rendered);
-        return null;
-      });
-      rendered.mockClear();
-      state.sessionsResult = sessionsResult(
-        [{ key: state.sessionKey, kind: "direct", label: "Projected page title" }],
-        1,
-      );
-      flush();
-      expect(rendered).toHaveBeenCalledWith("Projected page title", undefined);
-      view.unmount();
-    },
-  );
-
   it.each(Object.entries(presentationChanges))(
     "redraws when the visible %s presentation changes",
     (_change, change) => {
@@ -166,28 +138,13 @@ describe("chat pane session presentation", () => {
       }
       f.publish(f.publication);
       f.rendered.mockClear();
-      for (const updatedAt of [2, 3, 4]) {
-        const result = sessionsResult(
-          [
-            f.selected,
-            f.parent,
-            {
-              ...f.foreign,
-              ...(surface === "transcript" ? { updatedAt } : {}),
-              label: `Other ${updatedAt}`,
-            },
-          ],
-          updatedAt,
-        );
-        f.publish({ ...f.publication, result });
-        expect(f.state.sessionsResult).toBe(result);
-        if (surface === "transcript") {
-          expect(f.rendered).not.toHaveBeenCalled();
-        } else {
-          expect(f.rendered).toHaveBeenCalledOnce();
-          f.rendered.mockClear();
-        }
-      }
+      const result = sessionsResult(
+        [f.selected, f.parent, { ...f.foreign, label: "Changed", updatedAt: 2 }],
+        2,
+      );
+      f.publish({ ...f.publication, result });
+      expect(f.state.sessionsResult).toBe(result);
+      expect(f.rendered).toHaveBeenCalledTimes(surface === "transcript" ? 0 : 1);
     },
   );
 

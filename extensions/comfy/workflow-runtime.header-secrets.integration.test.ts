@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildComfyConfig, registerComfyProviders } from "./test-helpers.js";
 
 const comfyProviders = registerComfyProviders();
@@ -78,17 +78,10 @@ beforeAll(async () => {
     }
     res.writeHead(404).end();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  baseUrl = `http://127.0.0.1:${await listenOnLoopback(server)}`;
 });
 
-afterAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-});
+afterAll(() => server[Symbol.asyncDispose]());
 
 beforeEach(() => {
   receivedAuthHeaders.length = 0;

@@ -256,7 +256,7 @@ export function streamWithIdleTimeout(
       reason = "no response from model",
       name = "LlmIdleTimeoutError",
     ) => {
-      const timer = setTimeout(() => {
+      return setTimeout(() => {
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
@@ -268,9 +268,7 @@ export function streamWithIdleTimeout(
         streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
-      }, delay);
-      timer.unref?.();
-      return timer;
+      }, delay).unref();
     };
     let requestDeadline:
       | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }

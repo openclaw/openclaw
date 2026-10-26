@@ -1,11 +1,9 @@
 import { CronPattern } from "croner";
-import { resolveExactDurationParts } from "../../../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { formatUnit } from "../../../lib/format.ts";
-import { formatCronSchedule } from "../../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { nonCronSessionAutomationSchedule } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -34,16 +32,8 @@ function yearRanges(years: number[]): string[] {
 
 /** Presentation only. Croner owns the grammar, including named days and special dates. */
 export function sessionAutomationSchedule(schedule: CronJob["schedule"]): string {
-  if (schedule.kind === "every") {
-    return t("chat.sessionAutomation.everyDuration", {
-      duration:
-        resolveExactDurationParts(schedule.everyMs)
-          ?.map((part) => formatUnit({ ...part, unitDisplay: "long" }))
-          .join(" ") ?? t("common.na"),
-    });
-  }
   if (schedule.kind !== "cron") {
-    return formatCronSchedule({ schedule });
+    return nonCronSessionAutomationSchedule(schedule);
   }
   let pattern: CronPattern;
   try {

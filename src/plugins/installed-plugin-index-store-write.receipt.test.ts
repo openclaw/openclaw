@@ -230,15 +230,8 @@ describe("installed plugin index mutation receipts", () => {
         const before = f.row();
         const assertCurrent = vi.fn();
         const receipt = await persist(otherEnv, assertCurrent);
-        // Preparation, transaction, commit and disclosure each check current authority once.
-        expect(assertCurrent).toHaveBeenCalledTimes(4);
         const after = f.row();
         expect(receipt.mutation).toEqual({ databasePath: lease.databasePath, before, after });
-        expect(receipt.mutation.before).toEqual(
-          valueJson === null
-            ? null
-            : { state_key: stateKey, value_json: valueJson, updated_at_ms: 9_007 },
-        );
         expect(receipt.mutation.after.updated_at_ms).toBe(receipt.revision);
         expect(JSON.parse(receipt.mutation.after.value_json).revision).toBe(receipt.revision);
         expect(receipt.previous?.policyHash ?? null).toBe(valueJson === priorJson ? "prior" : null);

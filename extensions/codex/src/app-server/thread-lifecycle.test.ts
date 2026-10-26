@@ -53,6 +53,7 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-fingerprints.js";
 import {
+  createAppServerOptions as createLifecycleAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createLifecycleRequest,
   createThreadRequestAppServerOptions as createAppServerOptions,
@@ -374,18 +375,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
 >[0]["appServer"] {
   return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    requestTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
+    ...createLifecycleAppServerOptions(),
     connectionClass: "local-loopback",
   };
 }
@@ -484,13 +474,7 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
 }
 
 function createSupervisedCommitRequest() {
-  return vi.fn(async (method: string, _requestParams?: unknown) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
+  return createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
     if (method === "thread/read") {
       return { thread: sourceThread({ threadId: sourceThreadId }) };
     }

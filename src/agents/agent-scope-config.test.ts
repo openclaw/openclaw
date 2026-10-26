@@ -267,6 +267,41 @@ describe("agent roster resolution", () => {
     }
   });
 
+  it("shares immutable agent ids per publication and capture without retaining removed agents", () => {
+    const previous = getRuntimeConfigSnapshot();
+    const config = twoAgents();
+    try {
+      setRuntimeConfigSnapshot(config);
+      const captured = captureRuntimeConfig(config);
+      const ids = listAgentIds(config);
+      const capturedIds = listAgentIds(captured);
+      expect(ids).toEqual(["main", "ops"]);
+      expect(listAgentIds(config)).toBe(ids);
+      expect(listAgentIds(captured)).toBe(capturedIds);
+      expect(Object.isFrozen(ids)).toBe(true);
+      expect(Object.isFrozen(capturedIds)).toBe(true);
+
+      delete config.agents!.entries!.ops;
+      setRuntimeConfigSnapshot(config);
+      expect(listAgentIds(config)).toEqual(["main"]);
+      expect(() => configuredAgent(config, "ops")).toThrow('Unknown agent id "ops"');
+      expect(listAgentIds(captured)).toBe(capturedIds);
+      expect(capturedIds).toEqual(["main", "ops"]);
+
+      clearRuntimeConfigSnapshot();
+      config.agents!.entries!.research = {};
+      expect(listAgentIds(config)).toEqual(["main", "research"]);
+      delete config.agents!.entries!.main;
+      expect(listAgentIds(config)).toEqual(["research"]);
+    } finally {
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
+  });
+
   it("does not treat Doctor migration provenance as runtime ownership", () => {
     const config = captureRuntimeConfig({ agents: { entries: { ops: {}, research: {} } } });
     for (const owner of ["ops", "research", undefined]) {

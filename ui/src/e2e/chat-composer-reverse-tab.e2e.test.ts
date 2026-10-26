@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Composer reverse Tab" });
@@ -36,6 +37,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.waitFor();
+      await waitForChatScrollIdle(page);
       await textarea.focus();
       await page.keyboard.press("Shift+Tab");
       const previous = await page.evaluateHandle(() => document.activeElement);

@@ -15,6 +15,7 @@ import {
   hostedDiffsEntry,
   hostedFeedDiffsEntry,
   metadataSnapshot,
+  mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -58,15 +59,6 @@ const {
   resolveManagedSetupCatalogIconUrl,
 } = await import("./management-service.js");
 
-function mockHostedOfficialCatalog(entries: unknown[]) {
-  mocks.officialCatalog.mockResolvedValue({
-    source: "hosted",
-    entries,
-    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
-  });
-}
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const listLocalPlugins = (config: OpenClawConfig = {}) =>
   listManagedPlugins({ config, env: {}, officialCatalog: { entries: [] } });
@@ -85,12 +77,12 @@ describe("managed plugin catalog", () => {
     mocks.providerAuthChoices.mockReturnValue([]);
     mocks.pluginVersionCategories.mockResolvedValue([]);
     mocks.recommendedInstalls.mockReturnValue([]);
-    mockHostedOfficialCatalog([]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
   it("normalizes package-shaped hosted rows and deduplicates their runtime id", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, [hostedFeedDiffsEntry]);
 
     const available = await listManagedPlugins({ config: {}, env: {} });
     expect(available.plugins).toEqual([
@@ -204,7 +196,7 @@ describe("managed plugin catalog", () => {
 
   it("does not transfer bundled endorsement to a package identity impostor", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mockHostedOfficialCatalog([
+    mockHostedOfficialCatalog(mocks.officialCatalog, [
       {
         ...hostedDiffsEntry,
         name: "community/impostor",

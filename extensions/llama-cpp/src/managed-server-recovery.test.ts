@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const mocks = vi.hoisted(() => ({
   dataDir: vi.fn<() => string>(),
@@ -56,49 +57,41 @@ async function createFixture() {
     await fs.writeFile(command, "restored managed executable");
     return { command, asset };
   });
-  const model = {
-    id: "chat",
-    maxTokens: 2048,
-    params: { modelPath },
-  };
   const provider = {
     baseUrl: "http://127.0.0.1:19432/v1",
     localService: {
       command,
-      args: ["--host", "127.0.0.1", "--port", "19432", "--models-preset", presetPath],
+      args: [..."--host 127.0.0.1 --port 19432 --models-preset".split(" "), presetPath],
     },
     params: { modelCacheDir: root },
     models: [],
   };
-  const prepare = () => ensureManagedLlamaServerForChat({ model, provider });
+  const prepare = () =>
+    ensureManagedLlamaServerForChat({
+      model: { id: "chat", maxTokens: 2048, params: { modelPath } },
+      provider,
+    });
   const embed = (localService = provider.localService) =>
     llamaCppEmbeddingProviderAdapter.create({
-      config: { models: { providers: { "llama-cpp": { ...provider, localService, models: [] } } } },
+      config: { models: { providers: { "llama-cpp": { ...provider, localService } } } },
       provider: "local",
       model: modelPath,
       local: { modelPath },
     });
-  return { root, asset, command, presetPath, modelPath, provider, prepare, embed };
+  return { root, command, presetPath, modelPath, provider, prepare, embed };
 }
 
-it.each(["missing host", "duplicate preset", "different port", "direct model"])(
-  "leaves routers untouched for a configuration with %s",
-  async (kind) => {
-    const { prepare, presetPath, modelPath, provider } = await createFixture();
-    const args = provider.localService.args;
-    if (kind === "missing host") {
-      args.splice(0, 2);
-    } else if (kind === "duplicate preset") {
-      args.push("--models-preset", `${presetPath}.other`);
-    } else if (kind === "different port") {
-      args[3] = "19433";
-    } else {
-      args.splice(4, 2, "--model", modelPath);
-    }
-    await prepare();
-    expect(mocks.reap).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  ["missing host", (args: string[]) => args.splice(0, 2)],
+  ["duplicate preset", (args: string[]) => args.push("--models-preset", "other.ini")],
+  ["different port", (args: string[]) => args.splice(3, 1, "19433")],
+  ["direct model", (args: string[]) => args.splice(4, 2, "--model", "chat.gguf")],
+] as const)("leaves routers untouched for a configuration with %s", async (_kind, changeArgs) => {
+  const { prepare, provider } = await createFixture();
+  changeArgs(provider.localService.args);
+  await prepare();
+  expect(mocks.reap).not.toHaveBeenCalled();
+});
 
 it.each(["absolute", "relative", "equals"])("recovers %s before transport", async (kind) => {
   const { root, command, presetPath, provider, embed } = await createFixture();
@@ -126,41 +119,27 @@ it.each(["absolute", "relative", "equals"])("recovers %s before transport", asyn
   });
   mocks.genericCreate.mockImplementation(async () => {
     expect(orphanAlive).toBe(false);
+    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
     return { provider: null };
   });
   await embed(localService);
   await embed(localService);
   expect(mocks.reap).toHaveBeenCalledOnce();
-  expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, true])("prepares chat with an existing executable: %s", async (existing) => {
-  const { asset, command, presetPath, prepare, provider } = await createFixture();
+  const { command, presetPath, prepare } = await createFixture();
   if (existing) {
     await fs.mkdir(path.dirname(command), { recursive: true });
     await fs.writeFile(command, "existing executable");
   }
   await prepare();
-  const installOptions = { asset, signal: undefined, onProgress: undefined };
-  expect(mocks.install.mock.calls).toEqual(existing ? [] : [[installOptions]]);
   expect(await fs.readFile(command, "utf8")).toBe(
     existing ? "existing executable" : "restored managed executable",
   );
   expect(await fs.readFile(presetPath, "utf8")).toContain("[chat]");
-  expect(provider.localService.command).toBe(command);
   await prepare();
   expect(mocks.install).toHaveBeenCalledTimes(existing ? 0 : 1);
-});
-
-it("restores the managed executable before creating the embedding transport", async () => {
-  const { asset, command, embed } = await createFixture();
-  mocks.genericCreate.mockImplementation(async () => {
-    expect(await fs.readFile(command, "utf8")).toBe("restored managed executable");
-    return { provider: null };
-  });
-  await embed();
-  expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
-  expect(mocks.genericCreate).toHaveBeenCalledTimes(1);
 });
 
 it("reports the missing OpenSSL runtime through embedding errors and status facts", async () => {
@@ -168,15 +147,9 @@ it("reports the missing OpenSSL runtime through embedding errors and status fact
   const server = http.createServer((_request, response) => {
     response.writeHead(503).end();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture server address");
-    }
-    provider.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    provider.baseUrl = `http://127.0.0.1:${port}/v1`;
     const detail =
       "llama-server: error while loading shared libraries: libssl.so.3: cannot open shared object file: No such file or directory";
     mocks.genericCreate.mockResolvedValue({

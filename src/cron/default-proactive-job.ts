@@ -13,7 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { readDefaultProactiveJobReceiptsAsync } from "./proactive-job-receipt.js";
 import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
-import { publishCronJobsStoreMutation } from "./store.js";
+import { noteCronJobsStoreCommit, publishCronJobsStoreMutation } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
 export const DEFAULT_PROACTIVE_PROMPT =
@@ -106,6 +106,11 @@ export async function provisionDefaultProactiveJob(
     input: { storePath, agentId: owner, planned, recoveryHoldPredicate },
     assertCurrent,
     snapshot: {},
+    onSettled: (outcome) => {
+      if (outcome === "unknown") {
+        noteCronJobsStoreCommit();
+      }
+    },
     publish: (outcome) => {
       if (outcome.created) {
         publishCronJobsStoreMutation(outcome.storeKey);

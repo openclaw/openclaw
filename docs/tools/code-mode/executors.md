@@ -17,10 +17,12 @@ config, include `enabled: "auto"` to retain automatic activation.
 
 An AOT standalone selects the `embedded-aot`
 [runtime execution profile](/concepts/runtime-profiles). Its Node executor
-reports `runtime_unavailable` before creating a VM worker. Run the Gateway with
-a Node/Bun installation or a JIT/bytecode standalone for host JavaScript
-execution. QuickJS is a separate guest runtime and needs its own embedded WASM
-and worker qualification; OpenClaw does not select it automatically.
+runs VM code interpreted and returns its normal results. A one-time performance
+notice recommends a JIT build for full speed. Builds that disable runtime code
+generation, including `--disallow-code-generation-from-strings=strict`, still
+report their runtime restriction with guidance. QuickJS remains a separate guest
+runtime with its own embedded WASM and worker qualification; OpenClaw does not
+select it automatically.
 
 ## Choose an executor
 
@@ -111,6 +113,7 @@ Gateway shutdown releases them. Neither survives a Gateway restart.
 `timeoutMs`, output limits, pending-call limits, suspended-run capacity, and
 `snapshotTtlSeconds` apply to both executors. The historical
 `snapshotTtlSeconds` name also controls Node's suspended-context lifetime.
+Suspended runs expire after elapsed time, unaffected by system-clock changes.
 The host enforces Node's execution deadline by terminating an overdue worker,
 including synchronous loops and promise continuations. Output emitted before
 the timeout remains available within the configured output limit.

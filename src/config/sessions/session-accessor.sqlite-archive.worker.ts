@@ -34,6 +34,7 @@ import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-age
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   hashSessionArchiveBytes,
+  trackSqliteArchiveTemporaryFile,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
@@ -66,9 +67,9 @@ import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-r
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import type {
   SessionColdPreparationWorkerData,
-  SessionColdWorkerData,
+  SqliteArchiveMutationRequest,
 } from "./session-cold-storage-worker.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql } from "./transcript-payload-read.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -174,6 +175,7 @@ async function encodeStagedTranscriptArchive(params: {
     nowMs: createdAt,
   })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
+  trackSqliteArchiveTemporaryFile(encodedPath, true);
   try {
     await pipeline([
       fs.createReadStream(params.stagedPath),
@@ -191,6 +193,7 @@ async function encodeStagedTranscriptArchive(params: {
     };
   } finally {
     fs.rmSync(encodedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(encodedPath, false);
   }
 }
 
@@ -212,6 +215,7 @@ export async function materializeTranscriptArchiveInWorker(
     reason: input.reason,
     sessionId: input.sessionId,
   })}.${randomUUID()}.jsonl-stage`;
+  trackSqliteArchiveTemporaryFile(stagedPath, true);
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -286,6 +290,7 @@ export async function materializeTranscriptArchiveInWorker(
     return { archive, sessionId: input.sessionId, ...(history ? { preparedPlan } : {}) };
   } finally {
     fs.rmSync(stagedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(stagedPath, false);
   }
 }
 
@@ -356,58 +361,73 @@ export function publishTranscriptArchiveInWorker(
   }
 }
 
+async function runArchiveSessionRequest(
+  port: NonNullable<typeof parentPort>,
+  env: NodeJS.ProcessEnv,
+  message: unknown,
+): Promise<boolean> {
+  // SAFETY: only the paired scoped archive owner sends this private port's requests.
+  const request = message as
+    | SqliteArchiveSessionRequest
+    | SqliteArchiveMutationRequest
+    | { type: "close" };
+  if (request.type === "close") {
+    return false;
+  }
+  if (request.type === "cold-mutation") {
+    const { runColdMutationWorkerPort } =
+      await import("./session-accessor.sqlite-mutation-worker.runtime.js");
+    await runColdMutationWorkerPort(request.port, request.data, request.operationId);
+    return true;
+  }
+  let response: SqliteArchiveSessionResponse;
+  if (request.operation === "materialize") {
+    const results: TranscriptArchiveWorkerResult[] = [];
+    for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
+      results.push(result);
+    }
+    response = { type: "done", results };
+  } else if (request.operation === "publish") {
+    response = {
+      type: "published",
+      results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
+    };
+  } else if (request.operation === "read-page") {
+    const { readTranscriptArchivePageInWorker } =
+      await import("./session-accessor.sqlite-archive-read.js");
+    const results: Array<TranscriptArchivePageResult | undefined> = [];
+    for (const plan of request.plans) {
+      results.push(await readTranscriptArchivePageInWorker(plan, env));
+    }
+    response = { type: "page-read", results };
+  } else {
+    const { readTranscriptArchiveFinalInWorker } =
+      await import("./session-accessor.sqlite-archive-read.js");
+    const results: TranscriptArchiveReadResult[] = [];
+    for (const plan of request.plans) {
+      results.push(await readTranscriptArchiveFinalInWorker(plan, env));
+    }
+    response = { type: "final-read", results };
+  }
+  // Each callee has closed its fresh database, streams, file descriptors and staging files.
+  // Failed publication still requires native exit in case its error came from native close.
+  port.postMessage(response);
+  return !(
+    response.type === "published" && response.results.some((result) => result.error !== undefined)
+  );
+}
+
 async function runArchiveSession(
   port: NonNullable<typeof parentPort>,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  for await (const [message] of on(port, "message")) {
+  for await (const messages of on(port, "message")) {
     cancelWorkerIdleGc();
-    // SAFETY: only the paired scoped archive owner sends this private port's requests.
-    const request = message as SqliteArchiveSessionRequest | { type: "close" };
-    if (request.type === "close") {
+    // Consume the event before waiting again; request payloads live only in the handler.
+    if (!(await runArchiveSessionRequest(port, env, messages.pop()))) {
       break;
     }
-    let response: SqliteArchiveSessionResponse;
-    if (request.operation === "materialize") {
-      const results: TranscriptArchiveWorkerResult[] = [];
-      for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
-        results.push(result);
-      }
-      response = { type: "done", results };
-    } else if (request.operation === "publish") {
-      response = {
-        type: "published",
-        results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
-      };
-    } else if (request.operation === "read-page") {
-      const { readTranscriptArchivePageInWorker } =
-        await import("./session-accessor.sqlite-archive-read.js");
-      const results: Array<TranscriptArchivePageResult | undefined> = [];
-      for (const plan of request.plans) {
-        results.push(await readTranscriptArchivePageInWorker(plan, env));
-      }
-      response = { type: "page-read", results };
-    } else {
-      const { readTranscriptArchiveFinalInWorker } =
-        await import("./session-accessor.sqlite-archive-read.js");
-      const results: TranscriptArchiveReadResult[] = [];
-      for (const plan of request.plans) {
-        results.push(await readTranscriptArchiveFinalInWorker(plan, env));
-      }
-      response = { type: "final-read", results };
-    }
-    // Each callee has closed its fresh database, streams, file descriptors and staging files.
-    // Failed publication still requires native exit in case its error came from native close.
-    port.postMessage(response);
-    const failed =
-      response.type === "published" &&
-      response.results.some((result) => result.error !== undefined);
-    response.results.length = 0;
-    request.plans = [];
     scheduleWorkerIdleGc();
-    if (failed) {
-      break;
-    }
   }
   port.close();
 }
@@ -514,20 +534,15 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       }
       port.postMessage({ type: "sized", results: [opened.value] }, []);
       port.close();
-    } else if (operation === "cold-mutate" || operation === "reclaim") {
-      const { runColdMutationWorkerPort, runReclamationWorkerPort } =
+    } else if (operation === "reclaim") {
+      const { runReclamationWorkerPort } =
         await import("./session-accessor.sqlite-mutation-worker.runtime.js");
-      if (operation === "cold-mutate") {
-        // SAFETY: the paired parent constructs this internal payload; commit revalidates its rows.
-        await runColdMutationWorkerPort(port, workerData as SessionColdWorkerData);
-      } else {
-        await runReclamationWorkerPort(
-          port,
-          // SAFETY: the parent creates these cloneable boot options from its typed plan.
-          (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
-            .databaseOptions,
-        );
-      }
+      await runReclamationWorkerPort(
+        port,
+        // SAFETY: the parent creates these cloneable boot options from its typed plan.
+        (workerData as { databaseOptions: SqliteSessionReclamationPlan["databaseOptions"] })
+          .databaseOptions,
+      );
     } else {
       throw new Error("SQLite transcript archive worker requires a supported operation");
     }

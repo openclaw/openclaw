@@ -3,6 +3,7 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildMinimaxImageGenerationProvider } from "./image-generation-provider.js";
 
 installPinnedHostnameTestHooks();
@@ -99,18 +100,14 @@ describe("minimax image-generation provider", () => {
 
     await generateImage({
       provider: "minimax-portal",
-      cfg: {
-        models: {
-          providers: {
-            ...imageConfig("minimax", "https://wrong.example/anthropic").models.providers,
-            "minimax-portal": {
-              baseUrl: "https://api.minimaxi.com/anthropic",
-              models: [],
-              request: requestOverrides,
-            },
-          },
+      cfg: createModelProviderConfig({
+        ...imageConfig("minimax", "https://wrong.example/anthropic").models.providers,
+        "minimax-portal": {
+          baseUrl: "https://api.minimaxi.com/anthropic",
+          models: [],
+          request: requestOverrides,
         },
-      },
+      }),
     });
 
     const request = postJsonResponse.mock.calls[0]?.[0];

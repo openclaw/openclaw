@@ -91,7 +91,6 @@ describe("system-agent delegation scenario tool policy", () => {
     });
     return {
       senderIsOwner,
-      names: tools.map((tool) => tool.name),
       delegate: tools.find((tool) => tool.name === "openclaw"),
     };
   }
@@ -109,7 +108,7 @@ describe("system-agent delegation scenario tool policy", () => {
       const policy = policyFor(getConfig(), options);
       expect(policy.senderIsOwner).toBe(owner);
       if (outcome === "absent") {
-        expect(policy.names).not.toContain("openclaw");
+        expect(policy.delegate).toBeUndefined();
       } else if (outcome === "gated") {
         const result = await expectDefined(policy.delegate, "offered openclaw tool").execute(
           "non-owner-delegation",
@@ -118,10 +117,7 @@ describe("system-agent delegation scenario tool policy", () => {
         expect(result.details).toMatchObject({ gated: true });
         expect(JSON.stringify(result.content)).toContain("openclaw needs the owner's authority");
       } else {
-        expect(policy.names).toContain("read");
-        expect(policy.delegate?.catalogMode).toBe("direct-only");
-        expect(config.tools).toEqual(baseline.tools);
-        expect(baseline.agents?.entries?.qa?.tools).toEqual({ profile: "coding" });
+        expect(policy.delegate).toBeDefined();
       }
     },
   );

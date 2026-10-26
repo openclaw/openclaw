@@ -559,15 +559,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      q.enqueue({
-        prompt,
-        messageId: replyToId,
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-        originatingReplyToId: replyToId,
-        originatingReplyToMode: "off",
-        originatingChatType: "channel",
-      });
+      q.slackAnchor(prompt, replyToId, "off");
     }
 
     await q.drain();
@@ -585,15 +577,7 @@ describe("followup queue collect routing", () => {
       ["one", "101.001"],
       ["two", "101.002"],
     ] as const) {
-      q.enqueue({
-        prompt,
-        messageId: replyToId,
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-        originatingReplyToId: replyToId,
-        originatingReplyToMode: "all",
-        originatingChatType: "channel",
-      });
+      q.slackAnchor(prompt, replyToId, "all");
     }
 
     await q.drain();

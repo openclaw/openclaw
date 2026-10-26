@@ -4,10 +4,11 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderSolid as LogsRoute } from "./logs-page.tsx";
@@ -196,17 +197,7 @@ it("retains truncation with stale rows and clears it when read access clears the
     .fn()
     .mockResolvedValueOnce({ ...tail(100, ["retained tail"], "/tmp/stale.log"), truncated: true })
     .mockRejectedValueOnce(new Error("log read failed"))
-    .mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "FORBIDDEN",
-        message: "permission denied",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.read",
-          requiredScopes: ["operator.read"],
-        },
-      }),
-    );
+    .mockRejectedValueOnce(missingReadScopeErrorFixture());
   const { page } = await setup(request);
   await poll();
   expect(page.lines()).toEqual(["retained tail"]);

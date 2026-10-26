@@ -74,10 +74,11 @@ function estimateReplicaBytes(
   const childSizes = memoizeDescendants ? sizes : undefined;
   let bytes = 32;
   if (Array.isArray(value)) {
-    bytes = value.reduce<number>(
-      (total, child) => total + 16 + estimateReplicaBytes(child, childSizes, false),
-      bytes,
-    );
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
+      }
+    }
   } else {
     for (const key in value) {
       bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
@@ -264,7 +265,7 @@ export function ensureReplicaSubscription(): void {
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           retainEntry(cell, {
             target: cell.target,
-            entry: structuredClone(prepared.fullEntry),
+            entry: prepared.fullEntry,
             dependencySessionIds,
             writeToken,
             snapshots: "full",

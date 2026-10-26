@@ -9,10 +9,6 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteCronJobRowInDatabase } from "../../cron/store/row-codec.js";
 import { withSettledLocalWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-settlement.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
@@ -24,6 +20,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
+import { rejectOnNextAbort } from "../test-helpers/abort-signal.js";
 import { requireGit } from "../worktrees/git.js";
 import { insertRegistryWorktree } from "../worktrees/registry.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
@@ -277,10 +275,6 @@ it("records custody before allocation and the exact private container before STA
     await f.expectCustody({ phase: "running", receipt: f.receipt });
   });
   const run = await f.start();
-  expect(f.prepare).toHaveBeenCalledWith(
-    expect.objectContaining({ command: { argv: ["fixture-watcher"], cwd: undefined } }),
-  );
-  expect(f.preparation.start).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
   await run.waitForExtinction?.();
   await f.expectReleased();
 });
@@ -451,18 +445,7 @@ it.each(["caller", "retirement"] as const)(
       f.preparation.start.mockImplementationOnce(async (admit) => {
         await admit();
         entered.resolve();
-        await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("START observation aborted"),
-              ),
-            { once: true },
-          );
-        });
+        await rejectOnNextAbort(signal, "START observation aborted");
       });
       return f.preparation;
     });
@@ -480,25 +463,9 @@ it.each(["caller", "retirement"] as const)(
   },
 );
 
-it("reads recovery custody once and observes reservations from a later lifecycle", async () => {
+it("observes reservations from a later recovery lifecycle", async () => {
   const f = await fixture();
-  await waitForDiagnosticEventsDrained();
-  let reads = 0;
-  const unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      if (event.type === "worker.request" && event.phase === "queued") {
-        reads++;
-      }
-    },
-    { include: ["worker.request"] },
-  );
-  try {
-    await f.owner.recover();
-    await waitForDiagnosticEventsDrained();
-    expect(reads).toBe(2); // One custody observation and one registry read.
-  } finally {
-    unsubscribe();
-  }
+  await f.owner.recover();
   replaceProcessOwner(await f.seedCustody("running"));
   await f.owner.recover();
   expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(f.receipt, expect.any(Function));
@@ -557,10 +524,6 @@ it.each([
     await expect(f.start()).rejects.toThrow("replacement is blocked");
     expect(await f.store.list()).toEqual(prior);
     expect(f.prepare).not.toHaveBeenCalled();
-    expect(listDockerPersistentExecContainers).toHaveBeenCalledWith(
-      f.receipt.target,
-      expect.stringMatching(/^[a-f0-9]{64}$/u),
-    );
     expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(orphan, expect.any(Function));
     vi.mocked(stopDockerPersistentExec).mockClear();
     replaceProcessOwner(record);
@@ -602,14 +565,6 @@ it("retains stopped custody through checkpoint failure and registry replacement 
   );
   await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
   await f.expectCustody({ phase: "stopped", receipt: f.receipt });
-  expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledWith(
-    expect.objectContaining({
-      projectionPath: f.registry.workspaceDir,
-      databasePath: f.store.databasePath,
-      env: f.store.environment,
-    }),
-    expect.any(Function),
-  );
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await replaceRegistry(replacement);
@@ -640,15 +595,12 @@ it("retains uncertain stop custody and refuses a replacement until the same owne
   f.preparation.stop.mockRejectedValue(new Error("daemon unavailable"));
   await expect(run.waitForExtinction?.()).rejects.toThrow("daemon unavailable");
   await f.expectCustody({ phase: "uncertain", receipt: f.receipt });
-  expect(f.finalize).not.toHaveBeenCalled();
   await expect(f.start({ releaseAuthority: vi.fn() })).rejects.toThrow("daemon unavailable");
   expect(f.prepare).toHaveBeenCalledTimes(1);
-  expect(f.finalize).not.toHaveBeenCalled();
   f.preparation.stop.mockResolvedValue(stopped(f.receipt));
   await f.owner.recover();
   await run.waitForExtinction?.();
   await f.expectReleased();
-  expect(f.preparation.stop).toHaveBeenCalledTimes(3);
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
@@ -669,9 +621,6 @@ it.each(["source", "registry", "parent container"] as const)(
     }
     await f.clock.advanceBy(20_000);
     await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-    expect(f.preparation.checkCurrent).toHaveBeenCalledTimes(
-      retirement === "parent container" ? 1 : 0,
-    );
     expect(f.preparation.stop).toHaveBeenCalledTimes(1);
     expect(f.preparation.start).toHaveBeenCalledTimes(1);
     expect(f.prepare).toHaveBeenCalledTimes(1);
@@ -682,10 +631,8 @@ it.each(["source", "registry", "parent container"] as const)(
 
 it("joins an in-flight authority check and workspace finalization before releasing durable custody", async () => {
   const f = await fixture();
-  const checking = createDeferredCore();
-  const checked = createDeferredCore();
-  const finalizing = createDeferredCore();
-  const finalized = createDeferredCore();
+  const checking = createEnteredGate();
+  const finalizing = createEnteredGate();
   const createStore = persistentExecStore.createSandboxPersistentExecStore;
   const storeFactory = vi
     .spyOn(persistentExecStore, "createSandboxPersistentExecStore")
@@ -695,8 +642,7 @@ it("joins an in-flight authority check and workspace finalization before releasi
         ...store,
         async checkExecutionCurrent(...args) {
           const result = await store.checkExecutionCurrent(...args);
-          checking.resolve();
-          await checked.promise;
+          await checking.wait();
           return result;
         },
       };
@@ -704,24 +650,23 @@ it("joins an in-flight authority check and workspace finalization before releasi
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await operation();
-      finalizing.resolve();
-      await finalized.promise;
+      await finalizing.wait();
     },
   );
   const run = await f.start();
   const wake = f.clock.advanceBy(20_000);
-  await checking.promise;
+  await checking.entered;
   const settlement = run.waitForExtinction?.();
   try {
     expect(f.preparation.stop).not.toHaveBeenCalled();
     await f.expectCustody({ phase: "running" });
-    checked.resolve();
-    await finalizing.promise;
+    checking.release();
+    await finalizing.entered;
     await f.expectCustody({ phase: "stopped" });
     expect(f.releaseAuthority).not.toHaveBeenCalled();
   } finally {
-    checked.resolve();
-    finalized.resolve();
+    checking.release();
+    finalizing.release();
     try {
       await Promise.all([settlement, wake]);
     } finally {

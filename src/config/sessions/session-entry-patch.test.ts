@@ -55,6 +55,7 @@ import {
 } from "./session-source-authority.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as reconcile from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const { getSessionEntryPatchDelivery, observeCommitAdmission } =
@@ -225,12 +226,8 @@ it.each([false, true])(
     await withFixture(async (f) => {
       const options = { agentId: f.database.agentId, path: f.database.path };
       const scope = { ...f.scope, sessionId: "original" };
-      const event = (id: string, parentId: string | null) => ({
-        type: "message",
-        id,
-        parentId,
-        message: { role: "user", content: id },
-      });
+      const event = (id: string, parentId: string | null) =>
+        messageEvent(id, parentId, { role: "user", content: id });
       runOpenClawAgentWriteTransaction(
         (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
         options,

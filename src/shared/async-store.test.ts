@@ -1,5 +1,6 @@
 import { AsyncLocalStorage, executionAsyncId } from "node:async_hooks";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runWithAsyncStore } from "./async-store.js";
 
 describe("runWithAsyncStore", () => {
@@ -47,10 +48,7 @@ describe("runWithAsyncStore", () => {
 
   it("inherits into awaited and detached continuations without leaking to siblings", async () => {
     const storage = new AsyncLocalStorage<string>();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
     let detached!: Promise<string | undefined>;
     const first = runWithAsyncStore(storage, "first", async () => {
       detached = gate.then(() => storage.getStore());

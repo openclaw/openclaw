@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { usageMessages } from "../pages/usage/view.test-support.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
@@ -19,14 +20,7 @@ suite.define(() => {
           output: 20,
           totalTokens: 120,
         };
-        const messages = {
-          total: 2,
-          user: 1,
-          assistant: 1,
-          toolCalls: 0,
-          toolResults: 0,
-          errors: 0,
-        };
+        const messages = usageMessages();
         await page.clock.setFixedTime(new Date(`${date}T12:00:00Z`));
         const gateway = await installMockGateway(page, {
           methodResponses: {

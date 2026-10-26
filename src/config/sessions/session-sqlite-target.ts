@@ -2,13 +2,15 @@ import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db-owner-read.js";
 import {
-  inspectOpenClawAgentDatabaseOwner,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+  listOpenClawRegisteredAgentDatabases,
+} from "../../state/openclaw-agent-db-registry-listing.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
   isIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
-import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
+} from "../../state/openclaw-agent-db.paths.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
   parseSqliteTargetSuffixIndex,

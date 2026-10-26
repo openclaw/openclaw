@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -168,7 +168,9 @@ the file. A clean-close seal carries validated facts across process restarts.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without
-checking the pathname again. Native open and reopen still identify replacement
+checking the pathname again. Shared-state handle lookups, including lease storage
+preparation, do not enter a schema read scope. Actual cached reads retain their
+schema and row-revision admission. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
 changes and publish new facts after successful DDL settlement. Ordinary Doctor

@@ -18,6 +18,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -757,12 +758,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
         stopReason: "stop",
         errorMessage: undefined,
         usage: {
-          input: 200,
-          output: 10,
+          ...createUsageFixture(200, 10, 235),
           cacheRead: 20,
           cacheWrite: 5,
-          totalTokens: 235,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
       }),
     );

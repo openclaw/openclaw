@@ -29,6 +29,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
@@ -106,7 +107,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 const roots = createTempDirTracker();
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 beforeEach(() => {
@@ -186,26 +186,8 @@ function observeColdAdmission(
   };
   releases.push(() => release.resolve());
   let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname === databasePath && !options?.readOnly) {
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += 1;
-            return all();
-          };
-        }
-        return statement;
-      };
-    }
-    return database;
+  observeNativeSqliteIntegrityChecks(databasePath, () => {
+    parentChecks += 1;
   });
   vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
     const work = realIntegrity(...args);

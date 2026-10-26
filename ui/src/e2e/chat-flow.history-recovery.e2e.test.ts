@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   newChatPage,
@@ -26,13 +27,6 @@ type FrameSample = {
   minOpacity: number;
   sessionKey: string;
 };
-const sessionRow = (key: string, label: string, updatedAt: number, extra = {}) => ({
-  key,
-  kind: "direct",
-  label,
-  updatedAt,
-  ...extra,
-});
 async function expectVisiblePair(page: Page, userIndex: number) {
   await expect
     .poll(async () => {

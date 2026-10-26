@@ -17,6 +17,7 @@ import {
 } from "./session-accessor.sqlite-generation-copy.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 it("treats a streaming copy onto its source as a no-op without deleting any rows", () =>
   withOpenClawTestState({ label: "generation-self-copy" }, async (state) => {
@@ -25,12 +26,7 @@ it("treats a streaming copy onto its source as a no-op without deleting any rows
     write((database) => {
       appendTranscriptEventsInTransaction(database, scope, [
         { type: "session", version: 3, id: scope.sessionId },
-        {
-          type: "message",
-          id: "message",
-          parentId: null,
-          message: { role: "user", content: "kept" },
-        },
+        messageEvent("message", null, { role: "user", content: "kept" }),
       ]);
       const rows = (sql: string) => database.db.prepare(sql).all();
       const snapshot = () => ({

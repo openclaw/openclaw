@@ -58,44 +58,42 @@ type SetupParams = {
 const XCODE_APP = "/Applications/Xcode.app";
 const XCODE_CLANG = `${XCODE_APP}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang`;
 const XCODE_MACOS_SDK = `${XCODE_APP}/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
+function commandAction(label: string, command: string) {
+  return { kind: "command" as const, label, command };
+}
+
+function settingsAction(label: string, settingsPath: string) {
+  return { kind: "system-settings" as const, label, settingsPath };
+}
+
 const SETUP_ACTIONS = {
-  "install-native-package": {
-    kind: "command",
-    label: "Install or reinstall the FaceTime native package with Homebrew",
-    command:
-      "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi",
-  },
-  "install-xcode-tools": {
-    kind: "command",
-    label: "Install full Xcode in /Applications",
-    command: "open 'https://apps.apple.com/us/app/xcode/id497799835'",
-  },
-  "enable-developer-tools": {
-    kind: "command",
-    label: "Enable developer tools access",
-    command: "sudo /usr/sbin/DevToolsSecurity -enable",
-  },
+  "install-native-package": commandAction(
+    "Install or reinstall the FaceTime native package with Homebrew",
+    "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi",
+  ),
+  "install-xcode-tools": commandAction(
+    "Install full Xcode in /Applications",
+    "open 'https://apps.apple.com/us/app/xcode/id497799835'",
+  ),
+  "enable-developer-tools": commandAction(
+    "Enable developer tools access",
+    "sudo /usr/sbin/DevToolsSecurity -enable",
+  ),
   "disable-sip-debugging": {
     kind: "recovery",
     label: "Disable SIP debugging restrictions from macOS Recovery, then reboot and rerun setup",
     command: "csrutil enable --without debug",
     settingsPath: "macOS Recovery > Utilities > Terminal",
   },
-  "verify-sip-status": {
-    kind: "command",
-    label: "Verify SIP status, then rerun setup",
-    command: "/usr/bin/csrutil status",
-  },
-  "configure-owner-handles": {
-    kind: "command",
-    label: "Configure ownerHandles",
-    command: "openclaw configure",
-  },
-  "restart-gateway": {
-    kind: "command",
-    label: "Stop the stale gateway process, then restart OpenClaw",
-    command: "openclaw gateway restart",
-  },
+  "verify-sip-status": commandAction(
+    "Verify SIP status, then rerun setup",
+    "/usr/bin/csrutil status",
+  ),
+  "configure-owner-handles": commandAction("Configure ownerHandles", "openclaw configure"),
+  "restart-gateway": commandAction(
+    "Stop the stale gateway process, then restart OpenClaw",
+    "openclaw gateway restart",
+  ),
   "wait-for-helper": {
     kind: "automatic",
     label: "Wait for automatic helper injection to finish",
@@ -109,31 +107,26 @@ const SETUP_ACTIONS = {
     label: "Install or update the paired FaceTime audio driver",
     gatewayMethod: "facetime.installDriver",
   },
-  "select-physical-output": {
-    kind: "system-settings",
-    label: "Select MacBook Speakers or another physical output",
-    settingsPath: "System Settings > Sound > Output",
-  },
-  "grant-system-audio": {
-    kind: "system-settings",
-    label: "Allow OpenClaw to capture FaceTime app audio",
-    settingsPath: "System Settings > Privacy & Security > Screen & System Audio Recording",
-  },
-  "configure-realtime-provider": {
-    kind: "command",
-    label: "Configure authentication for a registered realtime voice provider",
-    command: "openclaw configure",
-  },
-  "verify-focus": {
-    kind: "system-settings",
-    label: "Verify Focus is off or allows the expected caller",
-    settingsPath: "Control Center > Focus",
-  },
-  "allow-sharing-notifications": {
-    kind: "system-settings",
-    label: "Allow notifications while mirroring or sharing the display",
-    settingsPath: "System Settings > Notifications",
-  },
+  "select-physical-output": settingsAction(
+    "Select MacBook Speakers or another physical output",
+    "System Settings > Sound > Output",
+  ),
+  "grant-system-audio": settingsAction(
+    "Allow OpenClaw to capture FaceTime app audio",
+    "System Settings > Privacy & Security > Screen & System Audio Recording",
+  ),
+  "configure-realtime-provider": commandAction(
+    "Configure authentication for a registered realtime voice provider",
+    "openclaw configure",
+  ),
+  "verify-focus": settingsAction(
+    "Verify Focus is off or allows the expected caller",
+    "Control Center > Focus",
+  ),
+  "allow-sharing-notifications": settingsAction(
+    "Allow notifications while mirroring or sharing the display",
+    "System Settings > Notifications",
+  ),
   "live-outbound-test": {
     kind: "manual-test",
     label: "Place one outbound FaceTime audio call with facetime.dial",
@@ -143,11 +136,10 @@ const SETUP_ACTIONS = {
     kind: "manual-test",
     label: "Run one inbound and one outbound FaceTime audio call",
   },
-  "review-live-voicemail": {
-    kind: "system-settings",
-    label: "Review Live Voicemail if inbound audio calls are screened",
-    settingsPath: "Phone > Settings > Live Voicemail",
-  },
+  "review-live-voicemail": settingsAction(
+    "Review Live Voicemail if inbound audio calls are screened",
+    "Phone > Settings > Live Voicemail",
+  ),
 } satisfies Record<string, Omit<FaceTimeSetupAction, "id">>;
 
 const PRECHECK_ACTIONS: Record<string, keyof typeof SETUP_ACTIONS> = {

@@ -110,7 +110,10 @@ registeredElementSuite.define(() => {
       await page.goto(registeredElementSuite.server.baseUrl, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
 
-      expect(await page.locator("openclaw-app").textContent()).toBe("");
+      expect(await page.locator("#openclaw-boot-shell").isVisible()).toBe(true);
+      expect(
+        await page.locator("#openclaw-boot-shell .loading-skeleton__composer").isVisible(),
+      ).toBe(true);
       expect(await counter(page, renderCountKey)).toBeNull();
 
       await exhaustMountRecovery(page);

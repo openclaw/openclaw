@@ -286,7 +286,7 @@ export async function tryDispatchAcpReplyCore(
       const delivered = await delivery.deliver(kind, payload, meta);
       const text = isLive && kind === "block" ? delivery.getVisibleBlockDisplayText() : "";
       const delta = text.startsWith(streamedText) ? text.slice(streamedText.length) : text;
-      if (delta && !auditOnly) {
+      if (delta && !auditOnly && !params.suppressUserDelivery) {
         auditRuntime.emitAcpAssistantDelta({ runId: auditRunId, text, delta });
         streamedText = text;
       }

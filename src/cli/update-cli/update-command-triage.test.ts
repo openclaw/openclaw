@@ -296,23 +296,13 @@ it("uses a new report identity for each distinct CLI update execution", async ()
 
 it("does not start triage when the report action menu throws", async () => {
   const target = await createInstalledTriage();
-  const bin = path.join(target.root, "bin");
-  const triageReceipt = path.join(target.root, "triage-receipt");
-  await fs.mkdir(bin);
-  await fs.writeFile(
-    path.join(bin, "claude"),
-    `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(triageReceipt)}, "called");\n`,
-    { mode: 0o700 },
-  );
   reportActionSelect.mockRejectedValue(new Error("report storage unavailable"));
 
-  await withEnvAsync({ PATH: bin, HOME: target.root, USERPROFILE: target.root }, () =>
-    withTriageTerminal(true, async () => {
-      await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
-    }),
-  );
-
-  await expectMissing(triageReceipt);
+  await withTriageTerminal(true, async () => {
+    await expect(failUpdate(target)).rejects.toMatchObject({ code: 1 });
+  });
+  await expectNoTriage(target);
+  expectNoCalls(triageAfterFailure);
   expectMessages(defaultRuntime.error, "report storage unavailable");
 });
 

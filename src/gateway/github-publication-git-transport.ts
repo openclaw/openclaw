@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
@@ -8,10 +9,12 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
@@ -58,8 +61,8 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
           ...(options.cwd ? { cwd: options.cwd } : {}),
           env: {
             ...(argv[0] === "git"
-              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? process.env)
-              : (options.env ?? process.env)),
+              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? {})
+              : (options.env ?? {})),
             GIT_NO_REPLACE_OBJECTS: "1",
             // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
             ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
@@ -172,11 +175,39 @@ export async function requireGitHubPublicationCommit(
       { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
     );
     if (result.code !== 0) {
-      throw new Error(failure);
+      // This diagnostic reaches both receipt readers and recovery warnings. Remove
+      // whole remote URLs before truncation, including unrecognized query credentials.
+      const detail = truncateUtf8Prefix(
+        redactToolPayloadText(
+          sanitizeForLog(result.stderr.toString("utf8").replace(/[\r\n\t]+/gu, " ")).replace(
+            /\b[a-z][a-z\d+.-]*:\/\/\S+/giu,
+            "[redacted URL]",
+          ),
+        ).trim(),
+        1_024,
+      );
+      throw new Error(detail ? `${failure} Git fetch: ${detail}` : failure);
     }
   };
   if (!options.commitPresent) {
-    await fetch();
+    // Fetching a present non-promisor commit still makes Git enumerate every
+    // promisor object for connectivity. Probe the physical commit without lazy
+    // fetching or trusting commit-graph metadata; content hydration stays below.
+    const present = await run(
+      [
+        "git",
+        "-c",
+        "core.commitGraph=false",
+        "rev-list",
+        "--missing=allow-any",
+        "--no-walk",
+        `${sha}^{commit}`,
+      ],
+      { cwd, env },
+    );
+    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
+      await fetch();
+    }
   }
   if (!options.contents) {
     return;

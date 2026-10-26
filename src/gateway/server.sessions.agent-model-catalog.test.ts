@@ -31,10 +31,8 @@ const mainModel = { id: "main-only", name: "Main Model", provider: "main-provide
 const workModel = { id: "work-only", name: "Work Model", provider: "work-provider" };
 
 const catalog = (entries = [workModel]) => ({ entries, routeVariants: entries });
-const createAgentModelCatalogLoader = () =>
-  vi.fn(async (params?: { agentId?: string }) =>
-    catalog(params?.agentId === "work" ? [workModel] : [mainModel]),
-  );
+const loadAgentModelCatalog = async (params?: { agentId?: string }) =>
+  catalog(params?.agentId === "work" ? [workModel] : [mainModel]);
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";
 const selectedWork = { providerOverride: "work-provider", modelOverride: "work-only" };
@@ -135,7 +133,6 @@ test.each<["create" | "patch", string, ModelOptions]>([
   }
   const before = loadSessionEntry(access);
   const beforeConfig = await readConfigFileSnapshot();
-  const loadGatewayModelCatalogSnapshot = createAgentModelCatalogLoader();
   const result = await sessions.directSessionReq<{ entry?: SessionEntry }>(
     `sessions.${method}`,
     {
@@ -145,12 +142,11 @@ test.each<["create" | "patch", string, ModelOptions]>([
       label: "Updated label",
     },
     {
-      context: { loadGatewayModelCatalogSnapshot },
+      context: { loadGatewayModelCatalogSnapshot: loadAgentModelCatalog },
       ...(scenario.harness ? { client: { connect: { scopes: ["operator.admin"] } } as never } : {}),
     },
   );
 
-  expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
   if (fixture) {
     expect(coldPlugins.isColdPluginRuntimeLoaded(fixture)).toBe(false);
   }
@@ -221,7 +217,7 @@ test.each([false, true])("preserves write-scoped adoption (subagent: %s)", async
     key,
     sessions.sessionStoreEntry("existing-selection", subagent ? {} : selectedWork),
   );
-  const context = { loadGatewayModelCatalogSnapshot: createAgentModelCatalogLoader() };
+  const context = { loadGatewayModelCatalogSnapshot: loadAgentModelCatalog };
   const writeClient = { connect: { scopes: ["operator.write"] } } as never;
   const create = (
     model: string,

@@ -114,7 +114,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   };
   const scheduleObservation = (delayMs: number) => {
     executionStartTimer = setTimeout(observeExecutionStart, delayMs);
-    executionStartTimer.unref?.();
+    executionStartTimer.unref();
   };
   scheduleObservation(RESTART_RECOVERY_START_OBSERVATION_MS);
   let dispatchPromise: Promise<RestartRecoveryDispatchResult>;

@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { DEFAULT_WORKER_PENDING_BYTES } from "@openclaw/worker-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
+import { workerTaskPoolEntrypoints } from "../../infra/worker-task-pool-runtime.test-support.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type {
+  PoolFixtureInput,
+  PoolFixtureResult,
+} from "../../infra/worker-task-pool.test-support.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -204,6 +212,113 @@ it.each(["client cancellation", "time budget"] as const)(
   },
 );
 
+it("returns complete family usage while other reports occupy worker input capacity", async () => {
+  const families = [
+    { key: "agent:opus:capacity-first", prefix: "capacity-first", count: 2049 },
+    { key: "agent:opus:capacity-second", prefix: "capacity-second", count: 2048 },
+  ];
+  const storePath =
+    "/tmp/synthetic-usage-admission/retained-team-shaped-session-cost-usage-fixture/agents/opus/agent/openclaw-agent.sqlite";
+  const rows = families.flatMap(({ prefix, count }) =>
+    Array.from({ length: count }, (_, index) => {
+      const sessionId = `${prefix}-${index}`;
+      const sessionFile = `sqlite:opus:${sessionId}:${storePath}`;
+      return {
+        sessionId,
+        sessionFile,
+        mtime: 1000,
+        transcriptFile: {
+          kind: "sqlite" as const,
+          filePath: sessionFile,
+          sourcePath: sessionFile,
+          sessionId,
+          size: 1024,
+          mtimeMs: 1000,
+          eventCount: 4,
+          maxSeq: 4,
+          generation: "synthetic-generation",
+          cold: false,
+        },
+      };
+    }),
+  );
+  projectionFixture = createUsageSessionStoreFixture(
+    Object.fromEntries(
+      families.map(({ key, prefix, count }) => [
+        key,
+        {
+          sessionId: `${prefix}-0`,
+          updatedAt: 1000,
+          usageFamilyKey: key,
+          usageFamilySessionIds: Array.from({ length: count }, (_, index) => `${prefix}-${index}`),
+        },
+      ]),
+    ),
+    families.map(({ key }) => [key, "opus"] as const),
+  );
+  // Charge the observed background queue without allocating its payload. Two
+  // slots let a report finish while the background preparation remains admitted.
+  const pool = new WorkerTaskPool<PoolFixtureInput, PoolFixtureResult>({
+    workerUrl: resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker),
+    maxWorkers: 2,
+    idleTimeoutMs: 0,
+  });
+  const release = createDeferred();
+  const backgroundBytes = 265_155_910;
+  const background = pool.run(
+    async () => {
+      await release.promise;
+      return { label: "background usage reports" };
+    },
+    { inputBytes: backgroundBytes },
+  );
+  const backgroundOutcome = Promise.allSettled([background]);
+  const originalDiscovery = discovery.getMockImplementation()!;
+  const originalLoad = summaryLoader.getMockImplementation()!;
+  try {
+    // Fixture sanity: the full request is larger than the remaining real budget.
+    // The admission charge below omits envelope fields, so it is conservative.
+    expect(2 * JSON.stringify({ sessions: rows }).length).toBeGreaterThan(
+      DEFAULT_WORKER_PENDING_BYTES - backgroundBytes,
+    );
+    discovery.mockResolvedValue(rows);
+    summaryLoader.mockImplementation(async ({ sessions }) => {
+      await pool.run(
+        { label: "family usage report" },
+        { inputBytes: 2 * JSON.stringify({ sessions }).length },
+      );
+      return freshUsageBatch(
+        sessions.map(({ sessionId }) =>
+          sessionId?.startsWith("capacity-first-") ? usageTotals(7, 0.125) : usageTotals(11, 0.25),
+        ),
+      );
+    });
+    const result = await readSessionsUsage({ agentId: "opus", groupBy: "family" });
+    expect(result.totals).toMatchObject({ totalTokens: 36_871, totalCost: 768.125 });
+    expect(result.cacheStatus).toMatchObject({ status: "fresh", pendingFiles: 0, staleFiles: 0 });
+    expect(result.partial).toBeUndefined();
+    expect(result.sessions).toHaveLength(2);
+    expect(result.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "agent:opus:capacity-first",
+          usage: expect.objectContaining({ totalTokens: 14_343, totalCost: 256.125 }),
+        }),
+        expect.objectContaining({
+          key: "agent:opus:capacity-second",
+          usage: expect.objectContaining({ totalTokens: 22_528, totalCost: 512 }),
+        }),
+      ]),
+    );
+  } finally {
+    discovery.mockImplementation(originalDiscovery);
+    summaryLoader.mockImplementation(originalLoad);
+    release.resolve();
+    await backgroundOutcome;
+    await pool.close();
+  }
+});
+
 it.each(["time", "report allowance"])(
   "keeps completed batches after exhausting %s",
   async (budget) => {
@@ -217,7 +332,7 @@ it.each(["time", "report allowance"])(
     const originalDiscovery = discovered.getMockImplementation()!;
     const load = summaryLoader;
     const originalLoad = load.getMockImplementation()!;
-    discovered.mockResolvedValue(discoveredRows("budget", 257, true));
+    discovered.mockResolvedValue(discoveredRows("budget", 1025, true));
     load.mockImplementation(async ({ sessions, reportBudgetBytes }) => {
       if (timed && sessions.some(({ sessionId }) => sessionId === "budget-256")) {
         const signal = getAsyncWorkSignal()!;
@@ -257,7 +372,7 @@ it.each(["time", "report allowance"])(
       const result = readResult(await pending);
       expect(result).toMatchObject({
         totals: { totalTokens: 256 * 7 },
-        cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 1 },
+        cacheStatus: { status: "partial", cachedFiles: 256, pendingFiles: 769 },
       });
       if (timed) {
         expect(result.sessions).toHaveLength(50);

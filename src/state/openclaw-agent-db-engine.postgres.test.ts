@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { getEnvironmentData, threadId } from "node:worker_threads";
@@ -63,13 +64,17 @@ function captureStatements(run: () => void) {
 }
 
 it("leaves SQLite extension admission and statements unchanged", () => {
-  using db = openNodeSqliteDatabase(":memory:");
+  const filename = path.join(dirs.make("sqlite-search-admission-"), "agent.sqlite");
+  using db = openNodeSqliteDatabase(filename);
+  db.exec("CREATE TABLE preserved (value BLOB); INSERT INTO preserved VALUES (X'001122ff')");
+  const bytes = readFileSync(filename);
   const statements = captureStatements(() => {
     admitAgentEngineSearchExtensions(db, { "memory.text": text }, () => {
       throw new Error("SQLite must retain its own memory admission");
     });
   });
   expect(statements).toEqual([]);
+  expect(readFileSync(filename)).toEqual(bytes);
 });
 
 describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", () => {
@@ -136,6 +141,9 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
       publishSqliteDatabaseSchemaChange(anchor);
       const statements = captureStatements(() => {
         db = open();
+        admitAgentEngineSearchExtensions(db, definitions, () => {
+          throw new Error("Persisted extensions must already be admitted after reopen");
+        });
         const rebound = admitStoreSearch(db, vector);
         expect(rebound.vector).not.toBeNull();
         expect(rebound.vectors.chunks?.postgres?.dimensions).toBe(3);
@@ -151,6 +159,35 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
         ),
       ).toEqual([]);
       expect(JSON.parse(extensions())).toEqual(definitions);
+    });
+  });
+
+  it("does no SQL or write admission for 20 warm memory extension requests", () => {
+    withEngineStoreAdmission(() => {
+      const statements = captureStatements(() => {
+        for (let index = 0; index < 20; index++) {
+          admitAgentEngineSearchExtensions(db, { "memory.text": text }, () => {});
+        }
+      });
+      expect(statements).toHaveLength(0);
+      admitAgentEngineSearchExtensions(db, { "memory.text": text }, () => {
+        throw new Error("An admitted search must not request write authority");
+      });
+    });
+  });
+
+  it("refuses a changed definition through the existing admission path", () => {
+    withEngineStoreAdmission(() => {
+      const stages: string[] = [];
+      expect(() =>
+        admitAgentEngineSearchExtensions(
+          db,
+          { "memory.text": textSchema("body", "memory_index_sources", "path", "id") },
+          (stage) => stages.push(stage),
+        ),
+      ).toThrow(/Search extension memory.text changed/);
+      expect(stages).toEqual(["transaction"]);
+      expect(JSON.parse(extensions())["memory.text"]).toEqual(text);
     });
   });
 
@@ -177,16 +214,32 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
-  it("admits a first-use search extension on a new handle sharing physical admission", () => {
+  it("locks first-use installation and shares its admission with another handle", () => {
     withEngineStoreAdmission(() => {
       using nextAnchor = openNodeSqliteDatabase(databasePath);
       const next = open(nextAnchor);
       try {
         expect(getPostgresPhysicalFacts(next)).toBe(getPostgresPhysicalFacts(db));
         const paths = { "memory.paths": textSchema("paths", "memory_index_sources", "path", "id") };
-        admitAgentEngineSearchExtensions(next, paths, () => {});
+        const stages: string[] = [];
+        const tryLock = () =>
+          db.prepare("SELECT pg_try_advisory_xact_lock(?) AS locked").get(next.advisoryLockKey);
+        admitAgentEngineSearchExtensions(next, paths, (stage) => {
+          stages.push(stage);
+          if (stage === "transaction") {
+            expect(tryLock()).toEqual({ locked: 0 });
+          }
+        });
+        expect(stages).toEqual(["transaction", "commit"]);
+        expect(tryLock()).toEqual({ locked: 1 });
         // A second publication must consume the committed definition without reinstalling DDL.
-        admitAgentEngineSearchExtensions(next, paths, () => {});
+        expect(
+          captureStatements(() =>
+            admitAgentEngineSearchExtensions(db, paths, () => {
+              throw new Error("A second handle must reuse committed extension admission");
+            }),
+          ),
+        ).toEqual([]);
         expect(JSON.parse(extensions())).toEqual({
           "memory.text": text,
           "memory.vector": vector,
@@ -226,6 +279,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
       };
       const predecessor: StoreSchema = {
         ...agentEngineSchema,
+        ...agentEngineSchema.postgresMigrations!.find((step) => step.version === 32)!.fromSchema,
         version: 31,
         postgresVectorDecoderVersion: 1,
         postgresVectorSearchVersion: 1,

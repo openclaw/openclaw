@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { withServer } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addQaCredentialSet,
@@ -26,13 +26,6 @@ function mockFetch(response: unknown, status = 200) {
   return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
     jsonResponse(response, status),
   );
-}
-
-function jsonResponse(response: unknown, status = 200) {
-  return new Response(JSON.stringify(response), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function fetchCall(fetchImpl: ReturnType<typeof mockFetch>) {

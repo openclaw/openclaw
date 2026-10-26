@@ -25,6 +25,15 @@ export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_r
 
 export const PROGRESS_CARD_REFRESH_SOURCE_TOOL = "progress_card_refresh" as const;
 
+/** Execution input, never a delivered cron announcement or a user-authored prompt. */
+export const CRON_EXECUTION_SOURCE_TOOL = "cron_execution" as const;
+
+export function isCronExecutionInputProvenance(provenance: InputProvenance | undefined): boolean {
+  return (
+    provenance?.kind === "internal_system" && provenance.sourceTool === CRON_EXECUTION_SOURCE_TOOL
+  );
+}
+
 /** The card is the only visible result of this Gateway-authored status request. */
 export function isProgressCardRefreshInputProvenance(
   provenance: InputProvenance | undefined,
@@ -98,15 +107,21 @@ export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
   message: T,
   inputProvenance: InputProvenance | undefined,
 ): T {
-  if (!inputProvenance || (message as { role?: unknown }).role !== "user") {
+  if ((message as { role?: unknown }).role !== "user") {
     return message;
   }
   const existing = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-  if (existing) {
+  const provenance = existing ?? inputProvenance;
+  if (!provenance) {
+    return message;
+  }
+  const hideExecutionInput = isCronExecutionInputProvenance(provenance);
+  if (existing && (!hideExecutionInput || Reflect.get(message, "display") === false)) {
     return message;
   }
   return Object.assign({}, message, {
-    provenance: inputProvenance,
+    ...(existing ? {} : { provenance }),
+    ...(hideExecutionInput ? { display: false } : {}),
   });
 }
 
@@ -165,7 +180,10 @@ const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = n
 
 export function shouldPreserveUserFacingSessionStateForInputProvenance(value: unknown): boolean {
   const provenance = normalizeInputProvenance(value);
-  if (isProgressCardRefreshInputProvenance(provenance)) {
+  if (
+    isProgressCardRefreshInputProvenance(provenance) ||
+    isCronExecutionInputProvenance(provenance)
+  ) {
     return true;
   }
   if (provenance?.kind !== "inter_session") {

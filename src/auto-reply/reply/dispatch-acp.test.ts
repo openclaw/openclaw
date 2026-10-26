@@ -63,6 +63,7 @@ const managerMocks = vi.hoisted(() => ({
 }));
 
 const auditMocks = vi.hoisted(() => ({
+  emitAcpAssistantDelta: vi.fn(),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
   emitAcpLifecycleEnd: vi.fn(),
@@ -163,6 +164,7 @@ vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
   return {
     ...actual,
+    emitAcpAssistantDelta: auditMocks.emitAcpAssistantDelta,
     emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
     emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
     emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
@@ -679,6 +681,8 @@ describe("tryDispatchAcpReplyCore", () => {
 
     const result = await runDispatch({
       bodyForAgent: "reply via message tool if needed",
+      runId: "private-acp-reply",
+      cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
       dispatcher,
       onReplyStart,
       suppressUserDelivery: true,
@@ -693,6 +697,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpAssistantDelta).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

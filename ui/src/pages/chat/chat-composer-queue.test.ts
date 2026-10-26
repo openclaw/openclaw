@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
@@ -171,11 +172,8 @@ describe("chat composer queue reordering", () => {
   });
 
   it("auto-scrolls a long queue while a drag stays near its edge", () => {
-    const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
-      frames.push(callback);
-      return frames.length;
-    });
+    const { frames, request } = createFrameQueue();
+    const requestFrame = vi.fn(request);
     const cancelFrame = vi.fn();
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);

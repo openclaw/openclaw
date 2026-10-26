@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { stubResizeObserver } from "../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.tsx";
 
@@ -19,14 +20,7 @@ let restoreDialog: () => void;
 
 beforeEach(() => {
   // JSDOM lacks layout and media APIs; these cases exercise selection, not geometry.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   vi.stubGlobal("matchMedia", () => ({ matches: false }));
   restoreDialog = installDialogPolyfill();
 });

@@ -211,15 +211,20 @@ export class CodexToolTranscriptProjection {
     if (!item || this.resultIds.has(item.id)) {
       return;
     }
-    const call = this.nativeTranscriptCall(item);
-    if (!call) {
+    const name =
+      item.type === "collabAgentToolCall" || item.type === "subAgentActivity"
+        ? this.rawCallsById.get(item.id)?.name
+        : isProjectedNativeToolItem(item)
+          ? itemName(item)
+          : undefined;
+    if (!name) {
       return;
     }
     const status = itemStatus(item);
     const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
     this.recordToolResult({
       id: item.id,
-      name: call.name,
+      name,
       text:
         approvalTimeoutExplanation ??
         this.rawNativeToolOutputByCallId.get(item.id) ??
@@ -495,13 +500,16 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.trajectoryResultIds.add(params.item.id);
+    if (!this.options.trajectoryRecorder) {
+      return;
+    }
     const toolResult = itemToolResult(params.item);
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
     const status =
       params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
-    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+    this.options.trajectoryRecorder.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,

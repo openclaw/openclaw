@@ -102,6 +102,7 @@ const metrics = {
   memoHitCount: 0,
   memoTruncatedCount: 0,
 };
+/** @returns {never} */
 function fail(message) {
   throw new Error(message);
 }
@@ -222,7 +223,7 @@ function walk(relativeDirectory) {
   } finally {
     directory.closeSync();
   }
-  for (const name of names.sort()) {
+  for (const name of names.toSorted(comparePathNames)) {
     const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
     const absolute = path.join(root, relative);
     const stats = fs.lstatSync(absolute);
@@ -236,6 +237,9 @@ function walk(relativeDirectory) {
     hasIncludedEntry = true;
   }
   return hasIncludedEntry || !hasDerivedEntry;
+}
+function comparePathNames(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 async function nulPaths(args) {
   const value = await readManifestGit(root, ["ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
@@ -309,7 +313,7 @@ async function eligiblePaths() {
       addSelected(entry.path);
     }
   }
-  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).sort();
+  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).toSorted(comparePathNames);
 }
 function assertSerializedManifestBudget(baseCommit, entries) {
   let bytes = Buffer.byteLength(JSON.stringify({ version: 1, baseCommit, entries: [] }));
@@ -339,7 +343,8 @@ async function hashFiles(entries) {
     }
   };
   async function worker() {
-    while (!failure && next < entries.length) {
+    while (next < entries.length) {
+      if (failure) return;
       const entry = entries[next++];
       if (entry.type !== "file") {
         continue;
@@ -504,15 +509,17 @@ export function createRemoteWorkspaceManifestScript(
 ${WORKSPACE_MANIFEST_PROGRAM}
 function readManifestInput() { return fs.readFileSync(0, "utf8"); }
 function assertManifestCurrent() {}
-function readManifestGit(root, args, maxBuffer) {
+async function readManifestGit(root, args, maxBuffer) {
   return childProcess.execFileSync("git", ["-C", root, ...args], {
     encoding: "buffer", maxBuffer, env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
   });
 }
-main().catch((error) => {
-  process.stderr.write(String(error && error.stack ? error.stack : error) + "\n");
+/** @param {unknown} error */
+function reportFailure(error) {
+  process.stderr.write(String(error instanceof Error ? error.stack ?? error.message : error) + "\n");
   process.exitCode = 1;
-});`;
+}
+main().catch(reportFailure);`;
 }
 
 export const REMOTE_WORKSPACE_MANIFEST_JS = createRemoteWorkspaceManifestScript();

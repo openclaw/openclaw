@@ -9,10 +9,10 @@
   padding: 0;
   margin: 0;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border, var(--border-strong));
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow, var(--shadow-lg));
   color: var(--text);
   font-size: 12px;
 }

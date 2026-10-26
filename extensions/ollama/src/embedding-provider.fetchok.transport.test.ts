@@ -3,6 +3,7 @@
 // sockets, without mocking global fetch, SSRF runtime, or logging redaction.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
@@ -35,10 +36,7 @@ async function startOllamaServer(
   const requests: OllamaRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(req);
       const request: OllamaRequest = {
         method: req.method,
         url: req.url,
@@ -46,7 +44,7 @@ async function startOllamaServer(
         proxyAuthorization: req.headers["proxy-authorization"],
         proxyAuth:
           typeof req.headers["x-proxy-auth"] === "string" ? req.headers["x-proxy-auth"] : undefined,
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: bodyBuffer.toString("utf8"),
       };
       requests.push(request);
       const response = respond(request);

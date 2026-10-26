@@ -361,18 +361,18 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
-  /** Read facts share one generation across committed and scheduler-local mutations. */
+  /** Worker publications replace the source rows or advance the store revision. */
   readSnapshot?: {
     storeRevision: number;
     source: CronJob[] | undefined;
     status: CronStatusSummary;
-    list?: {
+    lists: {
       filteredJobs: CronJob[];
       sortBy: CronJobsSortBy;
       sortDir: CronSortDir;
       jobs: CronJob[];
       snapshotRevision: string;
-    };
+    }[];
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
   };
@@ -583,6 +583,8 @@ export type CronUpdateOptions = Pick<
   | "streamSandbox"
   | "sessionEntryCurrent"
 > & {
+  /** Parent incarnation recorded by `automations bind`; only fills an absent link. */
+  bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
 };

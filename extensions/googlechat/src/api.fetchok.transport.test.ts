@@ -1,7 +1,7 @@
 // Exercise Google Chat requests through a real guarded HTTP transport.
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { deleteGoogleChatMessage, GoogleChatApiError } from "./api.js";
 
@@ -78,15 +78,8 @@ const account = {
 } as ResolvedGoogleChatAccount;
 
 async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
 }
 
 async function closeServer(server: Server): Promise<void> {
@@ -163,19 +156,10 @@ describe("Google Chat real guarded transport", () => {
   });
 
   it("delivers task-list fallback at the default chunk limit through the SDK", async () => {
-    const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");
-    await withOpenClawTestState(
-      { label: "googlechat-markdown-delivery", layout: "state-only" },
-      async () => {
-        const [
-          { sendDurableMessageBatch },
-          { createTestRegistry, withPluginRuntimeRegistryScope },
-          { googlechatPlugin },
-        ] = await Promise.all([
-          import("openclaw/plugin-sdk/channel-outbound"),
-          import("openclaw/plugin-sdk/channel-test-helpers"),
-          import("../api.js"),
-        ]);
+    const { withDurableGoogleChatTransport } = await import("./durable-transport.test-support.js");
+    await withDurableGoogleChatTransport(
+      "googlechat-markdown-delivery",
+      async (sendDurableMessageBatch) => {
         const requests: Array<{
           method: string | undefined;
           path: string | undefined;
@@ -197,28 +181,22 @@ describe("Google Chat real guarded transport", () => {
         try {
           loopback.baseUrl = await listen(server);
           const paragraph = "A".repeat(31_998);
-          const result = await withPluginRuntimeRegistryScope(
-            createTestRegistry([
-              { pluginId: "googlechat", plugin: googlechatPlugin, source: "test" },
-            ]),
-            () =>
-              sendDurableMessageBatch({
-                cfg: {
-                  channels: {
-                    googlechat: {
-                      serviceAccount: {
-                        client_email: "transport@example.test",
-                        private_key: "not-a-real-key",
-                      },
-                    },
+          const result = await sendDurableMessageBatch({
+            cfg: {
+              channels: {
+                googlechat: {
+                  serviceAccount: {
+                    client_email: "transport@example.test",
+                    private_key: "not-a-real-key",
                   },
                 },
-                channel: "googlechat",
-                accountId: "default",
-                to: "spaces/AAA",
-                payloads: [{ text: `**${paragraph}**\n\n- [x] done` }],
-              }),
-          );
+              },
+            },
+            channel: "googlechat",
+            accountId: "default",
+            to: "spaces/AAA",
+            payloads: [{ text: `**${paragraph}**\n\n- [x] done` }],
+          });
           expect(result).toMatchObject({
             status: "sent",
             deliveryIntent: { queuePolicy: "required" },
