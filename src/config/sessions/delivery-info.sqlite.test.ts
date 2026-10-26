@@ -13,9 +13,12 @@ import { historyLane, projectionLane } from "./session-transcript-worker-resourc
 
 const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
-const expected = { deliveryContext, threadId: undefined };
-const missing = { deliveryContext: undefined, threadId: undefined };
 type Route = typeof deliveryContext;
+const delivery = (context?: Route) => ({ deliveryContext: context, threadId: undefined });
+const expected = delivery(deliveryContext);
+const missing = delivery();
+const requestsFor = (keys: string[], agentId?: string) =>
+  keys.map((key) => ({ sessionKey: key, ...(agentId ? { agentId } : {}) }));
 const seed = (key: string, context: Route, agentId = "main") =>
   replaceSessionEntry(
     { agentId, sessionKey: key },
@@ -43,11 +46,7 @@ it("reads distinct delivery targets once per batch and observes owner route writ
       { sessionKey: "agent:main:missing" },
       { sessionKey: "agent:main:matrix:channel:!Missing:example.org" },
     ];
-    const expectedRoutes = [
-      ...ordered.map(({ context }) => ({ deliveryContext: context, threadId: undefined })),
-      missing,
-      missing,
-    ];
+    const expectedRoutes = [...ordered.map(({ context }) => delivery(context)), missing, missing];
     const selected: Array<readonly string[] | undefined> = [];
     let inventories = 0;
     const run = projectionLane.pool.run.bind(projectionLane.pool);
@@ -87,10 +86,7 @@ it("reads distinct delivery targets once per batch and observes owner route writ
     expect(first).toEqual(expectedRoutes);
     expect(selected).toHaveLength(2);
 
-    expect(await extractDeliveryInfo(routes[0]!.sessionKey, { cfg })).toEqual({
-      deliveryContext: changed,
-      threadId: undefined,
-    });
+    expect(await extractDeliveryInfo(routes[0]!.sessionKey, { cfg })).toEqual(delivery(changed));
     expect(selected).toHaveLength(3);
     expect(selected[2]).toHaveLength(1);
     expect(inventories).toBe(0);
@@ -121,12 +117,7 @@ it("preserves pending sibling validation when a combined delivery read fails", a
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sibling);
-    expect(
-      await extractDeliveryInfoBatch(
-        keys.map((key) => ({ sessionKey: key })),
-        { cfg },
-      ),
-    ).toEqual([missing, missing]);
+    expect(await extractDeliveryInfoBatch(requestsFor(keys), { cfg })).toEqual([missing, missing]);
   });
 });
 
@@ -137,16 +128,14 @@ it("recovers folded Signal groups from canonical rows and observes route updates
     const key = "agent:main:signal:group:AbC";
     const context = { channel: "signal", to: "signal:group:AbC", accountId: "first" };
     await seed(key, context);
-    const requests = ["agent:main:signal:group:abc", "signal:group:abc", key].map((lookupKey) => ({
-      sessionKey: lookupKey,
-    }));
+    const requests = requestsFor(["agent:main:signal:group:abc", "signal:group:abc", key]);
     expect(await extractDeliveryInfoBatch(requests, { cfg })).toEqual(
-      requests.map(() => ({ deliveryContext: context, threadId: undefined })),
+      requests.map(() => delivery(context)),
     );
     const changed = { ...context, accountId: "second" };
     await seed(key, changed);
     expect(await extractDeliveryInfoBatch(requests, { cfg })).toEqual(
-      requests.map(() => ({ deliveryContext: changed, threadId: undefined })),
+      requests.map(() => delivery(changed)),
     );
   });
 });
@@ -197,19 +186,13 @@ it("keeps explicit delivery ownership through alias lookup and rejects conflicti
     for (const [agentId, context] of Object.entries(routes)) {
       await seed("global", context, agentId);
     }
-    const selected = { deliveryContext: routes.ops, threadId: undefined };
-    expect(await extractDeliveryInfo("global", { cfg })).toEqual({
-      deliveryContext: routes.main,
-      threadId: undefined,
-    });
+    const selected = delivery(routes.ops);
+    expect(await extractDeliveryInfo("global", { cfg })).toEqual(delivery(routes.main));
     expect(await extractDeliveryInfo("global", { cfg, agentId: "ops" })).toEqual(selected);
     expect(await extractDeliveryInfo("agent:ops:main", { cfg, agentId: "ops" })).toEqual(selected);
     expect(
       await extractDeliveryInfoBatch(
-        ["global", "agent:main:main", "agent::broken"].map((key) => ({
-          sessionKey: key,
-          agentId: "ops",
-        })),
+        requestsFor(["global", "agent:main:main", "agent::broken"], "ops"),
         { cfg },
       ),
     ).toEqual([selected, missing, missing]);

@@ -45,23 +45,20 @@ export async function assertSessionActorPathAliasReuse(
   const identity = readOpenClawAgentDatabaseIdentity(database);
   assert.notEqual(database.path, identity.canonicalPath, "The configured store must use its alias");
   const canonicalScope = { ...scope, storePath: identity.canonicalPath };
-  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-  await appendTranscriptMessage(scope, {
-    eventId: "question",
-    message: { role: "user", content: "Aliased question" },
-    now: 1,
+  const message = (eventId: string, content: string, now: number) => ({
+    eventId,
+    message: { role: "user", content },
+    now,
   });
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  await appendTranscriptMessage(scope, message("question", "Aliased question", 1));
   await appendTranscriptMessage(scope, {
     eventId: "answer",
     message: { role: "assistant", content: "Aliased answer", usage: { input: 20, output: 3 } },
     now: 2,
   });
   await upsertSessionEntryCore(otherScope, { sessionId, updatedAt: 1 });
-  await appendTranscriptMessage(otherScope, {
-    eventId: "other-question",
-    message: { role: "user", content: "Different database" },
-    now: 1,
-  });
+  await appendTranscriptMessage(otherScope, message("other-question", "Different database", 1));
 
   const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
   const actorDatabase = { agentId: database.agentId, path: database.path, env };
@@ -131,12 +128,8 @@ export async function assertSessionActorPathAliasReuse(
         }
 
         historyReads.mockClear();
-        expect(
-          await readSessionTranscriptAccountingAsync(otherScope, accountingOptions),
-        ).toMatchObject({ eventCount: 1 });
-        expect(
-          (await readActivitySummarySource({ scope: otherScope, assertCurrent() {} }))?.notes,
-        ).toEqual(["user: Different database"]);
+        expect(await accounting(otherScope)).toMatchObject({ eventCount: 1 });
+        expect(await notes(otherScope)).toEqual(["user: Different database"]);
         expect(historyReads).toHaveBeenCalled();
 
         expect(
