@@ -58,13 +58,9 @@ const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
 const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
 const sdkOptions = { apiKey: "test-key", ...identity };
-function compactionCase(): { model: Model<"openai-responses">; context: Context };
-function compactionCase<TApi extends Api>(
-  model: Model<TApi>,
-  includeReasoning?: boolean,
-): { model: Model<TApi>; context: Context };
-function compactionCase(model: Model = fixtures.createModel(), includeReasoning = false) {
-  return { model, context: fixtures.createCompactionContext(model, identity, includeReasoning) };
+function compactionCase() {
+  const model = fixtures.createModel();
+  return { model, context: fixtures.createCompactionContext(model, identity) };
 }
 const runManaged = (
   model: Model,
@@ -100,18 +96,10 @@ function usageBoundary(
     context.systemPrompt,
   );
 }
-const addHostMetadata = () =>
-  configureAiTransportHost({
-    ...initialHost,
-    plugin: {
-      ...initialHost.plugin,
-      resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
-    },
-  });
-function observe(options: object, order?: string[]) {
+function observe(options: object, order?: string[], includeEgress = false) {
   const observations: ResponsesPromptObservation[] = [];
   responsesPromptObserver.set(options, (observation) => {
-    order?.push("observe");
+    order?.push(includeEgress ? `observe:${observation.egress}` : "observe");
     observations.push(observation);
   });
   return observations;
@@ -157,6 +145,14 @@ function mockSse(order?: string[], onRequest?: (request: Record<string, unknown>
 
 function requestHasCompaction(request: Record<string, unknown> | undefined): boolean {
   return Array.isArray(request?.input) && request.input.some((item) => item?.type === "compaction");
+}
+
+function expectCompactionRecovery(result: AssistantMessage, variants: boolean[]) {
+  expect(result).toMatchObject({
+    stopReason: "stop",
+    providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
+  });
+  expect(sdkState.requests.map(requestHasCompaction)).toEqual(variants);
 }
 
 async function runObservedRequest(params: {
@@ -389,10 +385,6 @@ describe("OpenAI Responses provider prompt observer", () => {
       fixtures.completedSdkResponse("resp_azure_next"),
     ];
     const recovered = await managedResult(azureModel, context, options, true);
-    expect(recovered).toMatchObject({
-      stopReason: "stop",
-      providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
-    });
     expect(recovered).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     await managedResult(
       azureModel,
@@ -405,7 +397,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     );
 
     expect(sdkState.clients).toEqual(["azure", "azure", "azure"]);
-    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, false, false]);
+    expectCompactionRecovery(recovered, [true, false, false]);
     expect(requestInput(0)).not.toContain(fullHistory);
     expect(requestInput(1)).toContain(fullHistory);
     expect(observations.map((entry) => entry.payloadVariant)).toEqual([
@@ -431,11 +423,7 @@ describe("OpenAI Responses provider prompt observer", () => {
 
     const recovered = await managedResult(openAIModel, context, options);
 
-    expect(recovered).toMatchObject({
-      stopReason: "stop",
-      providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
-    });
-    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, false]);
+    expectCompactionRecovery(recovered, [true, false]);
     expect(requestInput(0)).toContain("function_call_output");
     expect(requestInput(0)).not.toContain('"type":"function_call"');
     expect(requestInput(1)).toContain('"type":"function_call"');
@@ -515,7 +503,13 @@ describe("OpenAI Responses provider prompt observer", () => {
       description: name,
       parameters: { type: "object", properties: {} },
     });
-    addHostMetadata();
+    configureAiTransportHost({
+      ...initialHost,
+      plugin: {
+        ...initialHost.plugin,
+        resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
+      },
+    });
     const options = {
       openclawCodeModeToolSurface: true,
       openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
@@ -584,8 +578,8 @@ describe("OpenAI Responses provider prompt observer", () => {
 
   it("observes each native WebSocket connection-limit dispatch before send", async () => {
     const prompt = "PRIVATE-NATIVE-WEBSOCKET-PROMPT";
-    const { model, context } = compactionCase(nativeModel());
-    context.systemPrompt = prompt;
+    const model = nativeModel();
+    const context = { ...fixtures.createCompactionContext(model, identity), systemPrompt: prompt };
     const order: string[] = [];
     const sentRequests: Array<Record<string, unknown>> = [];
     const connections = installWebSocket(
@@ -648,7 +642,6 @@ describe("OpenAI Responses provider prompt observer", () => {
     "observes each dispatched transport when fallback happens %s send",
     async (phase) => {
       const prompt = `PRIVATE-${phase}-SEND-FALLBACK-PROMPT`;
-      const observations: ResponsesPromptObservation[] = [];
       const order: string[] = [];
       if (phase === "before") {
         vi.stubGlobal("WebSocket", function FailingWebSocket() {
@@ -670,10 +663,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       }
       mockSse(order);
       const options = { apiKey: createJwt(), transport: "auto" as const };
-      responsesPromptObserver.set(options, (observation) => {
-        order.push(`observe:${observation.egress}`);
-        observations.push(observation);
-      });
+      const observations = observe(options, order, true);
 
       const result = await streamOpenAICodexResponses(
         nativeModel(),
