@@ -13,7 +13,7 @@ const context: OpenClawPluginToolContext = {
 };
 
 const environment = {
-  id: "environment-one",
+  id: "box",
   status: "available",
   worker: { profileId: "desktop", state: "ready" },
 };
@@ -85,7 +85,7 @@ describe("Crabbox conversation tool", () => {
   const execute = (action: string, params: Record<string, unknown> = {}) =>
     tool.execute(action, { action, ...params });
 
-  it("lists usable profile choices while retaining machine catalog metadata", async () => {
+  it("lists profiles with machine metadata", async () => {
     const profile = {
       id: "desktop",
       providerId: "crabbox",
@@ -118,7 +118,7 @@ describe("Crabbox conversation tool", () => {
       presentation(
         "create",
         { attachment, environment, reused },
-        `${reused ? "Reusing" : "Created"} Crabbox environment-one.`,
+        `${reused ? "Reusing" : "Created"} Crabbox box.`,
         "Environment: available (ready).",
       ),
     ),
@@ -152,7 +152,7 @@ describe("Crabbox conversation tool", () => {
         },
         code === 0 ? "Command completed." : "Command failed.",
         `exit code: ${code}; termination: ${termination}; signal: ${signal}; killed: ${killed}`,
-        "Environment: environment-one; workspace: /workspace",
+        "Environment: box; workspace: /workspace",
         "stdout truncated: 12 bytes",
         "stderr truncated: 3 bytes",
         "Output limit exceeded.",
@@ -168,25 +168,22 @@ describe("Crabbox conversation tool", () => {
           (processState === "running" ? " App readiness has not been checked." : ""),
       );
     }),
-  ])(
-    "presents $action results without changing receipts: $text",
-    async ({ action, response, text }) => {
-      if (action === "create") {
-        request.mockResolvedValueOnce({ attachment: null });
-      }
-      request.mockResolvedValueOnce(response);
-      const result = await execute(action, { argv: ["example"], processId: "app-one" });
-      for (const fragment of text) {
-        expect(result.content[0]).toMatchObject({ text: expect.stringContaining(fragment) });
-      }
-      if (action === "stop") {
-        expect(result.content[0]).toMatchObject({ text: expect.not.stringContaining("released") });
-      }
-      expect(result.details).toBe(response);
-    },
-  );
+  ])("presents $action: $text", async ({ action, response, text }) => {
+    if (action === "create") {
+      request.mockResolvedValueOnce({ attachment: null });
+    }
+    request.mockResolvedValueOnce(response);
+    const result = await execute(action, { argv: ["example"], processId: "app-one" });
+    for (const fragment of text) {
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining(fragment) });
+    }
+    if (action === "stop") {
+      expect(result.content[0]).toMatchObject({ text: expect.not.stringContaining("released") });
+    }
+    expect(result.details).toBe(response);
+  });
 
-  it("emits one public request update before create I/O without invented stages", async () => {
+  it("publishes one update before create I/O", async () => {
     const onUpdate = vi.fn();
     request.mockImplementation(async () => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
@@ -202,7 +199,7 @@ describe("Crabbox conversation tool", () => {
     });
   });
 
-  it("keeps progress failures out of execution and preserves Gateway failures", async () => {
+  it("ignores progress failure but preserves Gateway failure", async () => {
     const onUpdate = vi.fn(() => {
       throw new Error("Progress display unavailable");
     });
@@ -217,7 +214,7 @@ describe("Crabbox conversation tool", () => {
     ).rejects.toThrow("Gateway response timed out");
   });
 
-  it("does not emit progress or dispatch on invalid or aborted input", async () => {
+  it("rejects invalid or aborted input before effects", async () => {
     const onUpdate = vi.fn();
     await expect(
       tool!.execute("invalid", { action: "exec", argv: [] }, undefined, onUpdate),
@@ -232,11 +229,11 @@ describe("Crabbox conversation tool", () => {
     { ...context, sandboxed: true },
     { ...context, sessionId: undefined },
     { ...context, config: { cloudWorkers: { profiles: { other: { provider: "other" } } } } },
-  ])("is absent without a permitted conversation and configured provider", (toolContext) => {
+  ])("requires a permitted conversation and provider", (toolContext) => {
     expect(fixture(toolContext).tool).toBeNull();
   });
 
-  it("dedupes repeated calls until an empty attachment is replaced, across tool instances", async () => {
+  it("dedupes across instances until the attachment changes", async () => {
     const first = fixture();
     const retry = fixture();
     const next = fixture();
@@ -259,7 +256,7 @@ describe("Crabbox conversation tool", () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  it("reuses allocation identity on a replay without accepting caller-supplied ownership", async () => {
+  it("replays allocation identity without trusting caller ownership", async () => {
     const params = {
       action: "create",
       presentation: "desktop",
@@ -281,7 +278,7 @@ describe("Crabbox conversation tool", () => {
     );
   });
 
-  it("requires a profile choice when more than one is configured and rechecks runtime config", async () => {
+  it("requires a profile choice and rechecks runtime config", async () => {
     let current = context.config;
     const live = fixture({ ...context, getRuntimeConfig: () => current });
     current = {
@@ -302,10 +299,10 @@ describe("Crabbox conversation tool", () => {
     expect(live.request).not.toHaveBeenCalled();
   });
 
-  it("preserves remote command argument and standard-input bytes", async () => {
+  it("preserves command and stdin bytes", async () => {
     const argv = ["node", "-e", "process.stdout.write(process.argv[1])", "  padded\n"];
     const params = {
-      environmentId: "environment-one",
+      environmentId: "box",
       argv,
       input: "\n payload \n",
     };
@@ -317,7 +314,7 @@ describe("Crabbox conversation tool", () => {
     );
   });
 
-  it("gives replayed background starts the same process identity and stops only the selected process", async () => {
+  it("replays background identity and stops only that process", async () => {
     await tool!.execute("launch", backgroundStart);
     const first = request.mock.calls[0]?.[1];
     await tool!.execute("launch", backgroundStart);
@@ -334,7 +331,7 @@ describe("Crabbox conversation tool", () => {
     );
   });
 
-  it("retains the process identity for reconciliation after a lost launch acknowledgement", async () => {
+  it("retains process identity after a lost launch acknowledgement", async () => {
     request.mockRejectedValueOnce(new Error("Gateway response timed out"));
     const execution = tool!.execute("launch", backgroundStart);
     const processId = request.mock.calls[0]?.[1].processId;

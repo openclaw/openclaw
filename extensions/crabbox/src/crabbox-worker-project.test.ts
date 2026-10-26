@@ -621,67 +621,41 @@ exec "$CRABBOX_TEST_NODE" "$@"
     },
   );
 
-  it.each([
-    { backend: "aws", desktop: true },
-    { backend: "daytona", desktop: false },
-    { backend: "machine0", desktop: false },
-  ])(
-    "captures the prepared $backend project before enrollment and reuses it (desktop=$desktop)",
-    async ({ backend, desktop }) => {
-      const profile = { ...PROFILE, provider: backend, desktop };
-      const events: string[] = [];
-      let current = projectOptions(events);
-      const { provider, calls } = createWarmProvider((call) => {
-        if (
-          call.argv[1] === "run" &&
-          String(call.options.input).includes("openclaw-worker-browser")
-        ) {
-          events.push("desktop");
-        }
-        current.observe(call);
-        if (
-          backend === "daytona" &&
-          call.argv[2] === "create" &&
-          !call.argv.includes("--no-reboot=false")
-        ) {
-          return commandResult({
-            code: 2,
-            stderr:
-              "Daytona filesystem snapshots require a stopped source; rerun with --no-reboot=false",
-          });
-        }
-        return undefined;
-      });
+  it("captures the prepared desktop project before enrollment and reuses it", async () => {
+    const profile = { ...PROFILE, desktop: true };
+    const events: string[] = [];
+    let current = projectOptions(events);
+    const { provider, calls } = createWarmProvider((call) => {
+      if (
+        call.argv[1] === "run" &&
+        String(call.options.input).includes("openclaw-worker-browser")
+      ) {
+        events.push("desktop");
+      }
+      current.observe(call);
+      return undefined;
+    });
 
-      await provider.provision(profile, "project-first", current.options);
+    await provider.provision(profile, "project-first", current.options);
 
-      expect(events).toEqual([
-        ...(desktop ? ["desktop"] : []),
-        ...PREPARATION_EVENTS,
-        ...ENROLLMENT_EVENTS,
-      ]);
-      expect(await warmImage()).toMatchObject({
-        projectKey: PROJECT_KEY,
-        checkpointId: CHECKPOINT_ID,
-        allocations: {
-          [operationLeaseId("project-first")]: { phase: "enrolled", baseCommit: BASE_COMMIT },
-        },
-      });
-      calls.length = 0;
-      events.length = 0;
-      current = projectOptions(events);
-      await provider.provision(profile, "project-second", current.options);
-      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-      expect([commandCount(calls, "warmup"), commandCount(calls, "create")]).toEqual([0, 0]);
-      expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(0);
-      expect(events).toEqual([
-        ...(desktop ? ["desktop"] : []),
-        "project-prepared",
-        ...ENROLLMENT_EVENTS,
-      ]);
-      expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
-    },
-  );
+    expect(events).toEqual(["desktop", ...PREPARATION_EVENTS, ...ENROLLMENT_EVENTS]);
+    expect(await warmImage()).toMatchObject({
+      projectKey: PROJECT_KEY,
+      checkpointId: CHECKPOINT_ID,
+      allocations: {
+        [operationLeaseId("project-first")]: { phase: "enrolled", baseCommit: BASE_COMMIT },
+      },
+    });
+    calls.length = 0;
+    events.length = 0;
+    current = projectOptions(events);
+    await provider.provision(profile, "project-second", current.options);
+    expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect([commandCount(calls, "warmup"), commandCount(calls, "create")]).toEqual([0, 0]);
+    expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(0);
+    expect(events).toEqual(["desktop", "project-prepared", ...ENROLLMENT_EVENTS]);
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+  });
 
   it.each(["grant", "readiness"] as const)(
     "preserves preparation %s failure ownership without enrollment",

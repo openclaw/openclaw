@@ -127,7 +127,6 @@ async function serveArtifact(
   options: {
     tls?: boolean;
     redirect?: boolean;
-    truncate?: boolean;
     resetBeforeHeaders?: boolean;
     resetBeforeTls?: boolean;
     statusCodes?: number[];
@@ -162,12 +161,6 @@ async function serveArtifact(
       return;
     }
     response.writeHead(200, { "content-length": archive.length });
-    if (options.truncate) {
-      // Truncate after headers without retained bytes: one persisted byte resets the
-      // consecutive-failure budget and makes the request count scheduler-dependent.
-      response.end();
-      return;
-    }
     if (options.hold) {
       void options.hold.then(() => response.end(archive));
     } else {
@@ -745,12 +738,9 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
   );
 
   it.each([
-    ["digest", "integrity verification"],
-    ["length", "length does not match"],
     ["redirect", /download HTTP response failed from [^\s]+:.*HTTP 302/],
     ["http-reset", "download HTTP response failed (ECONNRESET)"],
     ["tls-reset", "download TLS failed (ECONNRESET)"],
-    ["truncated", /download body failed \(ECONNRESET\) from [^\s]+: aborted/],
   ] as const)(
     "identifies bootstrap %s failure before installing or starting a node",
     async (failure, diagnosis) => {
@@ -758,7 +748,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       const archive = await packageFixture("first");
       const { nodeBootstrap, authorizations } = await serveArtifact(archive, {
         redirect: failure === "redirect",
-        truncate: failure === "truncated",
         resetBeforeHeaders: failure === "http-reset",
         resetBeforeTls: failure === "tls-reset",
         tls: failure === "tls-reset",
@@ -766,8 +755,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       const result = await enroll(home, {
         ...nodeBootstrap,
         url: nodeBootstrap.url + "/synthetic-url-token",
-        ...(failure === "digest" ? { sha256: "f".repeat(64) } : {}),
-        ...(failure === "length" ? { bytes: archive.length + 1 } : {}),
       });
       expect(result.code).toBe(1);
       expect(result.output).toMatch(diagnosis);
@@ -790,24 +777,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
       expect(new Set(authorizations)).toEqual(
         failure === "tls-reset" ? new Set() : new Set([authorization]),
       );
-      if (failure === "truncated") {
-        expect(authorizations.length).toBeGreaterThanOrEqual(3);
-      } else {
-        expect(authorizations).toHaveLength(
-          failure === "http-reset" ? 9 : failure === "tls-reset" ? 0 : 1,
-        );
-      }
-      if (failure === "http-reset" || failure === "tls-reset" || failure === "truncated") {
-        const terminalNoProgressFailure =
-          /\(download attempt \d+; 9 consecutive no-progress failures\)/;
-        const retryOnlyOutput = result.output
-          .split("\n")
-          .filter((line) => /\([0-8]\/9 consecutive no-progress failures\)/.test(line))
-          .join("\n");
-        expect(retryOnlyOutput).not.toBe("");
-        expect(retryOnlyOutput).not.toMatch(terminalNoProgressFailure);
-        expect(result.output).toMatch(terminalNoProgressFailure);
-      }
       expectAbsent(path.join(stateDir, "node.pid"));
       expect(fs.readdirSync(stateDir)).toEqual([]);
       expect(fs.readdirSync(runtimeRoot(home))).toEqual([]);

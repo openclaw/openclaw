@@ -20,6 +20,15 @@ const context = () => ({
 const absent = () => commandResult({ code: 4, stderr: `aws instance not found: ${leaseId}` });
 const candidates = ["chk_interrupted_a", "chk_interrupted_b"];
 const checkpoints = (ids: string[]) => ids.map((id) => ({ id, leaseId, provider: "aws" }));
+type Reply = () => ReturnType<typeof commandResult> | undefined;
+function reconciliation(replies: Record<string, Reply>, info?: (message: string) => void) {
+  return scenario(
+    ({ argv }) => replies[argv[1] === "inspect" ? "inspect" : argv[2]!]?.(),
+    undefined,
+    { info },
+  );
+}
+const failed = (stderr: string, code = 7) => commandResult({ code, stderr });
 const candidateIds = (s: ReturnType<typeof scenario>) =>
   s.checkpoints("delete").map((argv) => argv[3]);
 const register = (
@@ -39,35 +48,29 @@ it.each([
   "settles interrupted capture (checkpoint=$found, empty=$emptyCatalog)",
   async ({ found, emptyCatalog }) => {
     const info = vi.fn();
-    const s = scenario(
-      ({ argv }) => {
-        if (argv[1] === "inspect") {
-          return found
+    const s = reconciliation(
+      {
+        inspect: () =>
+          found
             ? jsonResult({ id: leaseId, state: "stopped" })
             : emptyCatalog
-              ? commandResult({
-                  code: 4,
-                  stderr: `coordinator GET /v1/leases/${leaseId}: http 404: not_found`,
-                })
-              : absent();
-        }
-        if (argv[2] === "list") {
-          return jsonResult(
+              ? failed(`coordinator GET /v1/leases/${leaseId}: http 404: not_found`, 4)
+              : absent(),
+        list: () =>
+          jsonResult(
             emptyCatalog
               ? null
               : [
                   { id: "chk_unrelated", leaseId: `${leaseId}_other`, name: leaseId },
                   ...checkpoints(found ? [candidates[0]!] : []),
                 ],
-          );
-        }
-        if (argv[2] === "delete") {
+          ),
+        delete: () => {
           expect(s.store.lookup("profile")?.operation?.type).toBe("capture");
-        }
-        return undefined;
+          return undefined;
+        },
       },
-      undefined,
-      { info },
+      info,
     );
     const image = warmImage("chk_validated", { lastDemandAtMs: Date.now() });
     register(s, found ? { image } : {});
@@ -84,17 +87,13 @@ it.each([
 
 it("retries reconciliation once the source is released", async () => {
   let sourceState = "running";
-  const s = scenario(({ argv }) => {
-    if (argv[1] === "inspect") {
-      return jsonResult({ id: leaseId, provider: "aws", state: sourceState });
-    }
-    if (argv[2] === "list") {
-      return jsonResult(checkpoints([candidates[0]!]));
-    }
-    if (argv[2] === "delete") {
+  const s = reconciliation({
+    inspect: () => jsonResult({ id: leaseId, provider: "aws", state: sourceState }),
+    list: () => jsonResult(checkpoints([candidates[0]!])),
+    delete: () => {
       expect(s.store.lookup("profile")?.operation?.type).toBe("capture");
-    }
-    return undefined;
+      return undefined;
+    },
   });
   const record = register(s);
   await s.provider.maintain!(context());
@@ -123,38 +122,28 @@ it.each([
   "terminal",
 ] as const)("retains interrupted capture after %s failure", async (failure) => {
   const unconfirmed = failure === "alive";
-  const s = scenario(({ argv }) => {
-    if (argv[1] === "inspect") {
-      if (failure === "unclaimed" || failure === "terminal") {
-        return commandResult({
-          code: 4,
-          stderr:
-            failure === "unclaimed"
-              ? `${leaseId} is not claimed by Crabbox`
-              : "DigitalOcean fixed lease is terminal",
-        });
-      }
-      return unconfirmed
-        ? jsonResult({ id: leaseId, state: failure === "alive" ? "running" : failure })
-        : failure === "inspection"
-          ? commandResult({ code: 7, stderr: "fixture inspection failed" })
-          : absent();
-    }
-    if (argv[2] === "list") {
-      return failure === "lookup"
-        ? commandResult({ code: 7, stderr: "fixture catalog unavailable" })
+  const s = reconciliation({
+    inspect: () =>
+      failure === "unclaimed"
+        ? failed(`${leaseId} is not claimed by Crabbox`, 4)
+        : failure === "terminal"
+          ? failed("DigitalOcean fixed lease is terminal", 4)
+          : unconfirmed
+            ? jsonResult({ id: leaseId, state: "running" })
+            : failure === "inspection"
+              ? failed("fixture inspection failed")
+              : absent(),
+    list: () =>
+      failure === "lookup"
+        ? failed("fixture catalog unavailable")
         : jsonResult(
             failure === "shape"
               ? {}
               : failure === "identity"
                 ? [{ id: "chk_untracked", name: leaseId }]
                 : checkpoints(failure === "ambiguous" ? candidates : [candidates[0]!]),
-          );
-    }
-    if (argv[2] === "delete") {
-      return commandResult({ code: 7, stderr: "fixture deletion failed" });
-    }
-    return undefined;
+          ),
+    delete: () => failed("fixture deletion failed"),
   });
   const record = register(s, {
     operation: { ...capture(), provider: failure === "terminal" ? "digitalocean" : "aws" },
@@ -189,7 +178,7 @@ it("preserves earlier candidates when another catalog fails", async () => {
     }
     return argv[0] === "/opt/a/crabbox"
       ? jsonResult(checkpoints([candidates[0]!]))
-      : commandResult({ code: 7, stderr: "second catalog unavailable" });
+      : failed("second catalog unavailable");
   });
   register(s, { operation: { ...capture(), checkpointIds: candidates } });
   await s.provider.maintain!({
@@ -212,9 +201,10 @@ it.each(["image", "previous", "allocation"] as const)(
   "preserves checkpoints owned by %s",
   async (owner) => {
     const checkpointId = candidates[0]!;
-    const s = scenario(({ argv }) =>
-      argv[1] === "inspect" ? absent() : jsonResult(checkpoints([checkpointId])),
-    );
+    const s = reconciliation({
+      inspect: absent,
+      list: () => jsonResult(checkpoints([checkpointId])),
+    });
     const record = register(
       s,
       owner === "allocation"
@@ -234,12 +224,12 @@ it.each(["image", "previous", "allocation"] as const)(
 
 it("rechecks maintenance authority after catalog lookup", async () => {
   let current = true;
-  const s = scenario(({ argv }) => {
-    if (argv[1] === "inspect") {
-      return absent();
-    }
-    current = false;
-    return jsonResult(checkpoints([candidates[0]!]));
+  const s = reconciliation({
+    inspect: absent,
+    list: () => {
+      current = false;
+      return jsonResult(checkpoints([candidates[0]!]));
+    },
   });
   const record = register(s);
   await expect(
