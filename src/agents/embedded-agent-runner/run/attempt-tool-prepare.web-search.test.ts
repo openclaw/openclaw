@@ -1,4 +1,6 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
@@ -14,6 +16,7 @@ import {
 } from "../../admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -110,6 +113,41 @@ beforeAll(async () => {
   );
 });
 afterAll(async () => await state?.cleanup());
+
+it.each(["completion", "permission change"] as const)(
+  "retained %s signals release the retiring run without changing cancellation",
+  async (outcome) => {
+    class RetiringRun {
+      settle(result: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>) {
+        return outcome === "completion"
+          ? result.releaseTools("completion")
+          : result.refreshPermissionMode(null, () => {});
+      }
+    }
+    const retained = await (async () => {
+      await using fixture = await createFixture();
+      const signal = fixture.result.toolAbortSignal;
+      let reasonAtAbort: unknown;
+      signal.addEventListener("abort", () => (reasonAtAbort = signal.reason), { once: true });
+      await new RetiringRun().settle(fixture.result);
+      return { signal, reasonAtAbort };
+    })();
+    // Error matchers can materialize the lazy stack and hide the retained caller.
+    await nextTurn();
+    expect(queryObjects(RetiringRun)).toBe(0);
+    expect(retained.signal.aborted).toBe(true);
+    expect(retained.signal.reason).toBe(retained.reasonAtAbort);
+    if (outcome === "completion") {
+      expect(retained.signal.reason).toBeInstanceOf(DOMException);
+      expect(retained.signal.reason).toHaveProperty("name", "AbortError");
+    } else {
+      const details = { status: "failed", code: "aborted", error: "original failure" };
+      markCodeModePermissionChangeResult(details, retained.signal);
+      expect(details.error).toContain("Permission change interrupted this Code Mode program.");
+    }
+  },
+);
+
 it("prepares tools without enumerating unrelated attempt state", async () => {
   const enumerate = vi.fn((target: EmbeddedRunAttemptInternalParams) => Reflect.ownKeys(target));
   codingTools.mockReturnValue([createStubTool("read")]);
