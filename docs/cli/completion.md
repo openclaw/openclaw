@@ -46,6 +46,8 @@ other special files are rejected before reading, so completion does not wait for
 
 Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
 
+Installation messages display control characters in profile paths as visible escapes. If the reload command would contain terminal controls, the installer tells you to restart your shell instead; the installed profile still uses the literal path.
+
 A user-managed portable hook for the same cached script (for example `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"`, as a dotfile manager would write) is recognized as completion being configured. Doctor and `completion --install` leave such managed lines byte-for-byte untouched instead of appending a duplicate literal-path block.
 
 ## Permission failures

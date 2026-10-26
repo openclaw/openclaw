@@ -2274,7 +2274,7 @@ jobs:
             wait_checks
           fi
 
-          # These canaries verify the built CLI's local roundtrip and Gateway connection.
+          # This canary verifies the built CLI's local roundtrip.
           # Full plans retain the PTY descriptor, but CI consumes it only as this selection flag.
           if [ "$RUN_TUI_PTY" = "true" ]; then
             start_check "tui-pty" env \
@@ -2285,7 +2285,7 @@ jobs:
               node scripts/run-vitest.mjs run \
                 --config test/vitest/vitest.tui-pty.config.ts \
                 src/tui/tui-pty-local.e2e.test.ts \
-                --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
+                --testNamePattern "launches openclaw chat as local mode through a real PTY"
             wait_checks
           fi
 
@@ -2591,15 +2591,17 @@ jobs:
           )"
             export OPENCLAW_VITEST_INCLUDE_FILE
           fi
-          requires_webkit="$(node --input-type=module <<'NODE'
+          requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
           const webkitSuites = new Set([
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
           ].filter(existsSync));
+          const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           let requiresWebkit = false;
-          if (webkitSuites.size > 0) {
+          let requiresRuntime = false;
+          if (webkitSuites.size > 0 || existsSync(runtimeSuite)) {
             const { createVitest } = await import("vitest/node");
             const vitest = await createVitest({
               config: "test/vitest/vitest.ui-e2e.config.ts",
@@ -2612,15 +2614,22 @@ jobs:
               const sequencer = new vitest.config.sequence.sequencer(vitest);
               const files = await sequencer.shard(await vitest.globTestSpecifications());
               requiresWebkit = files.some((file) => webkitSuites.has(file.moduleId));
+              requiresRuntime = files.some((file) => file.moduleId === runtimeSuite);
             } finally {
               await vitest.close();
             }
           }
-          process.stdout.write(String(requiresWebkit));
+          process.stdout.write([requiresWebkit && "webkit", requiresRuntime && "runtime"].filter(Boolean).join(" "));
           NODE
           )"
-          if [[ "$requires_webkit" == "true" ]]; then
+          if [[ "$requirements" == *webkit* ]]; then
             pnpm --dir ui exec playwright install --with-deps webkit
+          fi
+          if [[ "$requirements" == *runtime* ]]; then
+            # Run the helper's cold preparation before Vitest starts its subprocess budget.
+            preparation_started=$SECONDS
+            VITEST=1 node scripts/run-node.mjs --help
+            echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
           fi
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \

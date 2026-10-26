@@ -197,6 +197,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "config/sessions/session-accessor.sqlite-archive.worker",
     ),
     sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+    usageOverview: runtimeProcessEntrypoint("infra/session-cost-usage-overview-report.worker"),
     workerTranscriptCommit: runtimeProcessEntrypoint(
       "gateway/worker-environments/transcript-commit.worker",
     ),

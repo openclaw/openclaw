@@ -3,7 +3,7 @@ import { assert, describe, expect, it } from "vitest";
 import * as httpFixtures from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
-import { serializeSse } from "./provider-stream.test-support.js";
+import { makeStallingStream, serializeSse } from "./provider-stream.test-support.js";
 
 const MAX = 16 * 1024 * 1024;
 const TOTAL = 18 * 1024 * 1024;
@@ -71,11 +71,9 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
 describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => {
   it("finishes wrapped response cancellation after handing cleanup upstream", async () => {
     let cancelStarted = false;
-    const upstreamBody = new ReadableStream<Uint8Array>({
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const upstreamBody = makeStallingStream([], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const fetcher = createBoundedMistralFetcher(
       async () => new Response(upstreamBody, { status: 200 }),

@@ -74,16 +74,49 @@ A new worker or database generation receives a complete snapshot.
 Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
+
 Reference and fact publications reuse the last complete scope sweep while its
 shared revision remains current. Importing scope cells publishes only the imported
 keys and carries a completed sweep through the host's own revision increment.
 Peer retirement and capacity pruning still invalidate that sweep; an imported key
 never certifies that unrelated remote retirements were swept.
 
+Ordinary SQLite worker dispatch verifies the current Gateway root and projection
+in the existing ownership heartbeat worker. Each request receives a fresh physical
+check, then verifies the same live owner before dispatch and native admission.
+Successful checks are never reused across requests. Retained schema settlement,
+synchronous bootstrap, and native cleanup keep their existing lease checks.
+
+MCP config mutations, personal GitHub credential publication, and transcript
+artifact exports retain their original database context through the async lease
+owner. They await durable ownership verification after staging and before each
+effect, then use the same owner's synchronous liveness guard at publication.
+Worker writes retain the lease through native transaction settlement; draining
+refuses new effects without revoking accepted writes. Read-only transcript
+exports refuse before acquiring a writable lease. Automatic recovery cleanup
+also awaits serving-owner verification before launch and destructive admission.
+
+Runtime owner-path capture resolves filesystem aliases asynchronously. Borrowed
+cleanup clients carry their original physical database identity to the SQLite
+worker, including birthtime where supported, instead of repeating synchronous
+host filesystem checks. The binding belongs to each client, so reusing an actor
+does not change another client's authority. Close-checkpoint diagnostics inspect
+files asynchronously and recheck cleanup custody before publishing.
+Periodic WAL work carries its original file identity through worker opening and
+execution; host lifecycle guards stay in memory. Worker admission publication
+consumes the broker's prepared identity instead of rescanning the same file and
+aliases. Warm admission exchanges reuse their locally retained descriptor facts.
+Native opening, replacement, and retirement keep their existing custody checks.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
+early awaited configuration and plugin metadata reads. Standalone CLI inspection
+keeps its one-shot reader retirement; failed reads and native cleanup still retire
+their workers. The existing two-reader limit and database authority checks remain.
 
 Agent creation and workspace mutations keep their recovery-hold recheck inside
 the existing synchronous engine admission; filesystem effects remain outside it.
@@ -184,6 +217,8 @@ the canonical entry postimage, without a second copy.
 Session-entry patch preparation sends only logical entries and their keys. SQL row,
 window, and side-table facts stay with the worker; callback commits retain the same
 entry comparison, admission ordering, and persisted bytes.
+Entry comparison ignores top-level property order introduced by replica deltas,
+while preserving JSON field values and rejecting intervening owner or content changes.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -536,6 +571,14 @@ The worker sends a reference only after matching its authoritative write token,
 and only while the entry object remains unchanged. Cold or mismatched revisions
 and replaced entries carry the complete entry. Main resolves references within
 that command; live policy and revocation checks still run at every admission.
+
+Plain transcript append receipts use the same command-local reference when the
+entry is unchanged and initialization does not also expose it. Main restores the
+entry by reference to its deeply frozen replica preimage, without cloning it.
+Settlement, publication, and commit observers only read that entry; changed or
+unavailable preimages still transfer the complete entry. A missing or mismatched
+reference refuses receipt restoration. Stored bytes and write authority are
+unchanged.
 
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL

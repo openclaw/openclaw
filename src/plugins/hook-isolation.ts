@@ -61,6 +61,15 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
     }
     return false;
   }
+  if (!sourceData && (Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype)) {
+    // Native cloning materializes ordinary fields as data properties, including getter results.
+    for (const key of Reflect.ownKeys(value)) {
+      if (containsSharedMemory(Reflect.get(value, key), seen)) {
+        return true;
+      }
+    }
+    return false;
+  }
   if (sourceData && !(value instanceof Error) && !Array.isArray(value)) {
     const prototype = Object.getPrototypeOf(value);
     // Non-plain values retain their native clone semantics. Inspect their

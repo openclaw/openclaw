@@ -706,7 +706,7 @@ export function createAgentDatabaseNativeGeneration(
           }
         }
         throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
-        publishAgentDatabaseCloseCheckpoint(
+        await publishAgentDatabaseCloseCheckpoint(
           pathname,
           readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
           assertCleanupOwned,

@@ -25,6 +25,9 @@ type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 const materializationChanges = vi.hoisted<{
   onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
 }>(() => ({}));
+const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
+  () => import("../plugins/plugin-metadata-empty.test-support.js"),
+);
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
@@ -39,18 +42,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     manifestRegistry: { plugins: [], diagnostics: [] },
     registryDiagnostics: [],
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
   },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
   credentialsRevision: 0,

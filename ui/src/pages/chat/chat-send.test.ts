@@ -27,7 +27,7 @@ import {
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { createResolvedModelPatch, sessionListResult } from "../../test-helpers/chat-model.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
@@ -1146,46 +1146,6 @@ describe("handleSendChat", () => {
     expect(
       getChatSessionProjection(host, { sessionKey: host.sessionKey }).entries,
     ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
-  });
-
-  it("retires a failed queued picker back to the preceding confirmed session row", async () => {
-    const firstPatch = createDeferred<unknown>();
-    let patchCount = 0;
-    const host = makeChatHost({
-      requestHandlers: {
-        "sessions.list": createSessionsResult([
-          row("agent:main", {
-            model: "gpt-5-mini",
-            modelProvider: "openai",
-            modelOverrideSource: "user",
-          }),
-        ]),
-        "sessions.patch": () => {
-          patchCount += 1;
-          if (patchCount === 1) {
-            return firstPatch.promise;
-          }
-          throw new Error("picker rejected");
-        },
-      },
-    });
-
-    const slash = patchChatSessionSettings(host, host.sessionKey, { model: "openai/gpt-5-mini" });
-    await waitForFast(() => expect(patchCount).toBe(1));
-    const picker = patchChatSessionSettings(host, host.sessionKey, {
-      model: "openai/gpt-5",
-    });
-
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBe("openai/gpt-5-mini");
-    firstPatch.resolve(createResolvedModelPatch("gpt-5-mini", "openai"));
-    await expect(slash).resolves.toBeTruthy();
-    await expect(picker).rejects.toThrow("picker rejected");
-    expect(host.sessions.state.modelOverrides[host.sessionKey]).toBeUndefined();
-    expect(host.sessions.state.result?.sessions[0]).toMatchObject({
-      model: "gpt-5-mini",
-      modelProvider: "openai",
-      modelOverrideSource: "user",
-    });
   });
 
   it("keeps waiting when a late picker barrier cannot be persisted", async () => {

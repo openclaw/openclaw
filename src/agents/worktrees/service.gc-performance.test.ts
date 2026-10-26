@@ -236,6 +236,52 @@ describe("worktree Git maintenance", () => {
     expect(await missing()).toBe(0);
   });
 
+  it("resumes past an over-budget worktree after restart without losing later staged objects", async () => {
+    const { root, repo, worktree } = await fixture("repair-resume");
+    const remote = path.join(root, "remote.git");
+    await git(remote, "config", "uploadpack.allowAnySHA1InWant", "true");
+    const input = "staged object on a later worktree\n";
+    const missing = await requireGit(remote, ["hash-object", "-w", "--stdin"], { input });
+    await requireGit(repo, ["hash-object", "-w", "--stdin"], { input });
+    await git(
+      worktree.path,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${missing},staged.txt`,
+    );
+    await fs.writeFile(path.join(worktree.path, "staged.txt"), "unstaged contents\n");
+    const indexPath = path.resolve(
+      worktree.path,
+      await git(worktree.path, "rev-parse", "--git-path", "index"),
+    );
+    const index = await fs.readFile(indexPath);
+    await fs.unlink(path.join(repo, ".git", "objects", missing.slice(0, 2), missing.slice(2)));
+    await git(repo, "config", "remote.origin.promisor", "true");
+    await git(repo, "config", "remote.origin.partialclonefilter", "blob:none");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      // Model an expensive primary checkout inventory using the real Git result;
+      // the deadline must not keep later linked indexes from ever being repaired.
+      if (cwd === repo && args[0] === "rev-list") {
+        now += 300_001;
+      }
+      return result;
+    });
+    const first = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true, progress: first });
+    expect(first.result.outcome).toBe("partial");
+    expect((await runGit(repo, ["cat-file", "-e", missing], offlineGit)).code).not.toBe(0);
+    await stateDatabase.closeOpenClawStateDatabaseAsync();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true });
+    expect(await requireGit(repo, ["cat-file", "blob", missing], offlineGit)).toBe(input.trim());
+    expect(await fs.readFile(indexPath)).toEqual(index);
+    expect(await read(worktree.path, "staged.txt")).toBe("unstaged contents\n");
+  });
+
   it("repairs stale pack lookup without rebuilding a repository-wide index", async () => {
     const repo = await initRepo(tempDirs.make("worktree-stale-pack-index-"));
     const packDirectory = path.join(repo, ".git", "objects", "pack");

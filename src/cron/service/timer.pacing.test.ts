@@ -2,6 +2,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import type { DeferredCronNotifications } from "./state.js";
@@ -34,7 +35,17 @@ function complete(job: CronJob, result: Partial<CronJobRunResult>) {
   applyJobResult(
     state,
     job,
-    { status: "ok", startedAt: STARTED_AT, endedAt: ENDED_AT, ...result },
+    {
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      ...result,
+      errorReason: resolveCronRunErrorReason(
+        result.error,
+        result.provider,
+        result.errorClassification,
+      ),
+    },
     { deferredNotifications },
   );
   return { state, deferredNotifications };
@@ -128,6 +139,7 @@ it("preserves an edited pacing override and force marker after a stale quiet tri
     state,
     job,
     authorCronRunCompletion(admittedJob, {
+      errorReason: undefined,
       jobId: job.id,
       job: admittedJob,
       status: "ok",

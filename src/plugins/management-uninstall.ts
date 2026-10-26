@@ -49,6 +49,7 @@ import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
 } from "./plugin-lifecycle-trace.js";
+import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
 import { buildPluginSnapshotReport } from "./status.js";
@@ -144,9 +145,9 @@ export async function preparePluginUninstall(
         () => buildPluginSnapshotReport({ config }),
         { command: "uninstall" },
       ).plugins;
-  const requestedId = metadata
-    ? metadata.normalizePluginId(params.pluginId.trim())
-    : params.pluginId;
+  const rawId = params.pluginId.trim();
+  const requestedId =
+    metadata && !Object.hasOwn(installRecords, rawId) ? metadata.normalizePluginId(rawId) : rawId;
   const selection: Result<{ pluginId: string; plugin?: (typeof plugins)[number] }, string> = cli
     ? resolvePluginUninstallId({ rawId: requestedId, config, plugins })
     : ok({ pluginId: requestedId, plugin: plugins.find((plugin) => plugin.id === requestedId) });
@@ -169,7 +170,15 @@ export async function preparePluginUninstall(
     return ownership;
   }
   const { installOwner: pluginId, pluginIds } = ownership.value;
-  const policyPluginIds = pluginIds.length ? pluginIds : [pluginId];
+  let policyPluginIds = pluginIds.length ? pluginIds : [pluginId];
+  if (ownership.value.kind === "orphan") {
+    const normalizeId = metadata?.normalizePluginId ?? createPluginRegistryIdNormalizer(index);
+    const aliasOwnerId = normalizeId(pluginId);
+    // 孤立安装记录不拥有已归属于其他插件的别名配置。
+    if (aliasOwnerId !== pluginId && plugins.some((entry) => entry.id === aliasOwnerId)) {
+      policyPluginIds = [];
+    }
+  }
   let channelIds: string[] | undefined;
   if (cli) {
     if (pluginIds.length === 1 && pluginIds[0] === requestedPluginId) {

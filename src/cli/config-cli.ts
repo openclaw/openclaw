@@ -138,11 +138,13 @@ async function runConfigMutation(
                 await prepareReadOnly();
                 await run(async (change) => {
                   const { buildConfigOwnerPatch } = await import("./config-cli-owner-patch.js");
-                  const result = await requestOwner<{ restart?: unknown }>(
-                    "config.patch",
-                    buildConfigOwnerPatch(change, current.hash),
-                  );
-                  return result.restart ? "The Gateway is restarting to apply it." : undefined;
+                  const result = await requestOwner<{
+                    restart?: unknown;
+                    restartPending?: unknown;
+                  }>("config.patch", buildConfigOwnerPatch(change, current.hash));
+                  return result.restart || result.restartPending
+                    ? "The Gateway is restarting to apply it."
+                    : undefined;
                 });
               },
             }),

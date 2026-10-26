@@ -99,7 +99,7 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   store.write(cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 3) => ({
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 5) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,
@@ -159,7 +159,18 @@ async function readRawRecord(
 describe("persistent chat session snapshots", () => {
   it("restores model display data with the conversation, isolated from another account", async () => {
     const writer = new SessionSnapshotStore();
-    const remembered = { id: "model", provider: "openai", name: "Remembered model" };
+    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
+      id: "model",
+      provider: "openai",
+      name: "Remembered model",
+      reasoning: true,
+      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
+      thinkingLevel: "high",
+      thinkingDefault: "medium",
+      thinkingLevels: [{ id: "high", label: "High" }],
+      permissionMode: "full",
+      defaultPermissionMode: "workspace",
+    };
     await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
     expect((await readSnapshot())?.composer).toEqual(remembered);
     const otherKey = resolveChatSnapshotKey(
@@ -445,17 +456,14 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
-  it.each(["direct", "prewarmed"])(
-    "discards a superseded unbounded projection (%s)",
-    async (mode) => {
-      await persist(writer, sessionKey, snapshot("current"));
-      await putRawRecord(envelope(sessionKey, snapshot("old"), 2));
-      if (mode === "prewarmed") {
-        void prewarmChatSnapshot(sessionKey);
-      }
-      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
-    },
-  );
+  it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
+    await persist(writer, sessionKey, snapshot("current"));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 4));
+    if (mode === "prewarmed") {
+      void prewarmChatSnapshot(sessionKey);
+    }
+    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+  });
 
   it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
     const privateKey = "agent:main:dashboard:incognito-old";

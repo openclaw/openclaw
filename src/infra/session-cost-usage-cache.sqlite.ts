@@ -286,6 +286,12 @@ export function prepareSessionCostUsageRefreshLock(
     ) {
       return assertCurrent().write("usageCache.writeRollup", params, assertCurrent, signal);
     },
+    writeQuarters(
+      rows: AgentDatabaseOperations["usageCache.writeQuarters"]["input"],
+      signal?: AbortSignal,
+    ) {
+      return assertCurrent().write("usageCache.writeQuarters", rows, assertCurrent, signal);
+    },
     pruneRows(rows: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
       return assertCurrent().write("usageCache.prune", rows, assertCurrent, signal);
     },

@@ -15,7 +15,19 @@ import type {
  * custom StreamFn (for example a native API transport that cannot be expressed
  * as a wrapper around `streamSimple`).
  */
-export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContext;
+export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContext & {
+  /**
+   * Optional host-owned, selected-credential capability. Resolve immediately before
+   * each physical request, including private continuation/recovery requests,
+   * and call the result's assertCurrent immediately before dispatch. Never cache
+   * its result or fall back to a captured bearer when it rejects.
+   * Absent on legacy hosts and calls without an owner-bound renewable credential.
+   */
+  requestAuth?: {
+    version: 1;
+    resolve(params: { signal?: AbortSignal }): Promise<{ apiKey: string; assertCurrent(): void }>;
+  };
+};
 
 /**
  * Provider-owned stream wrapper hook after OpenClaw applies its generic

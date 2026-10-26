@@ -2,13 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listLineAccountIds, resolveLineAccount } from "./accounts.js";
+import { lineConfig as withLine } from "./channel-account.test-support.js";
 import type { LineConfig } from "./types.js";
 
-function withLine(line: LineConfig): OpenClawConfig {
-  return { channels: { line } };
+function credentials(prefix: string) {
+  return { channelAccessToken: `${prefix}-token`, channelSecret: `${prefix}-secret` };
+}
+function resolve(line: LineConfig, accountId?: string) {
+  return resolveLineAccount({ cfg: withLine(line), accountId });
 }
 
 describe("LINE accounts", () => {
@@ -31,21 +34,17 @@ describe("LINE accounts", () => {
   });
 
   it("resolves account from config", () => {
-    const cfg = withLine({
-      enabled: true,
-      channelAccessToken: "test-token",
-      channelSecret: "test-secret",
-      name: "Test Bot",
-      accounts: {
-        default: { channelAccessToken: "override-token", channelSecret: "override-secret" },
-      },
-    });
-
-    expect(resolveLineAccount({ cfg })).toMatchObject({
+    expect(
+      resolve({
+        enabled: true,
+        ...credentials("test"),
+        name: "Test Bot",
+        accounts: { default: credentials("override") },
+      }),
+    ).toMatchObject({
       accountId: DEFAULT_ACCOUNT_ID,
       enabled: true,
-      channelAccessToken: "override-token",
-      channelSecret: "override-secret",
+      ...credentials("override"),
       name: "Test Bot",
       tokenSource: "config",
     });
@@ -55,9 +54,8 @@ describe("LINE accounts", () => {
     vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
     vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
 
-    expect(resolveLineAccount({ cfg: withLine({ enabled: true }) })).toMatchObject({
-      channelAccessToken: "env-token",
-      channelSecret: "env-secret",
+    expect(resolve({ enabled: true })).toMatchObject({
+      ...credentials("env"),
       tokenSource: "env",
     });
   });
@@ -67,12 +65,9 @@ describe("LINE accounts", () => {
       tokenFile: createSecretFile("business-token.txt", "business-file-token\n"),
       secretFile: createSecretFile("business-secret.txt", "business-file-secret\n"),
     };
-    const cfg = withLine({ accounts: { business } });
-
-    expect(resolveLineAccount({ cfg, accountId: "business" })).toMatchObject({
-      channelAccessToken: "business-file-token",
+    expect(resolve({ accounts: { business } }, "business")).toMatchObject({
+      ...credentials("business-file"),
       enabled: true,
-      channelSecret: "business-file-secret",
       tokenSource: "file",
     });
   });
@@ -84,9 +79,7 @@ describe("LINE accounts", () => {
       const secretLink = path.join(dir, "secret-link.txt");
       fs.symlinkSync(createSecretFile("token.txt", "file-token\n"), tokenLink);
       fs.symlinkSync(createSecretFile("secret.txt", "file-secret\n"), secretLink);
-      const account = resolveLineAccount({
-        cfg: withLine({ tokenFile: tokenLink, secretFile: secretLink }),
-      });
+      const account = resolve({ tokenFile: tokenLink, secretFile: secretLink });
       expect(account).toMatchObject({
         tokenStatus: "configured_unavailable",
         signingSecretStatus: "configured_unavailable",
@@ -105,11 +98,8 @@ describe("LINE accounts", () => {
   it("does not fall through when an explicit credential file is missing", () => {
     vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
     vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
-    const tokenFile = createSecretFile("missing-token.txt", "unused");
-    fs.rmSync(tokenFile);
-    expect(
-      resolveLineAccount({ cfg: withLine({ tokenFile, channelSecret: "test-channel-secret" }) }),
-    ).toMatchObject({
+    const tokenFile = path.join(dir, "missing-token.txt");
+    expect(resolve({ tokenFile, channelSecret: "test-channel-secret" })).toMatchObject({
       channelAccessToken: "",
       tokenStatus: "configured_unavailable",
       tokenSource: "file",

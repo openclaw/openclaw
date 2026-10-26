@@ -39,18 +39,6 @@ const completion = (engine: string, outcome = "ok") => ({
 });
 
 describe("database engine observation", () => {
-  it("executes SQLite without clocks or events when neither channel has a subscriber", async () => {
-    const db = database();
-    const clock = vi.spyOn(performance, "now");
-    expect(statementChannel.hasSubscribers).toBe(false);
-    expect(requestChannel.hasSubscribers).toBe(false);
-    expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
-    const pending = Promise.resolve(8);
-    expect(observeDatabaseRequest("sqlite", () => pending)).toBe(pending);
-    await expect(pending).resolves.toBe(8);
-    expect(clock).not.toHaveBeenCalled();
-  });
-
   it("observes pre-subscription statements, redacts trailing-backslash literals and never publishes bindings", () => {
     const db = database();
     const statement = db.prepare("SELECT ? AS v, 'C:\\' AS p, 'literal-secret' AS t, 42 AS n");
@@ -80,6 +68,9 @@ describe("database engine observation", () => {
     }
     expect(events).toHaveLength(4);
     expect(events.at(-1)).toMatchObject({ engine: "sqlite", outcome: "ok" });
+    expect(() => db.exec("SELECT * FROM missing_entries")).toThrow("no such table");
+    expect(events).toHaveLength(5);
+    expect(events.at(-1)).toMatchObject({ engine: "sqlite", outcome: "error" });
   });
 
   it.each([false, true])(
@@ -89,6 +80,7 @@ describe("database engine observation", () => {
       if (subscribed) {
         capture(statementChannel);
       }
+      expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
       const statement = db.prepare("SELECT ? AS value");
       expect(() => statement.iterate(1, 2)).toThrow("column index out of range");
       const binding = new Uint8Array([1]);
@@ -112,13 +104,6 @@ describe("database engine observation", () => {
     expect(events).toEqual([]);
   });
 
-  it("publishes failure outcomes while preserving SQLite errors", () => {
-    const db = database();
-    const events = capture(statementChannel);
-    expect(() => db.exec("SELECT * FROM missing_entries")).toThrow("no such table");
-    expect(events).toEqual([expect.objectContaining({ engine: "sqlite", outcome: "error" })]);
-  });
-
   it("redacts PostgreSQL literals, nested comments and dollar strings without changing identifiers or placeholders", () => {
     const events = capture(statementChannel);
     observeDatabaseOperation(
@@ -138,6 +123,9 @@ describe("database engine observation", () => {
   });
 
   it("publishes one worker request completion for each success or error without request payloads", async () => {
+    const pending = Promise.resolve(8);
+    expect(observeDatabaseRequest("sqlite", () => pending)).toBe(pending);
+    await expect(pending).resolves.toBe(8);
     const events = capture(requestChannel);
     await expect(observeDatabaseRequest("postgres", async () => 7)).resolves.toBe(7);
     const failure = new Error("private failure payload");

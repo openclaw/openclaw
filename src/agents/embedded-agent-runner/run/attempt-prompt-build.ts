@@ -43,10 +43,8 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
-import {
-  evaluateAttemptDecisionToolPrefilter,
-  type DecisionPrefilterResult,
-} from "./attempt-decision-prefilter.js";
+import type { DecisionPrefilterResult } from "./attempt-decision-prefilter-policy.js";
+import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   usesEscapedRuntimeContext,

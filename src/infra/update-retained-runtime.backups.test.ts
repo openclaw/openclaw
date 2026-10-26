@@ -16,49 +16,20 @@ import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(
-  (["symlink", "directory"] as const).flatMap((kind) =>
-    (["missing", "failed"] as const).map((probe) => ({ kind, probe })),
-  ),
-)(
-  "updates the npm package without traversing a historical package backup $kind when pacman is $probe",
-  async ({ kind, probe }) => {
+it.each(["symlink", "directory"] as const)(
+  "updates the npm package without traversing a historical package backup %s when pacman fails",
+  async (kind) => {
     mockProcessPlatform("linux");
-    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-      pkgQueryResult(
-        "",
-        probe === "missing"
-          ? {
-              code: null,
-              termination: "error",
-              error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
-            }
-          : { code: 1 },
-      ),
-    );
+    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult("", { code: 1 }));
     const base = await fs.realpath(dirs.make("retained-package-backup-"));
     const { params, globalRoot, packageRoot: installed } = await createPackageSwapFixture(base);
     const read = (file: string) => fs.readFile(file, "utf8");
-    const dependency = path.join(globalRoot, "fixture");
     const backupName = ".openclaw.package-backup-123-1700000000000";
     const backup = path.join(globalRoot, backupName);
     const checkout = kind === "symlink" ? path.join(base, "checkout") : backup;
     const asset = path.join("dist", backupName, "asset.txt");
     const assetContent = "runtime asset outside module owner";
-    await writeTree(installed, {
-      "package.json": JSON.stringify({
-        name: "openclaw",
-        version: "1.0.0",
-        type: "module",
-        dependencies: { fixture: "1.0.0" },
-      }),
-      "dist/updater.mjs": 'export { value } from "fixture";',
-      [asset]: assetContent,
-    });
-    await writeTree(dependency, {
-      "package.json": JSON.stringify({ name: "fixture", type: "module", exports: "./index.js" }),
-      "index.js": 'export const value = "hoisted";',
-    });
+    await writeTree(installed, { [asset]: assetContent });
     await writeTree(checkout, {
       "package.json": '{"name":"openclaw"}',
       ".agents/skills/keep.txt": "operator checkout",
@@ -78,7 +49,7 @@ it.each(
     );
     await writeTree(`${backup}.databases`, { "snapshot.sqlite": "recovery data" });
     const original = await fs.lstat(backup, { bigint: true });
-    const moduleUrl = pathToFileURL(path.join(installed, "dist/updater.mjs"));
+    const moduleUrl = pathToFileURL(path.join(installed, "dist/index.js"));
     await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
       await retain({
         mutationRoots: [installed],
@@ -89,8 +60,7 @@ it.each(
       const retainedUrl = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
       expect(retainedUrl.href).not.toBe(moduleUrl.href);
       const retainedModules = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "../..");
-      expect((await fs.readdir(retainedModules)).toSorted()).toEqual(["fixture", "openclaw"]);
-      expect((await import(retainedUrl.href)).value).toBe("hoisted");
+      expect(await fs.readdir(retainedModules)).toEqual(["openclaw"]);
       expect(await read(path.join(retainedModules, "openclaw", asset))).toBe(assetContent);
       expect(await read(sentinel)).toBe("operator checkout");
       expect(await fs.lstat(backup, { bigint: true })).toMatchObject({

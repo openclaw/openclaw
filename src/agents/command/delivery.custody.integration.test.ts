@@ -256,7 +256,7 @@ it.each(
     if (readFailure) {
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
       const retain = historyWorker.retainSessionHistoryWorkerDatabase;
-      const sourceRead = vi
+      using _ = vi
         .spyOn(historyWorker, "retainSessionHistoryWorkerDatabase")
         .mockImplementationOnce((...args) => {
           const retained = retain(...args);
@@ -266,14 +266,11 @@ it.each(
           return retained;
         });
       release.resolve();
-      try {
-        expect(await delivery).toMatchObject({
-          ok: false,
-          error: { message: "Source transcript read unavailable" },
-        });
-      } finally {
-        sourceRead.mockRestore();
-      }
+
+      expect(await delivery).toMatchObject({
+        ok: false,
+        error: { message: "Source transcript read unavailable" },
+      });
     }
     if (outcome.endsWith("source-interleaved")) {
       await append({ role: "user", content: "A new request", timestamp: Date.now() });

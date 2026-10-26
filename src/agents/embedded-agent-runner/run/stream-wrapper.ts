@@ -78,19 +78,33 @@ export function wrapStreamObjectEvents(
   const iterator = function () {
     // An already opened iterator keeps the transforms installed when it opened.
     const activeTransforms = transforms.slice();
-    return createStreamIteratorWrapper({
-      iterator: originalAsyncIterator(),
-      next: async (streamIterator) => {
-        const result = await streamIterator.next();
-        if (!result.done && result.value && typeof result.value === "object") {
-          for (const transform of activeTransforms) {
-            const pending = transform(result.value as Record<string, unknown>);
-            if (pending) {
-              await pending;
-            }
+    function transformNext(
+      result: IteratorResult<AssistantMessageEvent>,
+      start = 0,
+    ): IteratorResult<AssistantMessageEvent> | Promise<IteratorResult<AssistantMessageEvent>> {
+      if (!result.done && result.value && typeof result.value === "object") {
+        for (
+          let index = start, transform = activeTransforms[index];
+          transform;
+          transform = activeTransforms[++index]
+        ) {
+          const pending = transform(result.value as Record<string, unknown>);
+          if (pending) {
+            return Promise.resolve(pending).then(() => transformNext(result, index + 1));
           }
         }
-        return result;
+      }
+      return result;
+    }
+    return createStreamIteratorWrapper({
+      iterator: originalAsyncIterator(),
+      next: (streamIterator) => {
+        try {
+          return Promise.resolve(streamIterator.next()).then(transformNext);
+        } catch (error) {
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the source iterator's rejection value.
+          return Promise.reject(error);
+        }
       },
     });
   };
