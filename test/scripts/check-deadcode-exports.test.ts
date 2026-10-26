@@ -367,7 +367,18 @@ const catalog = module.loadControlUiSourceCatalog();`;
       `              execArgv: [...(options.execArgv ?? process.execArgv)],
               // "--import", preload remains a decoy after the launch is removed.`,
     );
-    const withoutArchiveLaunch = compileWithSources(archiveWithoutLaunch, sessionCreateSource);
+    const archiveWithDetachedFragments = `${archiveWithoutLaunch}
+const preload = pathToFileURL(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "archive-worker-churn-preload.mjs"),
+).href;
+const options = {};
+const unrelatedWorkerOptions = {
+  execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],
+};`;
+    const withoutArchiveLaunch = compileWithSources(
+      archiveWithDetachedFragments,
+      sessionCreateSource,
+    );
     expect(withoutArchiveLaunch).not.toContain("archive-worker-churn-preload.mjs");
     expect(withoutArchiveLaunch).toContain(
       'import "../scripts/perf/session-create-measure-loader.mjs";',
@@ -382,9 +393,14 @@ const catalog = module.loadControlUiSourceCatalog();`;
       new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
       // "--import" and the loader path remain decoys after the launch is removed.`,
     );
+    const sessionCreateWithDetachedArgs = `${sessionCreateWithoutLaunch}
+const unrelatedArgs = [
+  "--import",
+  new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+];`;
     const withoutSessionCreateLaunch = compileWithSources(
       archiveSource,
-      sessionCreateWithoutLaunch,
+      sessionCreateWithDetachedArgs,
     );
     expect(withoutSessionCreateLaunch).toContain(
       'import "../scripts/perf/archive-worker-churn-preload.mjs";',
