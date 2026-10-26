@@ -7,6 +7,7 @@ import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
+// mock-isolation: loading the real lifecycle module is the regression this boundary rejects.
 vi.mock("openclaw/plugin-sdk/database-engine-worker-runtime", () => {
   throw new Error("Knowledge's SQLite worker must not load host database engine lifecycle");
 });
