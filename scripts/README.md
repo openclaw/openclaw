@@ -218,6 +218,14 @@ first-open regression. Phase timestamps require an aligned document/CDP clock;
 coverage timings are diagnostic. Main-target CPU and V8 omit inner-App and worker
 execution. The 100 ms HTTP profile does not delay the synthetic WebSocket.
 
+Browser/Reader probes are opt-in: `browser-focus-existing`,
+`browser-session-mobile-first-open`, `browser-session-mobile-dark-first-open`,
+and `reader-activity-first-open`. These use native navigation/panel controls and
+retain separate cold and first-open phases, raw clock evidence, no-write checks,
+and post-close settlement. They cannot be combined with `--interactions`.
+Completed contexts append once to `samples.jsonl`; `summary.json` is written
+after browser/server cleanup, including when a later context fails.
+
 ## Control UI request waterfalls
 
 The production-bundle cold-load harness can record usable-screen readiness,
