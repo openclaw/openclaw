@@ -104,6 +104,9 @@ function cleanupAdmission(admitted: Admission | undefined, runId: string) {
   }
   clearAgentRunContext(runId);
 }
+function expectAdmissionError(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
+}
 function lifecycleRelease(session: Session) {
   return sessionControllerLifecycle.captureSessionControllerSettlement({
     scope: session.storePath,
@@ -520,10 +523,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
           ]).toEqual([undefined, undefined, undefined]);
           const respond = vi.fn();
           await withoutHostSql(async () => {
-            admitted = await admitChatSend({
-              ...admission,
-              respond,
-            });
+            admitted = await admitChatSend({ ...admission, respond });
             expect(respond).not.toHaveBeenCalled();
             expect(admitted.ok).toBe(true);
             assert(admitted.ok, "Session admission failed");
@@ -571,10 +571,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
             ],
           },
         });
-        const admission = admitChatSend({
-          ...blocked,
-          respond: vi.fn(),
-        });
+        const admission = admitChatSend({ ...blocked, respond: vi.fn() });
         if (failure === "throws") {
           await expect(admission).rejects.toBe(policyError);
         } else {
@@ -588,10 +585,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         });
         let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
         try {
-          retried = await admitChatSend({
-            ...corrected,
-            respond: vi.fn(),
-          });
+          retried = await admitChatSend({ ...corrected, respond: vi.fn() });
           expect(retried.ok).toBe(true);
         } finally {
           cleanupAdmission(retried, runId);
@@ -643,22 +637,16 @@ it.each(["new-terminal", "new-receipt"] as const)(
       const respond = vi.fn();
       let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
-        admitted = await admitChatSend({
-          ...admission,
-          respond,
-        });
+        admitted = await admitChatSend({ ...admission, respond });
         expect(admitted.ok).toBe(false);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining(
-            source === "new-receipt"
-              ? { code: "UNAVAILABLE", retryable: true }
-              : {
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("already used for different input"),
-                },
-          ),
+        expectAdmissionError(
+          respond,
+          source === "new-receipt"
+            ? { code: "UNAVAILABLE", retryable: true }
+            : {
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("already used for different input"),
+              },
         );
         expect(getRpcSource(runId)).toBeUndefined();
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
@@ -835,12 +823,8 @@ it("names the changed store key when refusing a send prepared against stale stor
       respond,
     });
     expect(outcome.ok).toBe(false);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "Error: Session storage changed while starting work (store key). Retry.",
-      }),
-    );
+    expectAdmissionError(respond, {
+      message: "Error: Session storage changed while starting work (store key). Retry.",
+    });
     expect(getRpcSource(f.runId)).toBeUndefined();
   }));

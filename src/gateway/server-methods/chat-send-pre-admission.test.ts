@@ -145,6 +145,10 @@ function expectFailure(respond: RetryParams["respond"], fields: Record<string, u
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
 
+function expectCached(payload: unknown, metadata: Record<string, unknown> = { cached: true }) {
+  expect(params.respond).toHaveBeenCalledWith(true, payload, undefined, metadata);
+}
+
 function expectConflict(respond: RetryParams["respond"]) {
   expectFailure(respond, {
     code: "INVALID_REQUEST",
@@ -352,13 +356,11 @@ it.each(["pending", "active", "accepted", "terminal"] as const)(
     if (state === "pending" || state === "active") {
       expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
     } else {
-      expect(params.respond).toHaveBeenCalledWith(
-        true,
+      expectCached(
         expect.objectContaining({
           runId: clientRunId,
           status: state === "terminal" ? "ok" : "in_flight",
         }),
-        undefined,
         expect.objectContaining({ cached: true }),
       );
     }
@@ -400,10 +402,8 @@ it("replays explicit cancellation before a retained accepted input marker", asyn
   params.context.chatRunState.getOrCreate(clientRunId).abortMarker = createChatAbortMarker(200);
 
   expect(await retry(params)).toBe(true);
-  expect(params.respond).toHaveBeenCalledWith(
-    true,
+  expectCached(
     { runId: clientRunId, status: "timeout", summary: "aborted", endedAt: 200 },
-    undefined,
     { cached: true, runId: clientRunId },
   );
 });
@@ -494,12 +494,7 @@ it.each(["unchanged", "removed", "uncached removal", "rotated device"] as const)
     } else {
       expect(await retry(params)).toBe(true);
       if (selection === "unchanged") {
-        expect(params.respond).toHaveBeenCalledWith(
-          true,
-          { runId: params.session.clientRunId, status: "ok" },
-          undefined,
-          { cached: true },
-        );
+        expectCached({ runId: params.session.clientRunId, status: "ok" });
       } else {
         expectConflict(params.respond);
       }
