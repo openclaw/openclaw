@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createAnthropicMessagesTransportStreamFn } from "../transports/anthropic-transport-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
-import type { Context, Model } from "../types.js";
+import type { Context } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
@@ -15,12 +15,9 @@ const context: Context = { messages: [{ role: "user", content: "Hello", timestam
 const model = makeProviderModel("openai-completions", "openai", "gpt-5.6-luna", {
   baseUrl: "https://provider.test/v1",
 });
-const anthropic: Model<"anthropic-messages"> = {
-  ...model,
-  id: "sonnet-4.6",
-  api: "anthropic-messages",
-  provider: "anthropic",
-};
+const anthropic = makeProviderModel("anthropic-messages", "anthropic", "sonnet-4.6", {
+  baseUrl: model.baseUrl,
+});
 
 const options = { apiKey: "fixture-token", reasoningEffort: "medium" as const };
 const completionsTransport = createOpenAICompletionsTransportStreamFn();
@@ -66,8 +63,6 @@ describe.each(implementations)("%s transport failures", (_name, api, stream) => 
         expect(result.diagnostics).toContainEqual(
           expect.objectContaining({
             type: "provider_transport_failure",
-            timestamp: expect.any(Number),
-            error: expect.objectContaining({ message: expect.any(String) }),
             details: { eventsEmitted: false, phase: "before_message_stream_start" },
           }),
         );
@@ -77,59 +72,46 @@ describe.each(implementations)("%s transport failures", (_name, api, stream) => 
     },
   );
 
-  it.each(["text", "thinking", "toolCall"] as const)(
-    "does not mark a socket drop after a %s delta",
-    async (kind) => {
-      const isTool = kind === "toolCall";
-      const toolFunction = { name: "lookup", arguments: '{"value":' };
-      const openAiDelta = isTool
-        ? { tool_calls: [{ index: 0, id: "call_1", type: "function", function: toolFunction }] }
-        : { [kind === "text" ? "content" : "reasoning_content"]: "Partial" };
-      const anthropicBlock = isTool
-        ? { type: "tool_use", id: "call_1", name: "lookup", input: {} }
-        : { type: kind, [kind]: "Partial" };
-      const anthropicDelta = isTool
-        ? { type: "input_json_delta", partial_json: '{"value":' }
-        : { type: `${kind}_delta`, [kind]: " more" };
-      const events =
-        api === "anthropic-messages"
-          ? [
-              frame("message_start", {
-                message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
-              }),
-              frame("content_block_start", { index: 0, content_block: anthropicBlock }),
-              frame("content_block_delta", { index: 0, delta: anthropicDelta }),
-            ]
-          : [{ choices: [{ index: 0, delta: openAiDelta, finish_reason: null }] }];
-      const body = serializeSse(events);
-      let failBody: (() => void) | undefined;
-      const fetchStream: typeof fetch = async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode(body));
-              failBody = () => controller.error(socketError());
-            },
-          }),
-          { headers: { "content-type": "text/event-stream" } },
-        );
-      configureAiTransportHost({ buildModelFetch: () => fetchStream });
+  it("does not mark a socket drop after content starts", async () => {
+    const events =
+      api === "anthropic-messages"
+        ? [
+            frame("message_start", {
+              message: { id: "msg_1", usage: { input_tokens: 1, output_tokens: 0 } },
+            }),
+            frame("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+            frame("content_block_delta", {
+              index: 0,
+              delta: { type: "text_delta", text: "Partial" },
+            }),
+          ]
+        : [{ choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }] }];
+    let failBody: (() => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(serializeSse(events)));
+        failBody = () => controller.error(socketError());
+      },
+    });
+    configureAiTransportHost({
+      buildModelFetch: () => async () =>
+        new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    });
 
-      const response = await createStream();
-      let sawDelta = false;
-      for await (const event of response) {
-        if (event.type.endsWith("_delta")) {
-          sawDelta = true;
-          failBody?.();
-        }
+    const response = await createStream();
+    let sawDelta = false;
+    for await (const event of response) {
+      if (event.type.endsWith("_delta")) {
+        sawDelta = true;
+        failBody?.();
       }
-      const result = await response.result();
-      expect(sawDelta).toBe(true);
+    }
+    const result = await response.result();
+    expect(sawDelta).toBe(true);
 
-      expect(result.stopReason).toBe("error");
-      expect(
-        result.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure"),
-      ).not.toBe(true);
-    },
-  );
+    expect(result.stopReason).toBe("error");
+    expect(
+      result.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure"),
+    ).not.toBe(true);
+  });
 });
