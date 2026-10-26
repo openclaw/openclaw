@@ -30,6 +30,7 @@ class NativeFixture {
 
 type NativeContent = JSX.Element | NativeFixture;
 const mounts = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<{ value: NativeContent }>>>();
+const rowContent = (row: TranscriptRow) => (row.kind === "content" ? row.content : null);
 
 function Content(props: { value: NativeContent }) {
   const fixture = () => (props.value instanceof NativeFixture ? props.value : undefined);
@@ -154,13 +155,8 @@ export async function mountTestTranscript(
   });
   container.scrollTo = (options?: ScrollToOptions | number) => {
     if (typeof options === "object") {
-      container.scrollTop = Math.max(
-        0,
-        Math.min(
-          options.top ?? container.scrollTop,
-          container.scrollHeight - container.clientHeight,
-        ),
-      );
+      const maximum = container.scrollHeight - container.clientHeight;
+      container.scrollTop = Math.max(0, Math.min(options.top ?? container.scrollTop, maximum));
     }
   };
   let currentRows = initialRows;
@@ -174,12 +170,7 @@ export async function mountTestTranscript(
     render(
       transcript.renderSession(`agent:main:${paneId}`, (session) => {
         currentSession = session;
-        return session.render(
-          rows,
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-        );
+        return session.render(rows, rowContent, null, false);
       }),
       container,
     );
@@ -260,5 +251,5 @@ export const contact = (identifier: number, target: EventTarget): Touch => ({
 
 export function renderReadyRows(session: ChatTranscriptSession, rows: readonly TranscriptRow[]) {
   session.setContentReady(true);
-  return session.render(rows, (row) => (row.kind === "content" ? row.content : null), null, false);
+  return session.render(rows, rowContent, null, false);
 }
