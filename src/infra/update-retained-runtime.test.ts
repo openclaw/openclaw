@@ -16,6 +16,7 @@ import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-nati
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import * as commands from "../process/exec.js";
+import { writeFixtureTree as writeFiles } from "./fixture-tree.test-support.js";
 import * as processCensus from "./openclaw-process-census.js";
 import {
   resolvePackageActivationAnchor,
@@ -236,14 +237,6 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
   };
 }
 `;
-
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, content] of Object.entries(files)) {
-    const destination = path.join(root, name);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await writeFile(destination, content);
-  }
-}
 
 const contents = (root: string, file: string) => readFile(path.join(root, file), "utf8");
 const expectMissing = (operation: Promise<unknown>) =>
