@@ -127,7 +127,7 @@ export const AlphaChannelConfigSchema = ${JSON.stringify({ schema: schema(file) 
       );
     }
     expect(listBundledPluginMetadata({ rootDir: root })[0]).toMatchObject({
-      publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+      publicSurfaceArtifacts: ["api.js", "index.js", "runtime-api.js"],
       runtimeSidecarArtifacts: ["runtime-api.js"],
     });
     expect(channelConfig(root)).toEqual(expectedConfig("manifest", {}, "boolean"));

@@ -323,7 +323,7 @@ it("keeps one command row through failed terminal delivery", async () => {
       });
     }
     await progress.start();
-    expect(progress.getSnapshot().lines[0]?.text).toBe(`exit 1; ${detail}`);
+    expect(progress.getSnapshot().lines[0]).toMatchObject({ text: `exit 1; ${detail}` });
     expect(rendered.match(/run tests/g)).toHaveLength(1);
   } finally {
     progress.cancel();

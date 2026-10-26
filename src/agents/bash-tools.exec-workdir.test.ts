@@ -91,7 +91,7 @@ it("rejects file sandbox workdirs", async () => {
     resolveExecWorkdir({ host: "sandbox", defaultCwd: "/workspace/not-dir", sandbox: sandbox() }),
   ).resolves.toEqual(unavailable("/workspace/not-dir"));
 });
-it.each([
+it.each<[string, () => string, () => BashSandboxConfig]>([
   ["outside workspace", () => tempDirs.make("openclaw-outside-"), () => sandbox()],
   ["parent segments", () => "missing/..", () => sandbox()],
   ["outside backend roots", () => "/other/remote/workspace", () => backend()],
@@ -100,7 +100,7 @@ it.each([
     () => "/remote/workspace/missing",
     () => backend({ validateWorkdir: async () => null }),
   ],
-] as const)("rejects sandbox workdir: %s", async (_kind, workdir, config) =>
+])("rejects sandbox workdir: %s", async (_kind, workdir, config) =>
   expectUnavailable(workdir(), config()),
 );
 it.each(["host", "backend"] as const)(

@@ -1,14 +1,15 @@
+import { X509Certificate } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import { productModelConfig } from "./server.chat-product.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -67,31 +68,50 @@ it("delivers a committed human mention once through authenticated chat.send", as
       "alice@committed-mention.example.test": scopes,
     },
   };
+  const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
+  const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
+  const tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
   const headers = (email: string) => ({
     "x-forwarded-user": email,
     "x-forwarded-for": "203.0.113.50",
     "x-forwarded-proto": "https",
   });
   const origin = "https://control.example.test";
-  const clientOptions = {
-    origin,
-    clientName: "openclaw-control-ui",
-    mode: "webchat",
-    scopes,
-  } as const;
-  const { defaults, models } = productModelConfig(state.workspaceDir, model);
   const gateway = await startGatewayWithClient({
-    ...clientOptions,
     configPath: state.configPath,
     auth,
+    secure: true,
+    tlsFingerprint,
+    origin,
     edgeAuthHeaders: headers("bob@committed-mention.example.test"),
+    clientName: "openclaw-control-ui",
+    mode: "webchat",
+    scopes: ["operator.admin"],
     cfg: {
-      agents: { defaults },
-      models,
+      agents: {
+        defaults: {
+          workspace: state.workspaceDir,
+          skipBootstrap: true,
+          model: { primary: model.modelRef },
+          models: {
+            [model.modelRef]: {
+              agentRuntime: { id: "openclaw" },
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+        },
+      },
       plugins: { slots: { memory: "none" } },
       tools: { profile: "minimal" },
       gateway: {
         auth,
+        tls: { enabled: true, autoGenerate: false, certPath, keyPath },
         trustedProxies: ["127.0.0.1", "::1"],
         controlUi: { allowedOrigins: [origin] },
         roles: {
@@ -112,9 +132,13 @@ it("delivers a committed human mention once through authenticated chat.send", as
     await gateway.server.close({ reason: "committed mention cleanup" });
   });
   const sender = await connectGatewayClient({
-    ...clientOptions,
-    url: `ws://127.0.0.1:${gateway.port}`,
+    url: `wss://127.0.0.1:${gateway.port}`,
+    tlsFingerprint,
+    origin,
     edgeAuthHeaders: headers("alice@committed-mention.example.test"),
+    clientName: "openclaw-control-ui",
+    mode: "webchat",
+    scopes: ["operator.admin"],
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: state.path("sender-device", "client", "credentials.sqlite"),
     }),
@@ -128,6 +152,11 @@ it("delivers a committed human mention once through authenticated chat.send", as
     idempotencyKey: "mention-seed",
   });
   await gateway.client.request("agent.wait", { runId: seed.runId, timeoutMs: 30_000 });
+  const lookup = await sender.request<{ users: { profileId: string }[] }>("users.mentionable", {
+    sessionKey: target,
+    query: "Bob",
+  });
+  expect(lookup.users.map((profile) => profile.profileId)).toContain(bob.id);
   const request = {
     sessionKey: target,
     message: "@Bob Please review.",

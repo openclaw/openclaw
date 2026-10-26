@@ -45,7 +45,9 @@ export function registerSharedClientInferenceTests(
     ],
   ])("preserves inference ownership for %s", async (_label, overrides, ownsInference) => {
     stubCodexInferenceTransportEnv();
-    onTestFinished(() => vi.unstubAllEnvs());
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const generation = { epoch: 1, fingerprint: "desktop-inference" };
     const options = {
       ...startOptions,
