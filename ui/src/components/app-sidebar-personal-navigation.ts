@@ -6,6 +6,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,
@@ -323,6 +324,25 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       host.sessionDataContext?.plugins.registryStatus !== "complete"
         ? host.sidebarPluginSnapshot
         : null,
+  });
+}
+
+/** Group occurrences share the canonical tree and its child observation metadata. */
+export function personalSidebarGroupRows(
+  host: PersonalNavigationHost & { reconciledSidebarZone(): SidebarPinZone },
+  group: PersonalSessionGroup,
+): SidebarRecentSession[] {
+  if (host.sidebarSnapshot) {
+    return [];
+  }
+  const rows = host.reconciledSidebarZone().sessionRows;
+  return group.sessionKeys.flatMap((key) => {
+    const row = rows.get(key);
+    return row?.pinnable &&
+      !row.archived &&
+      !host.sessionDataContext?.sessions.archiveVisibility(key)
+      ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]
+      : [];
   });
 }
 

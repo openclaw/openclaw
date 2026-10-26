@@ -105,6 +105,65 @@ async function mountParent() {
   return { harness, sidebar, data, publishChildChanged, expand, retry };
 }
 
+it.each(["loaded", "unloaded"] as const)(
+  "retains child rendering and observations when grouped with %s children",
+  async (initial) => {
+    let currentChild = { ...child, sessionId: "child-session" };
+    const childList = vi.fn(() => result([currentChild]));
+    const mounted = await mountChildren({ ...parentRow, sessionId: "parent-session" }, childList);
+    const { sidebar, context, harness } = mounted;
+    const renderedChildren = () => sidebar.querySelectorAll(`[data-session-key="${childKey}"]`);
+    try {
+      if (initial === "loaded") {
+        expandCollapsed(sidebar);
+        await waitForFast(() => expect(renderedChildren()).toHaveLength(1));
+      }
+      context.navigation.update({
+        personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: [parentKey] }],
+      });
+      await settleLitElement(sidebar);
+      if (initial === "unloaded") {
+        const group = sidebar.querySelector('[data-personal-session-group="focus"]')!;
+        group.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
+      }
+      await waitForFast(() => expect(renderedChildren()).toHaveLength(2));
+      expect(childList).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      currentChild = { ...currentChild, label: "Updated grouped child", updatedAt: 20 };
+      harness.publishEvent("sessions.changed", {
+        sessionKey: childKey,
+        agentId: "worker",
+        reason: "patch",
+        spawnedBy: parentKey,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settleLitElement(sidebar);
+      expect(childList).toHaveBeenCalledTimes(2);
+      expect([...renderedChildren()].map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Updated grouped child"),
+        expect.stringContaining("Updated grouped child"),
+      ]);
+      vi.useRealTimers();
+
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          '[data-personal-session-group="focus"] .sidebar-session-group-toggle',
+        )!
+        .click();
+      await settleLitElement(sidebar);
+      expect(renderedChildren()).toHaveLength(1);
+      context.navigation.update({ personalSessionGroups: [] });
+      await settleLitElement(sidebar);
+      expect(renderedChildren()).toHaveLength(1);
+      expect(childList).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      disposeRoster(mounted);
+    }
+  },
+);
+
 it("hydrates a connection replacement while an old child page is pending", async () => {
   const children = Array.from({ length: 101 }, (_, index) => ({
     ...child,

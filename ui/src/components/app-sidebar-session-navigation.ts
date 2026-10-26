@@ -33,7 +33,7 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
-  resolvePersonalSidebarSession,
+  personalSidebarGroupRows,
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
@@ -500,7 +500,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   resolvePersonalGroupSession(key: string): SidebarRecentSession | undefined {
     // Startup snapshots are presentation only; group membership resolves through current access.
-    return this.sidebarSnapshot ? undefined : resolvePersonalSidebarSession(this, key);
+    return this.sidebarSnapshot ? undefined : this.reconciledSidebarZone().sessionRows.get(key);
   }
 
   collapsedPersonalSessionGroups: ReadonlySet<string> = new Set();
@@ -515,12 +515,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   personalGroupSessionRows = (group: PersonalSessionGroup): SidebarRecentSession[] =>
-    group.sessionKeys.flatMap((key) => {
-      const row = this.resolvePersonalGroupSession(key);
-      return row?.pinnable && !row.archived && !this.context.sessions.archiveVisibility(key)
-        ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]
-        : [];
-    });
+    personalSidebarGroupRows(this, group);
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
   pruneSidebarSessionEntry(key: string) {

@@ -19,17 +19,21 @@ suite.define(() => {
     "organizes a personal layout without shared mutations (%s)",
     async (scope) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const childKey = "agent:main:reliability-child";
         const rows = [
           createControlUiSessionRow(key, "Reliability Tracker", Date.now(), {
             category: "Engineering",
+            childSessions: [childKey],
           }),
           createControlUiSessionRow(releaseKey, "Release checklist", Date.now() - 1000),
+          createControlUiSessionRow(childKey, "Verification notes", Date.now() - 2000, {
+            spawnedBy: key,
+          }),
         ];
         const gateway = await installMockGateway(page, {
           sessionKey: key,
           operatorScopes: [scope],
           sessions: rows,
-          methodResponses: { "sessions.list": sessionsListResponse(rows) },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -68,10 +72,27 @@ suite.define(() => {
             .click();
           await page.getByRole("menuitem", { name: action, exact: true }).click();
         };
+        const childToggle = sidebar.locator(`[data-child-session-toggle="${key}"]`);
+        await childToggle.waitFor();
+        if ((await childToggle.getAttribute("aria-expanded")) === "false") {
+          await childToggle.click();
+        }
+        await sidebar.locator(`[data-session-key="${childKey}"]`).waitFor();
         await create("Focus", "Reliability Tracker");
         await group("Focus")
           .getByRole("link", { name: /Reliability Tracker/ })
           .waitFor();
+        if (artifacts) {
+          await captureFrame(artifacts, "grouped-children.png", page.locator(".shell"), [
+            group("Focus"),
+            sidebar.locator('[data-session-section="category:Engineering"]'),
+          ]);
+          console.log("Personal group child-tree proof: " + artifacts);
+        }
+        await group("Focus")
+          .getByRole("link", { name: /Verification notes/ })
+          .waitFor();
+        expect(await sidebar.locator(`[data-session-key="${childKey}"]`).count()).toBe(2);
         await create("Later");
         // A guest's ordinary session drag adds a personal reference, not a shared move.
         await sidebar
