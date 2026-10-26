@@ -100,7 +100,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.client.transcript", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.close", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.toolCall", "talk", "operator.talk", "<=2026.7"],
-  ["talk.client.say", "talk", "operator.talk", "2026.10"],
   ["talk.client.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.create", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.appendAudio", "talk", "operator.talk", "<=2026.7"],
@@ -743,4 +742,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["update.recovery.cleanup", "update", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
   ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["talk.client.say", "talk", "operator.talk", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
