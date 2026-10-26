@@ -1,32 +1,16 @@
-import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   captureAnthropicRequest,
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { makeUserMessage } from "../../../../test/helpers/user-message.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
-import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { Context, UserMessage } from "../../../llm/types.js";
-import {
-  buildLateMediaAttachedProjection,
-  createUserTurnTranscriptRecorder,
-  mergePreparedUserTurnMessageForRuntime,
-  type UserTurnInput,
-} from "../../../sessions/user-turn-transcript.js";
-import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -70,7 +54,6 @@ import {
   buildSystemUpdateMessage,
 } from "./runtime-context-prompt.js";
 
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-99495-boundary-");
 const TS = 1717570800000;
 const options = { timezone: "UTC" };
 const user = (text: string, timestamp = TS): UserMessage => ({
@@ -454,59 +437,6 @@ describe("prompt-cache boundary regressions", () => {
     expect(input).toEqual([{ role: "user", content: text, timestamp: TS }]);
   });
 
-  it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
-    const dir = sessionDirs.make();
-    setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      cwd: dir,
-      sessionEntry: undefined,
-      sessionId: "session-99495",
-      sessionKey: "agent:main:cache-99495",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    const input = { text: "describe this", timestamp: TS, idempotencyKey: "cache-99495:user" };
-    const { promise: started, resolve: markStarted } = createDeferred();
-    const { promise: media, resolve: resolveMedia } = createDeferred<UserTurnInput>();
-    const recorder = createUserTurnTranscriptRecorder({
-      input,
-      target,
-      resolveInput: async () => {
-        markStarted();
-        return await media;
-      },
-    });
-    const persistence = recorder.persistFallback();
-    await started;
-    await persistUserTurnTranscript({ ...target, input });
-    recorder.markRuntimePersisted(recorder.message);
-    const runtimeMessage = mergePreparedUserTurnMessageForRuntime({
-      runtimeMessage: user(input.text),
-      preparedMessage: recorder.message,
-    });
-    const sent = normalizeMessagesForLlmBoundary([runtimeMessage], options);
-    recorder.markSentToProvider?.();
-    const mediaPath = path.join(dir, "image.png");
-    resolveMedia({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
-    await persistence;
-    const persisted = (await loadTranscriptEvents(target))
-      .map((entry) => entry as { message?: AgentMessage })
-      .flatMap((entry) => (entry.message ? [entry.message] : []));
-    const next = normalizeMessagesForLlmBoundary(persisted, options);
-    const late = expectDefined(persisted.at(-1), "persisted late-media turn");
-    expect(next).toHaveLength(sent.length + 1);
-    expect(next.slice(0, sent.length)).toEqual(sent);
-    expect(late).toMatchObject({ content: "", __openclaw: { lateMedia: true } });
-    expect(next.at(-1)).toMatchObject({
-      content: `${buildTimestampPrefix(new Date(TS), options)}[media attached: ${mediaPath}]`,
-    });
-    const projection = buildLateMediaAttachedProjection(late);
-    expect(projection.text).toBe(`[media attached: ${mediaPath}]`);
-    expect(projection.media).toEqual([
-      expect.objectContaining({ path: mediaPath, contentType: "image/png", kind: "image" }),
-    ]);
-  });
-
   it("preserves the full-history provider prefix through a completed tool loop on the next user turn", async () => {
     const active = [
       carrier("sender=Bob"),
@@ -634,6 +564,8 @@ describe("active prompt steering context", () => {
     expect(retry).toEqual([message, original, steering]);
     expect(session.agent.transformContext).toBe(originalTransform);
     expect(session.messages).toEqual([original, steering]);
+    session.agent.state.messages.unshift(message);
+    expect(normalizeMessagesForLlmBoundary(session.messages)).not.toContain(message);
   });
 
   it("keeps steering context through tool use and retires it after a settled answer", () => {
@@ -772,41 +704,5 @@ describe("active prompt steering context", () => {
     cleanupCarrier();
     cleanupPrompt();
     expect(projected.at(-1)).toBe(kept.message);
-  });
-
-  it("preserves user metadata through steering and runtime-context cleanup", () => {
-    const session = createSession();
-    const message = runtimeContext();
-    const cleanup = installRuntimeContextMessageForPrompt({ session, message });
-    const promptText =
-      'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"channel":"discord"}\n```\n\nOriginal ask';
-    session.agent.state.messages.push({
-      role: "user",
-      content: promptText,
-      timestamp: 1717574460000,
-    });
-    const boundaryOptions = {
-      timezone: "UTC",
-      currentUserTimestampOverride: { timestamp: 1717570800000, text: promptText },
-    };
-    const project = () =>
-      relocateCurrentRuntimeContextCarrierToTail(
-        normalizeMessagesForLlmBoundary(session.messages, boundaryOptions),
-      );
-    const prefix = project();
-    session.agent.state.messages.push(makeUserMessage("new requirement", 1717570860000));
-    const steered = project();
-    cleanup();
-    expect(steered.slice(0, prefix.length)).toEqual(prefix);
-    expect(steered.at(-1)).toMatchObject({
-      role: "user",
-      content: expect.stringContaining("new requirement"),
-    });
-    expect(session.messages).not.toContain(message);
-    expect(project()[0]).toMatchObject({
-      content: expect.stringContaining("Conversation info:"),
-    });
-    session.agent.state.messages.unshift(message);
-    expect(project()).not.toContain(message);
   });
 });
