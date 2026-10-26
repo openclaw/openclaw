@@ -26,25 +26,35 @@ import { getSubagentRunsSnapshotForChildSession } from "./subagent-registry-stat
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export async function getSubagentRunByChildSessionKey(
-  ...child: [childSessionKey: string, childAgentId?: string]
+  childSessionKey: string,
+  childAgentId?: string,
 ): Promise<SubagentRunRecord | null> {
-  const runs = await getSubagentRunsSnapshotForChildSession(subagentRuns, ...child);
-  return getSubagentRunByChildSessionKeyFromRuns(runs, ...child);
+  const runs = await getSubagentRunsSnapshotForChildSession(
+    subagentRuns,
+    childSessionKey,
+    childAgentId,
+  );
+  return getSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey, childAgentId);
 }
 
 type RegistryTestApi = {
   releaseSubagentRun(runId: string): Promise<void>;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): Promise<void>;
-  testing: Record<"sweepOnceForTests" | "runSweeperTickForTests", () => Promise<void>>;
+  testing: {
+    sweepOnceForTests(): Promise<void>;
+    runSweeperTickForTests(): Promise<void>;
+  };
 };
 
-const getRegistryTestApi = () =>
-  (globalThis as Record<PropertyKey, unknown>)[
+function getRegistryTestApi(): RegistryTestApi {
+  return (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.subagentRegistryTestApi")
   ] as RegistryTestApi;
+}
 
-export const resetSubagentRegistryForTests = (opts?: { persist?: boolean }) =>
-  getRegistryTestApi().resetSubagentRegistryForTests(opts);
+export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
+  return getRegistryTestApi().resetSubagentRegistryForTests(opts);
+}
 
 function createRegistryRunFixture(entry: SubagentRunRecordOverrides): SubagentRunRecord {
   const canonical = createSubagentRunRecord(entry);
@@ -81,7 +91,9 @@ export function seedSubagentRunForReadTest(entry: SubagentRunRecordOverrides): v
   subagentRuns.set(canonical.runId, canonical);
 }
 
-export const releaseSubagentRun = (runId: string) => getRegistryTestApi().releaseSubagentRun(runId);
+export function releaseSubagentRun(runId: string) {
+  return getRegistryTestApi().releaseSubagentRun(runId);
+}
 
 export const testing = {
   sweepOnceForTests: () => getRegistryTestApi().testing.sweepOnceForTests(),

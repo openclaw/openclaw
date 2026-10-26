@@ -31,7 +31,10 @@ export function createLifecycleAgentCallWaits(
       // Retain serial producer joins for teardown even when RPC entry wins.
       pendingRootWork = pendingRootWork.then(() => settleRootWork(true));
       await Promise.race([entered(), pendingRootWork]);
-      expect(getAgentCallCount()).toBeGreaterThanOrEqual(expectedCount);
+      if (getAgentCallCount() >= expectedCount) {
+        return;
+      }
+      throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCallCount()}`);
     },
     async waitForCleanupHandledFalse(runId: string) {
       // RPC entry may precede persistence; join without advancing retry time.
@@ -40,8 +43,16 @@ export function createLifecycleAgentCallWaits(
       expect(run).toMatchObject({ cleanupHandled: false, delivery: { status: "pending" } });
       expect(Boolean(run?.delivery?.payload)).toBe(true);
     },
-    settle() {
-      return pendingRootWork.finally(() => settleRootWork()).finally(flushAsync);
+    async settle() {
+      try {
+        await pendingRootWork;
+      } finally {
+        try {
+          await settleRootWork();
+        } finally {
+          await flushAsync();
+        }
+      }
     },
   };
 }
@@ -67,22 +78,24 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     }
   };
 
+  const waitForDeliveredCleanup = async (
+    runId: string,
+    options?: { allowPendingRequesterSettleWake?: boolean },
+  ) => {
+    await waitForRun(
+      runId,
+      (run) =>
+        run.delivery?.status === "delivered" &&
+        typeof run.cleanupCompletedAt === "number" &&
+        (options?.allowPendingRequesterSettleWake === true ||
+          run.requesterSettleWake === undefined),
+    );
+  };
+
   return {
     flushAsync,
     waitForRun,
-    async waitForDeliveredCleanup(
-      runId: string,
-      options?: { allowPendingRequesterSettleWake?: boolean },
-    ) {
-      await waitForRun(
-        runId,
-        (run) =>
-          run.delivery?.status === "delivered" &&
-          typeof run.cleanupCompletedAt === "number" &&
-          (options?.allowPendingRequesterSettleWake === true ||
-            run.requesterSettleWake === undefined),
-      );
-    },
+    waitForDeliveredCleanup,
     waitForFrozenResultText: (runId: string, expectedText: string) =>
       waitForRun(runId, (run) => run.completion?.resultText === expectedText),
   };
