@@ -3,8 +3,12 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -119,15 +123,19 @@ suite.define(() => {
           const link = summary.locator(runSelector);
           const body = first.locator(messageBody);
           const capture = async (state: "collapsed" | "expanded") => {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              thread,
-              labeled ? [answer] : [summary, answer],
-              { animations: "disabled", elements: labeled ? [thread] : [thread, summary] },
-            );
-            const names = labeled ? ["desktop"] : [state, state + "-summary"];
-            for (const [index, name] of names.entries()) {
-              await writeFile(path.join(artifacts, name + ".png"), frame.elements[index]!.png);
+            if (captureUiProofEnabled) {
+              const frame = await takeControlUiScreenshotFrame(
+                page,
+                thread,
+                labeled ? [answer] : [summary, answer],
+                { animations: "disabled", elements: labeled ? [thread] : [thread, summary] },
+              );
+              const names = labeled ? ["desktop"] : [state, state + "-summary"];
+              for (const [index, name] of names.entries()) {
+                await writeFile(path.join(artifacts, name + ".png"), frame.elements[index]!.png);
+              }
+            } else {
+              await waitForControlUiProofSurface(thread, labeled ? [answer] : [summary, answer]);
             }
             return summary.evaluate((element) => {
               const source = element.querySelector("a[data-cron-run-link]");
@@ -171,11 +179,15 @@ suite.define(() => {
           await summary.press(labeled ? "Space" : "Enter");
           await body.waitFor({ state: "detached" });
           if (labeled) {
-            const mobile = await takeControlUiScreenshotFrame(page, thread, [summary, answer], {
-              animations: "disabled",
-              viewport: { width: 390, height: 844 },
-            });
-            await writeFile(path.join(artifacts, "mobile.png"), mobile.png);
+            await page.setViewportSize({ width: 390, height: 844 });
+            if (captureUiProofEnabled) {
+              const mobile = await takeControlUiScreenshotFrame(page, thread, [summary, answer], {
+                animations: "disabled",
+              });
+              await writeFile(path.join(artifacts, "mobile.png"), mobile.png);
+            } else {
+              await waitForControlUiProofSurface(thread, [summary, answer]);
+            }
           }
           const toggles = await first.evaluateHandle((details) => {
             const observed = { count: 0 };

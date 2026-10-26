@@ -14,7 +14,10 @@ import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
 import { connectChatGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
@@ -30,6 +33,7 @@ import {
 
 // Product E2E: one actual native visible child and three parent turns, not an external-provider live test.
 // The exact same assertions run against baseline and candidate asset roots.
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiRoot = path.resolve(process.env.OPENCLAW_UI_E2E_WAIT_CLOCK_UI_ROOT || "dist/control-ui");
 let instance: OpenClawTestInstance;
 let client: Awaited<ReturnType<typeof connectChatGateway>>;
@@ -181,6 +185,10 @@ async function capture(page: Page, parent: Locator, name: string, content: Locat
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
+  if (!captureUiProof) {
+    await waitForControlUiProofSurface(parent, content);
+    return;
+  }
   await pauseVirtualClock(page);
   try {
     const frame = await takeControlUiScreenshotFrame(page, parent, content, {

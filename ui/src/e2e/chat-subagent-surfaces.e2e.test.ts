@@ -3,7 +3,10 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -13,6 +16,7 @@ import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagent presentation" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const now = 1_800_000_000_000;
 
 suite.define(() => {
@@ -133,11 +137,15 @@ suite.define(() => {
           await expect
             .poll(() => block.textContent())
             .toContain(count === 1 ? firstChildLabel : String(count));
-          const artifactDir = createControlUiE2eArtifactDir("subagent-surfaces-" + name);
-          const frame = await takeControlUiScreenshotFrame(page, pane, [footer, block], {
-            animations: "disabled",
-          });
-          await writeFile(path.join(artifactDir, "active.png"), frame.png);
+          if (captureUiProof) {
+            const artifactDir = createControlUiE2eArtifactDir("subagent-surfaces-" + name);
+            const frame = await takeControlUiScreenshotFrame(page, pane, [footer, block], {
+              animations: "disabled",
+            });
+            await writeFile(path.join(artifactDir, "active.png"), frame.png);
+          } else {
+            await waitForControlUiProofSurface(pane, [footer, block]);
+          }
           expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
           expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(
             0,

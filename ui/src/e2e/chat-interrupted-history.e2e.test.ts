@@ -2,7 +2,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   interruptedChatHistory,
@@ -11,6 +14,7 @@ import {
 } from "../test-helpers/interrupted-chat-history.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Interrupted chat history" });
 
 suite.define(() => {
@@ -29,17 +33,19 @@ suite.define(() => {
       }
       await thread.getByText("Interrupted", { exact: true }).waitFor();
       await thread.locator(".chat-activity-group__summary").first().waitFor();
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        thread,
-        [
-          thread.getByText(interruptedChatPrompt, { exact: true }),
-          ...interruptedChatCommentary.map((text) => thread.getByText(text, { exact: true })),
-          thread.getByText("Interrupted", { exact: true }),
-        ],
-        { animations: "disabled" },
-      );
-      await writeFile(path.join(artifacts, "history.png"), frame.png);
+      const content = [
+        thread.getByText(interruptedChatPrompt, { exact: true }),
+        ...interruptedChatCommentary.map((text) => thread.getByText(text, { exact: true })),
+        thread.getByText("Interrupted", { exact: true }),
+      ];
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, thread, content, {
+          animations: "disabled",
+        });
+        await writeFile(path.join(artifacts, "history.png"), frame.png);
+      } else {
+        await waitForControlUiProofSurface(thread, content);
+      }
       await thread.locator(".chat-activity-group__summary").first().click();
       await thread.getByText("Inspect fixture 1", { exact: true }).waitFor();
       await page.reload();

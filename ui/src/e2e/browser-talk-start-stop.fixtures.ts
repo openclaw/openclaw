@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Page } from "playwright";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 export const TALK_READY_HISTORY_MESSAGE = {
   role: "assistant",
   content: "Talk history is ready.",
@@ -481,10 +483,15 @@ export async function captureComposerProof(
   page: Page,
   fileName: string,
 ) {
+  const surface = page.locator(".agent-chat__composer-shell");
+  await surface.waitFor();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await surface.scrollIntoViewIfNeeded();
+  if (!captureUiProof) {
+    return;
+  }
   const artifactDir = path.join(owner.artifactDir, "voice-controls");
-  await page
-    .locator(".agent-chat__composer-shell")
-    .screenshot({ path: path.join(artifactDir, fileName) });
+  await surface.screenshot({ path: path.join(artifactDir, fileName) });
 }
 
 export async function captureMicrophoneLossProof(
@@ -493,6 +500,10 @@ export async function captureMicrophoneLossProof(
   fileName: string,
 ) {
   const artifactDir = path.join(owner.artifactDir, "voice-controls");
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  if (!captureUiProof) {
+    return;
+  }
   // The error floats above the composer bounds; retain the real chat context.
   await page.screenshot({ path: path.join(artifactDir, fileName), fullPage: true });
 }
@@ -502,10 +513,15 @@ export async function captureVideoTalkProof(
   page: Page,
   fileName: string,
 ) {
+  const surface = page.locator(".agent-chat__composer-shell");
+  await surface.waitFor();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await surface.scrollIntoViewIfNeeded();
+  if (!captureUiProof) {
+    return;
+  }
   const artifactDir = path.join(owner.artifactDir, "video-talk");
-  await page
-    .locator(".agent-chat__composer-shell")
-    .screenshot({ path: path.join(artifactDir, fileName) });
+  await surface.screenshot({ path: path.join(artifactDir, fileName) });
 }
 
 export async function captureWebRtcSdpAlertProof(
@@ -513,10 +529,15 @@ export async function captureWebRtcSdpAlertProof(
   page: Page,
   fileName: string,
 ) {
+  const surface = page.locator('.agent-chat__talk-status[role="alert"]');
+  await surface.waitFor();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await surface.scrollIntoViewIfNeeded();
+  if (!captureUiProof) {
+    return;
+  }
   const artifactDir = path.join(owner.artifactDir, "webrtc-sdp");
-  await page
-    .locator('.agent-chat__talk-status[role="alert"]')
-    .screenshot({ path: path.join(artifactDir, fileName) });
+  await surface.screenshot({ path: path.join(artifactDir, fileName) });
 }
 
 export async function installBlockedMicrophoneFixture(page: Page) {

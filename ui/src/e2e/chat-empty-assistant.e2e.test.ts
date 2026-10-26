@@ -1,7 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   emptyAssistantAcknowledgment,
@@ -9,6 +12,7 @@ import {
 } from "../test-helpers/empty-assistant-history.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({ name: "Chat without assistant text" });
 
 suite.define(() => {
@@ -35,12 +39,16 @@ suite.define(() => {
       const prompt = thread.getByText("talk to parent session", { exact: true });
       await prompt.waitFor();
       await thread.locator(".chat-tool-row, .chat-activity-group__summary").first().waitFor();
-      const frame = await takeControlUiScreenshotFrame(page, thread, [prompt], {
-        animations: "disabled",
-      });
-      const screenshot = path.join(suite.artifactDir, "chat.png");
-      await writeFile(screenshot, frame.png);
-      console.log(`Screenshot: ${screenshot}`);
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, thread, [prompt], {
+          animations: "disabled",
+        });
+        const screenshot = path.join(suite.artifactDir, "chat.png");
+        await writeFile(screenshot, frame.png);
+        console.log(`Screenshot: ${screenshot}`);
+      } else {
+        await waitForControlUiProofSurface(thread, [prompt]);
+      }
       expect(await thread.locator(".chat-group.assistant").count()).toBe(0);
       await thread.getByText(emptyAssistantAcknowledgment, { exact: true }).waitFor();
       expect(await thread.textContent()).not.toContain("PRIVATE_CONTINUATION");

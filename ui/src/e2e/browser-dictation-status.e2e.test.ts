@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -24,6 +27,7 @@ function catalog(transcription: boolean, realtime?: boolean) {
   };
 }
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionId = "dictation-test";
 function createDictationMethodResponses() {
   return {
@@ -90,6 +94,10 @@ async function openDictation(
 }
 
 async function captureFullPage(page: Page, name: string) {
+  await waitForControlUiProofSurface(page.locator("body"), []);
+  if (!captureUiProof) {
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     path: path.join(suite.artifactDir, `voice-controls/${name}.png`),
@@ -133,6 +141,10 @@ suite.define(() => {
             .waitFor({ state: "detached" });
           const capture = async (stage: string) => {
             const surface = page.locator(".agent-chat__composer-shell");
+            if (!captureUiProof) {
+              await waitForControlUiProofSurface(surface, [textarea]);
+              return;
+            }
             const frame = await takeControlUiScreenshotFrame(page, surface, [textarea], {
               animations: "disabled",
             });

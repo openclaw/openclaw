@@ -1,13 +1,21 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockBootstrapConfig,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -28,7 +36,20 @@ suite.define(() => {
         json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
       }),
     );
-    const artifactDir = createControlUiE2eArtifactDir("model-wait");
+    const artifactDir = captureUiProofEnabled
+      ? createControlUiE2eArtifactDir("model-wait")
+      : undefined;
+    const capture = async (name: string, content: Locator) => {
+      const shell = page.locator(".shell");
+      if (!artifactDir) {
+        await waitForControlUiProofSurface(shell, [content]);
+        return;
+      }
+      await writeFile(
+        path.join(artifactDir, name),
+        await takeControlUiViewportScreenshot(page, shell, [content]),
+      );
+    };
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
@@ -58,19 +79,13 @@ suite.define(() => {
       await expect.poll(() => summary.textContent()).toBe("");
       await expect.poll(() => summary.locator(".chat-bubble-dots > span").count()).toBe(3);
       expect(await working.isVisible()).toBe(false);
-      await writeFile(
-        path.join(artifactDir, "quiet-startup.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [summary]),
-      );
+      await capture("quiet-startup.png", summary);
       expect(await bubble.locator("svg").count()).toBe(0);
       await summary.click();
       await expect.poll(() => working.textContent()).toContain("Waiting for a response");
       await status(2, "waiting_for_model", "slot");
       await expect.poll(() => working.textContent()).toContain("Waiting for a free model slot");
-      await writeFile(
-        path.join(artifactDir, "after-slot-wait.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
-      );
+      await capture("after-slot-wait.png", working);
       await gateway.emitGatewayEvent("chat", {
         runId,
         sessionKey,
@@ -97,10 +112,7 @@ suite.define(() => {
       await expect
         .poll(() => working.textContent())
         .toContain("Waiting for the local model to respond");
-      await writeFile(
-        path.join(artifactDir, "response-wait.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
-      );
+      await capture("response-wait.png", working);
       await summary.click();
       await gateway.emitGatewayEvent("agent", {
         runId,
@@ -136,24 +148,15 @@ suite.define(() => {
       await expect.poll(() => workBubble.textContent()).toContain("Checking the tests");
       expect(await bubble.count()).toBe(0);
       expect(await page.locator(".chat-bubble-dots--working").count()).toBe(1);
-      await writeFile(
-        path.join(artifactDir, "active-work.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [workBubble]),
-      );
+      await capture("active-work.png", workBubble);
       await workBubble.locator(".chat-activity-group__summary").click();
       await expect
         .poll(() => workBubble.locator(".chat-activity-group__body").isVisible())
         .toBe(true);
-      await writeFile(
-        path.join(artifactDir, "expanded-work.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [workBubble]),
-      );
+      await capture("expanded-work.png", workBubble);
       await workBubble.locator(".chat-activity-group__summary").click();
       await page.setViewportSize({ width: 390, height: 844 });
-      await writeFile(
-        path.join(artifactDir, "active-work-mobile.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [workBubble]),
-      );
+      await capture("active-work-mobile.png", workBubble);
       await gateway.emitGatewayEvent("agent", {
         runId,
         sessionKey,

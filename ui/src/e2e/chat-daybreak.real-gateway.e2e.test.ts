@@ -18,11 +18,15 @@ import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let owner: OpenClawTestInstance;
 let client: Awaited<ReturnType<typeof connectChatGateway>>;
 const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
@@ -573,8 +577,12 @@ suite.define(() => {
             }
             await menu.waitFor();
           };
-          const snapshot = async (stage: string) => {
-            const frame = await takeControlUiScreenshotFrame(page, menu, [], {
+          const snapshot = async (stage: string, surface = menu) => {
+            if (!captureUiProof) {
+              await waitForControlUiProofSurface(surface, []);
+              return;
+            }
+            const frame = await takeControlUiScreenshotFrame(page, surface, [], {
               animations: "disabled",
             });
             await writeFile(path.join(dir, name + "-" + stage + ".png"), frame.png);
@@ -733,13 +741,7 @@ suite.define(() => {
           await modelPicker.locator("summary").click();
           const recovery = modelPicker.getByRole("button", { name: "Clear saved Access" });
           await recovery.waitFor();
-          const stale = await takeControlUiScreenshotFrame(
-            page,
-            modelPicker.locator(".chat-controls__model-menu"),
-            [],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(dir, name + "-stale-selection.png"), stale.png);
+          await snapshot("stale-selection", modelPicker.locator(".chat-controls__model-menu"));
           await recovery.click();
           await expect.poll(async () => (await row()).cyberAccessProgram).toBeUndefined();
           await expect.poll(() => recovery.count()).toBe(0);

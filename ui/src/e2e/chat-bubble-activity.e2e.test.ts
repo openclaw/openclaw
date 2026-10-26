@@ -3,7 +3,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockBootstrapConfig,
@@ -13,6 +16,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Bubble identity and activity" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKey = "agent:main:dashboard:bubble-activity";
 
 suite.define(() => {
@@ -106,14 +110,18 @@ suite.define(() => {
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       const last = chat.getByText("The second message keeps its rounded corners.", { exact: true });
       await browserExpect(last).toBeVisible();
-      const frame = await takeControlUiScreenshotFrame(page, chat, [last], {
-        animations: "disabled",
-        elements: [chat],
-      });
-      writeFileSync(
-        path.join(suite.artifactDir, "conversation-" + viewport.width + ".png"),
-        frame.elements[0]!.png,
-      );
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, chat, [last], {
+          animations: "disabled",
+          elements: [chat],
+        });
+        writeFileSync(
+          path.join(suite.artifactDir, "conversation-" + viewport.width + ".png"),
+          frame.elements[0]!.png,
+        );
+      } else {
+        await waitForControlUiProofSurface(chat, [last]);
+      }
       await browserExpect(
         chat.getByText("I’ll check the spacing first.", { exact: true }),
       ).toBeVisible();

@@ -169,20 +169,14 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.messages.subscribe", {
           match: { key: "agent:main:main" },
         });
-        for (const [index, { theme, mode, accent }] of themes.entries()) {
+        const applyAppearance = async ({ theme, mode, accent }: (typeof themes)[number]) => {
           const id = `${theme}-${mode}-${accent ?? "theme"}`;
           await page.emulateMedia({ colorScheme: mode });
-          await page.setViewportSize({ width: 1440, height: 900 });
-          if (index > 0) {
-            // Exercise the live preference owner while reusing the mounted application.
-            await gateway.setMethodResponse(
-              "config.get",
-              configResponse({ theme, themeMode: mode, accent }, id),
-            );
-            await gateway.emitGatewayEvent("config.changed", {});
-            await evaluateControlUiContext(page, (app) => app.navigate("chat"));
-            await waitForControlUiRoute(page, { routeId: "chat" });
-          }
+          await gateway.setMethodResponse(
+            "config.get",
+            configResponse({ theme, themeMode: mode, accent }, id),
+          );
+          await gateway.emitGatewayEvent("config.changed", {});
           const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;
           await expect
             .poll(() =>
@@ -202,6 +196,18 @@ suite.define(() => {
               )
               .toBe(true);
           }
+          return id;
+        };
+        const chatInput = page.locator(".chat-pane-cache__pane--active .agent-chat__input");
+        await chatInput
+          .locator(".agent-chat__composer-combobox textarea")
+          .fill("Review this draft.");
+        const send = page.getByRole("button", { name: "Send message", exact: true });
+        const sendSamples = [];
+        // Every palette sees the real controls; the shared send lifecycle runs once.
+        for (const appearance of themes) {
+          await page.setViewportSize({ width: 1440, height: 900 });
+          const id = await applyAppearance(appearance);
           const palette = await page.evaluate(() => ({
             theme: document.documentElement.dataset.theme,
             links: [
@@ -222,10 +228,6 @@ suite.define(() => {
               "var(--sidebar-rail-action-active-bg)",
             ],
           );
-          const chatInput = page.locator(".chat-pane-cache__pane--active .agent-chat__input");
-          const textarea = chatInput.locator(".agent-chat__composer-combobox textarea");
-          await textarea.fill("Review this draft.");
-          const send = page.getByRole("button", { name: "Send message", exact: true });
           const desktop = await inspectStates(
             page,
             send,
@@ -241,8 +243,7 @@ suite.define(() => {
             "var(--chat-send-foreground)",
           );
           await screenshot(page, `${id}-mobile-send`, [chatInput]);
-          if (theme === "crt" && mode === "dark") {
-            // An explicit theme token must reach the SVG, not only its button.
+          if (appearance.theme === "crt" && appearance.mode === "dark") {
             await page.evaluate(() =>
               document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
             );
@@ -251,28 +252,36 @@ suite.define(() => {
               document.documentElement.style.removeProperty("--chat-send-foreground"),
             );
           }
-          const sendCount = (await gateway.getRequests("chat.send")).length;
-          await send.click();
-          const sent = await gateway.waitForRequest("chat.send", { after: sendCount });
-          expect(sent.params, `${id}: submitted draft`).toMatchObject({
-            message: "Review this draft.",
-          });
-          const stop = page.getByRole("button", { name: "Stop generating", exact: true });
-          await stop.waitFor({ state: "visible" });
+          sendSamples.push({ palette, railSamples, desktop, mobile });
+        }
+        const sendCount = (await gateway.getRequests("chat.send")).length;
+        await send.click();
+        const sent = await gateway.waitForRequest("chat.send", { after: sendCount });
+        expect(sent.params, "submitted draft").toMatchObject({ message: "Review this draft." });
+        const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+        await stop.waitFor({ state: "visible" });
+        const stopSamples = [];
+        for (const appearance of themes) {
+          await page.setViewportSize({ width: 390, height: 844 });
+          const id = await applyAppearance(appearance);
           const stopMobile = await inspectStates(page, stop, `${id} stop`, "var(--danger)");
           await screenshot(page, `${id}-mobile-stop`, [chatInput]);
           await page.setViewportSize({ width: 1440, height: 900 });
           const stopDesktop = await inspectStates(page, stop, `${id} stop`, "var(--danger)");
-          const abortCount = (await gateway.getRequests("chat.abort")).length;
-          await stop.click();
-          await gateway.waitForRequest("chat.abort", { after: abortCount });
-          await stop.waitFor({ state: "detached" });
-          await evaluateControlUiContext(page, (app) => app.navigate("new-session"));
-          await waitForControlUiRoute(page, { routeId: "new-session" });
-          await page.setViewportSize({ width: 390, height: 844 });
-          const newInput = page.locator(".new-session-page .agent-chat__input");
-          await newInput.locator(".new-session-page__message").fill("A new conversation draft.");
-          const start = page.locator(".new-session-page__start-submit");
+          stopSamples.push({ stopMobile, stopDesktop });
+        }
+        const abortCount = (await gateway.getRequests("chat.abort")).length;
+        await stop.click();
+        await gateway.waitForRequest("chat.abort", { after: abortCount });
+        await stop.waitFor({ state: "detached" });
+        await evaluateControlUiContext(page, (app) => app.navigate("new-session"));
+        await waitForControlUiRoute(page, { routeId: "new-session" });
+        await page.setViewportSize({ width: 390, height: 844 });
+        const newInput = page.locator(".new-session-page .agent-chat__input");
+        await newInput.locator(".new-session-page__message").fill("A new conversation draft.");
+        const start = page.locator(".new-session-page__start-submit");
+        for (const [index, appearance] of themes.entries()) {
+          const id = await applyAppearance(appearance);
           const newSession = await inspectStates(
             page,
             start,
@@ -280,7 +289,7 @@ suite.define(() => {
             "var(--chat-send-foreground)",
           );
           await screenshot(page, `${id}-mobile-new`, [newInput]);
-          if (theme === "crt" && mode === "dark") {
+          if (appearance.theme === "crt" && appearance.mode === "dark") {
             await page.evaluate(() =>
               document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
             );
@@ -292,11 +301,7 @@ suite.define(() => {
           if (capture) {
             await writeFile(
               path.join(suite.artifactDir, `${id}-colors.json`),
-              JSON.stringify(
-                { palette, railSamples, desktop, mobile, stopMobile, stopDesktop, newSession },
-                null,
-                2,
-              ),
+              JSON.stringify({ ...sendSamples[index], ...stopSamples[index], newSession }, null, 2),
             );
           }
         }

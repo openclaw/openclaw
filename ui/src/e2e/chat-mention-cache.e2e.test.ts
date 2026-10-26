@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
+  captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -46,8 +47,9 @@ suite.define(() => {
         await gateway.deferNext("users.mentionable");
         await input.fill("Review @h");
         await menu.waitFor();
-        // Capture before asserting so the same flow retains the original loading regression.
-        await page.screenshot({ path: path.join(artifacts, "reopened.png") });
+        if (captureUiProofEnabled) {
+          await page.screenshot({ path: path.join(artifacts, "reopened.png") });
+        }
         expect(await menu.getByRole("option").count()).toBe(2);
         expect(await menu.locator(".mention-menu__loading").count()).toBe(0);
         await expectRequestCountStable(gateway, "users.mentionable", 1);
@@ -60,13 +62,17 @@ suite.define(() => {
         expect(await menu.getByRole("option").count()).toBe(2);
         expect(await menu.locator(".mention-menu__loading").count()).toBe(0);
         await input.press("ArrowDown");
-        await page.screenshot({ path: path.join(artifacts, "refreshing.png") });
+        if (captureUiProofEnabled) {
+          await page.screenshot({ path: path.join(artifacts, "refreshing.png") });
+        }
         await gateway.resolveDeferred("users.mentionable", {
           users: [people[1], { profileId: "hazel", displayName: "Hazel", online: true }],
           truncated: false,
         });
         await expect.poll(() => menu.textContent()).toContain("Hazel");
-        await page.screenshot({ path: path.join(artifacts, "refreshed.png") });
+        if (captureUiProofEnabled) {
+          await page.screenshot({ path: path.join(artifacts, "refreshed.png") });
+        }
         await input.press("Enter");
         expect(await input.inputValue()).toBe("Again @Henry ");
       });
