@@ -10,6 +10,12 @@ function failed(error: string, terminal = false) {
   return { path: target.path, ok: false, error, terminal };
 }
 
+function throwOnRead(failure: unknown) {
+  vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
+    throw failure;
+  });
+}
+
 it.each([
   {
     name: "wrapped I/O error without cause prose or metadata",
@@ -53,9 +59,7 @@ it.each([
     expected: "Error: source read failed (code=EIO, errcode=10)",
   })),
 ])("preserves $name", async ({ failure, expected }) => {
-  vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
-    throw failure;
-  });
+  throwOnRead(failure);
   await expect(verifyOpenClawDatabase(target)).resolves.toEqual(failed(expected));
 });
 

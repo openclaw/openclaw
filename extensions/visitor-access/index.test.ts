@@ -329,6 +329,41 @@ describe("visitor-access plugin lifecycle", () => {
     ).toEqual(await second.store.lookup("visitor@example.test"));
   });
 
+  it("upgrades a grant recorded by v2026.10.6 without onboarding metadata", async () => {
+    // Value recorded by the v2026.10.6 plugin through its registered visitor_invite tool.
+    const stableGrant = {
+      email: "stable@example.test",
+      invitedVia: "agent:main:maintainer",
+      createdAt: START_MS,
+      expiresAt: START_MS + 7 * DAY_MS,
+      grantId: "7b3da382-f824-43ff-ae25-9c8c994ca6f3",
+    };
+    vi.stubGlobal("fetch", createPolicyFetch([stableGrant.email]).fetcher);
+    const upgraded = registerPlugin();
+    await upgraded.store.register(stableGrant.email, stableGrant);
+    await upgraded.start();
+    await upgraded.settle();
+    const visitor = { profileId: "stable", emails: [stableGrant.email], assignedRole: null };
+    expect(upgraded.authorize(visitor)).toBeDefined();
+    const service = visitorRuntimeStore.getRuntime().service;
+    expect(service.findActiveInvitation(stableGrant.grantId)).toEqual(stableGrant);
+    await expect(
+      service.compareAndSetOnboarding({
+        grantId: stableGrant.grantId,
+        expected: null,
+        next: { state: "pending", welcomeSessionKey: "welcome" },
+      }),
+    ).resolves.toMatchObject({ applied: true });
+    await expect(
+      upgraded.execute("visitor_invite", { email: stableGrant.email, days: 30 }),
+    ).resolves.toMatchObject({ details: { outcome: "renewed" } });
+    expect(await upgraded.store.lookup(stableGrant.email)).toEqual({
+      ...stableGrant,
+      expiresAt: START_MS + 30 * DAY_MS,
+      onboarding: { state: "pending", welcomeSessionKey: "welcome", updatedAt: START_MS },
+    });
+  });
+
   it("keeps CLI metadata discovery free of runtime access and background work", () => {
     const api = createTestPluginApi({ registrationMode: "cli-metadata" });
     const runtime = vi.fn(() => {
