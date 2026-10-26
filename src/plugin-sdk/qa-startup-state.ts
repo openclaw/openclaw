@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds } from "../agents/agent-roster.js";
@@ -9,7 +10,10 @@ import {
   listWorkspaceStateDirs,
 } from "../agents/workspace-state-dirs.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
+import type { ConfigHealthFingerprint } from "../config/io.health-state.types.js";
 import { createConfigIO } from "../config/io.js";
+import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   readStoredCanonicalSessionMainKey,
@@ -89,6 +93,8 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   const statePath = resolveOpenClawStateSqlitePath(env);
   const config = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
   assert.ok(config.valid, "QA fixture config must be valid");
+  const raw = config.raw;
+  assert.ok(typeof raw === "string", "QA fixture config must exist");
   assertNoPendingLegacyExecApprovals({ env });
   assert.equal(hasActiveStartupMigrationLease({ env }), false, "Startup lease remains active");
   const registered = await inspectOpenClawRegisteredAgentDatabases({ env, path: statePath });
@@ -265,6 +271,40 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   assert.equal(daemonReceipt?.phase, "complete");
   const { lastRunAt, lastRunVersion, lastRunCommit, lastRunCommand, lastRunMode, ...wizardState } =
     config.sourceConfig.wizard ?? {};
+  const configState = {
+    ...config.sourceConfig,
+    wizard: Object.keys(wizardState).length ? wizardState : undefined,
+  };
+  const rootHealth = readConfigHealthStateInDatabase(shared).entries?.[config.path];
+  const fingerprint = (stored: ConfigHealthFingerprint | undefined) => {
+    if (!stored) {
+      return undefined;
+    }
+    const { observedAt, ...facts } = stored;
+    assert.ok(Number.isFinite(Date.parse(observedAt)), "Config observation time must be recorded");
+    const { observedAt: _now, ...current } = createConfigHealthFingerprint({
+      raw,
+      parsed: config.parsed,
+      resolved: config.resolved,
+      stat: statSync(config.path),
+    });
+    assert.deepEqual(facts, current, "Config health must describe the current root file");
+    const normalized = createConfigHealthFingerprint({
+      raw: JSON.stringify(normalizeFixture(configState, root)),
+      parsed: config.parsed,
+      resolved: config.resolved,
+      stat: null,
+    });
+    return {
+      ...facts,
+      hash: normalized.hash,
+      bytes: normalized.bytes,
+      mtimeMs: "<validated-file-time>",
+      ctimeMs: "<validated-file-time>",
+      dev: "<validated-file-identity>",
+      ino: "<validated-file-identity>",
+    };
+  };
   return {
     diagnostics: {
       sharedCleanClose,
@@ -273,12 +313,14 @@ export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
     },
     state: normalizeFixture(
       {
-        config: {
-          ...config.sourceConfig,
-          wizard: Object.keys(wizardState).length ? wizardState : undefined,
-        },
+        config: configState,
         workspaces,
         shared: {
+          configHealth: rootHealth && {
+            lastKnownGood: fingerprint(rootHealth.lastKnownGood),
+            lastPromotedGood: fingerprint(rootHealth.lastPromotedGood),
+            lastObservedSuspiciousSignature: rootHealth.lastObservedSuspiciousSignature,
+          },
           version: readSqliteUserVersion(shared),
           contentVersion: readStateSchemaContentVersion(shared),
           startupReady,

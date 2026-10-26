@@ -93,6 +93,8 @@ export async function initializeQaRuntimeState(): Promise<void> {
     sourceConfig: config,
     afterWrite: { mode: "auto" },
   });
+  // Config writes advance existing health baselines; fresh fixtures need their first observation.
+  await createConfigIO({ env }).readConfigFileSnapshot();
   for (const agentId of listAgentIds(config)) {
     await withOpenClawAgentDatabaseAsync({ agentId, env }, () => undefined);
   }
