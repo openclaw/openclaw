@@ -12,14 +12,14 @@ if (isMainThread) {
   process.on("message", (message) => {
     if (message?.channel === "team-shape-stress" && message.action === "stop") {
       // Telemetry finishes asynchronously; the stop request is not its boundary.
-      const send = process.send;
-      process.send = function (...args) {
+      const send = process.send.bind(process);
+      process.send = (...args) => {
         const reply = args[0];
         const stopped = reply?.channel === "team-shape-stress" && reply.action === "stop";
         if (stopped) {
           process.send = send;
         }
-        const result = Reflect.apply(send, this, args);
+        const result = send(...args);
         if (stopped && reply.ok) {
           queueMicrotask(() => {
             process.emit("message", {
