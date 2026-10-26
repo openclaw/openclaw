@@ -104,7 +104,11 @@ const model: Model<"openai-responses"> = {
   contextWindow: 128000,
   maxTokens: 4096,
 };
-const request = { model: "fixture", stream: true, input: [{ role: "user", content: "fixture" }] };
+const request = {
+  model: "fixture",
+  stream: true,
+  input: [{ role: "user", content: "fixture" }],
+} satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
 const run = async (hash?: ReturnType<typeof createHash>) => {
   const { stream } = await createResponsesStreamWithRecovery({
     client,
