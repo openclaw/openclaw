@@ -16,15 +16,12 @@ import {
   readMcpOAuthCredentialsStatus,
   resolveMcpOAuthAccessToken,
 } from "./mcp-oauth.js";
-import { requesterIdentity, withTempHome } from "./mcp-oauth.test-harness.js";
+import { requesterIdentity, withMcpOAuthTempHome } from "./mcp-oauth.test-harness.js";
 import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
-const homeOptions = {
-  prefix: "openclaw-mcp-oauth-requesters-",
-  skipSessionCleanup: true,
-  env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
-};
+const withTempHome = (run: () => Promise<void>) =>
+  withMcpOAuthTempHome(run, "openclaw-mcp-oauth-requesters-");
 
 async function reopenState() {
   await closeOpenClawStateDatabaseAsync();
@@ -63,7 +60,7 @@ describe("MCP OAuth requester credentials", () => {
           `MCP OAuth store ${storeKey} is invalid: store_json is not valid JSON`,
         );
       });
-    }, homeOptions);
+    });
   });
 
   it("isolates, counts, and clears requester credentials by configured server", async () => {
@@ -113,6 +110,6 @@ describe("MCP OAuth requester credentials", () => {
           )
           .all("{"),
       ).toEqual(unrelatedKeys.toSorted().map((store_key) => ({ store_key })));
-    }, homeOptions);
+    });
   });
 });
