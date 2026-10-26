@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
+import * as directoryWatch from "../../infra/directory-watch-host.js";
 import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
@@ -33,6 +34,7 @@ afterEach(async () => {
   runtimeAuthProfileRowsCache.clear();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.useRealTimers();
 });
 
@@ -234,6 +236,33 @@ it("rejects a swapped database before a privileged write even before observation
     }).toThrow("database target changed");
   });
   expect(write).not.toHaveBeenCalled();
+});
+
+it("ignores database content events but observes replacement and nameless invalidation", async () => {
+  const { databasePath } = fixture({ existing: true });
+  const watcher = Object.assign(new EventEmitter(), { close() {} });
+  const watch = vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue(watcher);
+  const captured = captureAuthProfileFileIdentity(databasePath);
+  const changed = watch.mock.calls[0]![1];
+  const stat = vi.spyOn(fs.promises, "stat");
+  syncBuiltinESMExports();
+  for (let index = 0; index < 100; index++) {
+    changed("change", path.basename(databasePath));
+    changed("change", `${path.basename(databasePath)}-wal`);
+  }
+  await Promise.resolve();
+  expect(stat).not.toHaveBeenCalled();
+  replaceFile(databasePath);
+  const replaced = nextChange(path.dirname(databasePath));
+  changed("rename", path.basename(databasePath));
+  await replaced;
+  expect(() => captured.assertCurrent()).toThrow("database file identity changed");
+  const replacement = captureAuthProfileFileIdentity(databasePath);
+  fs.unlinkSync(databasePath);
+  const deleted = nextChange(path.dirname(databasePath));
+  changed("change");
+  await deleted;
+  expect(() => replacement.assertCurrent()).toThrow("database file identity changed");
 });
 
 it("publishes a first owner write immediately and keeps same-file writes from revoking identity", async () => {

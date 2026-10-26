@@ -3,16 +3,14 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { HtmlPreview } from "./chat-html-preview-view.tsx";
 import { ChatSvgAttachment } from "./chat-svg-attachment.tsx";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 describe("Solid preview consumers", () => {
   it("loads the HTML frame when mounted from a Solid parent", async () => {

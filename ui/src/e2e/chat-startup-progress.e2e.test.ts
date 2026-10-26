@@ -155,7 +155,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -264,7 +264,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Naming worktree…");
       const before = (await gateway.getRequests("chat.history")).length;
@@ -362,7 +362,7 @@ suite.define(() => {
     const artifactDir = capture ? createControlUiE2eArtifactDir("cloud-start-status") : undefined;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
       const screenshot = async (fileName: string) => {

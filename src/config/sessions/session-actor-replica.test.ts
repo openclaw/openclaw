@@ -23,6 +23,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
   writeSessionEntry,
@@ -171,6 +172,27 @@ function reloadInvalidated(fixture: Fixture) {
   expect(fixture.replica.read()).toBeUndefined();
   return hydrate(fixture);
 }
+
+it("accounts for nested replica arrays without per-array reducer callbacks", ({ fixture }) => {
+  const state = hydrate(fixture);
+  const content = [{ type: "text", text: "synthetic" }];
+  const events = [{ rawSeq: 0, serializedBytes: 32, event: { content } }];
+  const transcript: SessionActorTranscriptReplica = {
+    sessionId: state.entry?.sessionId,
+    version: state.transcript.version,
+    tail: { coveredAfterSeq: -1, events },
+  };
+  const reduce = vi.spyOn(Array.prototype, "reduce");
+  try {
+    retainSessionActorTranscriptReplica(state, transcript);
+    expect(readSessionActorTranscriptReplica(state)).toBe(transcript);
+    expect(reduce.mock.contexts.filter((array) => array === events || array === content)).toEqual(
+      [],
+    );
+  } finally {
+    reduce.mockRestore();
+  }
+});
 
 it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
   await drainGlobalSingletonLifecycleState("restart");
@@ -325,6 +347,42 @@ it("retains the first creation after restart before any replica reader and appli
   });
 });
 
+it("shares immutable committed entry publications with replica readers", ({ fixture }) => {
+  const { scope, database } = fixture;
+  hydrate(fixture);
+  const target = sessionActorFileTarget(database, scope.sessionKey);
+  const published: NonNullable<ReturnType<typeof readPreparedSessionEntryChange>>[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    const prepared = readPreparedSessionEntryChange(change, scope.sessionKey);
+    if (prepared?.fullEntry) {
+      published.push(prepared);
+    }
+  });
+  try {
+    for (const label of ["first", "second"]) {
+      replaceSessionEntrySync(scope, {
+        ...entry(label),
+        skillsSnapshot: { prompt: `Instructions for ${label}`, skills: [] },
+      });
+      const prepared = published.at(-1)?.fullEntry;
+      assert(prepared, "Expected a committed full-entry publication");
+      expect(Object.isFrozen(prepared.skillsSnapshot)).toBe(true);
+      const retained = readSessionActorEntryFacts(target)?.entry;
+      expect(retained).toBe(prepared);
+      expect(() => {
+        retained!.skillsSnapshot!.prompt = "Listener mutation";
+      }).toThrow(TypeError);
+    }
+    expect(published).toHaveLength(2);
+    expect(published[0]!.fullEntry?.skillsSnapshot?.prompt).toBe("Instructions for first");
+    expect(readSessionActorEntryFacts(target)?.entry?.skillsSnapshot?.prompt).toBe(
+      "Instructions for second",
+    );
+  } finally {
+    stop();
+  }
+});
+
 function command(snapshot: SessionActorHotState, commandId: string) {
   return {
     commandId,
@@ -371,6 +429,7 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
     lifetime,
     replica,
     transport: {
+      agentId: "main",
       run: async (operation) => {
         const result = operation({ execute });
         started.resolve();

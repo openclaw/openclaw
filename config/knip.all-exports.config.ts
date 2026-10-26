@@ -62,6 +62,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/control-ui-locale-provider.fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.
   "test/scripts/state-read-worker-dependency.test-support.mts!",
+  // The relay artifact test launches this emitted-source fixture by path.
+  "test/scripts/service-relay-artifact.test-support.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
@@ -163,8 +165,13 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // The presentation proof HTML loads this browser entry.
-        ...(workspace === "ui" ? ["src/test-helpers/presentation-primitives-solid.tsx!"] : []),
+        // The presentation HTML and projection benchmark builder load these browser entries.
+        ...(workspace === "ui"
+          ? [
+              "src/test-helpers/presentation-primitives-solid.tsx!",
+              "src/test-helpers/control-ui-projection-fixture.tsx!",
+            ]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
@@ -184,12 +191,26 @@ const workspaces = Object.fromEntries(
           ? [
               ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
               ...ROOT_TEST_ENTRY_GLOBS,
+              // Tests spawn these fixtures through computed source and emitted paths.
+              "src/infra/database-engine/state-read-admission-publication.worker.test-support.ts!",
+              "test/scripts/state-read-worker-stream.test-support.ts!",
             ]
           : [
               TEST_ENTRY_GLOB,
+              // Realtime codec tests spawn these fixtures by basename.
+              ...(workspace === "extensions/openai"
+                ? [
+                    "test-support/realtime-dtls-codecs.mjs!",
+                    "test-support/realtime-numeric-codecs.mjs!",
+                  ]
+                : []),
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
-                ? ["src/report-run.benchmark.test-support.ts!"]
+                ? [
+                    "src/report-run.benchmark.test-support.ts!",
+                    // Collection tests load this transport fixture through a module specifier.
+                    "src/run-worker.collection-fixtures.test-support.ts!",
+                  ]
                 : []),
               // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
               ...(workspace === "extensions/diagnostics-prometheus"

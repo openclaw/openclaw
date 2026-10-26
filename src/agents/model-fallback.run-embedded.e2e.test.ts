@@ -475,10 +475,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           });
         const result = await run("first");
         expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
-        const expectedModels = [...Array<string>(10).fill("mock-1"), "mock-2"];
+        const expectedModels = [...Array<string>(16).fill("mock-1"), "mock-2"];
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
         expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(9).fill(90_000),
+          Array<number>(15).fill(90_000),
         );
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
         expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
@@ -493,7 +493,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         expect(next.result.payloads?.[0]?.text).toContain("fallback ok");
         expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
         expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
-          Array<number>(9).fill(90_000),
+          Array<number>(15).fill(90_000),
         );
       });
     },

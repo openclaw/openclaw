@@ -7,6 +7,7 @@ import { expandHomePrefix } from "./home-dir.js";
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
 const globRegexCache = new Map<string, RegExp>();
+const DOT_PATH_SEGMENT = /(?:^|[\\/])\.{1,2}(?![^\\/])/;
 
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
@@ -23,13 +24,6 @@ function normalizeMatchTarget(value: string): string {
     }
   }
   return normalized;
-}
-
-function hasDotPathSegment(value: string): boolean {
-  return value
-    .replace(/\\/g, "/")
-    .split("/")
-    .some((segment) => segment === "." || segment === "..");
 }
 
 function normalizeDotPathSegments(value: string): string {
@@ -84,7 +78,7 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
   normalizedTarget = normalizeMatchTarget(normalizedTarget);
   // Normalize only the target. Glob patterns are operator-authored strings, and
   // normalizing them can change wildcard structure such as `*/..`.
-  if (hasWildcard && hasDotPathSegment(normalizedTarget)) {
+  if (hasWildcard && DOT_PATH_SEGMENT.test(normalizedTarget)) {
     normalizedTarget = normalizeDotPathSegments(normalizedTarget);
   }
   return compileGlobRegex(normalizedPattern).test(normalizedTarget);

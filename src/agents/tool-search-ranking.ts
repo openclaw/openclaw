@@ -332,34 +332,38 @@ export function tokenizeQuery(input: string): WeightedTerm[] {
 
 type RankedDocument<T> = { value: T; terms: readonly string[] };
 
-type IndexedDocument<T> = { readonly value: T; readonly length: number; readonly position: number };
+type IndexedDocument<T> = { readonly value: T; readonly length: number };
 
 type LexicalIndex<T> = {
-  postings: ReadonlyMap<string, ReadonlyMap<IndexedDocument<T>, number>>;
-  documentCount: number;
+  postings: ReadonlyMap<string, readonly number[]>;
+  documents: readonly IndexedDocument<T>[];
   averageLength: number;
 };
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
-  const postings = new Map<string, Map<IndexedDocument<T>, number>>();
-  const documentCount = documents.length;
+  const postings = new Map<string, number[]>();
+  const indexed = documents.map(({ value, terms }) => ({ value, length: terms.length }));
   let totalLength = 0;
   documents.forEach((document, position) => {
-    const indexed = { value: document.value, length: document.terms.length, position };
     for (const term of document.terms) {
       let matches = postings.get(term);
       if (!matches) {
-        matches = new Map();
+        matches = [];
         postings.set(term, matches);
       }
-      matches.set(indexed, (matches.get(indexed) ?? 0) + 1);
+      // Documents arrive in order, so a repeated term updates its last position/frequency pair.
+      if (matches[matches.length - 2] === position) {
+        matches[matches.length - 1]! += 1;
+      } else {
+        matches.push(position, 1);
+      }
     }
-    totalLength += indexed.length;
+    totalLength += document.terms.length;
   });
   return {
     postings,
-    documentCount,
-    averageLength: documentCount > 0 ? totalLength / documentCount : 0,
+    documents: indexed,
+    averageLength: documents.length > 0 ? totalLength / documents.length : 0,
   };
 }
 
@@ -371,23 +375,26 @@ export function scoreLexical<T>(
   index: LexicalIndex<T>,
   queryTerms: readonly WeightedTerm[],
 ): Array<{ value: T; score: number; matchedLiteral: boolean }> {
-  if (queryTerms.length === 0 || index.documentCount === 0) {
+  if (queryTerms.length === 0 || index.documents.length === 0) {
     return [];
   }
-  const total = index.documentCount;
+  const total = index.documents.length;
   const results: Array<{ value: T; score: number; matchedLiteral: boolean }> = [];
   for (const { term, weight } of queryTerms) {
     const matches = index.postings.get(term);
     if (!matches) {
       continue;
     }
-    const matching = matches.size;
+    const matching = matches.length / 2;
     const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
-    for (const [document, frequency] of matches) {
-      let result = results[document.position];
+    for (let offset = 0; offset < matches.length; offset += 2) {
+      const position = matches[offset]!;
+      const frequency = matches[offset + 1]!;
+      const document = index.documents[position]!;
+      let result = results[position];
       if (!result) {
         result = { value: document.value, score: 0, matchedLiteral: false };
-        results[document.position] = result;
+        results[position] = result;
       }
       if (weight >= 1) {
         result.matchedLiteral = true;

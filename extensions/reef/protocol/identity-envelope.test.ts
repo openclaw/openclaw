@@ -1,4 +1,7 @@
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it } from "vitest";
+import { canonicalBytes } from "./canonical.js";
+import { base64url } from "./encoding.js";
 import {
   BadSignatureError,
   MalformedError,
@@ -7,7 +10,13 @@ import {
   seal,
   TooLargeError,
 } from "./envelope.js";
-import { fingerprint, formatHandleEpoch, generateIdentity, parseHandleEpoch } from "./identity.js";
+import {
+  fingerprint,
+  formatHandleEpoch,
+  generateIdentity,
+  parseHandleEpoch,
+  signDeviceRequest,
+} from "./identity.js";
 import { MemoryReplayStore } from "./memory-stores.test-support.js";
 
 const now = 1_752_300_000;
@@ -62,6 +71,52 @@ it("formats, parses, and fingerprints identities stably", () => {
   expect(fingerprint(identity.signing.publicKey)).toMatch(/^(?:[0-9a-f]{4} ){15}[0-9a-f]{4}$/);
 });
 
+describe("device request signatures", () => {
+  const request = { method: "GET", path: "/v1/mail/ws", ts: now, bodySha256: "0".repeat(64) };
+
+  it("matches the protocol signer byte-for-byte across messages and rotated device keys", () => {
+    const seeds = [0, 1, 127, 255].map((value) => new Uint8Array(32).fill(value));
+    for (const secret of [...seeds, seeds[0]!]) {
+      for (const input of [
+        request,
+        { ...request, method: "POST", path: "/v1/mail/send", ts: 0 },
+        { ...request, path: "/v1/mail/\u2603?cursor=1", ts: Number.MAX_SAFE_INTEGER },
+        { ...request, method: "DELETE", bodySha256: "abcdef0123456789".repeat(4) },
+      ]) {
+        expect(signDeviceRequest(input, base64url(secret))).toBe(
+          base64url(ed25519.sign(canonicalBytes(input), secret)),
+        );
+      }
+    }
+  });
+
+  it("rejects malformed seeds and changed invalid request fields", () => {
+    const secret = base64url(new Uint8Array(32));
+    for (const invalidSecret of [
+      "",
+      "!",
+      `${secret}=`,
+      "AB",
+      base64url(new Uint8Array(31)),
+      base64url(new Uint8Array(33)),
+    ]) {
+      expect(() => signDeviceRequest(request, invalidSecret)).toThrow();
+    }
+    for (const input of [
+      { ...request, method: "get" },
+      { ...request, path: "v1/mail/ws" },
+      { ...request, ts: -1 },
+      { ...request, ts: 0.5 },
+      { ...request, ts: Number.MAX_SAFE_INTEGER + 1 },
+      { ...request, bodySha256: "A".repeat(64) },
+    ]) {
+      expect(() => signDeviceRequest(input, secret)).toThrow(
+        "invalid device request signature input",
+      );
+    }
+  });
+});
+
 describe("envelope", () => {
   it("releases a failed envelope claim for retry", async () => {
     const { open } = fixture();
@@ -113,6 +168,7 @@ describe("envelope", () => {
     const replacement = seal({ ...sealOptions, from: "alice#2", body: { text: "different" } });
     await expect(open({ envelope: replacement })).rejects.toMatchObject({
       code: "replayed",
+      name: "ReplayedError",
       message: "replay id binding mismatch",
     });
   });

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { createSanitizedCommandError } from "./exec-result.js";
@@ -313,7 +314,9 @@ export async function runCommandBuffered(
         : Math.max(0, maxCombinedOutputBytes - combinedBytes);
     const remaining = Math.max(0, Math.min(maxBytes - capturedBytes[stream], combinedRemaining));
     if (remaining > 0) {
-      const captured = Buffer.from(chunk.subarray(0, remaining));
+      // Pipe chunks stay immutable until concatenation; only clipped views need owned storage.
+      const captured =
+        chunk.byteLength > remaining ? copyOwnedBuffer(chunk.subarray(0, remaining)) : chunk;
       chunks[stream].push(captured);
       capturedBytes[stream] += captured.byteLength;
     }

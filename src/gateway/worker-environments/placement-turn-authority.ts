@@ -8,7 +8,7 @@ import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerListener } from "../../shared/listeners.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
 import {
   closePlacementAuthorityOwner as closeOwner,
   notifyPlacementClaimRevoked as notifyRevoked,
@@ -193,7 +193,7 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
 }
 
 function capturePlacementObservation(pathname: string, sessionId?: string) {
-  const context = captureOpenClawStateWorkerContext({ path: pathname });
+  const context = captureOpenClawStateReadContext(pathname);
   const owner = ownerFor(context.admission.identity);
   const observation = { revoked: false, indeterminate: false };
   const observations = owner.observations.get(sessionId) ?? new Set<typeof observation>();
@@ -474,7 +474,7 @@ export async function preparePlacementWorkspaceResultAuthority(
     pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
   }>,
 ): Promise<void> {
-  const context = captureOpenClawStateWorkerContext({ path: pathname });
+  const context = captureOpenClawStateReadContext(pathname);
   const identity = context.admission.identity;
   const owner = ownerFor(identity);
   const claim = structuredClone(requestedClaim);
@@ -663,7 +663,7 @@ export async function preparePlacementTurnClaimAuthority(
     sessionIds: readonly string[],
   ) => Promise<{ placements: ReadonlyMap<string, WorkerSessionTurnClaimFacts> }>,
 ): Promise<PlacementTurnClaimAuthority> {
-  const context = captureOpenClawStateWorkerContext({ path: pathname });
+  const context = captureOpenClawStateReadContext(pathname);
   const owner = ownerFor(context.admission.identity);
   const claim = structuredClone(requestedClaim);
   claim.sessionId = required(claim.sessionId, "session id");

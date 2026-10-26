@@ -41,6 +41,9 @@ If a matching load-path reference is added again while the runtime drains, unins
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
+Manifest display names in the preview escape line breaks and strip terminal
+control sequences. The stored manifest and plugin selection keep their original values.
+
 When several IDs are supplied, uninstall resolves the whole selection before
 removing anything. Repeated IDs and children of the same package select that
 package once. Packages are processed in first-requested order, with a separate
@@ -238,6 +241,8 @@ registry generation when available, and up to 64 live reference records. Each
 record has an ID, kind, acquisition reason and time, age, cleanup state, and
 host-attributed agent/session/run/service fields when available. Missing attribution
 is explicitly `unknown`. Derived consumers can name their parent reference.
+Gateway turn preparation attributes its leases to the run ID and the
+`gateway-agent-turn` service, including before embedded execution starts.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

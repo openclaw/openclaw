@@ -1,3 +1,4 @@
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -118,24 +119,8 @@ describe("openrouter image generation provider", () => {
     };
     const dispatcherPolicy = { mode: "explicit-proxy" as const, proxyUrl: requestPolicy.proxy.url };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
-      for (const [name, value] of Object.entries(params.request?.headers ?? {})) {
-        if (value === null) {
-          headers.delete(name);
-        } else {
-          headers.set(name, value);
-        }
-      }
-      if (params.request?.auth?.mode === "authorization-bearer") {
-        headers.set("Authorization", `Bearer ${params.request.auth.token}`);
-      }
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork:
-          (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
-        headers,
-        dispatcherPolicy,
-      };
+      const result = resolveProviderHttpRequestConfigWithOriginTrust(params);
+      return { ...result, dispatcherPolicy: result.dispatcherPolicy };
     });
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockImplementation(async () =>
@@ -166,10 +151,13 @@ describe("openrouter image generation provider", () => {
 
     const result = await generateImage({
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      aspectRatio: "16:9",
+      resolution: "2K",
     });
 
     const request = postRequest();
     expect(request.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(request.body).toMatchObject({ aspect_ratio: "16:9", resolution: "2K" });
     expect((request.body as Record<string, unknown>).input_references).toEqual([
       {
         type: "image_url",
@@ -235,6 +223,8 @@ describe("openrouter image generation provider", () => {
         choices: [
           { message: { content: `done data:image/png;base64,${png}` } },
           { message: { content: [{ b64_json: raw }] } },
+          { message: { content: [{ inlineData: { data: raw, mimeType: "image/webp" } }] } },
+          { message: { content: [{ inline_data: { data: raw, mime_type: "image/jpeg" } }] } },
         ],
       }),
     );
@@ -244,6 +234,14 @@ describe("openrouter image generation provider", () => {
     expect(result.images.map((image) => image.buffer.toString())).toEqual([
       "png-inline",
       "raw-inline",
+      "raw-inline",
+      "raw-inline",
+    ]);
+    expect(result.images.map((image) => image.mimeType)).toEqual([
+      "image/png",
+      "image/png",
+      "image/webp",
+      "image/jpeg",
     ]);
   });
 
@@ -257,4 +255,3 @@ describe("openrouter image generation provider", () => {
     );
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

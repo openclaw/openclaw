@@ -1,4 +1,5 @@
 import type { Locator, Page } from "playwright";
+import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import type {
   SessionCatalog,
@@ -12,6 +13,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
 import { readTextTone } from "../test-helpers/rendered-colors.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eSuite,
   expandCodingSection,
@@ -456,6 +458,144 @@ suite.define(() => {
     } finally {
       await page.close();
     }
+  });
+
+  it("renders catalog records with ordinary tool cards and recorded outcomes", async () => {
+    const command = `printf '%s' '${"long-command ".repeat(60)}'`;
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...catalogMethods, "chat.message.get"],
+        methodResponses: {
+          "sessions.catalog.list": {
+            catalogs: [
+              makeCatalog("codex", "Codex", [
+                makeHost("gateway:local", "Local Codex", [
+                  makeNativeSession("preview", "External release check"),
+                ]),
+              ]),
+            ],
+          },
+          "sessions.catalog.read": {
+            hostId: "gateway:local",
+            threadId: "preview",
+            items: [
+              {
+                id: "answer",
+                type: "agentMessage",
+                text: 'The publication check failed.\n[embed ref="cv_external" /]',
+              },
+              {
+                id: "patch",
+                type: "toolResult",
+                toolName: "apply_patch",
+                toolCallId: "patch",
+                isError: false,
+                toolInput: {
+                  changes: [
+                    {
+                      path: "/workspace/example.ts",
+                      kind: { type: "update", move_path: null },
+                      diff: `@@ -1 +1 @@\n-${"before ".repeat(100)}\n+${"after ".repeat(100)}\n`,
+                    },
+                  ],
+                },
+                text: "Updated example.ts",
+              },
+              {
+                id: "text-only-failure",
+                type: "toolResult",
+                toolName: "custom",
+                toolCallId: "text-only-failure",
+                isError: true,
+                text: '{"exitCode":7,"error":"reported failure"}',
+              },
+              {
+                id: "unknown",
+                type: "toolResult",
+                toolName: "inventory.lookup",
+                toolCallId: "unknown",
+                toolInput: null,
+                text: JSON.stringify({
+                  kind: "canvas",
+                  view: { id: "cv_external" },
+                  error: "unverified",
+                }),
+              },
+              {
+                id: "quiet",
+                raw: { result: null },
+                type: "toolResult",
+                toolName: "bash",
+                toolCallId: "quiet",
+                toolInput: { command },
+                text: "",
+                isError: false,
+                exitCode: 0,
+              },
+              {
+                id: "failed",
+                type: "toolResult",
+                toolName: "bash",
+                toolCallId: "failed",
+                toolInput: { command: "publish --check" },
+                isError: true,
+                exitCode: 17,
+                truncated: true,
+                text: JSON.stringify({
+                  exitCode: 7,
+                  error: `authentication required ${"x".repeat(600)}omitted-native-output`,
+                }),
+              },
+              { id: "user", type: "userMessage", text: "Check the release artifacts." },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await expandCodingSection(page);
+      await page.getByText("External release check", { exact: true }).click();
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+      await browserExpect(pane.getByText(/The publication check failed/)).toBeVisible();
+      await pane.locator(".chat-activity-group__summary").click();
+      await browserExpect(pane.locator(".chat-tool-msg-summary")).toHaveCount(5);
+      for (const summary of await pane
+        .locator("button.chat-tool-msg-summary, .chat-tool-row__toggle")
+        .all()) {
+        await summary.click({ position: { x: 4, y: 4 } });
+        await browserExpect(summary).toHaveAttribute("aria-expanded", "true");
+      }
+      await browserExpect(pane.locator(".chat-tool-card__outcome")).toHaveText([
+        "Exit code 17",
+        "Completed",
+        "Outcome unknown",
+        "failed",
+        "Completed",
+      ]);
+      await browserExpect(pane.locator(".chat-tool-term__cmd").nth(1)).toHaveText(`$${command}`);
+      await browserExpect(pane.locator(".chat-diff")).toHaveCount(1);
+      expect((await pane.textContent())?.match(/\[Output truncated\]/g)).toHaveLength(1);
+      await browserExpect(
+        pane
+          .locator(".chat-tool-msg-collapse")
+          .nth(2)
+          .locator(".chat-tool-card__block-content")
+          .first(),
+      ).toHaveText("null");
+      await browserExpect(pane.locator(".chat-tool-msg-collapse").nth(1)).not.toContainText("null");
+      await browserExpect(pane).not.toContainText("omitted-native-output");
+      const thread = pane.locator(".chat-thread");
+      await thread.hover({ position: { x: 20, y: 4 } });
+      await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+      await waitForChatScrollIdle(page);
+      await browserExpect(pane).toContainText('[embed ref="cv_external" /]');
+      await browserExpect(pane.locator("mcp-app-view, iframe")).toHaveCount(0);
+      await pane
+        .getByRole("button", { name: "Open tool details in side panel", exact: true })
+        .nth(2)
+        .click();
+      await browserExpect(page.locator(".chat-tool-output__text")).toContainText("unverified");
+      expect(await gateway.getRequests("chat.message.get")).toEqual([]);
+    });
   });
 
   it.each([

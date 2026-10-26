@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   compactToolInputHint as inputHint,
   compactToolOutputHint as outputHint,
@@ -17,6 +17,35 @@ function fields(count: number, name: (index: number) => string, value: TSchema =
 const closedIdSchema = closedObject({ id: Type.String() });
 
 describe("tool schema hints", () => {
+  it("renders frozen nested schemas without copying private key arrays again", () => {
+    const schema = Object.freeze({
+      type: "object",
+      properties: Object.freeze({
+        z: Object.freeze({ type: "string" }),
+        a: Object.freeze({
+          type: "object",
+          properties: Object.freeze({ b: Object.freeze({ type: "boolean" }) }),
+          additionalProperties: false,
+        }),
+      }),
+      required: Object.freeze(["z", "a"]),
+      additionalProperties: false,
+    });
+    const copies = vi.spyOn(Array.prototype, "toSorted");
+    let rendered: string;
+    let copyCount: number;
+    try {
+      rendered = declaration(schema);
+      copyCount = copies.mock.calls.length;
+    } finally {
+      copies.mockRestore();
+    }
+    expect(rendered).toBe("{ a: { b?: boolean }; z: string }");
+    expect(Object.keys(schema.properties)).toEqual(["z", "a"]);
+    expect(schema.required).toEqual(["z", "a"]);
+    expect(copyCount).toBe(0);
+  });
+
   it("keeps unknown leaves and dictionaries honest in full declarations", () => {
     const schema = closedObject({
       value: Type.Unknown(),

@@ -700,6 +700,46 @@ if (process.versions.bun) {
     });
   });
 
+  it.each(["expired", "revoked"] as const)(
+    "refuses publication through a %s process-owned lifecycle capability",
+    async (reason) => {
+      await withOpenClawTestState({ label: "plugin-lifecycle-current" }, async (state) => {
+        const caller = new AbortController();
+        const refusal = new Error("Synthetic caller revoked");
+        const publish = vi.fn();
+        await expect(
+          withPluginLifecycleLease(
+            {
+              env: state.env,
+              processBound: true,
+              leaseMs: 1_000,
+              assertCurrent: () => caller.signal.throwIfAborted(),
+            },
+            async (lease) => {
+              await nextTurn();
+              const clock =
+                reason === "expired"
+                  ? vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000)
+                  : undefined;
+              if (reason === "revoked") {
+                caller.abort(refusal);
+              }
+              try {
+                lease.assertCurrent();
+                publish();
+              } finally {
+                clock?.mockRestore();
+              }
+            },
+          ),
+        ).rejects.toMatchObject(
+          reason === "expired" ? { code: "OPENCLAW_STATE_LEASE_LOST" } : refusal,
+        );
+        expect(publish).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("preserves an operation failure and releases the plugin lease after caller revocation", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-failed-cleanup" }, async (state) => {
       const failure = new Error("plugin preparation failed");

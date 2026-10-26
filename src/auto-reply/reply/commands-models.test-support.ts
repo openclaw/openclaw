@@ -5,6 +5,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -62,13 +63,7 @@ export function createModelsTestRegistry() {
 
 export function setFastModelsCliBackendDeps(): void {
   cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
     resolveRuntimeCliBackends: () =>
       cliBackends.map(({ pluginId, id, command }) => ({
         id,

@@ -318,7 +318,11 @@ export async function validateConfigMutation(params: {
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,
   }).map((line) => line.trim());
-  const selection = selectConfigMutationSecrets(config, operations);
+  // Database-only custody cannot read plugin state; its secret targets are core-owned.
+  const selection = selectConfigMutationSecrets(
+    params.databaseOnly ? { database: config.database, secrets: config.secrets } : config,
+    operations,
+  );
   const providerErrors = formatConfigIssueLines(
     await collectConfigSecretProviderErrors({ config, selection }),
     "",

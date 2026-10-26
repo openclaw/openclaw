@@ -341,7 +341,7 @@ function buildCommonServiceEnvironment(
   // Match the installing shell's probed SQLite library; wrappers hide the runtime.
   if (
     platform === "darwin" &&
-    (runtime === "bun" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
+    (runtime === "bun" || runtime === "standalone" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
   ) {
     const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
     const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);

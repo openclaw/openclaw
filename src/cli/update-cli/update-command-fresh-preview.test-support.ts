@@ -35,15 +35,11 @@ import { updateCommand } from "./update-command.js";
 export function createSelectedTargetStateDatabase(databasePath: string) {
   openOpenClawStateDatabase();
   closeOpenClawStateDatabaseForTest();
-  const db = new DatabaseSync(databasePath);
-  try {
-    removePreparedWorkerOwnershipColumns(db);
-    db.exec(
-      "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
-    );
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(databasePath);
+  removePreparedWorkerOwnershipColumns(db);
+  db.exec(
+    "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+  );
 }
 
 function expectOriginalCapture(params: {
@@ -63,22 +59,18 @@ function expectOriginalCapture(params: {
   if (params.previousRunId !== undefined) {
     assert(captured?.kind === "file");
     expect(captured.sqlite).toBe(true);
-    const original = new DatabaseSync(
+    using original = new DatabaseSync(
       path.join(path.dirname(params.manifestPath), captured.archivePath),
       { readOnly: true },
     );
-    try {
-      expect(
-        original
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("fixture.original"),
-      ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
-      expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
-        { run_id: params.previousRunId },
-      ]);
-    } finally {
-      original.close();
-    }
+    expect(
+      original
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("fixture.original"),
+    ).toEqual({ value_json: '{"message":"acknowledged before update"}' });
+    expect(original.prepare("SELECT run_id FROM update_runs ORDER BY run_id").all()).toEqual([
+      { run_id: params.previousRunId },
+    ]);
   } else {
     expect(captured).toEqual({
       kind: "missing",
@@ -122,18 +114,22 @@ export function registerOriginalCaptureTests({
       if (previousRunId) {
         finishUpdateRun(previousRunId, { status: "succeeded" });
         await closeOpenClawStateDatabaseAsync();
-        const original = new DatabaseSync(fixture.databasePath);
-        try {
-          original
-            .prepare(
-              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-            )
-            .run("fixture.original", '{"message":"acknowledged before update"}', 1);
-        } finally {
-          original.close();
-        }
+        using original = new DatabaseSync(fixture.databasePath);
+        original
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+          )
+          .run("fixture.original", '{"message":"acknowledged before update"}', 1);
       }
       const captureRoot = refused ? dirs.make("managed-refused-update-") : fixture.root;
+      const expectCapture = (runId: string, manifestPath: string) =>
+        expectOriginalCapture({
+          runId,
+          manifestPath,
+          installRoot: captureRoot,
+          databasePath: fixture.databasePath,
+          previousRunId,
+        });
       if (refused) {
         fs.mkdirSync(path.join(captureRoot, "dist"));
         writeFreshJson(path.join(captureRoot, "package.json"), {
@@ -207,38 +203,24 @@ export function registerOriginalCaptureTests({
         .mockImplementation(async () => {
           openOpenClawStateDatabase();
           closeOpenClawStateDatabaseForTest();
-          const db = new DatabaseSync(fixture.databasePath);
-          try {
-            db.exec(
-              `PRAGMA user_version=${schema}; UPDATE schema_meta SET schema_version=${schema}`,
-            );
-          } finally {
-            db.close();
-          }
+          using db = new DatabaseSync(fixture.databasePath);
+          db.exec(`PRAGMA user_version=${schema}; UPDATE schema_meta SET schema_version=${schema}`);
         });
       const execute = vi
         .spyOn(execution, "executeMutableUpdate")
         .mockImplementation(async (params) => {
           const run = params.opts.run;
           assert(run);
-          const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-          try {
+          {
+            using db = new DatabaseSync(fixture.databasePath, { readOnly: true });
             expect(db.prepare("PRAGMA user_version").get()).toEqual({
               user_version: OPENCLAW_STATE_SCHEMA_VERSION,
             });
-          } finally {
-            db.close();
           }
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
           const ref = run.originalRecoveryCapture;
           assert(ref);
-          expectOriginalCapture({
-            runId: run.runId,
-            manifestPath: ref.manifestPath,
-            installRoot: captureRoot,
-            databasePath: fixture.databasePath,
-            previousRunId,
-          });
+          expectCapture(run.runId, ref.manifestPath);
           finishUpdateRun(
             run.runId,
             { status: "skipped", reason: "fixture-before-forward-migration" },
@@ -301,13 +283,7 @@ export function registerOriginalCaptureTests({
           (set) => isRecord(set) && set.runId === result.runId,
         );
         assert(isRecord(capture) && typeof capture.manifestPath === "string");
-        expectOriginalCapture({
-          runId: result.runId,
-          manifestPath: capture.manifestPath,
-          installRoot: captureRoot,
-          databasePath: fixture.databasePath,
-          previousRunId,
-        });
+        expectCapture(result.runId, capture.manifestPath);
         expectNoFreshCalls(
           execute,
           packageUpdate.stagePackageInstallUpdate,

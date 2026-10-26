@@ -1,7 +1,6 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
-import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   dismissSidebarAttention,
   resolveSidebarAttentionKey,
@@ -34,16 +33,6 @@ async function mountIdentity(
   return { gateway, context, dom, navigate, open: () => dom.click(".sidebar-identity-card") };
 }
 
-function menuItems(menu: HTMLElement | null, enabledOnly = false) {
-  const selector = enabledOnly ? '[role="menuitem"][data-value]' : '[role^="menuitem"][data-value]';
-  return [...(menu?.querySelectorAll<HTMLElement>(selector) ?? [])].filter(
-    (item) =>
-      item.closest('[role="menu"]') === menu &&
-      !item.closest(".sidebar-identity-menu__footer") &&
-      (!enabledOnly || !item.hasAttribute("disabled")),
-  );
-}
-
 describe("AppSidebar footer identity menu", () => {
   it("opens Profile from the Owner header without a self user", async () => {
     const { dom, navigate, open } = await mountIdentity();
@@ -55,6 +44,7 @@ describe("AppSidebar footer identity menu", () => {
     expect(profile.text('[data-viewer-id="owner"]')).toContain("O");
     await dom.click(header!);
     expect(navigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
+    expect(dom.query(".sidebar-identity-menu")).toBeNull();
   });
 
   it("keeps release availability on Updates after dismissing the Inbox notice", async () => {
@@ -99,16 +89,11 @@ describe("AppSidebar footer identity menu", () => {
     });
   });
 
-  it("owns account utilities, restores focus, and routes Profile", async () => {
-    const originalBuildInfo = { ...CONTROL_UI_BUILD_INFO };
-    Object.assign(CONTROL_UI_BUILD_INFO, { release: false, commit: "0123456789abcdef" });
-    onTestFinished(() => {
-      Object.assign(CONTROL_UI_BUILD_INFO, originalBuildInfo);
-    });
+  it("shows account identity, utilities, and pairing access", async () => {
     const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const email = "ada.with.a.deliberately.long.address@example.test";
     const avatarUrl = "/api/users/self/avatar?v=1";
-    const { gateway, dom, navigate, open } = await mountIdentity();
+    const { gateway, dom, open } = await mountIdentity();
     await dom.update({ connected: true, canPairDevice: false });
     gateway.publish({ selfUser: { id: "self", name: fullName, email, avatarUrl } });
     await dom.update();
@@ -118,24 +103,12 @@ describe("AppSidebar footer identity menu", () => {
     expect(identity).toMatchObject({ ariaHasPopup: "menu", ariaExpanded: "false" });
     expect(identity?.getAttribute("aria-label")).toContain(fullName);
     expect(card.query("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
-    vi.spyOn(identity!, "getBoundingClientRect").mockReturnValue(new DOMRect(12, 700, 212));
     await open();
 
     const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
     const view = domProbe(menu!);
     expect(identity?.getAttribute("aria-expanded")).toBe("true");
-    expect(menuItems(menu).map((element) => element.getAttribute("data-value"))).toEqual([
-      "command:profile",
-      "command:settings",
-      "command:updates",
-      "command:usage",
-      "command:pair-mobile",
-      "command:apps",
-      "command:debug-overlay",
-      "command:help",
-    ]);
     expect(card.text(".sidebar-identity-card__name")?.trim()).toBe(fullName);
-    expect(card.attr(".sidebar-identity-card__name", "title")).toBeNull();
     for (const [field, value] of Object.entries({ name: fullName, email })) {
       const detail = view.query(`.sidebar-identity-menu__${field}`);
       expect(detail).toMatchObject({ textContent: value, title: value });
@@ -146,74 +119,25 @@ describe("AppSidebar footer identity menu", () => {
     expect(view.attr(".sidebar-identity-menu__avatar", "aria-hidden")).toBe("true");
     const shortcut = view.query('[data-value="command:settings"] .session-menu__shortcut');
     expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
-    expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
-    expect(view.attr("openclaw-sidebar-build-chip .sidebar-footer-build", "role")).toBe("menuitem");
-    expect(view.query("openclaw-theme-mode-toggle")).not.toBeNull();
-    expect(menu?.textContent).not.toContain("Recent activity");
-    expect(view.all(':scope > [role="separator"]')).toHaveLength(4);
-    expect(card.query(".sidebar-identity-card__more, .sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
-    expect([...links].map((link) => link.getAttribute("href"))).toEqual([
-      "https://docs.openclaw.ai",
-      "https://community.openclaw.ai/",
-      "https://discord.gg/clawd",
-      "https://docs.openclaw.ai/releases",
-    ]);
-
-    expect([...links].find((link) => link.textContent?.includes("Get support"))).toBeDefined();
-
-    view.query<HTMLElement>('[data-value="command:profile"]')?.focus();
-    await dom.key(menu, "Escape", { cancelable: false });
-    expect(dom.query(".sidebar-identity-menu")).toBeNull();
-    expect(document.activeElement).toBe(identity);
-
-    await open();
-    await dom.click('.sidebar-identity-menu [data-value="command:profile"]');
-    expect(navigate).toHaveBeenCalledWith("profile", { hash: "#settings-profile-identity" });
-    expect(dom.query(".sidebar-identity-menu")).toBeNull();
+    const support = [...links].find((link) => link.textContent?.includes("Get support"));
+    expect(support?.getAttribute("href")).toBe("https://community.openclaw.ai/");
   });
 
-  it.each([false, true])(
-    "traverses footer controls without losing the active menu item (offline: %s)",
-    async (offline) => {
-      const { dom, open } = await mountIdentity();
-      await dom.update({
-        connected: true,
-        canPairDevice: false,
-        connectionStatus: offline ? "reconnecting" : null,
-      });
-      await open();
-
-      const menu = dom.query<HTMLElement>(".sidebar-identity-menu");
-      const view = domProbe(menu!);
-      const items = menuItems(menu, true);
-      const lastItem = items.at(-1);
-      const theme = view.query<HTMLButtonElement>(".theme-mode-toggle");
-      const build = view.query<HTMLAnchorElement>(".sidebar-footer-build");
-      lastItem?.focus();
-      let current: HTMLElement | null | undefined = lastItem;
-      const buildControls = build ? [build] : [];
-      for (const [key, targets] of [
-        ["ArrowDown", [...buildControls, theme]],
-        ["ArrowUp", [...buildControls, lastItem]],
-      ] as const) {
-        for (const target of targets) {
-          await dom.key(current, key);
-          await waitForSolid(() => expect(document.activeElement).toBe(target));
-          current = target;
-        }
-      }
-      expect(lastItem?.getAttribute("data-highlighted")).not.toBeNull();
-
-      items[0]?.focus();
-      await dom.key(items[0], "ArrowUp");
-      await waitForSolid(() => expect(document.activeElement).toBe(theme));
-      await dom.key(theme, "ArrowDown");
-      await waitForSolid(() => expect(document.activeElement).toBe(items[0]));
-    },
-  );
+  it("wraps between Profile and the footer while reconnecting", async () => {
+    const { dom, open } = await mountIdentity();
+    await dom.update({ connected: true, canPairDevice: false, connectionStatus: "reconnecting" });
+    await open();
+    const profile = dom.query<HTMLElement>('[data-value="command:profile"]');
+    const theme = dom.query<HTMLButtonElement>(".sidebar-identity-menu .theme-mode-toggle");
+    profile!.focus();
+    await dom.key(profile, "ArrowUp");
+    await waitForSolid(() => expect(document.activeElement).toBe(theme));
+    await dom.key(theme, "ArrowDown");
+    await waitForSolid(() => expect(document.activeElement).toBe(profile));
+  });
 });

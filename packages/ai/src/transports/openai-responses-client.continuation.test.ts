@@ -11,6 +11,12 @@ import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-stat
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
+import {
+  completedResponse,
+  outputItem,
+  userMessage,
+  wireCall,
+} from "./openai-stream-cases.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   clientHeaders: [] as Array<Record<string, string>>,
@@ -75,19 +81,7 @@ function functionTool(name: string) {
   return { name, description: name, parameters: Type.Object({}) };
 }
 
-const asyncCall = {
-  type: "function_call",
-  id: "fc_lookup",
-  call_id: "call_lookup",
-  name: "lookup",
-  arguments: "{}",
-  status: "completed",
-  async: true,
-};
-
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
-}
+const asyncCall = { ...wireCall("lookup", "lookup"), status: "completed", async: true };
 
 function completedEvent(responseId: string, content: string) {
   const output = [
@@ -114,15 +108,9 @@ function completedEvent(responseId: string, content: string) {
       role: "assistant",
     },
   ];
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
+  return completedResponse(responseId, output, {
+    usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+  });
 }
 
 function sdkCompletion(responseId: string, content: string): SdkResponse {
@@ -269,14 +257,7 @@ describe("native OpenAI Responses SSE continuation", () => {
 
   it("continues after a hosted web search answer with sources through effort and tool turns", async () => {
     const search = completedEvent("resp_search", "searched answer");
-    const toolCall = {
-      type: "function_call",
-      id: "fc_lookup",
-      call_id: "call_lookup",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-    };
+    const toolCall = { ...wireCall("lookup", "lookup"), status: "completed" };
     const toolTurn = completedEvent("resp_tool", "");
     sseState.outcomes.push(
       sdkEvents({
@@ -294,15 +275,10 @@ describe("native OpenAI Responses SSE continuation", () => {
           ],
         },
       }),
-      sdkEvents(
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...toolCall, arguments: "" },
-        },
-        { type: "response.output_item.done", output_index: 0, item: toolCall },
-        { ...toolTurn, response: { ...toolTurn.response, output: [toolCall] } },
-      ),
+      sdkEvents(outputItem("added", { ...toolCall, arguments: "" }), outputItem("done", toolCall), {
+        ...toolTurn,
+        response: { ...toolTurn.response, output: [toolCall] },
+      }),
       sdkCompletion("resp_final", "used lookup result"),
     );
     const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
@@ -558,19 +534,11 @@ describe("native OpenAI Responses SSE continuation", () => {
       {
         response: new Response(null, { status: 200 }),
         data: (async function* () {
-          yield {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...asyncCall, arguments: "" },
-          };
-          yield { type: "response.output_item.done", output_index: 0, item: asyncCall };
+          yield outputItem("added", { ...asyncCall, arguments: "" });
+          yield outputItem("done", asyncCall);
           await withTestTimeout(toolStarted.promise, 5000, "Async tool did not start during SSE");
           const completed = completedEvent("resp_async", "independent answer");
-          yield {
-            type: "response.output_item.done",
-            output_index: 1,
-            item: completed.response.output[0],
-          };
+          yield outputItem("done", completed.response.output[0], 1);
           responseCompleted.resolve();
           yield {
             ...completed,
@@ -641,21 +609,13 @@ describe("native OpenAI Responses SSE continuation", () => {
       content: [{ type: "text" as const, text: "lookup result" }],
       details: {},
     }));
-    const call = {
-      type: "function_call",
-      id: "fc_lookup",
-      call_id: "call_lookup",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-    };
+    const call = { ...wireCall("lookup", "lookup"), status: "completed" };
     const completed = completedEvent("resp_call", "");
     sseState.outcomes.push(
-      sdkEvents(
-        { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
-        { type: "response.output_item.done", output_index: 0, item: call },
-        { ...completed, response: { ...completed.response, output: [call] } },
-      ),
+      sdkEvents(outputItem("added", { ...call, arguments: "" }), outputItem("done", call), {
+        ...completed,
+        response: { ...completed.response, output: [call] },
+      }),
       sdkUncitedCompletion("resp_final", "used lookup result"),
     );
     // plugins is synchronous but cannot collect async results (cron surfaces lack sessions_yield).
@@ -703,12 +663,8 @@ describe("native OpenAI Responses SSE continuation", () => {
       const completed = completedEvent("resp_call", "");
       sseState.outcomes.push(
         sdkEvents(
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...asyncCall, arguments: "" },
-          },
-          { type: "response.output_item.done", output_index: 0, item: asyncCall },
+          outputItem("added", { ...asyncCall, arguments: "" }),
+          outputItem("done", asyncCall),
           { ...completed, response: { ...completed.response, output: [asyncCall] } },
         ),
       );

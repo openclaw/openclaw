@@ -712,7 +712,8 @@ describe("acp-authority", () => {
   test.each(["already retired", "caller retired"] as const)(
     "ACP reset preserves its row and resume state when %s before metadata commit",
     async (reason) => {
-      const acpEntryWriter = await import("../acp/runtime/session-meta-entry.js");
+      const entryWorker =
+        await import("../config/sessions/session-accessor.sqlite-replacement-worker.js");
       const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
       const { storePath } = await seedActiveMainSession();
       const sessionKey = "agent:main:main";
@@ -728,14 +729,12 @@ describe("acp-authority", () => {
       });
       const before = structuredClone(readState());
       const mutation = createRequestGate();
-      const originalWrite = acpEntryWriter.updateAcpSessionStoreEntry;
+      const originalWrite = entryWorker.withSessionEntryWorker;
       using intercepted = vi
-        .spyOn(acpEntryWriter, "updateAcpSessionStoreEntry")
-        .mockImplementation(async (input) => {
-          if (input.mutation.kind === "touch") {
-            await mutation.pause();
-          }
-          return await originalWrite(input);
+        .spyOn(entryWorker, "withSessionEntryWorker")
+        .mockImplementation(async (...args) => {
+          await mutation.pause();
+          return await originalWrite(...args);
         });
       let current = reason !== "already retired";
       const resetting = closeAcpRuntimeForSession({

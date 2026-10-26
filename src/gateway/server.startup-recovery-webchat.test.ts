@@ -178,10 +178,7 @@ it(
         await replaceSessionEntry(scope(key, id), { sessionId: id, ...interrupted(cycleId) });
       }
       clearSessionStoreCacheForTest();
-      const addRecoveryChild = async (
-        marker: string,
-        overrides: Partial<SubagentRunRecord> = {},
-      ) => {
+      const addRecoveryChild = async (marker: string) => {
         const parent = expectDefined(readSession(), "recovery parent");
         const child = createSubagentRunRecord({
           runId: marker,
@@ -203,10 +200,8 @@ it(
             outcome: { status: "error", error: "Interrupted by restart" },
             interruptionReason: "gateway-restart",
           },
-          ...overrides,
         });
         await saveChild(child);
-        return child;
       };
       await addRecoveryChild(originalChildMarker);
       const recoveryRuntime = expectDefined(getGatewayRecoveryRuntime(), "recovery runtime");

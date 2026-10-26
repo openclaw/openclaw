@@ -563,6 +563,12 @@ enable request is saved only after the native request succeeds.
 Turning it off or quitting releases the request. Closing the dashboard to the
 tray does not release it.
 
+If the shared Saved Gateways credential store cannot be read at startup, the
+connection UI reports that problem once and Keep computer awake stays off for
+this run. The saved preference is preserved. An explicit toggle that cannot save
+its preference reports **Saved Gateways**; native power-service errors report
+**Keep computer awake**.
+
 Linux uses GNOME’s native session inhibitor when available, or another desktop’s
 xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or
 portal backend that supports idle inhibition is required; a

@@ -6,6 +6,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -442,14 +443,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         precedingMessages: [
           { role: "user", content: "Send the previous result.", timestamp: 0 },
           previousAssistant,
-          {
-            role: "toolResult",
-            toolCallId: "previous_reply",
-            toolName: "message",
-            content: [{ type: "text", text: "Delivered." }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("previous_reply", "message", "Delivered.", false, 0),
         ],
         answerSegments: [
           { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },
@@ -615,7 +609,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           data: expect.objectContaining({
             phase: "retrying",
             attempt: 2,
-            maxAttempts: 10,
+            maxAttempts: 16,
             reason: "rate_limit",
             retryAt: pacingNow + delayMs,
           }),
@@ -644,7 +638,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
+  it("exhausts sixteen rate-limited attempts before profile rotation and model failover", async () => {
     const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 provider rate limit",
       diagnostics: [],
@@ -653,14 +647,14 @@ describe("recoverEmbeddedRunAttempt", () => {
     });
     const { failoverRetryController: failover } = fixture;
     expect(fixture.recovery.action).toBe("retry");
-    for (let retry = 2; retry <= 9; retry++) {
+    for (let retry = 2; retry <= 15; retry++) {
       expect((await fixture.recover()).action).toBe("retry");
     }
     expect(failover.advanceAuthProfile).not.toHaveBeenCalled();
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(15);
     expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.attempt)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     ]);
     await expect(handleAssistantFailureAfterRecovery(fixture, "rate_limit")).rejects.toMatchObject({
       name: "FailoverError",
@@ -668,6 +662,31 @@ describe("recoverEmbeddedRunAttempt", () => {
       status: 429,
     });
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, TransportDropScenario, boolean]>([
+    ["no output after settled tools", { content: [] }, true],
+    ["no output before work", { content: [], noTools: true, replaySafe: true }, true],
+    ["partial reasoning", {}, false],
+    ["a native harness thread", { content: [], pluginHarnessOwnsTransport: true }, false],
+    ["an active lifecycle item", { content: [], activeCount: 1 }, false],
+    [
+      "a thrown prompt failure",
+      { content: [], ...promptError(providerError(undefined, "429 provider rate limit")) },
+      false,
+    ],
+  ])("replays the user turn after a rate limit with %s: %s", async (_name, scenario, replays) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage: "Rate limit reached on tokens per min (TPM). Please try again in 25ms.",
+      diagnostics: [],
+      ...scenario,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+      messages: fixture.attempt.messagesSnapshot,
+      ...(replays ? { replayCurrentUserTurn: true } : {}),
+    });
   });
 
   it.each<[string, TransportDropScenario]>([

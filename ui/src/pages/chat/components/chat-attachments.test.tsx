@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import * as toast from "../../../lib/toast.ts";
+import { useFakeClock as fakeTimers } from "../../../test-helpers/fake-clock.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
@@ -188,13 +189,6 @@ function previewFixture(
   const redraw = () => preview.update(view());
   onTestFinished(preview.dispose);
   return Object.assign(h, { container: preview.container, previewProps: props });
-}
-
-function fakeTimers() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
 }
 
 function imageFile(name: string, bytes: string, type = "image/png") {

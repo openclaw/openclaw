@@ -220,7 +220,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
   if (bootRecord) {
-    prewarmBootChat(bootRecord, settings.sessionKey);
+    prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
   }
   const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {

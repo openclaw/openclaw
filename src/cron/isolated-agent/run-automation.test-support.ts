@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 
 const readCronScratchSnapshotMock = vi.fn();
-export const appendSessionRuntimeContextMock = vi.fn();
 export const readSessionMessagesAsyncMock = vi.fn();
 // mock-isolation: Use the bounded conversation fixture instead of reading live transcripts.
 vi.mock("../../gateway/session-transcript-readers.js", async (importOriginal) => ({
@@ -10,10 +9,6 @@ vi.mock("../../gateway/session-transcript-readers.js", async (importOriginal) =>
 }));
 // mock-isolation: Use fixture scratch snapshots instead of opening the shared-state database worker.
 vi.mock("../scratch-read.js", () => ({ readCronScratchSnapshot: readCronScratchSnapshotMock }));
-// mock-isolation: Capture context appends without persisting transcripts for synthetic /tmp/store.json sessions.
-vi.mock("../../sessions/runtime-context.js", () => ({
-  appendSessionRuntimeContext: appendSessionRuntimeContextMock,
-}));
 // mock-isolation: Use synthetic target generations instead of capturing live sessions or admitting follow-up turns.
 vi.mock("../../auto-reply/reply/session-event-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/reply/session-event-target.js")>()),
@@ -33,6 +28,5 @@ vi.mock("../../auto-reply/reply/session-event-target.js", async (importOriginal)
 
 export function resetCronAutomationMocks() {
   readCronScratchSnapshotMock.mockReset().mockResolvedValue(undefined);
-  appendSessionRuntimeContextMock.mockReset().mockResolvedValue(undefined);
   readSessionMessagesAsyncMock.mockReset().mockResolvedValue([]);
 }

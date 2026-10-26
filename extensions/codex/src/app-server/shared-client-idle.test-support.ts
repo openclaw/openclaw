@@ -8,6 +8,7 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import { listCodexAppServerModels } from "./models.js";
 import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
@@ -115,14 +116,10 @@ function createIdleLifecycleHarness() {
     "model/list": {
       data: [
         {
-          id: "fixture-model",
-          model: "fixture-model",
+          ...createModelFixture("fixture-model"),
           displayName: "Fixture",
           description: "Fixture",
-          hidden: false,
           isDefault: true,
-          supportedReasoningEfforts: [],
-          defaultReasoningEffort: "medium",
         },
       ],
     },

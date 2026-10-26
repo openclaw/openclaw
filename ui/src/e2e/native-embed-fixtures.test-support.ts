@@ -3,14 +3,11 @@ import type { SecretsStoreListResult } from "../../../packages/gateway-protocol/
 import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
-import type {
-  ChannelsPairingListResult,
-  ChannelsStatusSnapshot,
-  CronJobsListResult,
-} from "../api/types.ts";
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
+import { createControlUiDefaultResponses } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
+import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 // WEB-1 uses the existing device contract; its macOS snapshot remains unchanged.
 export async function installExistingNativeDeviceSettings(page: Page): Promise<void> {
@@ -21,9 +18,7 @@ export async function installExistingNativeDeviceSettings(page: Page): Promise<v
       value: {
         messageHandlers: {
           openclawDeviceSettings: {
-            postMessage() {
-              return Promise.resolve(snapshot);
-            },
+            postMessage: () => Promise.resolve(snapshot),
           },
         },
       },
@@ -33,50 +28,41 @@ export async function installExistingNativeDeviceSettings(page: Page): Promise<v
 
 export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown> {
   const timestamp = Date.UTC(2026, 8, 5, 12);
-  const jobs: CronJobsListResult["jobs"] = [
-    {
-      id: "synthetic-healthy",
-      configRevision: "synthetic-healthy-revision",
-      name: "Healthy automation",
-      enabled: true,
+  const defaults = createControlUiDefaultResponses({});
+  const jobs = (
+    [
+      ["healthy", "Healthy", "ok"],
+      ["failing", "Failing", "error"],
+    ] as const
+  ).map(([id, label, lastRunStatus]) =>
+    cronJob(`synthetic-${id}`, `${label} automation`, {
+      configRevision: `synthetic-${id}-revision`,
       createdAtMs: timestamp,
       updatedAtMs: timestamp,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "Synthetic healthy automation" },
-      state: { lastRunStatus: "ok" },
-    },
-    {
-      id: "synthetic-failing",
-      configRevision: "synthetic-failing-revision",
-      name: "Failing automation",
-      enabled: true,
-      createdAtMs: timestamp,
-      updatedAtMs: timestamp,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "Synthetic failing automation" },
-      state: { lastRunStatus: "error" },
-    },
-  ];
+      payload: { kind: "systemEvent", text: `Synthetic ${id} automation` },
+      state: { lastRunStatus },
+    }),
+  );
+  const secret = (
+    name: string,
+    content: string | string[],
+  ): SecretsStoreListResult["entries"][number] => ({
+    name,
+    scopeKind: "team" as const,
+    scopeId: "",
+    createdAtMs: timestamp,
+    updatedAtMs: timestamp,
+    ...(typeof content === "string"
+      ? { kind: "env" as const, value: content }
+      : { kind: "secret" as const, allowedHosts: content }),
+  });
 
   return {
-    "channels.status": {
-      ts: 0,
-      channels: {},
-      channelAccounts: {},
-      channelOrder: [],
-      channelLabels: {},
-      channelDefaultAccountId: {},
-    } satisfies ChannelsStatusSnapshot,
+    "channels.status": defaults["channels.status"],
     "channels.pairing.list": {
-      accounts: [],
-      requests: [],
+      ...defaults["channels.pairing.list"],
       commandOwnerConfigured: false,
-      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-    } satisfies ChannelsPairingListResult,
+    },
     "webSearch.status": {
       enabled: true,
       provider: null,
@@ -141,24 +127,8 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
     } satisfies DevicePairingList,
     "secrets.store.list": {
       entries: [
-        {
-          name: "SYNTHETIC_EXAMPLE_KEY",
-          kind: "secret",
-          scopeKind: "team",
-          scopeId: "",
-          createdAtMs: timestamp,
-          updatedAtMs: timestamp,
-          allowedHosts: ["long-service-hostname.example.invalid"],
-        },
-        {
-          name: "SYNTHETIC_SERVICE_URL",
-          kind: "env",
-          value: "https://example.invalid/long/path/for-phone-wrapping",
-          scopeKind: "team",
-          scopeId: "",
-          createdAtMs: timestamp,
-          updatedAtMs: timestamp,
-        },
+        secret("SYNTHETIC_EXAMPLE_KEY", ["long-service-hostname.example.invalid"]),
+        secret("SYNTHETIC_SERVICE_URL", "https://example.invalid/long/path/for-phone-wrapping"),
       ],
     } satisfies SecretsStoreListResult,
     "diagnostics.lanes": {
@@ -217,23 +187,8 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
         },
       ],
     },
-    "cron.list": cronListResponseFixture({
-      jobs,
-      snapshotRevision: "native-embed-layout",
-      total: jobs.length,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    }),
-    "cron.runs": {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    },
+    "cron.list": cronListResponseFixture(cronList(jobs, "native-embed-layout", { limit: 50 })),
+    "cron.runs": cronRuns([]),
     "cron.status": {
       enabled: true,
       triggersEnabled: true,

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { vi, type Mock } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -135,6 +136,7 @@ export function createFixture(mocks: {
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
+      onRunAbortDeadlineChanged: () => () => {},
       clearTimers,
     },
   };
@@ -164,9 +166,7 @@ export function createFixture(mocks: {
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
     preparedUserTurnMessage: {
-      role: "user",
-      content: "hello",
-      timestamp: 100,
+      ...makeUserMessage("hello", 100),
       __openclaw: { senderName: "Alice" },
     },
     sessionManager,

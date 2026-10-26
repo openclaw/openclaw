@@ -51,7 +51,7 @@ function writeExternalPolicyFixture(): string {
       '    ? { provider, reason: "setup missing", requirement: "fixture-setup" }',
       "    : null;",
       "}",
-      "export function projectConfiguredModelRow() { return null; }",
+      "export function projectRealtimeVoicePublicProjection() { return null; }",
       "",
     ].join("\n"),
     "utf8",
@@ -154,20 +154,8 @@ describe("provider public artifacts", () => {
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
-    expect(surface?.normalizeConfig).toBeTypeOf("function");
-    expect(surface?.projectConfiguredModelRow).toBeTypeOf("function");
+    expect(surface?.projectRealtimeVoicePublicProjection).toBeTypeOf("function");
 
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-completions",
-      models: [],
-    };
-    expect(
-      surface?.normalizeConfig?.({
-        provider: "openai",
-        providerConfig,
-      }),
-    ).toBe(providerConfig);
     expect(
       surface
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
@@ -329,7 +317,7 @@ describe("provider public artifacts", () => {
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
-      expect(surface).not.toHaveProperty("projectConfiguredModelRow");
+      expect(surface).not.toHaveProperty("projectRealtimeVoicePublicProjection");
       expect(
         resolveProviderPolicySurface("fixture-embedding", {
           manifestRegistry: { plugins: [fixturePlugin as never] },

@@ -316,20 +316,21 @@ describe("Control UI performance budgets", () => {
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
-  it("bounds the approved mobile header CSS restoration", () => {
+  it("bounds stylesheet growth at the fixed CSS ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
+    const base = collectMetrics(distDir);
+    const raw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
+    const gzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
     for (let index = 0; index < 6; index++) {
       writeAsset(
         "css-" + index + ".css",
-        index === 0 ? 265_570 : 265_567,
-        index === 0 ? 50_422 : 50_418,
+        Math.floor(raw / 6) + (index < raw % 6 ? 1 : 0),
+        Math.floor(gzip / 6) + (index < gzip % 6 ? 1 : 0),
       );
     }
-    const base = collectMetrics(distDir);
-    writeAsset("mobile-header.css", 2_066, 845);
     const accepted = collectMetrics(distDir);
     expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
-    writeAsset("mobile-header.css", 2_067, 846);
+    writeAsset("overflow.css", 1, 1);
     expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
       expect.objectContaining({ metric: "total CSS gzip" }),
       expect.objectContaining({ metric: "total CSS raw" }),
@@ -387,12 +388,13 @@ describe("Control UI performance budgets", () => {
 
   it("retains the ordinary chunk cap beside locale pairs", () => {
     const { distDir, writeAsset } = createStartupFixture();
-    writeAsset("lazy-b.js", 200, 215 * 1024 + 1, 55);
+    const cap = CONTROL_UI_PERFORMANCE_BUDGETS.largestJsGzipBytes;
+    writeAsset("lazy-b.js", 200, cap + 1, 55);
     writeAsset("ru-a.js", 200, 100_000, 100);
     writeAsset("locale-config-hints-ru-a.js", 200, 100_000, 100);
     const metrics = collectMetrics(distDir);
     expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual(["largest JS gzip"]);
-    expect(metrics.total.js.gzipBytes).toBe(420_201);
+    expect(metrics.total.js.gzipBytes).toBe(cap + 200_041);
     expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
     expect(formatReport(metrics)).toContain("locale catalog JS:");
   });

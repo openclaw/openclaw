@@ -178,7 +178,10 @@ substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
 explicitly asks for it in that release. After dispatch, only confirmed release
-blockers qualify, each named in the handoff record.
+blockers qualify, each named in the handoff record, unless the operator explicitly
+reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+That decision invalidates affected evidence; it never authorizes publication of
+untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
 proposed set for maintainer approval. After approval, backport with provenance,

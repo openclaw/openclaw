@@ -181,14 +181,28 @@ it("refreshes health from the cron partition currently published by the kernel",
     });
     expect(partitions()).toEqual([previous.storePath]);
 
+    await previous.cron.start();
+    reads.mockClear();
+    for (let index = 0; index < 2; index += 1) {
+      await kernel.gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+    }
+    expect(partitions()).toEqual([]);
+
     // Hot reload uses this same owner publication; retained request contexts must follow it.
-    kernel.kernel.swapCronState({ ...previous, storePath: secondPartition });
+    kernel.kernel.swapCronState({
+      ...previous,
+      storePath: secondPartition,
+      readHeartbeatSummary: undefined,
+    });
     try {
       await kernel.gatewayRequestContext.refreshHealthSnapshot({
         probe: false,
         includeSensitive: true,
       });
-      expect(partitions()).toEqual([previous.storePath, secondPartition]);
+      expect(partitions()).toEqual([secondPartition]);
     } finally {
       kernel.kernel.swapCronState(previous);
     }

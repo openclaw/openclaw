@@ -128,15 +128,6 @@ function resolveVideoJobState(status: string | undefined): "active" | "completed
   throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
 
-function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  const url = URL.parse(normalized);
-  return url?.protocol === "https:" || url?.protocol === "http:" ? normalized : undefined;
-}
-
 export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openrouter",
@@ -362,7 +353,9 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           `videos/${encodeURIComponent(completedJobId)}/content?index=0`,
           baseUrl,
         );
-      const deliveryUrl = resolveDeliverableOpenRouterVideoUrl(unsignedUrl);
+      const deliveryProtocol = unsignedUrl ? URL.parse(unsignedUrl)?.protocol : undefined;
+      const deliveryUrl =
+        deliveryProtocol === "https:" || deliveryProtocol === "http:" ? unsignedUrl : undefined;
       const downloadTimeoutMs = resolveProviderOperationTimeoutMs({
         deadline,
         defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,

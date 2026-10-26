@@ -189,6 +189,7 @@ function createButtonHarness() {
 async function startDirect(controller: ComposerDictationOwner) {
   const start = vi.spyOn(ComposerDictationSession.prototype, "start");
   expect(controller.startDirect()).toBe(true);
+  await vi.dynamicImportSettled();
   const started = start.mock.results[0];
   assert.isDefined(started);
   await started.value;
@@ -275,6 +276,45 @@ afterEach(() => {
 });
 
 describe("ComposerDictationOwner", () => {
+  it.each(["cancel", "restart", "draft switch"])(
+    "does not revive a retired lazy capture after %s",
+    async (transition) => {
+      const start = vi.spyOn(ComposerDictationSession.prototype, "start");
+      const { controller, options, onCommit, onError } = createHarness({ draftKey: "first" });
+      expect(controller.startDirect()).toBe(true);
+      expect(controller.connecting).toBe(true);
+      expect(audios).toHaveLength(1);
+      expect(getUserMedia).not.toHaveBeenCalled();
+
+      if (transition === "draft switch") {
+        controller.update({ ...options, draftKey: "next" });
+      } else {
+        controller.cancel();
+      }
+      if (transition === "restart") {
+        expect(controller.startDirect()).toBe(true);
+      }
+      await vi.dynamicImportSettled();
+
+      if (transition === "restart") {
+        expect(start).toHaveBeenCalledOnce();
+        const started = start.mock.results[0];
+        assert.isDefined(started);
+        await started.value;
+        expect(getUserMedia).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledExactlyOnceWith("talk.session.create", expect.anything());
+        expect(controller.active).toBe(true);
+      } else {
+        expect(start).not.toHaveBeenCalled();
+        expect(getUserMedia).not.toHaveBeenCalled();
+        expect(request).not.toHaveBeenCalled();
+        expect(controller.locksComposer).toBe(false);
+      }
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
   it("retires capture before a retained owner adopts another draft's callbacks", async () => {
     const { controller, options, onCommit } = createHarness({ draftKey: "first" });
     const stopTrack = captureStop();

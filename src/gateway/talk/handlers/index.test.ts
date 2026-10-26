@@ -23,6 +23,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-v
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
+import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
@@ -1463,8 +1464,7 @@ describe("talk.config handler", () => {
       speakerVoice: "marin",
       speakerVoiceId: "voice-id",
     });
-    const providers = realtime.providers as Record<string, unknown> | undefined;
-    expectRecordFields(providers?.openai, {
+    expectRecordFields((realtime.providers as Record<string, unknown> | undefined)?.openai, {
       apiKey: redactedSecretRef,
       azureEndpoint: "https://example.openai.azure.com",
       azureDeployment: "realtime-prod",
@@ -1474,6 +1474,8 @@ describe("talk.config handler", () => {
       rawConfig: { apiKey: "runtime-azure-secret", model: "gpt-realtime" },
     });
     expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
+    // Source values supply the wire projection; provider discovery belongs to runtime config.
+    expect(mocks.listRealtimeVoiceProviders).not.toHaveBeenCalledWith(sourceConfig);
   });
 
   it("passes runtime-resolved tts provider secrets to strict provider resolvers", async () => {
@@ -2419,14 +2421,7 @@ describe("talk.session unified handlers", () => {
     },
     {
       name: "persisted fixed-store owner",
-      config: {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
+      config: fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite"),
       sessionKey: "global",
       scope: "operator.admin",
       agentId: "ops",

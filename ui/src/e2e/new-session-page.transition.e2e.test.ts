@@ -10,6 +10,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { confirmIme } from "./chat-flow.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -21,7 +22,6 @@ import {
 } from "./new-session-page.scenario.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
-  SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureUiProof,
   controlUiSessionPath,
@@ -33,6 +33,7 @@ import {
   pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { sessionList } from "./new-session-shard.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -155,17 +156,12 @@ async function assertCreateRecovery(
   const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
   const imageContent = (await readFile(imageFile)).toString("base64");
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     heldMethods: ["chat.startup"],
     workspaceGit: true,
     methodResponses: {
       ...LOCAL_GIT_WORKSPACE_RESPONSES,
-      "sessions.list": {
-        count: 0,
-        defaults: SESSION_LIST_DEFAULTS,
-        path: "",
-        sessions: [],
-        ts: Date.now(),
-      },
+      "sessions.list": sessionList(),
       "sessions.create": { key: sessionKey, runId, runStarted: true, messageSeq: 1 },
       "chat.startup": {
         messages: [],
@@ -498,20 +494,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}new`);
     const composer = page.locator(".new-session-page__message");
     await composer.fill("verify the default mock");
-    const confirmationConsumed = await composer.evaluate((textarea) => {
-      textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const end = new CompositionEvent("compositionend", { bubbles: true });
-      textarea.dispatchEvent(end);
-      const confirm = new KeyboardEvent("keydown", {
-        key: "Enter",
-        keyCode: 13,
-        bubbles: true,
-        cancelable: true,
-      });
-      Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
-      textarea.dispatchEvent(confirm);
-      return confirm.defaultPrevented;
-    });
+    const confirmationConsumed = await confirmIme(composer, "");
     expect(confirmationConsumed).toBe(false);
     expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     expect(await composer.inputValue()).toBe("verify the default mock");
@@ -579,6 +562,7 @@ suite.define(() => {
       },
     );
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
         "agent.wait",

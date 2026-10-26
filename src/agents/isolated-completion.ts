@@ -629,6 +629,7 @@ async function runIsolatedCompletionOwned(
                       authorization.owner === "host"
                         ? prepareIsolatedHostAuthorization(harness, authorization)
                         : authorization,
+                    ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
                     streamParams: resolveIsolatedStreamParams(request, completionModel),
                   }),
                 (completion) => completion.assistant,

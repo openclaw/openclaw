@@ -26,16 +26,15 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 type Runtime = ReturnType<typeof createNodeLlmRuntime>;
 
 function completedFrame(responseId: string): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output: [
+  return JSON.stringify(
+    completedResponse(
+      responseId,
+      [
         {
           id: `msg_${responseId}`,
           type: "message",
@@ -44,9 +43,9 @@ function completedFrame(responseId: string): string {
           role: "assistant",
         },
       ],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  });
+      { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
+    ),
+  );
 }
 
 function createRegistry() {

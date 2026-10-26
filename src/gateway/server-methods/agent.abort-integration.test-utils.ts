@@ -1,7 +1,6 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -26,6 +25,8 @@ import { registerAgentPreDispatchFailureTests } from "./agent.pre-dispatch-failu
 import { registerAgentQueuedRestartRecoveryTests } from "./agent.restart-recovery.test-support.js";
 import { registerAgentGlobalGoalEventTest } from "./agent.session-events.test-utils.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -1359,29 +1360,12 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 
   it("updates exec approval followup aliases when chat.abort lands during pre-accept setup", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-preaccept-abort",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
-    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-preaccept-abort",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration: firstRegistration, secondRegistration } =
+      createElevatedExecApprovalFixture("req-elevated-preaccept-abort", 2);
     if (!firstRegistration || !secondRegistration) {
       throw new Error("expected runtime handoff ids");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     let releaseSessionWrite: (() => void) | undefined;
     let sessionWriteCalls = 0;
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {

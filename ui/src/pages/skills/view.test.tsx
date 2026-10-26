@@ -562,6 +562,36 @@ describe("renderSkills", () => {
     expect(normalizeText(body)).not.toContain("Latest: v1.0.0");
   });
 
+  it.each([
+    [true, 1],
+    [undefined, 0],
+  ])(
+    "marks official ClawHub skills in the detail title: isOfficial=%s",
+    async (isOfficial, count) => {
+      const container = createContainer();
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+      renderView(container, {
+        clawhubDetailRef: "@openclaw/github",
+        clawhubDetail: {
+          skill: {
+            slug: "github",
+            displayName: "GitHub",
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_100,
+            isOfficial,
+          },
+        },
+      });
+      await getRenderedModalDialog(container);
+      const badges = container.querySelectorAll(
+        ".clawhub-skill-detail__identity [role='img'][aria-label='Official']",
+      );
+      expect(badges).toHaveLength(count);
+    },
+  );
+
   it.each(["Unable to read skill", null])(
     "keeps unavailable ClawHub details footer-free: %s",
     async (clawhubDetailError) => {

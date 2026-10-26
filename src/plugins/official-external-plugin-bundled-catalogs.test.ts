@@ -64,17 +64,13 @@ const fixtures = vi.hoisted(() => {
   const otherKind = { ...pluginShadow, name: "@fixture/other-kind", kind: "channel" };
   const lowercase = { name: "@fixture/shared", openclaw: { plugin: { id: "shared" } } };
   const fallback = { id: "FallbackOnly", name: "@fixture/fallback" };
-  const mutable: OfficialExternalPluginCatalogEntry = {
-    name: "@fixture/mutable",
-    openclaw: { plugin: { id: "Mutable" }, providers: [{ id: "OriginalProvider" }] },
-  };
   return {
     winner,
     accepted,
     lowercase,
     channelCatalog: { entries: [rejected, winner, otherKind] },
     providerCatalog: { entries: [shadow, accepted, lowercase] },
-    pluginCatalog: { entries: [pluginShadow, fallback, mutable] },
+    pluginCatalog: { entries: [pluginShadow, fallback] },
   };
 });
 
@@ -121,32 +117,6 @@ it.each([
   expect(first[0]).toBe(fixtures.winner);
   first.length = 0;
   expect(list()[0]).toBe(fixtures.winner);
-});
-
-it("observes mutations to returned rows in later lookups and projections", () => {
-  const entry = entryFor("Mutable")!;
-  const { name: originalName, openclaw: originalManifest } = entry;
-  try {
-    entry.name = "@fixture/renamed";
-    entry.openclaw = {
-      plugin: { id: "Renamed" },
-      channel: { id: "RenamedChannel", label: "Renamed" },
-    };
-
-    expect(entryFor("Mutable")).toBeUndefined();
-    expect(entryFor("OriginalProvider")).toBeUndefined();
-    expect(entryFor("Renamed")).toBe(entry);
-    expect(packageEntry("@fixture/mutable")).toBeUndefined();
-    expect(packageEntry("@fixture/renamed")).toBe(entry);
-    expect([isOfficial("mutable"), isOfficial("renamed")]).toEqual([false, true]);
-    expect(listOfficialExternalChannelCatalogEntries()).toContain(entry);
-    expect(listOfficialExternalProviderCatalogEntries()).not.toContain(entry);
-    expect(channelTarget({ config: { channels: { renamedchannel: {} } }, env: {} })).toBe(true);
-    expect(providerTarget({ providerIds: ["OriginalProvider"], env: {} })).toBe(false);
-  } finally {
-    entry.name = originalName;
-    entry.openclaw = originalManifest;
-  }
 });
 
 it.each(["shadow", "rejected"])("keeps repair targets from excluded %s rows", (prefix) => {

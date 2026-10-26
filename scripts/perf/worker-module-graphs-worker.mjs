@@ -4,25 +4,31 @@ import { registerHooks, stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { getHeapStatistics, setFlagsFromString, writeHeapSnapshot } from "node:v8";
+import {
+  getHeapCodeStatistics,
+  getHeapStatistics,
+  setFlagsFromString,
+  writeHeapSnapshot,
+} from "node:v8";
 import { isMainThread, workerData } from "node:worker_threads";
 
 const replacedFiles = new Set([
   "src/agents/workspace-git.ts",
   "src/gateway/worker-environments/workspace-result-git.ts",
   "src/infra/git-exec.ts",
+  "src/infra/sqlite-staging-token.ts",
   "src/plugins/plugin-generation-preparation.worker.ts",
   "src/skills/loading/plugin-skills.ts",
 ]);
 
 // Keep resolution at the candidate URL: only these source bytes differ between sides.
-export function installBaselineHook(directory) {
+export function installBaselineHook(directory, files = replacedFiles) {
   const root = fileURLToPath(new URL("../../", import.meta.url));
   registerHooks({
     load(url, context, next) {
       if (url.startsWith("file:")) {
         const relative = path.relative(root, fileURLToPath(url));
-        if (replacedFiles.has(relative)) {
+        if (files.has(relative)) {
           return {
             format: "module",
             source: stripTypeScriptTypes(
@@ -51,7 +57,10 @@ export function distribution(samples) {
 }
 
 if (!isMainThread) {
-  installBaselineHook(workerData.baselineDir);
+  installBaselineHook(
+    workerData.baselineDir,
+    workerData.baselineFiles ? new Set(workerData.baselineFiles) : undefined,
+  );
   const inspector = new Session();
   inspector.connect();
   const port = workerData.diagnostics;
@@ -127,6 +136,7 @@ if (!isMainThread) {
       } else {
         await inspector.post("HeapProfiler.collectGarbage");
         const heap = getHeapStatistics();
+        const code = getHeapCodeStatistics();
         const memory = process.memoryUsage();
         if (snapshot) {
           writeHeapSnapshot(snapshot);
@@ -142,6 +152,7 @@ if (!isMainThread) {
         ];
         value = {
           heap,
+          code,
           memory,
           scriptCount: modules.length,
           compiledScriptCount: scripts.size,

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -107,7 +108,7 @@ suite.define(() => {
               await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
             ).toBe("none");
           }
-          expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+          expect(await getInitialHistoryRequests(gateway)).toHaveLength(1);
           await gateway.rejectDeferred("sessions.create", {
             code: "UNAVAILABLE",
             message: "Synthetic admission refused",

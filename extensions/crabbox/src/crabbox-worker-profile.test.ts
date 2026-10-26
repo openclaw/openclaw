@@ -100,6 +100,7 @@ it.each([
   [{ TOKEN: storeRef("bad-name") }, "store SecretRef"],
   [{ "BAD-NAME": storeRef() }, "POSIX"],
   [{ HTTPS_PROXY: storeRef() }, "reserved"],
+  [{ CRABBOX_ENV_ALLOW: storeRef() }, "reserved"],
   [{ OPENCLAW_WORKTREE_PATH: storeRef() }, "reserved"],
   [[], "map"],
   [

@@ -41,6 +41,10 @@ function functionResult(call_id: string, output: string) {
   return user([{ type: "function_call_output", call_id, output }]);
 }
 
+function toolCall(name: string, args: unknown, id = "call_heartbeat") {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
 function toolResult(toolCallId: string, text: string, isError?: boolean) {
   return {
     role: "toolResult",
@@ -69,7 +73,7 @@ function heartbeatCall(type: "toolCall" | "tool_use", attention = true) {
   return assistant([
     type === "tool_use"
       ? { type, id: "toolu_heartbeat", name: "heartbeat_respond", input: outcome }
-      : { type, id: "call_heartbeat", name: "heartbeat_respond", arguments: outcome },
+      : toolCall("heartbeat_respond", outcome),
   ]);
 }
 
@@ -312,18 +316,8 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     expectFiltered([
       wake,
       assistant([
-        {
-          type: "toolCall",
-          id: "call_bash",
-          name: "bash",
-          arguments: { command: "inspect monitor scratch" },
-        },
-        {
-          type: "toolCall",
-          id: "call_heartbeat",
-          name: "heartbeat_respond",
-          arguments: createHeartbeatAttentionOutcome(),
-        },
+        toolCall("bash", { command: "inspect monitor scratch" }, "call_bash"),
+        toolCall("heartbeat_respond", createHeartbeatAttentionOutcome()),
       ]),
       toolResult("call_bash", "checked monitor scratch"),
       followup,

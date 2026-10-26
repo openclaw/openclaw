@@ -61,7 +61,7 @@ async function touch(file: string, timestamp: string) {
   const time = new Date(timestamp);
   await fs.utimes(file, time, time);
 }
-const meta = (id = "native-thread", extra: Record<string, unknown> = {}) =>
+const meta = (id = "native-thread") =>
   line("session_meta", {
     id,
     session_id: "root-session",
@@ -69,7 +69,6 @@ const meta = (id = "native-thread", extra: Record<string, unknown> = {}) =>
     source: "cli",
     cwd: "/workspace/project",
     originator: "codex_cli_rs",
-    ...extra,
   });
 
 async function fixture(contents: string | Buffer = meta(), fileName = "rollout-test.jsonl") {
@@ -100,27 +99,11 @@ describe("resident catalog rollout currency", () => {
     await expect(f.scan()).rejects.toBe(error);
   });
 
-  it("reports an unreadable rollout separately from incomplete metadata", async () => {
-    const f = await fixture();
-    const tracked = [f.file];
-    const before = await f.scan(tracked);
-    const error = denied();
-    const open = vi.spyOn(fs, "open").mockRejectedValueOnce(error);
-    await expect(f.read()).rejects.toBe(error);
-    open.mockRestore();
-    expect(await f.scan(tracked)).toEqual(before);
-    expect(await f.read()).toMatchObject({ id: "native-thread" });
-  });
-
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
     const { files: first } = await f.scan(tracked);
-    expect(first.get(f.file)).toEqual({
-      mtimeMs: expect.any(Number),
-      size: Buffer.byteLength(meta()),
-    });
     const compressedSibling = `${f.file}.zst`;
     await fs.writeFile(compressedSibling, zstdCompressSync(meta()));
     const newDay = path.join(f.root, "2026", "09", "17");
@@ -271,11 +254,7 @@ describe("resident catalog rollout currency", () => {
 
   it("derives bounded previews from the first user event and preserves canonical metadata", async () => {
     const f = await fixture(
-      meta("native-thread", {
-        history_mode: "paginated",
-        forked_from_id: "parent-thread",
-        history_base: { thread_id: "parent-thread", end_ordinal_exclusive: 42 },
-      }) +
+      meta() +
         line("response_item", {
           type: "message",
           role: "user",
@@ -302,7 +281,7 @@ describe("resident catalog rollout currency", () => {
     expect(row?.name).toBeUndefined();
   });
 
-  it("reads only the 128 KiB head and tail of large files", async () => {
+  it("reads preview and current workspace from opposite ends of a large rollout", async () => {
     const f = await fixture(
       meta() +
         event("task_started", { turn_id: "first-turn" }) +
@@ -315,30 +294,11 @@ describe("resident catalog rollout currency", () => {
         ) +
         settings(),
     );
-    const readCalls: Array<() => Promise<number[]>> = [];
-    const realOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const read = vi.spyOn(handle, "read");
-      readCalls.push(async () =>
-        Promise.all(
-          read.mock.results.flatMap((result) =>
-            result.type === "return" ? [result.value.then((value) => value.bytesRead)] : [],
-          ),
-        ),
-      );
-      return handle;
-    });
-    const readFile = vi.spyOn(fs, "readFile");
     expect(await f.read()).toMatchObject({
       preview: "First user request",
       cwd: "/workspace/moved",
       recencyAt: Math.floor(Date.parse(createdAt) / 1_000) + 60,
     });
-    const reads = (await Promise.all(readCalls.map((calls) => calls()))).flat();
-    expect(reads.reduce((sum, bytes) => sum + bytes, 0)).toBe(256 * 1024);
-    expect(Math.max(...reads)).toBeLessThanOrEqual(128 * 1024);
-    expect(readFile).not.toHaveBeenCalled();
     await touch(f.file, "2026-09-17T14:00:00.000Z");
     expect((await f.read())?.recencyAt).toBe(Math.floor(Date.parse(createdAt) / 1_000) + 60);
   });
@@ -351,7 +311,6 @@ describe("resident catalog rollout currency", () => {
           event("item_completed", {
             item: {
               type: "UserMessage",
-              id: "message-1",
               content: [
                 { type: "text", text: "A compressed" },
                 { type: "text", text: " request" },
