@@ -1,4 +1,5 @@
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
+import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { i18nRevision } from "../../../lib/reactive/i18n.ts";
 import { countSessionToolOverrides, readOwnEntry } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
@@ -23,6 +24,38 @@ export const MCP_DISCOVERY_NOTICE_IDS = new Set([
   "mcp-not-yet-listed",
   "mcp-stale-catalog",
 ]);
+export function mcpDiscoveryNotice(
+  result: ToolsEffectiveResult | null,
+  serverName: string,
+): string | undefined {
+  const notice = result?.notices?.find(
+    (entry) => MCP_DISCOVERY_NOTICE_IDS.has(entry.id) && entry.servers?.includes(serverName),
+  );
+  return notice ? formatUiExternalText(notice.message) || undefined : undefined;
+}
+
+export function labelsForMcpTools(tools: readonly McpToolEntry[]): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>(
+    tools.map((tool) => [tool.mcpToolName, tool.label?.trim() || tool.mcpToolName]),
+  );
+  let changed: boolean;
+  do {
+    changed = false;
+    const counts = new Map<string, number>();
+    for (const label of labels.values()) {
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    // A raw fallback can collide with another friendly label, so resolve that chain too.
+    for (const [name, label] of labels) {
+      if (label !== name && (counts.get(label) ?? 0) > 1) {
+        labels.set(name, name);
+        changed = true;
+      }
+    }
+  } while (changed);
+  return labels;
+}
+
 export const isToolDenied = (
   props: ChatComposerPlusMenuContentProps,
   tool: McpToolEntry,

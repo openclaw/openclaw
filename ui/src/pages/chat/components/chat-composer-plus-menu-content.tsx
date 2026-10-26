@@ -31,7 +31,8 @@ import {
 import {
   toolsForServer,
   isToolDenied,
-  MCP_DISCOVERY_NOTICE_IDS,
+  mcpDiscoveryNotice,
+  labelsForMcpTools,
   menuRenderInputs,
 } from "./chat-composer-menu-inputs.ts";
 import {
@@ -161,9 +162,7 @@ function pluginTools(
   readMenu: () => ChatComposerPlusMenuContentProps,
 ): MenuEntry[] {
   const tools = toolsForServer(menu.toolsEffectiveResult, serverName);
-  const notice = menu.toolsEffectiveResult?.notices?.find(
-    (entry) => MCP_DISCOVERY_NOTICE_IDS.has(entry.id) && entry.servers?.includes(serverName),
-  );
+  const notice = mcpDiscoveryNotice(menu.toolsEffectiveResult, serverName);
   if (menu.toolsEffectiveLoading)
     return [
       renderCapabilityMenuState(
@@ -172,7 +171,7 @@ function pluginTools(
         "status",
       ),
     ];
-  if (menu.toolsEffectiveError || notice)
+  if (menu.toolsEffectiveError)
     return [
       renderCapabilityMenuState(
         "tools-error",
@@ -191,7 +190,14 @@ function pluginTools(
       ),
     ];
   if (!tools.length)
-    return [renderCapabilityMenuState("tools-empty", t("chat.composer.menu.toolAccess.noTools"))];
+    return [
+      renderCapabilityMenuState(
+        "tools-empty",
+        notice ?? t("chat.composer.menu.toolAccess.noTools"),
+        notice ? "status" : undefined,
+      ),
+    ];
+  const labels = labelsForMcpTools(tools);
   const allOn = tools.every((tool) => !isToolDenied(menu, tool));
   return [
     {
@@ -209,7 +215,7 @@ function pluginTools(
     ...tools.map((tool) =>
       renderCapabilityToggleRow({
         value: `mcp-tool:${tool.mcpToolName}`,
-        label: tool.label?.trim() || tool.mcpToolName,
+        label: labels.get(tool.mcpToolName) ?? tool.mcpToolName,
         checked: !isToolDenied(menu, tool),
         disabled: menu.toolAccessMutationBlockedReason !== null,
         title: menu.toolAccessMutationBlockedReason,

@@ -733,3 +733,79 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
     ).toBeNull();
   });
 });
+
+it("keeps colliding tool labels distinct without replacing unique friendly labels", async () => {
+  const tools = docsTools(true);
+  const [dash, underscore] = tools.groups[0]!.tools;
+  dash!.mcpToolName = "search-items";
+  underscore!.mcpToolName = "search_items";
+  dash!.label = underscore!.label = "search_items";
+  tools.groups[0]!.tools.push(
+    { ...dash!, id: "docs_find", mcpToolName: "find", label: "search-items" },
+    { ...dash!, id: "docs_lookup", mcpToolName: "lookup", label: "find" },
+  );
+  tools.groups[0]!.tools.push({
+    ...dash!,
+    id: "docs_read",
+    mcpToolName: "read",
+    label: "Read documents",
+  });
+  const patch = vi.fn();
+  const menu = makeMenu({
+    open: true,
+    view: "connectors",
+    capabilityMenu: makeCapabilities({
+      mcpServers: [docsServer(true)],
+      toolsEffectiveResult: tools,
+      onOpenToolAccess: vi.fn(),
+      onPatchToolOverrides: patch,
+    }),
+  });
+  const view = mountSolid(() => <ChatComposerPlusMenu menu={menu} />);
+  await waitForSolid(() =>
+    expect(view.queryByRole("menuitem", { name: "docs", hidden: true })).not.toBeNull(),
+  );
+  view.getByRole("menuitem", { name: "docs", hidden: true }).click();
+  await waitForSolid(() =>
+    expect(
+      view.queryByRole("menuitemcheckbox", { name: "search-items", hidden: true }),
+    ).not.toBeNull(),
+  );
+  expect(view.getByRole("menuitemcheckbox", { name: "search_items", hidden: true })).not.toBeNull();
+  expect(view.getByRole("menuitemcheckbox", { name: "find", hidden: true })).not.toBeNull();
+  expect(view.getByRole("menuitemcheckbox", { name: "lookup", hidden: true })).not.toBeNull();
+  expect(
+    view.getByRole("menuitemcheckbox", { name: "Read documents", hidden: true }),
+  ).not.toBeNull();
+  view.getByRole("menuitemcheckbox", { name: "search-items", hidden: true }).click();
+  expect(patch).toHaveBeenCalledExactlyOnceWith({ mcpToolsDeny: { docs: ["search-items"] } });
+});
+
+it.each(["mcp-not-yet-connected", "mcp-not-yet-listed", "mcp-stale-catalog"])(
+  "shows the Gateway discovery guidance without a failure or Retry (%s)",
+  async (id) => {
+    const message = "MCP tools will appear here after the next agent run discovers them.";
+    const tools = {
+      ...docsTools(),
+      groups: [],
+      notices: [{ id, severity: "info" as const, message, servers: ["docs"] }],
+    };
+    const menu = makeMenu({
+      open: true,
+      view: "connectors",
+      capabilityMenu: makeCapabilities({
+        mcpServers: [docsServer(true)],
+        toolsEffectiveResult: tools,
+        onOpenToolAccess: vi.fn(),
+      }),
+    });
+    const view = mountSolid(() => <ChatComposerPlusMenu menu={menu} />);
+    await waitForSolid(() =>
+      expect(view.queryByRole("menuitem", { name: "docs", hidden: true })).not.toBeNull(),
+    );
+    view.getByRole("menuitem", { name: "docs", hidden: true }).click();
+    await waitForSolid(() => expect(view.getByRole("status").textContent).toBe(message));
+    expect(view.queryByRole("button", { name: "Retry", hidden: true })).toBeNull();
+    expect(view.container.textContent).not.toContain("The server didn’t respond.");
+  },
+);

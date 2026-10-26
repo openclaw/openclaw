@@ -391,7 +391,7 @@ suite.define(() => {
         .toEqual(["mcp-tool:list-issues", "mcp-tool:search-items", "mcp-tool:search_items"]);
       await expect
         .poll(() => toolLabels.allTextContents())
-        .toEqual(["list_issues", "search_items", "search_items"]);
+        .toEqual(["list_issues", "search-items", "search_items"]);
       await expect
         .poll(async () => [
           await toolLabels.nth(1).isVisible(),
@@ -420,7 +420,7 @@ suite.define(() => {
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
       await expect
         .poll(() => toolLabels.allTextContents())
-        .toEqual(["list_issues", "search_items", "search_items"]);
+        .toEqual(["list_issues", "search-items", "search_items"]);
 
       await toolRows.nth(1).click();
       await expect
@@ -483,7 +483,13 @@ suite.define(() => {
       await menu.locator('[data-value^="server:"]').first().click();
 
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await expect.poll(() => menu.getByText("The server didn’t respond.").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          menu
+            .getByText("MCP tools will appear here after an agent run discovers them.")
+            .isVisible(),
+        )
+        .toBe(true);
       await expect
         .poll(() => menu.getByText("No tools available for this MCP server.").count())
         .toBe(0);
@@ -491,7 +497,11 @@ suite.define(() => {
       await menu.locator('[data-value="server:github"]').click();
       await menu.locator('[data-value^="server:"]').nth(1).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await expect.poll(() => menu.getByText("The server didn’t respond.").count()).toBe(0);
+      await expect
+        .poll(() =>
+          menu.getByText("MCP tools will appear here after an agent run discovers them.").count(),
+        )
+        .toBe(0);
       await expect
         .poll(() => menu.getByText("No tools available for this MCP server.").isVisible())
         .toBe(true);
@@ -510,7 +520,7 @@ suite.define(() => {
           "tools.effective": undiscoveredMcpToolsResponse(),
         },
       });
-      const notice = "The server didn’t respond.";
+      const notice = "MCP tools will appear here after an agent run discovers them.";
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
@@ -530,7 +540,7 @@ suite.define(() => {
             .locator(".oc-menu-item__label")
             .allTextContents(),
         )
-        .toEqual(["list_issues", "search_items", "search_items"]);
+        .toEqual(["list_issues", "search-items", "search_items"]);
       await expect.poll(() => menu.getByText(notice).count()).toBe(0);
     });
   });
@@ -556,7 +566,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      const notice = menu.getByText("The server didn’t respond.");
+      const notice = menu.getByText(
+        "MCP tools will appear here after an agent run discovers them.",
+      );
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.locator('[data-value^="server:"]').click();
       await expect.poll(() => notice.isVisible()).toBe(true);
