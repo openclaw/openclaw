@@ -76,7 +76,7 @@ it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
       modelId: originalModel.id,
       model: originalModel,
     }) ?? originalModel;
-  let payload: unknown;
+  let serializedPayload = "";
   const stream = await (wrapModel(model, streamSimple) ?? streamSimple)(
     model,
     { messages: [{ role: "user", content: "Hi", timestamp: 1 }] },
@@ -85,12 +85,13 @@ it.each<[string, SimpleStreamOptions, Partial<Model>, string?]>([
       ...options,
       apiKey: "synthetic-unused-key",
       onPayload(value) {
-        payload = structuredClone(value);
+        serializedPayload = JSON.stringify(value);
         throw new Error("captured before request");
       },
     },
   );
   expect((await stream.result()).errorMessage).toBe("captured before request");
+  const payload: unknown = JSON.parse(serializedPayload);
   if (affinity === undefined) {
     expect(payload).not.toHaveProperty("prompt_cache_key");
   } else {

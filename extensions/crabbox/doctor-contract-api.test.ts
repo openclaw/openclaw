@@ -182,10 +182,9 @@ it.each(["changed", "write-failed", "metadata-conflict"])(
       await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
       return compareAndApply(...args);
     });
-    params.context = {
-      openPluginStateKeyedStore: (options) =>
-        options.namespace === "warm-images" ? store : openStore(options),
-    };
+    vi.spyOn(params.context, "openPluginStateKeyedStore").mockImplementation((options) =>
+      options.namespace === "warm-images" ? store : openStore(options),
+    );
     const result = await migrate();
     const retried = failure === "metadata-conflict";
     expect([result.changes.length, result.warnings.length]).toEqual(retried ? [1, 0] : [0, 1]);
