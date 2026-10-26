@@ -94,8 +94,8 @@ try {
     assert.equal(result.bytes.byteLength, payloadBytes);
     assert.equal(result.bytes[0], index);
     retained.push({
-      // oxlint-disable-next-line typescript/unbound-method -- Measure the receiver-free currency closure as the only strong caller root.
-      isCurrent: prepared.isCurrent,
+      // Retain the currency closure without retaining its prepared receiver.
+      isCurrent: prepared.isCurrent.bind(undefined),
       ref: new WeakRef(result.bytes),
       backingBytes: result.bytes.buffer.byteLength,
     });
