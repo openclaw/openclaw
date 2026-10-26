@@ -20,9 +20,11 @@ export function UsagePage(props: { routeData?: UsageRouteData }) {
 }
 
 export function UsagePageContent(props: { state: UsageProps; result: SessionsUsageResult | null }) {
-  // Reconcile the owner's snapshot so query drafts and read status cannot
-  // invalidate unchanged calendar, summary, and session data.
-  const state = createProjection(() => props.state);
+  // Session keys keep hydrated details from retargeting a shared roster row;
+  // other entities retain their existing id-based reconciliation.
+  const state = createProjection(() => props.state, null, {
+    key: (entry: { key?: unknown; id?: unknown }) => entry.key ?? entry.id,
+  });
   return (
     <UsagePageShell result={props.result}>
       <UsageView {...state} />
