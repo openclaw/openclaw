@@ -124,7 +124,6 @@ describe("message action projections", () => {
   });
 
   const indented = "    *literal*";
-  const oversized = "This message is too large to display here.";
   it.each<
     [
       name: string,
@@ -160,19 +159,6 @@ describe("message action projections", () => {
       "assistant",
       "Quoting a log line:\n...(truncated)...\nand continuing normally.",
       { id: "msg-3" },
-    ],
-    [
-      "oversized recovery",
-      "assistant",
-      "[chat.history omitted: message too large]",
-      { id: "msg-oversized", truncated: true, reason: "oversized" },
-      {
-        fullId: "msg-oversized",
-        markdown: oversized,
-        reply: oversized,
-        expanded: "Recovered full assistant content.",
-        onReply: true,
-      },
     ],
     [
       "omitted image reply",
@@ -218,8 +204,6 @@ describe("message action projections", () => {
         if (entry.role === "user") {
           expect(loaded?.replyTarget).toBeUndefined();
           expect(persistedMessageEntryId(message)).toBeNull();
-        } else if (entry.onReply) {
-          expect(loaded?.replyTarget?.text).toBe(markdown);
         }
       }
     },

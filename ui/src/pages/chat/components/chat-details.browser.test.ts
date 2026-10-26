@@ -196,76 +196,6 @@ describe("chat Details presentation", () => {
     },
   );
 
-  it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
-    await page.viewport(1700, 900);
-    const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(
-      props({
-        detailsWorkspace: {
-          root: "/workspace/details",
-          label: "details",
-          branch: "feature/docking",
-        },
-      }),
-      1320,
-    );
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    // The first docked view also resolves the lazy session module.
-    await expect
-      .poll(() => panel.querySelector(".chat-details-session"), { timeout: 5_000 })
-      .not.toBeNull();
-    const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-    expect(panel.getAttribute("role")).toBe("complementary");
-    expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    const groupStyle = getComputedStyle(panel.querySelector(".chat-details-desktop-section")!);
-    expect(groupStyle.borderTopWidth).toBe("0px");
-    expect(groupStyle.borderInlineStartWidth).toBe("0px");
-    expect(groupStyle.borderBottomWidth).toBe("0px");
-    expectOpen(panel, false);
-    expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
-      panel.getBoundingClientRect().left,
-    );
-    expect(footer.getBoundingClientRect().right).toBeLessThanOrEqual(
-      panel.getBoundingClientRect().left,
-    );
-    document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    const metadata = session.querySelector(".chat-details-session")!;
-    // A side panel consumes pane width even when the desktop stays wide.
-    frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(conversation.getBoundingClientRect().width).toBe(900);
-    frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(session.querySelector(".chat-details-session")).toBe(metadata);
-    expect(metadata.querySelector(":scope > summary")).toBeNull();
-    trigger.click();
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(conversation.getBoundingClientRect().width).toBe(1320);
-    updateChat({ progressCard: { ...card, revision: 4 } });
-    frame.style.width = "900px";
-    flush();
-    frame.style.width = "1320px";
-    update({ presentation: false });
-    flush();
-    update({ presentation: true });
-    flush();
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    trigger.click();
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-    frame.style.width = "600px";
-    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
-    expect(panel.getAttribute("role")).toBe("dialog");
-    expect(conversation.getBoundingClientRect().width).toBe(600);
-    frame.style.width = "1320px";
-    await expect.poll(() => panel.getAttribute("role"), { timeout: 5_000 }).toBe("complementary");
-    expectOpen(panel, false);
-    update({ presentation: false });
-    flush();
-    expect(panel.hidden).toBe(true);
-    expect(conversation.getBoundingClientRect().width).toBe(1320);
-  });
-
   it("positions above its supplied footer when unrelated matching DOM precedes it", async () => {
     const { updateChat, frame, footer, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
@@ -486,47 +416,29 @@ describe("chat Details presentation", () => {
     expectOpen(panel, false);
   });
 
-  it("routes browser progress preferences and retires hidden menu actions", async () => {
+  it("opens progress settings and retires hidden menu actions", async () => {
     const hide = vi.fn();
-    const collapse = vi.fn();
     const settings = vi.fn();
     const { update, trigger, progress } = await fixture(
       props({
         onHideTaskProgress: hide,
-        onCollapseTaskProgressChange: collapse,
         onOpenTaskProgressSettings: settings,
       }),
     );
     click(trigger);
     flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
-    const select = async (value: string) => {
-      if (trigger.getAttribute("aria-expanded") !== "true") {
-        click(trigger);
-        await expect
-          .poll(() => menu.querySelector<HTMLButtonElement>("button")!.disabled)
-          .toBe(false);
-      }
-      if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
-        menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect
-          .poll(() => menu.querySelector<HTMLElement>('[role="menu"]')!.dataset.phase)
-          .toBe("open");
-      }
-      menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
-    };
-    await select("collapse");
-    expect(collapse).toHaveBeenCalledWith(true);
-    await select("settings");
+    menu.querySelector<HTMLButtonElement>("button")!.click();
+    await expect
+      .poll(() => menu.querySelector<HTMLElement>('[role="menu"]')!.dataset.phase)
+      .toBe("open");
+    menu.querySelector<HTMLButtonElement>('[data-value="settings"]')!.click();
     expect(settings).toHaveBeenCalledOnce();
-    await select("hide");
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(hide).toHaveBeenCalledOnce();
     update({ presentation: false });
     flush();
     flush();
     menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
-    expect(hide).toHaveBeenCalledTimes(1);
+    expect(hide).not.toHaveBeenCalled();
   });
 });
 

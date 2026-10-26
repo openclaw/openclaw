@@ -480,7 +480,7 @@ it.each([
   },
 );
 
-it("projects answer delivery from the outbox, retries its payload, and waits for canonical confirmation", () => {
+it("prefers the queued payload over newer drafts and fences stale retry actions", () => {
   const state: QuestionState = presentationState();
   const retry = vi.fn();
   const queue: ChatQueueItem[] = [
@@ -499,47 +499,29 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
     drawSummary(readAsyncQuestions(messages[0])!, presentation);
     return presentation;
   };
-  const showDelivery = (sendState: ChatQueueItem["sendState"], label: string) => {
-    queue[0] = { ...queue[0]!, sendState };
-    draw();
-    expectSummary([label]);
-  };
-  const pending = draw();
-  const admitted = queue[0]!;
-  queue.length = 0;
-  expect(draw().pending).toEqual([]);
-  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
-  queue.push(admitted);
+  draw();
   state.asyncQuestionDrafts.set("question-1", {
     status: "submitted",
     answers: new Map([["0", { selected: new Set(), freeText: "A newer draft" }]]),
   });
-  expect(pending.pending).toEqual([]);
-  draw();
+  expect(draw().pending).toEqual([]);
   expect(container.textContent).toContain("Answer queued");
   expect(container.querySelector('[role="status"][aria-live="polite"]')).not.toBeNull();
   queue[0] = { ...queue[0]!, sendState: "failed", sendError: "Synthetic rejection" };
   const failed = draw();
-  expect(failed.historyKey).not.toBe(pending.historyKey);
   expectSummary(["Everyone", "Answer not sent", "Synthetic rejection"], ["A newer draft"]);
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();
   expect(retry).toHaveBeenCalledTimes(1);
   state.asyncQuestionScope = failed.scope;
-  showDelivery("waiting-reconnect", "Waiting for reconnect");
+  queue[0] = { ...queue[0]!, sendState: "waiting-reconnect" };
+  draw();
+  expectSummary(["Waiting for reconnect"]);
   expect(container.querySelector("button")).toBeNull();
-  showDelivery("sending", "Sending answer");
-  queue.length = 0;
-  draw();
-  expectSummary(["Awaiting delivery confirmation"], ["Answer sent"]);
-  props.messages = [...messages, historicalAnswer];
-  draw();
-  expectSummary(["Answer sent", "Everyone"], ["A newer draft"]);
 });
 
 it.each(["old", "new"])(

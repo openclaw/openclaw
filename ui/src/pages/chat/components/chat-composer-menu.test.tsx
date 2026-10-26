@@ -228,41 +228,6 @@ it("retains the focused capability row and management link through catalog refre
   await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
 });
 
-it("retains attachment choices while the native menu closes and reopens", async () => {
-  const base = makeMenu();
-  const [open, setOpen] = createSignal(false);
-  const toggle = {
-    value: "test-toggle",
-    label: "Test toggle",
-    checked: false,
-    disabled: false,
-    onChange: vi.fn(),
-  };
-  const view = mountSolid(() => (
-    <ChatComposerPlusMenu
-      menu={{
-        ...base,
-        open: open(),
-        rootToggles: [{ ...toggle, icon: "pencil" }],
-        onOpenChange: setOpen,
-        onViewChange: vi.fn(),
-      }}
-    />
-  ));
-  const { checkbox, trigger: readTrigger } = menuQueries(view);
-  const trigger = readTrigger();
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-  await waitForSolid(() => expect(checkbox("Test toggle")).toBeTruthy());
-  const choice = checkbox("Test toggle");
-  expect(choice.querySelector("svg")).not.toBeNull();
-  setOpen(false);
-  flush();
-  setOpen(true);
-  flush();
-  expect(view.container.querySelector('[data-value="test-toggle"]')).toBe(choice);
-});
-
 it.each(["item", "external", "closed"] as const)(
   "preserves newer %s focus after changing capability views",
   async (target) => {

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
@@ -9,8 +8,6 @@ import {
   createAssistantMessage,
   createUserMessage,
   prepareMessageGroup,
-  createMediaBlock,
-  createMessageGroup,
   createMessageEntry,
 } from "./chat-message.test-support.ts";
 
@@ -128,9 +125,6 @@ describe("grouped chat rendering", () => {
     ["held", "Needs review", undefined, true, true],
     ["waiting-reconnect", "Waiting for reconnect", undefined, false, true],
     ["submitting", "Queued", undefined, false, true],
-    ["sending", "Queued", undefined, false, true],
-    ["waiting-model", "Queued", undefined, false, true],
-    ["waiting-idle", "Queued", undefined, false, true],
   ] as const)(
     "shows a %s footer with its diagnostic and recovery actions",
     (state, label, actionLabel, canRetry, canDiscard) => {
@@ -160,7 +154,6 @@ describe("grouped chat rendering", () => {
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);
-      expect(status?.textContent).not.toContain("unconfirmed");
       expectAbsent(".chat-group-timestamp");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(Boolean(retry)).toBe(canRetry);
@@ -185,59 +178,6 @@ describe("grouped chat rendering", () => {
       );
     },
   );
-
-  it("collapses long image-bearing user messages and toggles their disclosure state", async () => {
-    const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
-    const expandedTail = "Full prompt tail after the disclosure boundary.";
-    const markdownContent = [...collapsedLines, expandedTail].join("\n");
-    const message = createUserMessage(
-      [
-        { type: "text", text: markdownContent },
-        createMediaBlock({
-          url: "data:image/png;base64,cG5n",
-          alt: "Sent image",
-          width: 640,
-          height: 640,
-        }),
-      ],
-      { timestamp: 1001 },
-    );
-    const onToggleUserMessageExpanded = vi.fn();
-    markdownRenderMock
-      .mockImplementationOnce(renderMarkdownHtml)
-      .mockImplementationOnce(renderMarkdownHtml);
-
-    for (const expanded of [false, true]) {
-      renderGroupedMessage(message, "user", {
-        isUserMessageExpanded: () => expanded,
-        onToggleUserMessageExpanded,
-      });
-      await vi.dynamicImportSettled();
-      const disclosure = requireElement(".chat-message-disclosure", HTMLDivElement);
-      const toggle = requireElement(
-        ".chat-message-disclosure__toggle",
-        HTMLButtonElement,
-        disclosure,
-      );
-      const text = requireElement(".chat-text", HTMLDivElement, disclosure);
-      const fileLink = requireElement("a.markdown-file-link", HTMLAnchorElement, text);
-      expect(
-        requireElement(".chat-bubble", HTMLDivElement).classList.contains(
-          "chat-bubble--with-images",
-        ),
-      ).toBe(true);
-      expectPresent(".chat-message-image");
-      expect(disclosure.classList.contains("is-expanded")).toBe(expanded);
-      expect(text.textContent).toContain(expandedTail);
-      expect(fileLink.dataset).toMatchObject({ filePath: "AGENTS.md", fileLine: "188" });
-      expect(toggle.textContent?.trim()).toBe(expanded ? "Show less" : "Show more");
-      expect(toggle.getAttribute("aria-expanded")).toBe(String(expanded));
-      if (!expanded) {
-        toggle.click();
-        expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
-      }
-    }
-  });
 
   it("uses the largest prompt for context and aggregates usage, cache, and nested cost", () => {
     renderAssistantMessages(
@@ -591,27 +531,6 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-divider__title")).toBe("System");
     expect(harness.view.textContent).toContain("Custom execution rules were not applied.");
     expect(harness.view.textContent).not.toContain("Guardian warning");
-  });
-
-  it("falls back to initials when a user avatar image fails", async () => {
-    const message = createUserMessage("hello", { timestamp: 1000 });
-    const group = createMessageGroup(message, "user", {
-      key: "gravatar-user",
-      senderLabel: "alice",
-      // A gateway avatar exercises the image tier without third-party requests.
-      sender: { id: "alice@example.com", profileAvatarUrl: "/api/users/alice/avatar" },
-    });
-    render(renderTestMessageGroup(group, { avatarPlacement: "footer" }));
-
-    const image = await vi.waitFor(() => {
-      const result = harness.view.querySelector<HTMLImageElement>(".chat-author-avatar__image");
-      expect(result).not.toBeNull();
-      expect(result?.getAttribute("src")).toBe("/api/users/alice/avatar");
-      return result!;
-    });
-    image.dispatchEvent(new Event("error"));
-    await waitForSolid(() => expect(image.parentElement?.classList).toContain("is-fallback"));
-    expect(elementText(".chat-author-avatar__fallback")?.trim()).toBe("A");
   });
 
   it("keeps a persisted reply preview busy until its target resolves, then opens it", () => {

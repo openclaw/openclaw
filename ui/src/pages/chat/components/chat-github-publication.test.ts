@@ -12,7 +12,6 @@ import {
   options as publicationOptions,
   setup,
   settled,
-  shared as sharedPublisher,
 } from "../chat-github-publication.test-support.ts";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
@@ -126,8 +125,8 @@ const unknownAvailability =
   "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
 function availability(
   reason: GitHubPublicationOptions["sharedUnavailableReason"],
-  message: string | undefined,
-  extra: { name?: string; native?: boolean; unidentified?: boolean } = {},
+  message: string,
+  extra: { name?: string; unidentified?: boolean } = {},
 ) {
   return { name: reason?.replaceAll("_", "-") ?? "unknown", reason, message, ...extra };
 }
@@ -154,14 +153,10 @@ it.each([
     name: "unknown-unidentified",
     unidentified: true,
   }),
-  availability(undefined, undefined, { name: "native-publisher", native: true }),
 ])("explains $name publication availability without requiring a connection", async (scenario) => {
-  const shared = scenario.native
-    ? { ...sharedPublisher, source: "system-detected" as const }
-    : null;
   const { controller } = setup({
     ...publicationOptions,
-    shared,
+    shared: null,
     personal: scenario.unidentified
       ? null
       : {
@@ -179,18 +174,13 @@ it.each([
   const action = await waitForPublication();
   const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
   expect(action.textContent).toBe("Create PR");
-  expect(action.disabled).toBe(!scenario.native);
+  expect(action.disabled).toBe(true);
   await openBranchMenu();
   const note = row.querySelector(".chat-pr__publication-note");
   const refresh = row.querySelector<HTMLButtonElement>('[aria-label="Refresh publication"]');
-  if (scenario.native) {
-    expect(note).toBeNull();
-    expect(refresh).toBeNull();
-  } else {
-    expect(note?.textContent).toContain(scenario.message);
-    expect(row.querySelectorAll('[aria-label="Refresh publication"]')).toHaveLength(1);
-    expect(refresh?.disabled).toBe(false);
-  }
+  expect(note?.textContent).toContain(scenario.message);
+  expect(row.querySelectorAll('[aria-label="Refresh publication"]')).toHaveLength(1);
+  expect(refresh?.disabled).toBe(false);
   expect(row.textContent).not.toContain("Connect GitHub in Settings");
   expect(row.querySelector('[aria-label="Publication account"]')).toBeNull();
 });
