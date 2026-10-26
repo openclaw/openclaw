@@ -12,16 +12,18 @@ import * as observeBridge from "./observe-bridge.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
-const cleanups: Array<() => Promise<void>> = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 const credentials = { password: "synthetic-password" };
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function createRequester() {
   const controller = new AbortController();
+  cleanups.push(() => controller.abort());
   return {
     controller,
     identity: { signal: controller.signal, isCurrent: () => !controller.signal.aborted },
@@ -49,10 +51,7 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
   client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
   client.connect.client.deviceFamily = "Linux";
   client.socket.send = (frame) => {
-    const event = JSON.parse(String(frame)) as {
-      event: string;
-      payload: { command: string };
-    };
+    const event = JSON.parse(String(frame)) as { event: string; payload: { command: string } };
     if (event.event !== "node.invoke.request") {
       return;
     }
@@ -133,6 +132,7 @@ it.each(["release", "stop"] as const)(
     const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
     const canceled = createDeferred();
     const finishInvocation = createDeferred();
+    cleanups.push(finishInvocation.resolve);
     const completionOrder: string[] = [];
     const invoke = fixture.nodeRegistry.invoke.bind(fixture.nodeRegistry);
     vi.spyOn(fixture.nodeRegistry, "invoke").mockImplementation(async (request) => {
@@ -144,32 +144,26 @@ it.each(["release", "stop"] as const)(
     });
     const { controller, identity } = createRequester();
     const owner = { ...identity, connId: "desktop-panel-client" };
-    try {
-      const observed = await fixture.observeAttached(owner);
-      const mintedRequester = mint.mock.calls[0]?.[0].requester;
-      expect(mintedRequester).toBe(owner);
-      expect(controller.signal.aborted).toBe(false);
-      const retiring = (
-        firstAction === "release"
-          ? observeBridge.releaseDesktopObserverToken(observed.wsPath, owner)
-          : fixture.stop()
-      ).then((result) => {
-        completionOrder.push(firstAction);
-        return result;
-      });
-      await canceled.promise;
-      const stopping = fixture.stop().then(() => {
-        completionOrder.push("stop");
-      });
-      await setImmediate();
-      finishInvocation.resolve();
-      expect(await retiring).toBe(firstAction === "release" ? true : undefined);
-      await stopping;
-      expect(completionOrder[0]).toBe("invocation");
-    } finally {
-      finishInvocation.resolve();
-      controller.abort();
-    }
+    const observed = await fixture.observeAttached(owner);
+    expect(mint.mock.calls[0]?.[0].requester).toBe(owner);
+    expect(controller.signal.aborted).toBe(false);
+    const retiring = (
+      firstAction === "release"
+        ? observeBridge.releaseDesktopObserverToken(observed.wsPath, owner)
+        : fixture.stop()
+    ).then((result) => {
+      completionOrder.push(firstAction);
+      return result;
+    });
+    await canceled.promise;
+    const stopping = fixture.stop().then(() => {
+      completionOrder.push("stop");
+    });
+    await setImmediate();
+    finishInvocation.resolve();
+    expect(await retiring).toBe(firstAction === "release" ? true : undefined);
+    await stopping;
+    expect(completionOrder[0]).toBe("invocation");
   },
 );
 
@@ -179,31 +173,26 @@ it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (cla
   const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
   const invoke = vi.spyOn(fixture.nodeRegistry, "invoke");
   const stream = new PassThrough();
-  try {
-    const observed = await fixture.observeAttached(undefined, stream);
-    const token = mint.mock.calls[0]![0];
-    if (claimed) {
-      if (token.attachment.kind !== "stream") {
-        throw new Error("expected a streamed node desktop");
-      }
-      expect(fixture.desktopRegistry.claimStream(token.sourceKey, token.attachment)).toBe(stream);
-      expect(
-        fixture.desktopRegistry.attachObserver(token.sourceKey, {
-          ownerEpoch: token.ownerEpoch,
-          control: false,
-          close: () => {},
-        }),
-      ).toBeDefined();
+  const observed = await fixture.observeAttached(undefined, stream);
+  const token = mint.mock.calls[0]![0];
+  if (claimed) {
+    if (token.attachment.kind !== "stream") {
+      throw new Error("expected a streamed node desktop");
     }
-    await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
-    expect(stream.destroyed).toBe(!claimed);
-    expect(fixture.desktopRegistry.hasActivity(token.sourceKey, token.ownerEpoch)).toBe(claimed);
-    if (!claimed) {
-      await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
-    }
-  } finally {
-    await fixture.stop();
-    vi.useRealTimers();
+    expect(fixture.desktopRegistry.claimStream(token.sourceKey, token.attachment)).toBe(stream);
+    expect(
+      fixture.desktopRegistry.attachObserver(token.sourceKey, {
+        ownerEpoch: token.ownerEpoch,
+        control: false,
+        close: () => {},
+      }),
+    ).toBeDefined();
+  }
+  await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
+  expect(stream.destroyed).toBe(!claimed);
+  expect(fixture.desktopRegistry.hasActivity(token.sourceKey, token.ownerEpoch)).toBe(claimed);
+  if (!claimed) {
+    await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
   }
 });
 
