@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
@@ -12,6 +13,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 
 it.each<[string, boolean]>([
+  ["timeout", true],
   ["session changed", true],
   ["upgraded", false],
   ["upgraded", true],
@@ -20,7 +22,7 @@ it.each<[string, boolean]>([
   ["rejected", true],
   ["disposed", true],
 ])("fences history behind stream admission: %s (startup: %s)", async (change, startup) => {
-  const retry = change === "session changed";
+  const retry = change === "timeout" || change === "session changed";
   const succeeds = retry || change === "upgraded";
   if (retry) {
     useFakeClock();
@@ -30,6 +32,7 @@ it.each<[string, boolean]>([
   const key = "agent:main:selected";
   const rpc = "sessions.messages.subscribe";
   const failure = "Live stream subscription failed";
+  const timeout = { method: rpc, timeoutMs: 30_000, requestSent: true };
   const requested = createDeferred();
   const admitted = createDeferred<{ key: string; agentId: string }>();
   const messages: unknown[] = retry ? [...completed] : [];
@@ -38,11 +41,13 @@ it.each<[string, boolean]>([
     if (++attempts > 1) {
       return { key, agentId: "main" };
     }
-    throw new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "session changed before sessions.messages.subscribe; retry the request",
-      details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED", method: rpc },
-    });
+    throw change === "session changed"
+      ? new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session changed before sessions.messages.subscribe; retry the request",
+          details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED", method: rpc },
+        })
+      : new GatewayProtocolRequestTimeoutError(timeout);
   };
   const state = makeChatHost({
     sessionKey: key,
@@ -60,6 +65,8 @@ it.each<[string, boolean]>([
       "chat.startup": () => ({ messages }),
     },
   });
+  state.chatError = null;
+  onTestFinished(() => state.sessions.dispose());
   const calls = (method: string) => requestCalls(state.request, method);
   if (change === "upgraded") {
     await state.sessions.subscribeMessages(key, { mode: "narration" });
@@ -77,6 +84,7 @@ it.each<[string, boolean]>([
   const method = startup ? "chat.startup" : "chat.history";
   if (retry) {
     await vi.advanceTimersByTimeAsync(0);
+    expect(calls("sessions.messages.unsubscribe")).toHaveLength(0);
     expect(state.chatMessages).toEqual(cached);
     expect(state).toMatchObject({ chatError: null, lastError: null });
   }
