@@ -30,9 +30,6 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   let assistantSource: AgentAssistantSourceReceipt | undefined;
   const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
-    const onError = (err: unknown) => {
-      ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-    };
     // Tool-result delivery must settle before later assistant or terminal events;
     // suppression flags would discard those events instead of preserving order.
     const run = () => {
@@ -42,7 +39,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         }
         return handler();
       } catch (err) {
-        onError(err);
+        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
         return undefined;
       }
     };
@@ -56,7 +53,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       try {
         await result;
       } catch (err) {
-        onError(err);
+        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
       } finally {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
