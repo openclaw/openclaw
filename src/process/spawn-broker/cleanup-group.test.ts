@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { drainCurrentBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 
@@ -21,14 +21,6 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: boundary.delay,
 }));
-const owner = { pid: process.pid, pgid: process.pid, state: "S" };
-const child = { pid: 123456789, pgid: process.pid, state: "S" };
-let kill: MockInstance<typeof process.kill>;
-beforeEach(() => {
-  boundary.identity.mockReturnValue(7);
-  boundary.dead.mockReturnValue(false);
-  kill = vi.spyOn(process, "kill").mockReturnValue(true);
-});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -38,6 +30,8 @@ afterEach(() => {
 it.skipIf(process.platform === "win32").each(["owned", "moved-group", "unknown-birth"] as const)(
   "signals only revalidated broker group members (%s)",
   async (mode) => {
+    const owner = { pid: process.pid, pgid: process.pid, state: "S" };
+    const child = { pid: 123456789, pgid: process.pid, state: "S" };
     boundary.census.mockReturnValueOnce([owner, child]);
     boundary.census.mockReturnValueOnce([
       owner,
@@ -45,6 +39,8 @@ it.skipIf(process.platform === "win32").each(["owned", "moved-group", "unknown-b
     ]);
     boundary.census.mockReturnValue([owner]);
     boundary.identity.mockReturnValue(mode === "unknown-birth" ? null : 7);
+    boundary.dead.mockReturnValue(false);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     if (mode === "unknown-birth") {
       await expect(drainCurrentBrokerProcessGroup()).rejects.toThrow(
         "cannot identify remaining group member",
@@ -62,6 +58,9 @@ it.skipIf(process.platform === "win32").each(["owned", "moved-group", "unknown-b
 
 it("retires delayed detached escalation when the captured leader is replaced", async () => {
   const pid = 123456789;
+  boundary.identity.mockReturnValue(7);
+  boundary.dead.mockReturnValue(false);
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
   const cleanup = terminateLostBrokerChild(pid, true, { pid, startedAt: 7 });
   expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[-pid, "SIGTERM"]]);
   boundary.identity.mockReturnValue(8);
@@ -76,7 +75,8 @@ it.each(["gone", "reused", "unavailable"] as const)(
   async (mode) => {
     const pid = 123456789;
     boundary.identity.mockReturnValue(mode === "unavailable" ? null : 8);
-    kill.mockImplementation((_pid, signal) => {
+    boundary.dead.mockReturnValue(false);
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
       if (signal === 0 && mode === "gone") {
         throw Object.assign(new Error("gone"), { code: "ESRCH" });
       }
@@ -103,7 +103,12 @@ it.skipIf(process.platform === "win32").each([-60_000, 60_000])(
           setTimeout(resolve, ms);
         }),
     );
+    const owner = { pid: process.pid, pgid: process.pid, state: "S" };
+    const child = { pid: 123456789, pgid: process.pid, state: "S" };
     boundary.census.mockReturnValue([owner, child]);
+    boundary.identity.mockReturnValue(7);
+    boundary.dead.mockReturnValue(false);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     const settled = drainCurrentBrokerProcessGroup();
     try {
       vi.setSystemTime(Date.now() + step);

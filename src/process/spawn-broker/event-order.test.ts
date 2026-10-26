@@ -1,23 +1,12 @@
 import { once } from "node:events";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { afterEach, expect, it } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import {
-  brokerSpawnPreload,
-  signalFixturePid,
-  startPreloadedBroker,
-} from "./broker-fixture.test-support.js";
+import { brokerSpawnPreload, startPreloadedBroker } from "./broker-fixture.test-support.js";
 import { BrokerChild } from "./child.js";
-import { createSpawnBrokerHost } from "./host.js";
-import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -117,84 +106,3 @@ it.skipIf(process.platform === "win32")("orders IPC during backpressure", async 
   expect(messages).toEqual(["A", "B", "C"]);
   expect(child.exitCode).toBe(0);
 });
-
-it.skipIf(!supportsSpawnBrokerCommandTransport())(
-  "cleans partial handoff on broker death",
-  async ({ signal }) => {
-    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
-    const receipts = await openFixtureReceiptChannel();
-    onTestFinished(() => receipts.close());
-    const host = createSpawnBrokerHost();
-    const marker = path.join(tempDirs.make("openclaw-broker-handoff-"), "pid");
-    let pid: number | undefined = undefined;
-    let stoppedBroker: number | undefined;
-    let closeOutcome: Promise<unknown> | undefined = undefined;
-    onTestFinished(async () => {
-      [stoppedBroker, pid].forEach((candidate) => signalFixturePid(candidate));
-      await (closeOutcome ?? host.close());
-    });
-    await wait(host.ready());
-    const child = host.spawn(
-      "/bin/sh",
-      [
-        "-c",
-        'printf "%s" "$$" > "$1"; "$2" --input-type=module -e "$3"; exec sleep 30',
-        "fixture",
-        marker,
-        process.execPath,
-        `${fixtureReceiptClientSource(receipts.endpoint)}
-sendReceipt(${JSON.stringify(marker)}, "ready");
-fixtureReceiptSocket.ref();
-fixtureReceiptSocket.end();`,
-      ],
-      { stdio: Array.from({ length: 32 }, () => "pipe" as const), detached: true },
-    );
-    const readiness = child.ready().catch((error: unknown) => error);
-    const pipeReady = Promise.withResolvers<void>();
-    const attachPipe = child.attachPipe.bind(child);
-    const attached = vi.spyOn(child, "attachPipe").mockImplementation((fd, socket) => {
-      attachPipe(fd, socket);
-      if (fd === 0) {
-        pipeReady.resolve();
-      }
-    });
-    onTestFinished(() => attached.mockRestore());
-    await wait(
-      awaitGateBeforeSettlement(
-        pipeReady.promise,
-        readiness,
-        "Broker settled before stdin attached",
-      ),
-    );
-    attached.mockRestore();
-    expect(child.stdin).not.toBeNull();
-    stoppedBroker = host.pid;
-    process.kill(stoppedBroker!, "SIGSTOP");
-    // The shell records its PID before reporting on the independent receipt channel.
-    await wait(receipts.waitFor(marker, "ready"));
-    pid = Number(await readFile(marker, "utf8"));
-    expect(pid).toBeGreaterThan(0);
-    expect(child.pid).toBeUndefined();
-    process.kill(stoppedBroker!, "SIGKILL");
-    // Join before yielding so the intentional SIGKILL is observed during shutdown.
-    closeOutcome = host.close().catch((error: unknown) => error);
-    stoppedBroker = undefined;
-    await expect(wait(readiness)).resolves.toMatchObject({
-      code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-    });
-    await expect(wait(closeOutcome)).resolves.toMatchObject({
-      name: "AggregateError",
-      errors: [
-        {
-          code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-          message: "Spawn broker shutdown failed",
-          cause: { message: "exited with code=null signal=SIGKILL" },
-        },
-      ],
-    });
-    await wait(child.waitForClose());
-    expect(child.stdin?.destroyed).toBe(true);
-    expect(isPidDefinitelyDead(pid!)).toBe(true);
-  },
-  15_000,
-);

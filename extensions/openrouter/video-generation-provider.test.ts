@@ -328,6 +328,7 @@ describe("openrouter video generation provider", () => {
           models: {
             providers: {
               openrouter: {
+                baseUrl: "https://openrouter.ai/api/v1",
                 models: [],
                 request: { auth: { mode: "authorization-bearer", token: "test-auth" } },
               },

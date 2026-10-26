@@ -12,6 +12,7 @@ function resourceFixture() {
   const failure = createDeferred<Error>();
   const ownerFailures: Error[] = [];
   const clientFailures: Error[] = [];
+  const responses: BrokerResourceResponse[] = [];
   let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
   let lease: ReturnType<typeof host.captureNativeResource> | undefined;
   return {
@@ -20,11 +21,7 @@ function resourceFixture() {
     failure: failure.promise,
     ownerFailures,
     clientFailures,
-    async close() {
-      await client?.close();
-      await lease?.close();
-      lease?.release();
-    },
+    responses,
     async attach(
       source: string,
       ownerPort = false,
@@ -35,11 +32,19 @@ function resourceFixture() {
         { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort },
         { message() {}, failed: (error) => ownerFailures.push(error) },
       );
-      client = attachBrokerNativeResource(lease.attachment, port1, observe, (error) => {
-        clientFailures.push(error);
-        failure.resolve(error);
-      });
-      return { client };
+      client = attachBrokerNativeResource(
+        lease.attachment,
+        port1,
+        (response) => {
+          responses.push(response);
+          observe(response);
+        },
+        (error) => {
+          clientFailures.push(error);
+          failure.resolve(error);
+        },
+      );
+      return { client, lease };
     },
     async [Symbol.asyncDispose]() {
       if (lease?.attachment.ownerPort) {
@@ -69,10 +74,12 @@ it.skipIf(process.platform === "win32").each([
   "closes failed resource %s initialization without losing its original error",
   async (stage, source) => {
     await using fixture = resourceFixture();
-    await fixture.attach(source);
+    const { client, lease } = await fixture.attach(source);
     const message = `synthetic resource ${stage} failure`;
     expect((await fixture.failure).message).toContain(message);
-    await fixture.close();
+    await client.close();
+    await lease.close();
+    lease.release();
     expect(fixture.ownerFailures.some((error) => error.message.includes(message))).toBe(true);
   },
   20_000,
@@ -83,7 +90,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     await using fixture = resourceFixture();
     const created = createDeferred();
-    const { client } = await fixture.attach(
+    const { client, lease } = await fixture.attach(
       `
       export function createNativeWorkerResource(target, _input, owner) {
         let permit;
@@ -106,7 +113,9 @@ it.skipIf(process.platform === "win32")(
     await created.promise;
     fixture.send("fail-operation");
     expect((await fixture.failure).message).toContain("synthetic resource operation failure");
-    await fixture.close();
+    await client.close();
+    await lease.close();
+    lease.release();
   },
   20_000,
 );
@@ -115,7 +124,7 @@ it.skipIf(process.platform === "win32")(
   "retains both disposal failures through the running native resource server and client",
   async () => {
     await using fixture = resourceFixture();
-    const { client } = await fixture.attach(`
+    const { client, lease } = await fixture.attach(`
       export function createNativeWorkerResource() {
         let attempts = 0;
         return { async close() {
@@ -129,8 +138,16 @@ it.skipIf(process.platform === "win32")(
     `);
     const failure: unknown = await client.close().catch((error: unknown) => error);
     const diagnostic = formatErrorMessage(failure, { redact: (text) => text });
-    await fixture.close();
+    await client.close();
+    await lease.close();
+    lease.release();
     expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
+    expect(fixture.responses).toMatchObject([
+      { type: "resource-ready", pid: fixture.host.pid },
+      { type: "resource-created" },
+      { type: "resource-close-error", requestId: 1 },
+      { type: "resource-closed", requestId: 2 },
+    ]);
     expect(fixture.host.pid).not.toBe(process.pid);
     expect(diagnostic).toContain("resource cleanup failed | resource operation failed");
   },

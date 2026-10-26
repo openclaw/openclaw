@@ -49,7 +49,14 @@ it("strips an audit-proven generated fallback row and rematerializes catalog cap
           nextHash: before.hash!,
           previousBytes: 100,
           nextBytes: Buffer.byteLength(before.raw ?? "", "utf-8"),
-          previousMetadata: await fs.stat(configPath),
+          previousMetadata: {
+            dev: null,
+            ino: null,
+            mode: null,
+            nlink: null,
+            uid: null,
+            gid: null,
+          },
           changedPathCount: 96,
           changedPaths: ["reasoning", "input", "cost", "maxTokens"].map(
             (field) => `models.providers.openai.models[0].${field}`,
