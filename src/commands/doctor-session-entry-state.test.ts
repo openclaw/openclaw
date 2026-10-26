@@ -198,7 +198,13 @@ it("backs up and repairs numeric-only legacy rows before canonical reads", async
 });
 
 it("backs up original rows and migrates pending delivery state before canonical reads", async () => {
-  const legacy = seedEntry("legacy", {
+  const originalRows: ReturnType<typeof seedEntry>[] = [];
+  const seed = (key: string, fields: Record<string, unknown>) => {
+    const row = seedEntry(key, fields);
+    originalRows.push(row);
+    return row;
+  };
+  const legacy = seed("legacy", {
     pendingFinalDelivery: true,
     pendingFinalDeliveryText: "saved reply",
     pendingFinalDeliveryCreatedAt: 40,
@@ -217,10 +223,10 @@ it("backs up original rows and migrates pending delivery state before canonical 
     transcriptPath: "retained-transcript-locator",
     archivedBy: { type: "human", id: "prior-archiver" },
   });
-  const transport = seedEntry("transport", { pendingFinalDelivery: true });
-  const cleared = seedEntry("cleared", { pendingFinalDelivery: false });
-  const nullLegacyField = seedEntry("null-legacy-field", { memoryFlushAt: null });
-  const routing = seedEntry("routing", {
+  const transport = seed("transport", { pendingFinalDelivery: true });
+  const cleared = seed("cleared", { pendingFinalDelivery: false });
+  const nullLegacyField = seed("null-legacy-field", { memoryFlushAt: null });
+  const routing = seed("routing", {
     delivery: undefined,
     provider: "slack",
     lastProvider: "telegram",
@@ -236,7 +242,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
     intentId: "current-intent",
     deliveries: [{ id: "delivery-current", state: "queued" }],
   };
-  const current = seedEntry("current", {
+  const current = seed("current", {
     pendingFinalDelivery: { ...canonicalPending, artifactHint: "preserve opaque state metadata" },
     pendingFinalDeliveryText: "superseded reply",
     fallbackNotice: { kind: "active", selectedModel: "current-a", activeModel: "current-b" },
@@ -246,7 +252,7 @@ it("backs up original rows and migrates pending delivery state before canonical 
     memoryFlushCompactionCount: 1,
     memoryFlushFailureCount: 2,
   });
-  const unchanged = seedEntry("unchanged", {
+  const unchanged = seed("unchanged", {
     status: "done",
     pendingFinalDelivery: canonicalPending,
     provider: "opaque provider",
@@ -258,9 +264,9 @@ it("backs up original rows and migrates pending delivery state before canonical 
     restartRecoveryBeforeAgentReplyState: "pending",
     restartRecoveryDeliveryReceiptState: "terminal-pending",
   };
-  const running = seedEntry("running", { status: "running", endedAt: 40, ...recoveryClaims });
-  const queued = seedEntry("queued", { status: "queued", endedAt: -1 });
-  const unclaimed = seedEntry("unclaimed", { status: "running", lifecycleRunId: "legacy-run" });
+  const running = seed("running", { status: "running", endedAt: 40, ...recoveryClaims });
+  const queued = seed("queued", { status: "queued", endedAt: -1 });
+  const unclaimed = seed("unclaimed", { status: "running", lifecycleRunId: "legacy-run" });
   const legacyYield = {
     status: "running",
     abortedLastRun: false,
@@ -269,20 +275,20 @@ it("backs up original rows and migrates pending delivery state before canonical 
     endedAt: 20,
     runtimeMs: 10,
   };
-  const yielded = seedEntry("yielded", legacyYield);
-  const admittedRecovery = seedEntry("admitted-recovery", {
+  const yielded = seed("yielded", legacyYield);
+  const admittedRecovery = seed("admitted-recovery", {
     ...legacyYield,
     lifecycleRunId: "resumed-run",
     activeWriterRunId: "resumed-run",
     mainRestartRecovery: { cycleId: "existing-cycle", revision: 3, chargedAttempts: 1 },
     restartRecoveryRuns: [{ runId: "resumed-run", lifecycleGeneration: "previous-gateway" }],
   });
-  const newerWriter = seedEntry("newer-writer", { ...legacyYield, activeWriterRunId: "new-run" });
-  const yieldedTerminal = seedEntry("yielded-terminal", {
+  const newerWriter = seed("newer-writer", { ...legacyYield, activeWriterRunId: "new-run" });
+  const yieldedTerminal = seed("yielded-terminal", {
     ...legacyYield,
     restartRecoveryTerminalRunIds: ["yielded-run"],
   });
-  const yieldedDelivered = seedEntry("yielded-delivered", {
+  const yieldedDelivered = seed("yielded-delivered", {
     ...legacyYield,
     restartRecoveryTerminalDeliveryEvidence: [
       { runId: "source-run", transcriptRunId: "yielded-run", captured: true },
@@ -296,14 +302,14 @@ it("backs up original rows and migrates pending delivery state before canonical 
     delivery: { kind: "internal" },
     restartRecoveryTerminalRunIds: ["previous-completed-run", "interrupted-writer"],
   };
-  const retiredSource = seedEntry("retired-source", interruptedWriter);
+  const retiredSource = seed("retired-source", interruptedWriter);
   const deliveredSources = ["runId", "transcriptRunId"].map((field) =>
-    seedEntry(`delivered-${field}`, {
+    seed(`delivered-${field}`, {
       ...interruptedWriter,
       restartRecoveryTerminalDeliveryEvidence: [{ [field]: "interrupted-writer" }],
     }),
   );
-  const canonicalSource = seedEntry("canonical-source", {
+  const canonicalSource = seed("canonical-source", {
     ...interruptedWriter,
     status: "interrupted",
   });
@@ -398,10 +404,6 @@ it("backs up original rows and migrates pending delivery state before canonical 
   expect(cleared.read()).not.toHaveProperty("pendingFinalDelivery");
   expect(nullLegacyField.read()).not.toHaveProperty("memoryFlushAt");
   expect(unchanged.readRaw()).toBe(unchanged.raw);
-  expect(current.read().pendingFinalDelivery).toEqual({
-    ...canonicalPending,
-    artifactHint: "preserve opaque state metadata",
-  });
   expect(legacy.readRaw()).not.toContain("pendingFinalDeliveryText");
   expect(legacy.read().pluginExtensions).toEqual({
     example: { draft: { text: "Saved operator draft", revisions: [2, 3] } },
@@ -434,26 +436,17 @@ it("backs up original rows and migrates pending delivery state before canonical 
   expect(loadExactSessionEntryReadOnly(transport.scope)?.entry.pendingFinalDelivery).toEqual(
     transportOnly,
   );
-  expect(loadExactSessionEntryReadOnly(current.scope)?.entry).toMatchObject({
-    pendingFinalDelivery: canonicalPending,
+  const currentEntry = loadExactSessionEntryReadOnly(current.scope)?.entry;
+  expect(currentEntry?.pendingFinalDelivery).toEqual({
+    ...canonicalPending,
+    artifactHint: "preserve opaque state metadata",
+  });
+  expect(currentEntry).toMatchObject({
     fallbackNotice: { kind: "active", selectedModel: "current-a", activeModel: "current-b" },
     memoryFlush: { kind: "succeeded", compactionCount: 7 },
   });
   using backup = readBackup(legacy.databasePath);
-  for (const legacyRun of [
-    legacy,
-    routing,
-    running,
-    queued,
-    unclaimed,
-    retiredSource,
-    yielded,
-    admittedRecovery,
-    newerWriter,
-    yieldedTerminal,
-    yieldedDelivered,
-    ...deliveredSources,
-  ]) {
+  for (const legacyRun of originalRows) {
     expect(legacyRun.readStored(backup)).toBe(legacyRun.raw);
   }
   expect(

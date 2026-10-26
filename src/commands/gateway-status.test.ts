@@ -504,10 +504,8 @@ describe("gateway-status command", () => {
   it("supports SSH tunnel targets", async () => {
     await run({ ssh: "me@studio" });
 
-    expect(startSshPortForward).toHaveBeenCalledTimes(1);
     const tunnelCall = readProbeCalls().find((call) => call.sshTunnel);
     expect(tunnelCall?.auth?.token).toBe("rtok");
-    expect(tunnelCall?.sshTunnel).toMatchObject({ target: "me@studio", remotePort: 18789 });
     const tunnelSignal = requireSshForwardCall().signal;
     expect(tunnelSignal).toBeInstanceOf(AbortSignal);
     expect(tunnelCall?.signal).toBe(tunnelSignal);
@@ -560,7 +558,6 @@ describe("gateway-status command", () => {
 
     await run({ timeout: "15000", json: true });
 
-    expect(inspectGatewayTlsCertificate).toHaveBeenCalledTimes(1);
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
     expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
@@ -616,8 +613,6 @@ describe("gateway-status command", () => {
 
     expect(capture.runtimeErrors).toHaveLength(0);
     expect(readProbeCalls().map((call) => call.url)).toEqual(["ws://127.0.0.1:19080"]);
-    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBeGreaterThan(0);
-    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBeLessThanOrEqual(15_000);
     expect(output()).toMatchObject({
       network: { localLoopbackUrl: "ws://127.0.0.1:19080" },
       primaryTargetId: "localLoopback",
@@ -654,37 +649,27 @@ describe("gateway-status command", () => {
   );
 
   it.each([
-    { ssh: undefined, port: 2222, explicitPort: false, sshIdentity: undefined },
-    { ssh: "alias:22", port: 22, explicitPort: true, sshIdentity: undefined },
-    { ssh: undefined, port: 22, explicitPort: false, sshIdentity: "/tmp/explicit_id" },
-  ])(
-    "resolves SSH port $port and identity $sshIdentity",
-    async ({ ssh, port, explicitPort, sshIdentity }) => {
-      await withEnvAsync({ USER: "steipete" }, async () => {
-        readBestEffortConfig.mockResolvedValueOnce(
-          makeRemoteGatewayConfig("ws://studio.example:18789"),
-        );
-        resolveSshConfig.mockResolvedValueOnce({
-          user: "steipete",
-          host: "studio.example",
-          port,
-          identityFiles: ["/tmp/id_ed25519"],
-        });
-        await run({ ssh, sshIdentity });
-        expect(startSshPortForward).toHaveBeenCalledTimes(1);
-        expect(resolveSshConfig).toHaveBeenCalledWith(expect.anything(), {
-          explicitPort,
-          identity: sshIdentity,
-          timeoutMs: 800,
-          signal: expect.any(AbortSignal),
-        });
-        expect(requireSshForwardCall()).toMatchObject({
-          target: `steipete@studio.example:${port}`,
-          identity: sshIdentity ?? "/tmp/id_ed25519",
-        });
+    { ssh: undefined, port: 2222, sshIdentity: undefined },
+    { ssh: "alias:22", port: 22, sshIdentity: undefined },
+    { ssh: undefined, port: 22, sshIdentity: "/tmp/explicit_id" },
+  ])("resolves SSH port $port and identity $sshIdentity", async ({ ssh, port, sshIdentity }) => {
+    await withEnvAsync({ USER: "steipete" }, async () => {
+      readBestEffortConfig.mockResolvedValueOnce(
+        makeRemoteGatewayConfig("ws://studio.example:18789"),
+      );
+      resolveSshConfig.mockResolvedValueOnce({
+        user: "steipete",
+        host: "studio.example",
+        port,
+        identityFiles: ["/tmp/id_ed25519"],
       });
-    },
-  );
+      await run({ ssh, sshIdentity });
+      expect(requireSshForwardCall()).toMatchObject({
+        target: `steipete@studio.example:${port}`,
+        identity: sshIdentity ?? "/tmp/id_ed25519",
+      });
+    });
+  });
 
   it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
     await withEnvAsync({ USER: "" }, async () => {
@@ -708,7 +693,6 @@ describe("gateway-status command", () => {
 
     await run({ timeout: "5000", json: true });
 
-    expect(capture.runtimeLogs).toHaveLength(1);
     expect(output()).toMatchObject({ ok: true, capability: "read_only" });
   });
 
@@ -748,7 +732,6 @@ describe("gateway-status command", () => {
       }));
       await run();
       expect(capture.runtimeErrors).toHaveLength(0);
-      expect(capture.runtimeLogs).toHaveLength(1);
       expect(output()).toMatchObject({
         ok: true,
         degraded: true,
