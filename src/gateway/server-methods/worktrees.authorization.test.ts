@@ -11,36 +11,7 @@ import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { worktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-});
-
-const worktreeRecord = (repoRoot: string) =>
-  makeWorktreeRecord(repoRoot, "worktree-id", { ownerKind: "manual" });
-
-async function dispatchCreate(params: { repoRoot: string; scopes: string[]; workspace: string }) {
-  const create = vi.fn(async () => worktreeRecord(params.repoRoot));
-  using _ = vi.spyOn(managedWorktrees, "create").mockImplementation(create);
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: gatewayRequest("req-worktree-create", "worktrees.create", { repoRoot: params.repoRoot }),
-    respond,
-    client: {
-      connId: "conn-worktree-create",
-      connect: gatewayConnect(params.scopes, { id: "test", version: "1", mode: "test" }),
-    } as Parameters<typeof handleGatewayRequest>[0]["client"],
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => ({
-        agents: { entries: { main: { workspace: params.workspace } } },
-      }),
-      logGateway: { warn: vi.fn() },
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-    extraHandlers: worktreesHandlers,
-  });
-  return { create, respond };
-}
+afterEach(() => closeOpenClawStateDatabaseAsync());
 
 it.each([
   { inside: true, admin: false, allowed: true },
@@ -52,33 +23,39 @@ it.each([
   const repoRoot = inside ? path.join(workspace, "project") : path.join(root, "outside");
   await fs.mkdir(repoRoot, { recursive: true });
   await fs.mkdir(workspace, { recursive: true });
-  const { create, respond } = await dispatchCreate({
-    repoRoot,
-    scopes: [admin ? "operator.admin" : "operator.write"],
-    workspace,
+  const record = makeWorktreeRecord(repoRoot, "worktree-id", { ownerKind: "manual" });
+  using create = vi.spyOn(managedWorktrees, "create").mockResolvedValue(record);
+  const respond = vi.fn();
+  await handleGatewayRequest({
+    req: gatewayRequest("req-worktree-create", "worktrees.create", { repoRoot }),
+    respond,
+    client: {
+      connId: "conn-worktree-create",
+      connect: gatewayConnect([admin ? "operator.admin" : "operator.write"]),
+    } as Parameters<typeof handleGatewayRequest>[0]["client"],
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig: () => ({ agents: { entries: { main: { workspace } } } }),
+      logGateway: { warn: vi.fn() },
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+    extraHandlers: worktreesHandlers,
   });
   if (allowed) {
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot,
-        runSetupScript: admin,
-      }),
+      expect.objectContaining({ repoRoot, runSetupScript: admin }),
     );
-    expect(respond).toHaveBeenCalledWith(true, worktreeRecord(repoRoot), undefined);
+    expect(respond).toHaveBeenCalledWith(true, record, undefined);
   } else {
     expect(create).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        message: "missing scope: operator.admin",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
-      }),
-    );
+    const error = expect.objectContaining({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
+    expect(respond).toHaveBeenCalledWith(false, undefined, error);
   }
 });

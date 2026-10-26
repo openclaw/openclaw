@@ -14,11 +14,11 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 export const sessionKey = "agent:main:main";
 
-export function upsertDefaultSuggestionSession(
+export const upsertDefaultSuggestionSession = (
   patch: Parameters<typeof upsertSessionEntryCore>[1] = {},
   key = sessionKey,
-) {
-  return upsertSessionEntryCore(
+) =>
+  upsertSessionEntryCore(
     { agentId: "main", sessionKey: key },
     {
       ...profileSessionEntry("session-main", 1, "owner"),
@@ -26,17 +26,15 @@ export function upsertDefaultSuggestionSession(
       ...patch,
     },
   );
-}
 
-export function withSuggestionState(
+export const withSuggestionState = (
   run: Parameters<typeof withOpenClawTestState>[1],
   options: { prepareProfileCatalog?: boolean } = {},
-) {
-  return withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
+) =>
+  withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
     setRuntimeConfigSnapshot({});
     await run(state);
   });
-}
 
 export function client(profileId: string, displayName: string, admin = false): GatewayClient {
   const result = identifiedClient(profileId);
@@ -48,17 +46,16 @@ export function client(profileId: string, displayName: string, admin = false): G
   return result;
 }
 
-export function context(
+export const context = (
   broadcast = vi.fn(),
   runtimeConfig: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {},
-): GatewayRequestContext {
-  return {
+): GatewayRequestContext =>
+  ({
     getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
     logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
+  }) as unknown as GatewayRequestContext;
 
 export async function call(
   method: `session.suggestions.${"add" | "list" | "resolve"}` | "session.typing",

@@ -7,8 +7,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { createTestChannelManager } from "../server-channels.test-support.js";
-import { createGatewayRequestContext } from "../server-request-context.js";
-import { makeContextParams } from "../server-request-context.test-support.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { webHandlers } from "./web.js";
 
 const ACCOUNTS = ["account-a", "account-b"];
@@ -19,17 +18,12 @@ it.each([true, false])(
   async (connected) => {
     const live = new Set<string>();
     const starts = new Map(ACCOUNTS.map((id) => [id, createDeferredCore()]));
-    const loginAccounts: Array<string | undefined> = [];
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: "whatsapp",
-        label: "WhatsApp",
         config: {
           listAccountIds: () => ACCOUNTS,
-          resolveAccount: (_cfg, accountId) => ({
-            accountId: accountId ?? "account-a",
-            enabled: true,
-          }),
+          resolveAccount: () => ({ enabled: true }),
         },
       }),
       gatewayMethods: ["web.login.start", "web.login.wait"],
@@ -43,11 +37,11 @@ it.each([true, false])(
           live.delete(accountId);
         },
         loginWithQrStart: async ({ accountId }) => {
-          loginAccounts.push(accountId);
+          expect(accountId).toBe("account-b");
           return { message: "scan", qrDataUrl: "data:image/png;base64,QQ==" };
         },
         loginWithQrWait: async ({ accountId }) => {
-          loginAccounts.push(accountId);
+          expect(accountId).toBe("account-b");
           return { connected, message: connected ? "linked" : "pairing timed out" };
         },
       },
@@ -60,17 +54,14 @@ it.each([true, false])(
       getRuntimeConfig: () => cfg,
       channelIds: ["whatsapp"],
     });
-    const context = createGatewayRequestContext(
-      makeContextParams({
-        stopChannel: (channel, accountId) =>
-          manager.stopChannel(channel, accountId, { manual: true }),
-        startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
-        getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
-      }),
-    );
-    context.getRuntimeConfig = () => cfg;
-    // Direct handler calls do not carry a request-scoped method registry.
-    delete context.getGatewayMethodRegistry;
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
+      stopChannel: (channel, accountId) =>
+        manager.stopChannel(channel, accountId, { manual: true }),
+      startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
+      getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
+    });
     const invoke = async (method: "web.login.start" | "web.login.wait") => {
       const params = { accountId: "account-b" };
       const respond = vi.fn();
@@ -100,7 +91,6 @@ it.each([true, false])(
         await restored.promise;
       }
       expect([...live].toSorted()).toEqual(connected ? ACCOUNTS : ["account-a"]);
-      expect(loginAccounts).toEqual(["account-b", "account-b"]);
     } finally {
       await manager.stopChannel("whatsapp");
     }
