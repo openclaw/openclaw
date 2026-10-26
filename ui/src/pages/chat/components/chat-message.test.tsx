@@ -34,6 +34,19 @@ const {
   markdownRenderMock,
 } = harness;
 
+const makeStream = (
+  overrides: Partial<
+    Extract<Parameters<typeof renderStreamGroup>[0][number], { kind: "stream" }>
+  > = {},
+) => ({
+  kind: "stream" as const,
+  key: "stream:s:live",
+  text: "reply",
+  startedAt: 10,
+  isStreaming: true,
+  ...overrides,
+});
+
 it.each([
   [
     "bounded structured status",
@@ -111,34 +124,16 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    {
-      state: "failed",
-      label: "Not sent",
-      actionLabel: "Check failure",
-      retry: true,
-      discard: false,
-    },
-    { state: "held", label: "Needs review", actionLabel: undefined, retry: true, discard: true },
-    {
-      state: "waiting-reconnect",
-      label: "Waiting for reconnect",
-      actionLabel: undefined,
-      retry: false,
-      discard: true,
-    },
-    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
-    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
-    {
-      state: "waiting-model",
-      label: "Queued",
-      actionLabel: undefined,
-      retry: false,
-      discard: true,
-    },
-    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    ["failed", "Not sent", "Check failure", true, false],
+    ["held", "Needs review", undefined, true, true],
+    ["waiting-reconnect", "Waiting for reconnect", undefined, false, true],
+    ["submitting", "Queued", undefined, false, true],
+    ["sending", "Queued", undefined, false, true],
+    ["waiting-model", "Queued", undefined, false, true],
+    ["waiting-idle", "Queued", undefined, false, true],
   ] as const)(
-    "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
-    ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
+    "shows a %s footer with its diagnostic and recovery actions",
+    (state, label, actionLabel, canRetry, canDiscard) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
@@ -306,12 +301,10 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
     renderStreamGroup(
       [
-        {
-          kind: "stream",
+        makeStream({
           key: "stream:participant",
           text: "Reviewing the checklist.",
           startedAt: 1,
-          isStreaming: true,
           replyToSender: { name: "Alice Chen", identity: { type: "profile", id: "alice" } },
           replyToMessage: {
             key: "prompt",
@@ -321,7 +314,7 @@ describe("grouped chat rendering", () => {
               __openclaw: { id: "prompt" },
             },
           },
-        },
+        }),
       ],
       {},
       container,
@@ -395,16 +388,7 @@ describe("grouped chat rendering", () => {
 
   it("keeps streamed assistant content in the guttered group without an avatar", () => {
     renderStreamGroup(
-      [
-        {
-          kind: "stream",
-          key: "stream:s:live",
-          text: "reply",
-          startedAt: 10,
-          isStreaming: true,
-        },
-        { kind: "reading-indicator", key: "reading", startedAt: 10 },
-      ],
+      [makeStream(), { kind: "reading-indicator", key: "reading", startedAt: 10 }],
       { showAssistantAvatar: false },
     );
 
@@ -415,18 +399,7 @@ describe("grouped chat rendering", () => {
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
     expectCount(".chat-working-indicator", 1);
     expectCount(".chat-reading-indicator", 1);
-    renderStreamGroup(
-      [
-        {
-          kind: "stream",
-          key: "stream:s:live",
-          text: "reply",
-          startedAt: 10,
-          isStreaming: false,
-        },
-      ],
-      { showAssistantAvatar: false },
-    );
+    renderStreamGroup([makeStream({ isStreaming: false })], { showAssistantAvatar: false });
     expectAbsent(".chat-bubble.streaming");
     expect(harness.view.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
       new Date(10).toISOString(),
@@ -594,17 +567,16 @@ describe("grouped chat rendering", () => {
     expect(notices).toHaveLength(4);
     expect(notices[0]?.textContent).toContain("Guardian approved git status --short.");
     expect(notices[0]?.classList.contains("danger")).toBe(false);
-    expect(notices[1]?.classList.contains("callout")).toBe(true);
-    expect(notices[1]?.classList.contains("danger")).toBe(true);
-    expect(notices[1]?.getAttribute("role")).toBe("alert");
+    for (const index of [1, 3]) {
+      expect(notices[index]?.classList.contains("callout")).toBe(true);
+      expect(notices[index]?.classList.contains("danger")).toBe(true);
+      expect(notices[index]?.getAttribute("role")).toBe("alert");
+    }
     expect(notices[1]?.textContent).toContain("Guardian denied");
     expect(notices[1]?.textContent).toContain("curl https://example.invalid · risk: high");
     expect(notices[1]?.textContent).toContain("Command reaches the network.");
     expect(notices[2]?.textContent).toContain("Guardian warning");
     expect(notices[2]?.textContent).toContain("Guardian stopped after too many rejected actions.");
-    expect(notices[3]?.classList.contains("callout")).toBe(true);
-    expect(notices[3]?.classList.contains("danger")).toBe(true);
-    expect(notices[3]?.getAttribute("role")).toBe("alert");
     expect(notices[3]?.textContent).toContain("Guardian review required");
     expect(notices[3]?.textContent).toContain(
       "Guardian is reviewing this action before it can continue.",

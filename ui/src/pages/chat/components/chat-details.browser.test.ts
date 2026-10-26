@@ -117,6 +117,18 @@ async function fixture(
     trigger: element.querySelector<HTMLButtonElement>(".chat-details-toggle")!,
   };
 }
+function click(element: HTMLElement) {
+  element.click();
+  flush();
+}
+function escape() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+  flush();
+}
+const expectOpen = (panel: Element, open: boolean) =>
+  expect(panel.matches(":popover-open")).toBe(open);
 async function toggle(details: HTMLDetailsElement) {
   const changed = new Promise<void>((resolve) => {
     details.addEventListener("toggle", () => resolve(), { once: true });
@@ -215,7 +227,7 @@ describe("chat Details presentation", () => {
     expect(groupStyle.borderTopWidth).toBe("0px");
     expect(groupStyle.borderInlineStartWidth).toBe("0px");
     expect(groupStyle.borderBottomWidth).toBe("0px");
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
       panel.getBoundingClientRect().left,
     );
@@ -254,7 +266,7 @@ describe("chat Details presentation", () => {
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";
     await expect.poll(() => panel.getAttribute("role"), { timeout: 5_000 }).toBe("complementary");
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     update({ presentation: false });
     flush();
     expect(panel.hidden).toBe(true);
@@ -267,9 +279,8 @@ describe("chat Details presentation", () => {
     unrelatedFooter.className = "chat-footer";
     unrelatedFooter.style.cssText = "position:absolute;top:0;height:20px";
     frame.prepend(unrelatedFooter);
-    trigger.click();
-    flush();
-    expect(panel.matches(":popover-open")).toBe(true);
+    click(trigger);
+    expectOpen(panel, true);
     expect(Number.parseFloat(panel.style.maxHeight)).toBeCloseTo(
       footer.getBoundingClientRect().top - 8 - Number.parseFloat(panel.style.top),
     );
@@ -353,22 +364,18 @@ describe("chat Details presentation", () => {
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
     const { updateChat, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     expect(panel.querySelector("openclaw-chat-details-session")).toBeNull();
     updateChat({ progressCard: { ...card, revision: 2 } });
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
-    trigger.click();
-    flush();
-    expect(panel.matches(":popover-open")).toBe(true);
+    expectOpen(panel, false);
+    click(trigger);
+    expectOpen(panel, true);
     await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    escape();
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(trigger);
   });
 
@@ -383,28 +390,25 @@ describe("chat Details presentation", () => {
     expect(trigger.hidden).toBe(true);
     open(source);
     flush();
-    expect(panel.matches(":popover-open")).toBe(true);
+    expectOpen(panel, true);
     expect(panel.getBoundingClientRect().width).toBe(364);
     expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
     await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    escape();
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(source);
     open(source);
     flush();
     panel.querySelector<HTMLButtonElement>(".chat-details__toolbar button")!.click();
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(source);
     update({ presentation: false });
     flush();
     open(source);
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
   });
 
   it("opens fullscreen Details within the visible pane and returns focus to its external trigger", async () => {
@@ -415,10 +419,10 @@ describe("chat Details presentation", () => {
     pane.prepend(source);
     expect(frame.checkVisibility()).toBe(false);
     expect(trigger.hidden).toBe(true);
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     open(source);
     flush();
-    expect(panel.matches(":popover-open")).toBe(true);
+    expectOpen(panel, true);
     expect(panel.checkVisibility()).toBe(true);
     expect(frame.contains(panel)).toBe(false);
     expect(pane.contains(panel)).toBe(true);
@@ -435,49 +439,40 @@ describe("chat Details presentation", () => {
     expect(close.checkVisibility()).toBe(true);
     expect(close.getAttribute("aria-label")).toBe("Close details");
     close.focus();
-    close.click();
-    flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    click(close);
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(source);
     open(source);
     flush();
     close.focus();
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    escape();
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(source);
   });
 
   it("keeps its child menu open through chat updates and closes Details after it closes", async () => {
     const { trigger, panel, progress, updateChat } = await fixture();
-    trigger.click();
-    flush();
+    click(trigger);
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    expectOpen(menuSurface, true);
     updateChat({ messages: [] });
     flush();
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    expectOpen(menuSurface, true);
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect
       .poll(() => menu.querySelector("button")!.getAttribute("aria-expanded"))
       .toBe("false");
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    escape();
+    expectOpen(panel, false);
     expect(document.activeElement).toBe(trigger);
   });
 
   it("keeps metadata visible while progress retains its collapse across revisions", async () => {
     const { updateChat, trigger, panel, progress } = await fixture();
-    trigger.click();
-    flush();
+    click(trigger);
     await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     await session.updateComplete;
@@ -505,8 +500,7 @@ describe("chat Details presentation", () => {
 
   it("constrains the popover to its conversation and above the composer after narrowing", async () => {
     const { frame, footer, trigger, panel } = await fixture();
-    trigger.click();
-    flush();
+    click(trigger);
     for (const width of [600, 300]) {
       frame.style.width = width + "px";
       window.dispatchEvent(new Event("resize"));
@@ -526,19 +520,17 @@ describe("chat Details presentation", () => {
 
   it("retires the open surface on hidden presentation and session changes", async () => {
     const { update, updateChat, trigger, panel } = await fixture();
-    trigger.click();
-    flush();
+    click(trigger);
     update({ presentation: false });
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
     update({ presentation: true });
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
-    trigger.click();
-    flush();
+    expectOpen(panel, false);
+    click(trigger);
     updateChat({ sessionKey: "agent:main:other", selectedSession: undefined });
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
+    expectOpen(panel, false);
   });
 
   it("keeps global browser hide, lifetime dismiss, saved clear and refresh as distinct actions", async () => {
@@ -558,19 +550,17 @@ describe("chat Details presentation", () => {
         progressCardRefresh: { onRefresh: refresh },
       }),
     );
-    trigger.click();
-    flush();
+    click(trigger);
     flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    expectOpen(menuSurface, true);
     expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
-        trigger.click();
-        flush();
+        click(trigger);
         await expect
           .poll(() => menu.querySelector<HTMLButtonElement>("button")!.disabled)
           .toBe(false);
@@ -644,12 +634,10 @@ it("keeps Environment changes readable across disclosure toggles and omits empty
   expect(openChanges).toHaveBeenCalledOnce();
   view.updateChat({ onOpenSessionDiff: currentOpenChanges });
   flush();
-  heading.click();
-  flush();
+  click(heading);
   expect(heading.getAttribute("aria-expanded")).toBe("false");
   expect(action().closest("[inert]")).not.toBeNull();
-  heading.click();
-  flush();
+  click(heading);
   expect(heading.getAttribute("aria-expanded")).toBe("true");
   expect(action().closest("[inert]")).toBeNull();
   expect(action().textContent).toContain("+248");

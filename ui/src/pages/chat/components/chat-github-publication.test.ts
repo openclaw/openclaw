@@ -25,7 +25,13 @@ import {
 
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
-const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
+const queryButton = (selector: string) => container.querySelector<HTMLButtonElement>(selector)!;
+const publish = () => queryButton(".chat-pr__create");
+const branchMenu = () => query(".chat-pr-branch-menu");
+const openBranchMenu = async () => {
+  queryButton(".chat-pr__actions-trigger").click();
+  await waitForSolid(() => expect(branchMenu()?.matches(":popover-open")).toBe(true));
+};
 const waitForPublication = () =>
   waitForSolid(() => {
     const button = publish();
@@ -84,17 +90,19 @@ const personalAccount = (login = "alice-tools") => ({
   pending: null,
 });
 
+const workWithPublication = (view: GitHubPublicationView | undefined): ChatPullRequestsProps => ({
+  pullRequests: [],
+  status: "ready",
+  onDismiss: () => {},
+  branch: sessionBranch(),
+  publication: view,
+});
+
 function paint(
   overrides: Partial<GitHubPublicationView>,
   surface: "pull-requests" | "environment" = "pull-requests",
 ) {
-  const work: ChatPullRequestsProps = {
-    pullRequests: [],
-    status: "ready",
-    onDismiss: () => {},
-    branch: sessionBranch(),
-    publication: publication(overrides),
-  };
+  const work = workWithPublication(publication(overrides));
   if (surface === "environment") {
     paintEnvironment(work);
   } else {
@@ -170,21 +178,14 @@ it.each([
     ...(scenario.reason ? { sharedUnavailableReason: scenario.reason } : {}),
   });
   paintEnvironment({
-    pullRequests: [],
-    status: "ready",
-    onDismiss: () => {},
+    ...workWithPublication(await settled(controller)),
     onDismissBranch: () => {},
-    branch: sessionBranch(),
-    publication: await settled(controller),
   });
   const action = await waitForPublication();
   const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
   expect(action.textContent).toBe("Create PR");
   expect(action.disabled).toBe(!scenario.native);
-  row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
-  await waitForSolid(() =>
-    expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
-  );
+  await openBranchMenu();
   const note = row.querySelector(".chat-pr__publication-note");
   const refresh = row.querySelector<HTMLButtonElement>('[aria-label="Refresh publication"]');
   if (scenario.native) {
@@ -272,7 +273,7 @@ it.each([false, true])(
     expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
     expect(choices[1]?.querySelector(".oc-menu-item__details svg")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
-    container.querySelector<HTMLButtonElement>('button[aria-label="Publication account"]')!.click();
+    queryButton('button[aria-label="Publication account"]').click();
     await waitForSolid(() => expect(menu?.matches(":popover-open")).toBe(true));
     choices[1]!.click();
     await waitForSolid(() => expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal"));
@@ -321,14 +322,7 @@ it("selects an eligible profile directly from Details and publishes its exact id
     status: "requested",
     publisher: { source: "personal", accountId: 2, login: "alice-tools" },
   });
-  const draw = () =>
-    paintEnvironment({
-      pullRequests: [],
-      status: "ready",
-      onDismiss: () => {},
-      branch: sessionBranch(),
-      publication: controller.view(),
-    });
+  const draw = () => paintEnvironment(workWithPublication(controller.view()));
   changed.mockImplementation(draw);
   draw();
   const create = await waitForPublication();
@@ -336,21 +330,16 @@ it("selects an eligible profile directly from Details and publishes its exact id
   expect(
     request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
   ).toHaveLength(0);
-  container.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
-  await waitForSolid(() =>
-    expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
-  );
-  const personal = container.querySelector<HTMLButtonElement>(
-    '.chat-pr-branch-menu [role="menuitemradio"][value="personal"]',
-  )!;
+  await openBranchMenu();
+  const personal = queryButton('.chat-pr-branch-menu [role="menuitemradio"][value="personal"]');
   expect(personal).not.toBeNull();
   expect(personal.textContent).toContain("My GitHub");
   expect(personal.textContent).toContain("@alice-tools");
   expect(query('.chat-pr-branch-menu [role="menuitemradio"]')).toBe(personal);
-  expect(personal.closest('[role="menu"]')).toBe(query(".chat-pr-branch-menu"));
+  expect(personal.closest('[role="menu"]')).toBe(branchMenu());
   personal.click();
   await waitForSolid(() => expect(controller.view()?.selection?.source).toBe("personal"));
-  expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(false);
+  expect(branchMenu()?.matches(":popover-open")).toBe(false);
   create!.click();
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("sessions.github.publish", {
@@ -371,12 +360,8 @@ it.each(["personal", "confirmation"] as const)(
   async (state) => {
     const personal = personalAccount();
     const nativeAction = vi.fn();
-    paintEnvironment({
-      pullRequests: [],
-      status: "ready",
-      onDismiss: () => {},
-      branch: sessionBranch(),
-      publication: publication({
+    paint(
+      {
         options: { shared: null, personal, pendingPersonal: null, latestShared: null },
         selection: null,
         result:
@@ -390,18 +375,15 @@ it.each(["personal", "confirmation"] as const)(
             : null,
         onPublish: nativeAction,
         onConfirm: nativeAction,
-      }),
-    });
+      },
+      "environment",
+    );
     const entry = await waitForPublication();
     expect(entry.textContent).toBe(state === "personal" ? "Create PR" : "Review");
     entry.click();
-    await waitForSolid(() =>
-      expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
-    );
+    await waitForSolid(() => expect(branchMenu()?.matches(":popover-open")).toBe(true));
     expect(nativeAction).not.toHaveBeenCalled();
-    const action = container.querySelector<HTMLButtonElement>(
-      ".chat-pr-branch-menu .chat-pr__create",
-    )!;
+    const action = queryButton(".chat-pr-branch-menu .chat-pr__create");
     expect(action.textContent).toBe(
       state === "personal" ? "Publish as @alice-tools" : "Confirm original publication",
     );
@@ -413,13 +395,7 @@ it.each(["personal", "confirmation"] as const)(
 it.each([false, true])("labels publication reads as Loading (recovery=%s)", async (recovery) => {
   const onPublish = vi.fn();
   const draw = (activity: GitHubPublicationView["activity"]) =>
-    paintEnvironment({
-      pullRequests: [],
-      status: "ready",
-      onDismiss: () => {},
-      branch: sessionBranch(),
-      publication: publication({ activity, locked: recovery, onPublish }),
-    });
+    paint({ activity, locked: recovery, onPublish }, "environment");
   draw("read");
   await waitForPublication();
   expect(publish()?.textContent?.trim()).toBe("Loading…");
@@ -477,7 +453,7 @@ it.each(["pull-requests", "environment"] as const)(
     await waitForSolid(() =>
       expect(container.textContent).toContain("Publication action unavailable"),
     );
-    container.querySelector<HTMLButtonElement>(".lazy-view-error button")?.click();
+    queryButton(".lazy-view-error button")?.click();
     await waitForSolid(() =>
       expect(publish()?.textContent).toContain(
         surface === "environment" ? "Create PR" : "Publish PR",
@@ -519,11 +495,11 @@ it.each(["pull-requests", "environment"] as const)(
     );
     (await waitForPublication()).click();
     await waitForSolid(() =>
-      expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
+      expect(query('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
     completion.reject(new Error("Replaced publication action unavailable"));
     await waitForSolid(() =>
-      expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
+      expect(query('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
   },
 );

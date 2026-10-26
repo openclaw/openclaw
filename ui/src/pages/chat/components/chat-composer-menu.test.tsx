@@ -22,6 +22,37 @@ import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-men
 import { createSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 
+function mountSlashMenu(paneId: string) {
+  const host: SlashMenuHost = {
+    paneId,
+    getDraft: () => "/",
+    commitDraft: vi.fn(),
+    getTextarea: () => null,
+    resolveArgOptions: () => [],
+    runCommand: vi.fn(),
+    canRun: () => true,
+  };
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return <SlashMenu menu={menu} host={host} draft="/" />;
+  });
+  menu.update("/", host);
+  flush();
+  return { host, menu, view };
+}
+
+function menuQueries(view: ReturnType<typeof mountSolid>) {
+  return {
+    item: (name: string) => view.getByRole("menuitem", { name, hidden: true }),
+    checkbox: (name: string) => view.getByRole("menuitemcheckbox", { name, hidden: true }),
+    key: (target: HTMLElement, key: string) =>
+      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })),
+    trigger: () =>
+      view.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!,
+  };
+}
+
 it("keeps loading suggestions named, selected and actionable", () => {
   const select = vi.fn();
   const [activeId, setActiveId] = createSignal("pending-status");
@@ -59,22 +90,7 @@ it("keeps loading suggestions named, selected and actionable", () => {
 });
 
 it("keeps current editing state when suggestion rows load after dismissal", async () => {
-  let menu!: ReturnType<typeof createSlashMenu>;
-  const host: SlashMenuHost = {
-    paneId: "lazy-menu-dismissal",
-    getDraft: () => "/",
-    commitDraft: vi.fn(),
-    getTextarea: () => null,
-    resolveArgOptions: () => [],
-    runCommand: vi.fn(),
-    canRun: () => true,
-  };
-  const view = mountSolid(() => {
-    menu = createSlashMenu();
-    return <SlashMenu menu={menu} host={host} draft="/" />;
-  });
-  menu.update("/", host);
-  flush();
+  const { menu, host, view } = mountSlashMenu("lazy-menu-dismissal");
   expect(view.getByRole("listbox")).toBeTruthy();
   expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
     menu.state.slashMenuItems.length,
@@ -122,22 +138,7 @@ it("uses the current focus policy on a retained suggestion option", () => {
 
 it("retains the slash viewport through row loading and selection changes, and resets it for a new mode", async () => {
   const command = { key: "status", name: "status", description: "Show status" };
-  const host: SlashMenuHost = {
-    paneId: "menu-retention",
-    getDraft: () => "/",
-    commitDraft: vi.fn(),
-    getTextarea: () => null,
-    resolveArgOptions: () => [],
-    runCommand: vi.fn(),
-    canRun: () => true,
-  };
-  let menu!: ReturnType<typeof createSlashMenu>;
-  const view = mountSolid(() => {
-    menu = createSlashMenu();
-    return <SlashMenu menu={menu} host={host} draft="/" />;
-  });
-  menu.update("/", host);
-  flush();
+  const { menu, host, view } = mountSlashMenu("menu-retention");
   const viewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   viewport.scrollTop = 120;
   await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
@@ -179,7 +180,7 @@ it("retains the focused capability row and management link through catalog refre
     }),
   );
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
-  const checkbox = (name: string) => view.getByRole("menuitemcheckbox", { name, hidden: true });
+  const { item, checkbox } = menuQueries(view);
   const update = (
     changes: Partial<Menu>,
     capability: Partial<NonNullable<Menu["capabilityMenu"]>> = {},
@@ -229,7 +230,7 @@ it("retains the focused capability row and management link through catalog refre
   expect(row.getAttribute("aria-checked")).toBe("false");
   expect(document.activeElement).toBe(row);
 
-  const manage = view.getByRole("menuitem", { name: "Manage skills", hidden: true });
+  const manage = item("Manage skills");
   expect(manage.getAttribute("href")).toBe("/control/skills");
   const modifiedClick = new MouseEvent("click", {
     bubbles: true,
@@ -282,15 +283,12 @@ it("retains attachment choices while the native menu closes and reopens", async 
       }}
     />
   ));
-  const trigger = view.container.querySelector<HTMLButtonElement>(
-    ".agent-chat__input-btn--attach",
-  )!;
+  const { checkbox, trigger: readTrigger } = menuQueries(view);
+  const trigger = readTrigger();
   trigger.click();
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-  await waitForSolid(() =>
-    expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
-  );
-  const choice = view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true });
+  await waitForSolid(() => expect(checkbox("Test toggle")).toBeTruthy());
+  const choice = checkbox("Test toggle");
   expect(choice.querySelector("svg")).not.toBeNull();
   setOpen(false);
   flush();
@@ -322,10 +320,9 @@ it.each(["item", "external", "closed"] as const)(
         />
       </>
     ));
-    await waitForSolid(() =>
-      expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBeTruthy(),
-    );
-    const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+    const { item, checkbox } = menuQueries(view);
+    await waitForSolid(() => expect(item("Back")).toBeTruthy());
+    const back = item("Back");
     await waitForSolid(() =>
       expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
     );
@@ -341,7 +338,7 @@ it.each(["item", "external", "closed"] as const)(
       if (target === "item") {
         flush();
         expect(document.activeElement).toBe(back);
-        focused = view.getByRole("menuitemcheckbox", { name: "docs Enabled", hidden: true });
+        focused = checkbox("docs Enabled");
       } else if (target === "closed") {
         setOpen(false);
         focused = document.body;
@@ -361,9 +358,7 @@ it.each(["item", "external", "closed"] as const)(
         back.click();
         flush();
         expect(back.isConnected).toBe(false);
-        expect(document.activeElement).toBe(
-          view.getByRole("menuitem", { name: "Take photo", hidden: true }),
-        );
+        expect(document.activeElement).toBe(item("Take photo"));
       }
     } finally {
       raf.mockRestore();
@@ -420,33 +415,28 @@ it("keeps skill navigation live through failure, retry and a retired connection 
     );
     return <ChatComposerPlusMenu menu={menu()} />;
   });
-  const trigger = view.container.querySelector<HTMLButtonElement>(
-    ".agent-chat__input-btn--attach",
-  )!;
+  const { item, checkbox, key, trigger: readTrigger } = menuQueries(view);
+  const trigger = readTrigger();
   const panel = view.container.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
   expect(request).not.toHaveBeenCalled();
   trigger.click();
-  await waitForSolid(() =>
-    expect(view.getByRole("menuitem", { name: "Skills", hidden: true })).toBeTruthy(),
-  );
-  view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
+  await waitForSolid(() => expect(item("Skills")).toBeTruthy());
+  item("Skills").click();
   await waitForSolid(() =>
     expect(view.getByRole("status").textContent).toContain("Loading skills"),
   );
-  const back = view.getByRole("menuitem", { name: "Back", hidden: true });
-  const manage = view.getByRole("menuitem", { name: "Manage skills", hidden: true });
+  const back = item("Back");
+  const manage = item("Manage skills");
   back.focus();
-  back.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
-  );
+  key(back, "ArrowDown");
   await waitForSolid(() => expect(document.activeElement).toBe(manage));
   failed.reject(new Error("Synthetic skill read failure"));
   await waitForSolid(() =>
     expect(view.getByRole("alert").textContent).toContain("Couldn’t load skills"),
   );
   expect(panel.matches(":popover-open")).toBe(true);
-  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
-  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  expect(item("Back")).toBe(back);
+  expect(item("Manage skills")).toBe(manage);
   trigger.click();
   await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
   trigger.click();
@@ -477,25 +467,15 @@ it("keeps skill navigation live through failure, retry and a retired connection 
   expect(view.queryByRole("menuitemcheckbox", { name: "Retired skill", hidden: true })).toBeNull();
   expect(view.getByRole("status").textContent).toContain("Loading skills");
   current.resolve({ skills: [skill("Current")] });
-  await waitForSolid(() =>
-    expect(
-      view
-        .getByRole("menuitemcheckbox", { name: "Current", hidden: true })
-        .getAttribute("aria-checked"),
-    ).toBe("false"),
-  );
+  await waitForSolid(() => expect(checkbox("Current").getAttribute("aria-checked")).toBe("false"));
   expect(view.container.querySelector(".agent-chat__input-btn--attach")).toBe(trigger);
-  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
-  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  expect(item("Back")).toBe(back);
+  expect(item("Manage skills")).toBe(manage);
   back.focus();
-  back.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
-  );
-  const row = view.getByRole("menuitemcheckbox", { name: "Current", hidden: true });
+  key(back, "ArrowDown");
+  const row = checkbox("Current");
   await waitForSolid(() => expect(document.activeElement).toBe(row));
-  row.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-  );
+  key(row, "Enter");
   await waitForSolid(() => expect(catalog.rows("main", overrides)?.[0]?.enabled).toBe(true));
   await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("true"));
   expect(panel.matches(":popover-open")).toBe(true);

@@ -42,9 +42,38 @@ const report: SessionSystemPromptReport = {
     entries: [{ name: "exec", summaryChars: 400, schemaChars: 12000 }],
   },
 };
-const usage = (key: string, sessionId = key) => ({
-  sessions: [{ key: `agent:main:${key}`, sessionId, contextWeight: report }],
+const usage = (key: string, sessionId = key, contextWeight = report) => ({
+  sessions: [{ key: `agent:main:${key}`, sessionId, contextWeight }],
 });
+type ContextGateway = ReturnType<typeof createApplicationGateway>["gateway"];
+function mountPage(gateway: ContextGateway, key = "first", empty = false, compact = false) {
+  return mountSolid(() => (
+    <ChatContextPage
+      presented
+      details={{
+        currentAgentId: "main",
+        pullRequestsGateway: gateway,
+        selectedSession: {
+          key: `agent:main:${key}`,
+          kind: "direct",
+          sessionId: key,
+          ...(empty ? {} : { totalTokens: 50000, totalTokensFresh: true, contextTokens: 100000 }),
+        },
+        runActive: false,
+        ...(compact ? { onCompact: vi.fn() } : {}),
+      }}
+    />
+  ));
+}
+const refresh = (gateway: ContextGateway) =>
+  sessionContextReportsForGateway(gateway).refresh({
+    sessionKey: "agent:main:first",
+    agentId: "main",
+    sessionId: "first",
+    used: 50000,
+  });
+const categoryButton = (container: HTMLElement, id: string) =>
+  container.querySelector<HTMLButtonElement>(`[data-context-category="${id}"]`)!;
 function expectTokens(value: SessionSystemPromptReport, expected: Array<number | null>) {
   const categories = buildChatContextCategories(value, 50000);
   expect(categories.map(({ id, tokens }) => [id, tokens])).toEqual(
@@ -130,23 +159,7 @@ it("offers retry after a rejected read and keeps loading until recovery settles"
   );
   const { gateway, publish } = createApplicationGateway();
   publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
-  const view = mountSolid(() => (
-    <ChatContextPage
-      presented
-      details={{
-        currentAgentId: "main",
-        pullRequestsGateway: gateway,
-        selectedSession: {
-          key: "agent:main:current",
-          kind: "direct",
-          sessionId: "current",
-          totalTokens: 50000,
-          totalTokensFresh: true,
-          contextTokens: 100000,
-        },
-      }}
-    />
-  ));
+  const view = mountPage(gateway, "current");
   await expect.poll(() => request.mock.calls.length).toBe(1);
   first.reject(new Error("Context read failed"));
   await expect
@@ -159,7 +172,7 @@ it("offers retry after a rejected read and keeps loading until recovery settles"
   retry.resolve(usage("current"));
   await expect.poll(() => view.container.querySelector(".chat-context-page--loading")).toBeNull();
   expect(view.getByRole("button", { name: "Refresh" }).hasAttribute("disabled")).toBe(false);
-  view.container.querySelector<HTMLButtonElement>('[data-context-category="files"]')!.click();
+  categoryButton(view.container, "files").click();
   flush();
   expect(view.container.textContent).toContain("AGENTS.md");
   view.unmount();
@@ -216,34 +229,12 @@ it("reports only the current manual refresh failure after reconnect", async () =
   const client = createTestGatewayClient(request);
   publish({ ...gateway.snapshot, phase: "connected", client });
   const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
-  const view = mountSolid(() => (
-    <ChatContextPage
-      presented
-      details={{
-        currentAgentId: "main",
-        pullRequestsGateway: gateway,
-        selectedSession: {
-          key: "agent:main:first",
-          kind: "direct",
-          sessionId: "first",
-          totalTokens: 50000,
-          totalTokensFresh: true,
-          contextTokens: 100000,
-        },
-        runActive: false,
-      }}
-    />
-  ));
+  const view = mountPage(gateway);
   try {
     await expect.poll(() => view.container.querySelector(".chat-context__bar")).not.toBeNull();
     view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
     expect(request).toHaveBeenCalledTimes(2);
-    const pendingRefresh = sessionContextReportsForGateway(gateway).refresh({
-      sessionKey: "agent:main:first",
-      agentId: "main",
-      sessionId: "first",
-      used: 50000,
-    });
+    const pendingRefresh = refresh(gateway);
     publish({ ...gateway.snapshot, phase: "reconnecting" });
     publish({ ...gateway.snapshot, phase: "connected", client });
     await expect.poll(() => view.container.textContent).toContain("Couldn");
@@ -270,9 +261,7 @@ function mountContextPage(
   options: { empty?: boolean; offline?: boolean; missing?: boolean; failure?: boolean } = {},
 ) {
   const request = createGatewayRequestMock().mockResolvedValue({
-    sessions: options.missing
-      ? []
-      : [{ key: "agent:main:first", sessionId: "first", contextWeight: value }],
+    sessions: options.missing ? [] : usage("first", "first", value).sessions,
   });
   if (options.failure) {
     request.mockRejectedValue(new GatewayProtocolRequestError({ code: "FORBIDDEN" }));
@@ -281,36 +270,11 @@ function mountContextPage(
   if (!options.offline) {
     publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
   }
-  const view = mountSolid(() => (
-    <ChatContextPage
-      presented
-      details={{
-        currentAgentId: "main",
-        pullRequestsGateway: gateway,
-        selectedSession: {
-          key: "agent:main:first",
-          kind: "direct",
-          sessionId: "first",
-          ...(options.empty
-            ? {}
-            : { totalTokens: 50000, totalTokensFresh: true, contextTokens: 100000 }),
-        },
-        runActive: false,
-        onCompact: vi.fn(),
-      }}
-    />
-  ));
+  const view = mountPage(gateway, "first", options.empty, true);
   flush();
   const requested = !options.empty && !options.offline;
   expect(request).toHaveBeenCalledTimes(requested ? 1 : 0);
-  const ready = requested
-    ? sessionContextReportsForGateway(gateway).refresh({
-        sessionKey: "agent:main:first",
-        agentId: "main",
-        sessionId: "first",
-        used: 50000,
-      })
-    : Promise.resolve();
+  const ready = requested ? refresh(gateway) : Promise.resolve();
   return { ...view, request, gateway, ready };
 }
 
@@ -320,12 +284,8 @@ it("opens one category, returns focus on Escape, and clears linked highlight whe
     await view.ready;
     flush();
     expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
-    const files = view.container.querySelector<HTMLButtonElement>(
-      '[data-context-category="files"]',
-    )!;
-    const tools = view.container.querySelector<HTMLButtonElement>(
-      '[data-context-category="tools"]',
-    )!;
+    const files = categoryButton(view.container, "files");
+    const tools = categoryButton(view.container, "tools");
     vi.useFakeTimers();
     files.focus();
     await vi.advanceTimersByTimeAsync(59);
@@ -378,9 +338,7 @@ it.each([20, 21])(
       await view.ready;
       flush();
       expect(view.container.querySelector(".chat-context__bar")).not.toBeNull();
-      const skills = view.container.querySelector<HTMLButtonElement>(
-        '[data-context-category="skills"]',
-      )!;
+      const skills = categoryButton(view.container, "skills");
       skills.click();
       flush();
       const section = () => view.container.querySelector('[data-context-section="skills"]')!;
@@ -402,43 +360,26 @@ it.each([20, 21])(
       flush();
       expect(section().querySelectorAll(".chat-context__entry")).toHaveLength(1);
       expect(view.request).toHaveBeenCalledTimes(1);
-      const update = createDeferredCore<{
-        sessions: Array<{
-          key: string;
-          sessionId: string;
-          contextWeight: SessionSystemPromptReport;
-        }>;
-      }>();
+      const update = createDeferredCore<ReturnType<typeof usage>>();
       view.request.mockReturnValueOnce(update.promise);
       view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
       flush();
       expect(view.request).toHaveBeenCalledTimes(2);
-      const refreshed = sessionContextReportsForGateway(view.gateway).refresh({
-        sessionKey: "agent:main:first",
-        agentId: "main",
-        sessionId: "first",
-        used: 50000,
-      });
+      const refreshed = refresh(view.gateway);
       expect(skills.getAttribute("aria-expanded")).toBe("true");
       expect(section().querySelector("input")).toBe(input);
       expect(section().textContent).toContain("skill-21");
       expect(view.container.querySelector(".chat-context-page--loading")).toBeNull();
-      update.resolve({
-        sessions: [
-          {
-            key: "agent:main:first",
-            sessionId: "first",
-            contextWeight: {
-              ...value,
-              generatedAt: 2,
-              skills: {
-                ...value.skills,
-                entries: [...value.skills.entries, { name: "skill-21-new", blockChars: 200 }],
-              },
-            },
+      update.resolve(
+        usage("first", "first", {
+          ...value,
+          generatedAt: 2,
+          skills: {
+            ...value.skills,
+            entries: [...value.skills.entries, { name: "skill-21-new", blockChars: 200 }],
           },
-        ],
-      });
+        }),
+      );
       await refreshed;
       flush();
       expect(section().querySelectorAll(".chat-context__entry")).toHaveLength(2);
