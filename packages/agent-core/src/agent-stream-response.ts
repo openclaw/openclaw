@@ -421,23 +421,21 @@ export async function streamAgentResponse(
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
-                  const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      // Persistence takes ownership and freezes nested values. Detach the
-                      // completed prefix from the provider's still-mutable stream, after
-                      // replay checkpoints have been reindexed using original block identity.
-                      ...structuredClone(
-                        replaceCompactionReplayOwnerContent(
-                          message,
-                          message.content.slice(committedContentCount, event.contentIndex + 1),
-                        ),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                  // Persistence takes ownership and freezes nested values. Detach the
+                  // completed prefix after reindexing checkpoints using original block identity.
+                  let prefix = structuredClone(
+                    replaceCompactionReplayOwnerContent(
+                      message,
+                      message.content.slice(committedContentCount, event.contentIndex + 1),
+                    ),
                   );
+                  if (streamedTurnId) {
+                    prefix.turnId = streamedTurnId;
+                  }
+                  prefix.stopReason = "toolUse";
+                  // Usage belongs to the terminal fragment, once per provider response.
+                  prefix.usage = createEmptyTransportUsage();
+                  prefix = prepareAssistantMessage(ensureToolTurnIdentity(prefix));
                   streamedTurnId ??= prefix.turnId;
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.

@@ -28,6 +28,7 @@ import {
 import { wireCall, wireMessage } from "../../ai/src/transports/openai-stream-cases.test-support.js";
 import { runAgentLoop } from "./agent-loop.js";
 import * as fixtures from "./agent-loop.test-support.js";
+import { streamAgentResponse } from "./agent-stream-response.js";
 import { Agent } from "./agent.js";
 import { attachInternalToolBatchLifecycle, setInternalBeforeToolBatch } from "./internal-hooks.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
@@ -214,6 +215,73 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
     expect(results(persisted)).toHaveLength(3);
   },
 );
+
+it("transfers the detached async prefix directly to persistence preparation", async () => {
+  const lookup = call("lookup");
+  const source = assistant([lookup], "stop", "response-lookup");
+  const clone = globalThis.structuredClone;
+  const detached: unknown[] = [];
+  const cloneSpy = vi.spyOn(globalThis, "structuredClone").mockImplementation((value) => {
+    const result = clone(value);
+    detached.push(result);
+    return result;
+  });
+  onTestFinished(() => cloneSpy.mockRestore());
+  const prepared: AssistantMessage[] = [];
+  const emitted: AgentEvent[] = [];
+  const executed: AssistantMessage[] = [];
+  await streamAgentResponse(
+    { systemPrompt: "", messages: [] },
+    fixtures.config,
+    undefined,
+    (event) => void emitted.push(event),
+    [],
+    async (message) => {
+      executed.push(message);
+      expect(emitted).toContainEqual({ type: "message_end", message });
+      return {
+        messages: [],
+        terminalToolCallIds: [],
+        steeringMessages: [],
+        terminate: false,
+        terminateRun: false,
+      };
+    },
+    (message) => {
+      prepared.push(message);
+      if (message.stopReason === "toolUse") {
+        Object.freeze(message.content[0]);
+        Object.freeze(message.content);
+        Object.freeze(message);
+      }
+      return message;
+    },
+    () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: source } as const;
+        yield { type: "toolcall_end", contentIndex: 0, toolCall: lookup, partial: source } as const;
+        source.content.push({ type: "text", text: "after lookup" });
+        yield {
+          type: "text_delta",
+          contentIndex: 1,
+          delta: "after lookup",
+          partial: source,
+        } as const;
+        yield { type: "done", reason: "stop", message: source } as const;
+      },
+      result: async () => source,
+    }),
+  );
+  expect(detached).toHaveLength(1);
+  expect(prepared[0]).toBe(detached[0]);
+  expect(executed).toEqual([prepared[0]]);
+  expect(prepared[0]).toEqual({
+    ...assistant([call("lookup")], "toolUse", "response-lookup"),
+    usage: fixtures.TEST_USAGE,
+  });
+  expect(prepared[1]?.content).toEqual([{ type: "text", text: "after lookup" }]);
+  expect(source.content).toHaveLength(2);
+});
 
 it("persists an execution identity for a done-only async length response", async () => {
   const execute = vi.fn(async () => {
