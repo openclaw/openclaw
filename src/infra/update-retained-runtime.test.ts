@@ -94,7 +94,6 @@ it.for([false, true])(
     const release = createDeferred();
     const nativeEntered = createDeferred();
     const nativeRelease = createDeferred();
-    const removed = vi.spyOn(fs, "rm");
     const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
     vi.spyOn(os, "tmpdir").mockReturnValue(base);
     vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
