@@ -6,10 +6,17 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { repairGeneratedModelMetadataCorruption } from "./model-metadata-corruption-repair.js";
 
 const configPath = path.resolve("/tmp/openclaw-model-metadata-corruption.json");
+const preservedModel = {
+  id: "gpt-5.6-sol",
+  name: "gpt-5.6-sol",
+  contextWindow: 272_000,
+  contextTokens: 272_000,
+  api: "openai-chatgpt-responses" as const,
+};
 type RepairParams = Parameters<typeof repairGeneratedModelMetadataCorruption>[0];
 function corruptedConfig(): OpenClawConfig {
   const model = {
-    id: "gpt-5.6-sol",
+    ...preservedModel,
     reasoning: false,
     input: ["text" as const],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

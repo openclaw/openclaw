@@ -314,9 +314,14 @@ describe("hooks CLI metadata config keys", () => {
       false,
     ],
     [["info", "metadata-key", "--json"], [hook], hook.name, true],
-    [["info", "metadata-key"], [pluginHook], hook.name, false],
+    [
+      ["info", "metadata-key"],
+      [{ ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" }],
+      hook.name,
+      false,
+    ],
   ])("inspects %j without mutation", async (args, hooks, name, json) => {
-    mocks.callGateway.mockResolvedValue(reportHooks(...hooks));
+    mocks.callGateway.mockResolvedValue({ ...report, hooks });
     await runHooks(...args);
     expectOneShotOutput(json, 0);
     const output = capture.runtimeLogs[0] ?? "";

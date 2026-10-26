@@ -101,7 +101,7 @@ async function mountTypingPage(
         return result("agent:main:sidebar");
       }
       requests.push(params);
-      if (requests.length === 1) {
+      if (requests.length === 1 || (deepLink && params?.search === deepLink)) {
         return initialResult;
       }
       const task = createDeferred<SessionsListResult>();

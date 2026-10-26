@@ -140,7 +140,10 @@ const withoutMemory = (run: () => Promise<void>) =>
 const withSourceImport = (
   source: Parameters<typeof viteMocks.runnerImport.withImplementation>[0],
   run: () => Promise<void>,
-) => withoutMemory(() => viteMocks.runnerImport.withImplementation(source, run));
+) =>
+  withoutMemory(async () => {
+    await viteMocks.runnerImport.withImplementation(source, run);
+  });
 const withMemory = (memory: string, run: () => Promise<void>) =>
   fsMocks.existsSync.withImplementation(
     () => true,
@@ -165,7 +168,8 @@ async function expectEncodings(
 }
 
 function expectBefore<T>(values: T[], first: T, second: T) {
-  expect(values).toEqual(expect.arrayContaining([first, second]));
+  expect(values.includes(first)).toBe(true);
+  expect(values.includes(second)).toBe(true);
   expect(values.indexOf(first)).toBeLessThan(values.indexOf(second));
 }
 

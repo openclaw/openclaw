@@ -116,8 +116,7 @@ export function registerRequesterCompletionCustodyTests({
         };
         const makeGateway = () => {
           const gateway = createContext([], () => cfg);
-          gateway.resolveGatewayContext = () => gateway;
-          return gateway;
+          return Object.assign(gateway, { resolveGatewayContext: () => gateway });
         };
         const registerChild = (
           runId: string,

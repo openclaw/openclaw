@@ -52,7 +52,7 @@ async function pack(root: string, commit: string) {
 }
 
 describe("node worker Git transfers", () => {
-  it.each(["win32", "linux"])("isolates Git configuration on %s", (platform) => {
+  it.each(["win32", "linux"] as const)("isolates Git configuration on %s", (platform) => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const inherited = {
       GIT_CONFIG_COUNT: "2",

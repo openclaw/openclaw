@@ -31,7 +31,7 @@ describe("subagent target policy", () => {
 
   it.each([
     [["planner", "stale"], ["main", "planner"], false, ["planner"], "stale"],
-    [["*"], ["planner", "checker"], true, ["checker", "main", "planner"]],
+    [["*"], ["planner", "checker"], true, ["checker", "main", "planner"], undefined],
     [["*", "beta"], ["main", "planner"], true, ["main", "planner"], "beta"],
   ] satisfies Array<[string[], string[], boolean, string[], string?]>)(
     "filters configured targets for %j",

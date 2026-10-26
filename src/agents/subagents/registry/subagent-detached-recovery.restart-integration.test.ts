@@ -302,7 +302,7 @@ describe("detached subagent restart recovery", () => {
         });
         if (recovery) {
           context.getGatewayMethodRegistry = () => methods;
-          context.getSessionEventSubscriberConnIds = () => [];
+          context.getSessionEventSubscriberConnIds = () => new Set();
           bindGatewayContextResolver(context.recoveryRuntime, context.resolveGatewayContext);
         }
         return context;
