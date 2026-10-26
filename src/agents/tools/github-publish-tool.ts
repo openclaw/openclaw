@@ -30,6 +30,7 @@ import {
 } from "../sandbox/github-publication.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { stringEnum } from "../schema/string-enum.js";
+import { bindToolInvocationResolver } from "../tool-invocation-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import {
@@ -507,6 +508,9 @@ export function createGitHubPublishTool(
       return jsonResult(result);
     },
   };
+  bindToolInvocationResolver(tool, (args) => ({
+    ownsTurnHandoff: isRecord(args) && args.action === "prepare_pr",
+  }));
   return bindAgentToolAvailability(tool, {
     prepare: (preparedTool, callableTools) => {
       const schema = callableTools.get("automations")?.parameters;

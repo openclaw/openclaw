@@ -9,6 +9,7 @@ import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "./runtime/internal-hooks.js";
+import { bindToolInvocationResolver } from "./tool-invocation-metadata.js";
 import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
@@ -303,7 +304,7 @@ function resolveSearchParameters(searchDefaultLimit: number): AnyAgentTool["para
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
-  return [
+  const tools: [AnyAgentTool, AnyAgentTool, AnyAgentTool] = [
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
@@ -402,10 +403,16 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         }
       },
     },
-  ].map((tool) => {
+  ];
+  for (const tool of tools) {
     bindGatewayToolPolicyControl(tool);
-    return tool.name === TOOL_CALL_RAW_TOOL_NAME
-      ? bindAgentToolReplaySafety(tool, "dispatcher")
-      : tool;
+    if (tool.name === TOOL_CALL_RAW_TOOL_NAME) {
+      bindAgentToolReplaySafety(tool, "dispatcher");
+    }
+  }
+  bindToolInvocationResolver(tools[2], (args) => {
+    const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+    return runtime.invocationMetadata(call.id, call.input);
   });
+  return tools;
 }

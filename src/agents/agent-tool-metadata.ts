@@ -16,6 +16,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
+import { copyToolInvocationMetadata } from "./tool-invocation-metadata.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
@@ -118,6 +119,7 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  copyToolInvocationMetadata(source, target);
   copyCodeModeControlToolIdentity(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
