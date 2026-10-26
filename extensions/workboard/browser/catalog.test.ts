@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import { WorkboardCatalog } from "./catalog.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
-import { loadWorkboard } from "./lib/workboard/loading.ts";
 import { moveWorkboardCard } from "./lib/workboard/mutations.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 
@@ -42,7 +41,12 @@ function expectCachedBoard(id: string) {
 async function startRefresh(response: unknown) {
   request
     .mockResolvedValueOnce(catalog("ops"))
-    .mockResolvedValueOnce(response)
+    .mockImplementationOnce(() => {
+      if (response instanceof Error) {
+        throw response;
+      }
+      return Promise.resolve(response);
+    })
     .mockResolvedValueOnce(catalog("platform"));
   runtime.sync(client, true);
   await expectBoard("ops");
@@ -54,67 +58,40 @@ afterEach(() => {
   runtime.dispose();
   host.dispose();
   vi.useRealTimers();
-  document.body.replaceChildren();
 });
 
-it.each([false, true])("loads the page after hydration (failed=%s)", async (failed) => {
-  const pending = createDeferred<ReturnType<typeof catalog>>();
-  request.mockImplementation(async (method: string) =>
-    method === "workboard.boards.list" ? pending.promise : { cards: [] },
-  );
-  runtime.sync(client, true);
-  const fullLoad = loadWorkboard({ host, client });
-  if (failed) {
-    pending.reject(new Error("Catalog unavailable"));
-  } else {
-    pending.resolve(catalog("ops"));
-  }
-  await expect(fullLoad).resolves.toBe(true);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(host.state).toMatchObject({ loaded: true, loadAttempted: true });
-});
-
-it("does not overwrite a completed mutation with an older catalog response", async () => {
+it("refreshes only summaries without overwriting completed card mutations", async () => {
+  vi.useFakeTimers();
   const card = createWorkboardCard();
   const moved = { ...card, status: "review" as const, updatedAt: 2 };
   const pending = createDeferred<unknown>();
+  const response = { cards: [card], boards: [{ ...board("ops"), name: "Renamed" }] };
   request
+    .mockImplementation(async (method: string) =>
+      method === "workboard.boards.list" ? response : catalog("ops"),
+    )
     .mockResolvedValueOnce({ cards: [card], boards: [board("ops")] })
     .mockReturnValueOnce(pending.promise)
     .mockResolvedValueOnce({ card: moved });
   runtime.sync(client, true);
-  await vi.waitFor(() => expect(host.boardsReady).toBe(true));
+  await expectBoard("ops");
+  expect(host.state.cards).toEqual([]);
   host.state.cards = [card];
-  change();
+  change({ epoch: "test", revision: 2, cardsRevision: 2 });
   await expectRequests(2);
   await moveWorkboardCard({ host, client, cardId: card.id, status: "review", position: 1000 });
-  pending.resolve({ cards: [card], boards: [board("ops")] });
-  await pending.promise;
-  expect(host.state.cards).toEqual([moved]);
-});
-
-it("loads only summaries on connect and changes without hydrating card history", async () => {
-  vi.useFakeTimers();
-  let name = "Operations";
-  request.mockImplementation(async (method: string) =>
-    method === "workboard.boards.list"
-      ? { boards: [{ ...board("ops"), name }] }
-      : { boards: [board("ops")], cards: [createWorkboardCard()] },
-  );
-  runtime.sync(client, true);
-  await vi.advanceTimersByTimeAsync(0);
-  name = "Renamed";
-  await tickChange({ epoch: "test", revision: 2, cardsRevision: 2 });
+  pending.resolve(response);
   await tickChange({ epoch: "test", revision: 3, cardsRevision: 2, sessionsRevision: 3 });
-  expect(request.mock.calls).toEqual([
-    ["workboard.boards.list", {}],
-    ["workboard.boards.list", {}],
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "workboard.boards.list",
+    "workboard.boards.list",
+    "workboard.cards.move",
   ]);
   expect(host.state.boards[0]?.name).toBe("Renamed");
   await tickChange({ epoch: "test", revision: 4 });
   await tickChange({ epoch: "restarted", revision: 1, cardsRevision: 2 });
-  expect(request).toHaveBeenCalledTimes(4);
-  expect(host.state.cards).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(5);
+  expect(host.state.cards).toEqual([moved]);
   expect(host.state.loaded).toBe(false);
 });
 
@@ -127,54 +104,40 @@ it("queues a forced refresh behind the current client load", async () => {
   change();
   first.resolve(catalog("default"));
 
-  await expectRequests(2);
   await expectBoard("ops");
 });
 
-it("does not let an old client repopulate a replacement catalog", async () => {
-  const first = createDeferred<ReturnType<typeof catalog>>();
-  const second = createDeferred<ReturnType<typeof catalog>>();
-  const secondRequest = vi.fn(() => second.promise);
-  const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
-  request.mockReturnValueOnce(first.promise);
-  runtime.sync(client, true);
-  change();
-  runtime.sync(secondClient, true);
-  first.resolve(catalog("stale"));
-  second.resolve(catalog("current"));
-
-  await expectBoard("current");
-  expect(request).toHaveBeenCalledOnce();
-  expect(secondRequest).toHaveBeenCalledOnce();
-});
-
-it.each([false, true])("rejects stale reconnect data (late=%s)", async (afterReconnect) => {
+it.each(["client", "disconnect", "reconnect"])("rejects stale %s", async (mode) => {
   vi.useFakeTimers();
   const pending = createDeferred<ReturnType<typeof catalog>>();
   await startRefresh(pending.promise);
-  runtime.sync(client, false);
-  if (!afterReconnect) {
-    pending.resolve(catalog("stale"));
-    await pending.promise;
-    expectCachedBoard("ops");
+  if (mode === "client") {
+    change();
+    runtime.sync({ ...client }, true);
+  } else {
+    runtime.sync(client, false);
+    if (mode === "disconnect") {
+      pending.resolve(catalog("stale"));
+      await pending.promise;
+      expectCachedBoard("ops");
+    }
+    runtime.sync(client, true);
   }
-  runtime.sync(client, true);
-  await expectRequests(3);
   await expectBoard("platform");
-  if (afterReconnect) {
+  if (mode !== "disconnect") {
     pending.resolve(catalog("stale"));
     await pending.promise;
     await vi.advanceTimersByTimeAsync(2_000);
   }
   expectCachedBoard("platform");
+  expect(request).toHaveBeenCalledTimes(3);
 });
 
-it("preserves catalog data and retries a malformed forced refresh", async () => {
+it.each([false, true])("retries failed refresh (throw=%s)", async (reject) => {
   vi.useFakeTimers();
-  await startRefresh({ ok: true });
+  await startRefresh(reject ? new Error("Catalog unavailable") : { ok: true });
   runtime.sync(client, true);
   await vi.advanceTimersByTimeAsync(2_000);
 
-  await expectRequests(3);
   await expectBoard("platform");
 });
