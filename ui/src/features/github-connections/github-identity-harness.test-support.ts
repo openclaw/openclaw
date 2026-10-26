@@ -3,10 +3,7 @@ import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createGitHubIdentityForTest,
-  type TestGitHubIdentity,
-} from "./github-identity.test-support.ts";
+import { createGitHubIdentityForTest } from "./github-identity.test-support.ts";
 
 export const authorizationCode = {
   requestId: "33333333-3333-4333-8333-333333333333",
@@ -38,7 +35,7 @@ export function availableStatus(scope: "system" | "agent" = "agent") {
 export function sharedTarget(profileId = "profile-b", config: Record<string, unknown> = {}) {
   return { kind: "shared", scope: "system", agentId: "main", config, profileId } as const;
 }
-type Context = Partial<Parameters<TestGitHubIdentity["sync"]>[0]> & {
+type Context = Partial<Parameters<ReturnType<typeof createGitHubIdentityForTest>["sync"]>[0]> & {
   config?: Record<string, unknown>;
   agentId?: string;
   scope?: "system" | "agent";
@@ -78,17 +75,13 @@ export function setupRequest(
     context?: Context;
   } = {},
 ) {
-  const request = vi.fn(
-    typeof respond === "function"
-      ? respond
-      : async (method: string) => {
-          const handler = respond[method];
-          if (!handler) {
-            throw new Error(`unexpected method ${method}`);
-          }
-          return handler();
-        },
-  );
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    const handler = typeof respond === "function" ? respond : respond[method];
+    if (!handler) {
+      throw new Error(`unexpected method ${method}`);
+    }
+    return handler(method, params);
+  });
   const client = createTestGatewayClient(request);
   const runExternalMutation =
     options.runExternalMutation ?? (options.mutation ? createMutationRunner(client) : undefined);
