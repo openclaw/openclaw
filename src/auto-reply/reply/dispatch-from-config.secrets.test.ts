@@ -172,14 +172,11 @@ it.for([false, true])(
       expect(progress).not.toHaveBeenCalled();
       await expect(dispatch).resolves.toHaveProperty("result");
     } finally {
-      try {
-        transport.resolve();
-        answer.resolve({ status: "cancelled" });
-        await dispatch;
-      } finally {
-        unsubscribe?.();
-        questionResolverSpy.mockRestore();
-      }
+      transport.resolve();
+      answer.resolve({ status: "cancelled" });
+      await dispatch;
+      unsubscribe?.();
+      questionResolverSpy.mockRestore();
     }
   },
 );

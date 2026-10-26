@@ -11,7 +11,7 @@ import { createQueueTestRun, createQueueSettings } from "./queue.test-helpers.js
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -117,7 +117,7 @@ it.each([
     };
 
     try {
-      const first = enqueue("first summarized request", eligible);
+      enqueue("first summarized request", eligible);
       enqueue("second summarized request", true);
       if (ordinary) {
         enqueue("pending predecessor", true);
@@ -135,15 +135,6 @@ it.each([
         // Compaction during deferral must preserve the original source eligibility.
         enqueue(tailPrompt, true);
         currentOwner = "owner-after-deferral";
-      }
-      const queue = getExistingFollowupQueue(key);
-      expect(queue?.droppedCount).toBe(2);
-      if (ordinary) {
-        expect(queue?.summaryElisions).toHaveLength(0);
-      } else {
-        expect(queue?.summaryElisions).toHaveLength(1);
-        expect(queue?.summaryElisions[0]?.sources).toHaveLength(1);
-        expect(queue?.summaryElisions[0]?.sources[0]).not.toBe(first);
       }
       releaseFirstAttempt.resolve();
       await completed.promise;

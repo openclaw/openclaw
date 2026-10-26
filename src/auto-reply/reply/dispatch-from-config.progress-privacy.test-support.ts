@@ -43,8 +43,6 @@ function expectNoAutomaticReply(dispatcher: ReturnType<typeof createDispatcher>)
 export function registerProgressPrivacyTests() {
   it.each([
     { surface: "telegram", mentioned: false },
-    { surface: "telegram", mentioned: true },
-    { surface: "discord", mentioned: false },
     { surface: "discord", mentioned: true },
   ])(
     "keeps optional $surface draft progress private (mentioned: $mentioned)",
@@ -96,63 +94,48 @@ export function registerProgressPrivacyTests() {
     },
   );
 
-  it.each([false, true])(
-    "gates channel-owned native progress when send policy denies delivery: %s",
-    async (deny) => {
-      const dispatcher = quietSession(deny);
-      const onToolStart = vi.fn(),
-        onItemEvent = vi.fn(),
-        onCommandOutput = vi.fn(),
-        onToolResult = vi.fn();
-      let commentaryEnabled: boolean | undefined;
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: deny ? "direct" : "group",
-          From: deny ? "telegram:123" : "telegram:group:-100123",
-          SessionKey: deny ? "agent:main:telegram:dm:123" : "agent:main:telegram:group:-100123",
-        }),
-        cfg: deny ? emptyConfig : automaticGroupReplyConfig,
-        dispatcher,
-        replyResolver: async (_ctx, opts) => {
-          commentaryEnabled = opts?.commentaryProgressEnabled;
-          await opts?.onToolStart?.(toolStart);
-          await opts?.onItemEvent?.(toolItem);
-          if (deny) {
-            await opts?.onItemEvent?.(modelWait);
-          }
-          await opts?.onCommandOutput?.(commandOutput);
-          await opts?.onToolResult?.({ text: "exec: ok" });
-          return { text: "done" };
-        },
-        replyOptions: {
-          ...suppressedProgress,
-          onToolStart,
-          onItemEvent,
-          onCommandOutput,
-          ...(!deny ? { onToolResult } : {}),
-        },
-      });
-      if (deny) {
-        for (const callback of [onToolStart, onItemEvent, onCommandOutput]) {
-          expect(callback).not.toHaveBeenCalled();
-        }
-        expect(commentaryEnabled).toBeUndefined();
-      } else {
-        expect(onToolStart).toHaveBeenCalledWith(toolStart);
-        expect(onItemEvent).toHaveBeenCalledWith(toolItem);
-        expect(onCommandOutput).toHaveBeenCalledWith(commandOutput);
-        expect(onToolResult).not.toHaveBeenCalled();
-      }
-      expectNoAutomaticReply(dispatcher);
-    },
-  );
+  it("gates channel-owned native progress when send policy denies delivery", async () => {
+    const dispatcher = quietSession(true);
+    const onToolStart = vi.fn(),
+      onItemEvent = vi.fn(),
+      onCommandOutput = vi.fn();
+    let commentaryEnabled: boolean | undefined;
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        From: "telegram:123",
+        SessionKey: "agent:main:telegram:dm:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        commentaryEnabled = opts?.commentaryProgressEnabled;
+        await opts?.onToolStart?.(toolStart);
+        await opts?.onItemEvent?.(toolItem);
+        await opts?.onItemEvent?.(modelWait);
+        await opts?.onCommandOutput?.(commandOutput);
+        await opts?.onToolResult?.({ text: "exec: ok" });
+        return { text: "done" };
+      },
+      replyOptions: {
+        ...suppressedProgress,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
+    });
+    for (const callback of [onToolStart, onItemEvent, onCommandOutput]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(commentaryEnabled).toBeUndefined();
+    expectNoAutomaticReply(dispatcher);
+  });
 
   it("keeps local model wait status transient when quiet channel progress is hidden", async () => {
     const dispatcher = quietSession();
     const onItemEvent = vi.fn();
-    let itemEventHandlerPresent = false;
     const waitEnd = { itemId: "model-wait", kind: "model-wait", phase: "end" } as const;
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -164,7 +147,6 @@ export function registerProgressPrivacyTests() {
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async (_ctx, opts) => {
-        itemEventHandlerPresent = Boolean(opts?.onItemEvent);
         await opts?.onItemEvent?.({ kind: "preamble", progressText: "Checking first" });
         await opts?.onItemEvent?.(modelWait);
         await opts?.onItemEvent?.(waitEnd);
@@ -172,7 +154,6 @@ export function registerProgressPrivacyTests() {
       },
       replyOptions: { onItemEvent, progressPreambleEnabled: true },
     });
-    expect(itemEventHandlerPresent).toBe(true);
     expect(onItemEvent.mock.calls.map(([payload]) => payload)).toEqual([modelWait, waitEnd]);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();

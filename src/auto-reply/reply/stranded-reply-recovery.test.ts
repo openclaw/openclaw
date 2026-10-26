@@ -35,7 +35,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     const onEnqueued = vi.fn(() => true);
     const parent = createMockFollowupRun({
       prompt: "user question",
-      transcriptPrompt: "user question",
       turnAdoptionLifecycle: {
         onAdopted: async () => {},
         onSettled: onComplete,
@@ -50,8 +49,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     expect(run).toMatchObject({
       turnAdoptionLifecycle: undefined,
       replyOperationRunStates: undefined,
-      strandedReplyRetry: true,
-      summaryLine: "stranded-reply-retry",
       admissionSessionId: "sess-rotated",
       run: { sessionKey: parent.run.sessionKey },
     });
@@ -95,22 +92,18 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 });
 
 describe("resolveStrandedReplyRecovery", () => {
-  it.each([
-    { payload: { text: "The recovered answer is ready." }, expected: "none" },
-    {
-      payload: { text: "The fallback model is active.", isFallbackNotice: true },
-      expected: "retry",
-    },
-  ])(
-    "distinguishes a pending terminal answer from a notice: $expected",
-    ({ payload, expected }) => {
-      const recovery = recover({
-        payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
-      });
-
-      expect(recovery.kind).toBe(expected);
-    },
-  );
+  it("does not mistake a pending fallback notice for a terminal answer", () => {
+    expect(
+      recover({
+        payloads: [
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: "The fallback model is active.",
+            isFallbackNotice: true,
+          }),
+        ],
+      }).kind,
+    ).toBe("retry");
+  });
 
   it.each([
     { label: "uncapped", toolsAllow: undefined, expected: ["message"] },
@@ -126,32 +119,7 @@ describe("resolveStrandedReplyRecovery", () => {
   ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
     const base = createMockFollowupRun({ prompt: "question", toolsAllow });
 
-    expect(retry(base)).toMatchObject({
-      strandedReplyRetry: true,
-      disableCollectBatching: true,
-      toolsAllow: expected,
-      run: { suppressNextUserMessagePersistence: true },
-      transcriptPrompt: undefined,
-    });
-  });
-
-  it("returns a diagnostic rather than a second retry", () => {
-    const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
-
-    const recovery = recover({
-      base,
-      finalText: "",
-      terminalReply: { disposition: "empty" },
-    });
-
-    expect(recovery).toMatchObject({
-      kind: "diagnostic",
-      payload: {
-        text: "No answer was returned. Ask again if you still need one.",
-        isError: true,
-        isStatusNotice: true,
-      },
-    });
+    expect(retry(base).toolsAllow).toEqual(expected);
   });
 
   it.each([

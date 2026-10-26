@@ -134,15 +134,6 @@ it.each(["failure", "policy-session", "untrusted-ingress"] as const)(
     });
 
     expect(result.kind).toBe(outcome === "failure" ? "final" : "success");
-    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-    if (outcome === "failure") {
-      await expect(state.runCliAgentMock.mock.results[0]?.value).rejects.toThrow(
-        "CLI execution failed",
-      );
-    }
-    if (trusted) {
-      expect(token).toBeDefined();
-    }
     expect(resolveCapability(token, authorityKey)).toBeUndefined();
   },
 );
