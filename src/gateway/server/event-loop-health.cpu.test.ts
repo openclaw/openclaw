@@ -301,10 +301,11 @@ describe("Linux host CPU sampling", () => {
     if (failure === "topology") {
       vi.mocked(readFileSync).mockReturnValue("0-3\n");
     }
-    if (failure === "read failure")
+    if (failure === "read failure") {
       vi.mocked(readSync).mockImplementationOnce(() => {
         throw new Error("unavailable");
       });
+    }
     await sample();
     expect(monitor.snapshot()?.cpuBreakdown?.hostUtilization).toBeUndefined();
     expect(closeSync).toHaveBeenCalledTimes(2);
