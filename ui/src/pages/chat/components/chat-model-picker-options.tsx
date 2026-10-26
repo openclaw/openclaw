@@ -35,36 +35,37 @@ export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
 }
 
-type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
+type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "entry" | "onSelect" | "index">;
 
-function optionPresentation(options: ModelPresentationProps) {
+function optionPresentation(
+  entry: ChatModelPickerOptionProps["entry"],
+  options: ModelPresentationProps,
+) {
   const selected = isModelPickerOptionSelected(
-    options.entry,
+    entry,
     options.selectedModelValue,
     options.selectedAgentRuntime,
   );
-  const modelLabel = formatModelLabel(options.entry);
-  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
+  const modelLabel = formatModelLabel(entry);
+  const runtime = formatModelRuntimeLabel(entry.provider, entry.agentRuntimeId);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
-  const chatOnlyHelp =
-    options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
+  const chatOnlyHelp = entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
   // Resetting a recorded pin remains possible even when its default model is unavailable.
-  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const resetsPin = entry.isDefault && options.sessionModelPinned;
   const needsAuth =
-    options.entry.disabled &&
-    (options.entry.unavailableReason === "missing-auth" ||
-      options.entry.unavailableReason === "auth-failed");
+    entry.disabled &&
+    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed");
   const onModelSetup = needsAuth ? options.onModelSetup : undefined;
   const modelMeta = needsAuth
     ? runtime?.detail !== undefined
       ? runtimeLabel
       : ""
-    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
+    : [formatModelContextMeta(entry), runtimeLabel].filter(Boolean).join(" · ");
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
-    : options.entry.unavailableReason === "unsupported-runtime"
+    : entry.unavailableReason === "unsupported-runtime"
       ? t("chat.modelControls.runtimeUnavailable")
       : "";
   return {
@@ -82,23 +83,25 @@ function optionPresentation(options: ModelPresentationProps) {
 }
 
 function createOptionPresentation(props: ChatModelPickerOptionProps) {
-  return createMemo(() => optionPresentation(props));
+  return createMemo(() => optionPresentation(props.entry, props));
 }
 
-export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
-  const view = optionPresentation(options);
+export function modelOptionSearchRow(
+  entry: ChatModelPickerOptionProps["entry"],
+  options: ModelPresentationProps,
+): ChatModelSearchRow {
+  const view = optionPresentation(entry, options);
   return {
-    key: modelPickerOptionKey(options.entry),
+    key: modelPickerOptionKey(entry),
     name: view.modelLabel.toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+    keywords: [entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
-    providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
-    reference: options.entry.value,
+    providerLabel: providerDisplayLabel(entry.provider).toLocaleLowerCase(),
+    reference: entry.value,
     selected: view.selected,
     hasShortcut: !view.selected,
-    disabled:
-      options.disabled || Boolean(options.entry.disabled && !view.onModelSetup && !view.resetsPin),
+    disabled: options.disabled || Boolean(entry.disabled && !view.onModelSetup && !view.resetsPin),
   };
 }
 

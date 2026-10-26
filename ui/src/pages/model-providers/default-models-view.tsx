@@ -301,6 +301,7 @@ function FallbackModel(props: {
       }
       control={
         <ModelPicker
+          windowed
           label={props.label}
           value={props.fallbacks[0] ?? ""}
           options={options()}
@@ -459,6 +460,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           title={t("modelProviders.defaults.primary")}
           control={
             <ModelPicker
+              windowed
               label={t("modelProviders.defaults.primary")}
               value={primary()}
               options={primaryOptions()}
@@ -482,6 +484,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }
           control={
             <ModelPicker
+              windowed
               id={UTILITY_MODEL_PICKER_ID}
               label={t("modelProviders.defaults.utility")}
               value={utilityValue()}
