@@ -67,8 +67,12 @@ beforeEach(() => {
             this,
           );
       }
-      observe = (target: Element) => this.targets.add(target);
-      unobserve = (target: Element) => this.targets.delete(target);
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
       disconnect() {
         disconnected = true;
         this.targets.clear();
