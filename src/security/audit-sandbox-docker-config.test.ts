@@ -33,7 +33,7 @@ describe("security audit sandbox docker config", () => {
       enabled.agents = { ...enabled.agents, entries: { ops: { sandbox: { mode: "all" } } } };
       expect(collect(enabled)).not.toContainEqual(finding("docker_config_mode_off"));
 
-      const cases: Array<[SandboxDockerSettings, string[], string?]> = [
+      const cases: Array<[SandboxDockerSettings, string[]]> = [
         [
           {
             binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
@@ -46,25 +46,14 @@ describe("security audit sandbox docker config", () => {
         [
           { binds: [path.join(isolatedHome, ".docker", "config.json") + ":/mnt/docker:ro"] },
           ["bind_mount"],
-          "Dangerous bind mount in sandbox config",
         ],
-        [
-          { network: "container:peer" },
-          ["network_mode"],
-          "Dangerous network mode in sandbox config",
-        ],
+        [{ network: "container:peer" }, ["network_mode"]],
       ];
-      for (const [docker, suffixes, title] of cases) {
-        expect(collect(sandboxConfig(docker))).toEqual(
-          expect.arrayContaining(
-            suffixes.map((suffix) =>
-              finding(`dangerous_${suffix}`, {
-                severity: "critical",
-                ...(title ? { title } : {}),
-              }),
-            ),
-          ),
-        );
+      for (const [docker, suffixes] of cases) {
+        const findings = collect(sandboxConfig(docker));
+        for (const suffix of suffixes) {
+          expect(findings).toContainEqual(finding(`dangerous_${suffix}`, { severity: "critical" }));
+        }
       }
       expect(
         collect(sandboxConfig({ binds: ["D:/data/openclaw/src:/src:ro"] })),

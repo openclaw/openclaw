@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
+import { collectSecretsInConfigFindings } from "./audit-secrets.js";
 import { runSecurityAuditCore } from "./audit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,6 +60,9 @@ describe("security audit gateway config findings", () => {
       "config.secrets.hooks_token_in_config",
     ]) {
       expect(report.findings.some((entry) => entry.checkId === checkId)).toBe(stored);
+      expect(
+        collectSecretsInConfigFindings(snapshot.config).some((entry) => entry.checkId === checkId),
+      ).toBe(stored);
     }
   });
 
