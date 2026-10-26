@@ -18,19 +18,19 @@ const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );
 
-function setupNativePluginInstallFixture() {
+function setupNativePluginInstallFixture(pluginId = "symlink-plugin", packageName = pluginId) {
   const caseDir = suiteTempRootTracker.makeTempDir();
   const pluginDir = path.join(caseDir, "plugin-src");
   const extensionsDir = path.join(caseDir, "state", "extensions");
   writeArtifacts(pluginDir, {
     "package.json": {
-      name: "symlink-plugin",
+      name: packageName,
       version: "1.0.0",
       openclaw: { extensions: ["./dist/index.js"] },
     },
     "dist/index.js": "export {};\n",
     "openclaw.plugin.json": {
-      id: "symlink-plugin",
+      id: pluginId,
       configSchema: { type: "object", properties: {} },
     },
   });
@@ -50,6 +50,42 @@ function archive(pluginDir: string) {
 function exists(root: string, ...parts: string[]) {
   return fs.existsSync(path.join(root, ...parts));
 }
+
+it.runIf(process.platform !== "win32").each([
+  ["Unicode", "café-🦀", "café-🦀"],
+  ["terminal controls", "café\u001b[31m\nFORGED\trow\r🦀", "café\\nFORGED\\trow\\r🦀"],
+])(
+  "renders %s in install progress without changing package files or identity",
+  async (_case, text, displayed) => {
+    const pluginId = `plugin-${text}`;
+    const packageName = `package-${text}`;
+    const { pluginDir, extensionsDir } = setupNativePluginInstallFixture(pluginId, packageName);
+    const messages: string[] = [];
+
+    const result = await installPluginFromPath({
+      path: pluginDir,
+      extensionsDir,
+      logger: { info: (message) => messages.push(message) },
+    });
+
+    assert(result.ok, JSON.stringify(result));
+    expect(result.pluginId).toBe(pluginId);
+    expect(result.targetDir).toBe(path.join(extensionsDir, pluginId));
+    for (const file of ["package.json", "openclaw.plugin.json", "dist/index.js"]) {
+      expect(fs.readFileSync(path.join(result.targetDir, file))).toEqual(
+        fs.readFileSync(path.join(pluginDir, file)),
+      );
+    }
+    expect
+      .soft(messages)
+      .toContain(
+        `Plugin manifest id "plugin-${displayed}" differs from npm package name "package-${displayed}"; using manifest id as the config key.`,
+      );
+    expect
+      .soft(messages)
+      .toContain(`Installing to ${path.join(extensionsDir, `plugin-${displayed}`)}…`);
+  },
+);
 
 it.each(["directory", "archive"] as const)(
   "retains caller-owned rollback and staged artifact review for a %s",
