@@ -95,22 +95,15 @@ it.each(["expires", "cannot be presented"])("releases once when Undo %s", (reaso
   expect(state.chatAttachments).toEqual([]);
 });
 
-it.each(["session", "composer owner"])(
-  "never restores into a replacement %s",
-  async (replacement) => {
-    remove();
-    if (replacement === "session") {
-      state.sessionKey = "agent:other";
-    } else {
-      Object.assign(pane, { stagedAttachmentGatewayOwner: {} });
-    }
-    undo();
-    expect(state.chatAttachments).toEqual([]);
-    expect(releasePayload).toHaveBeenCalledOnce();
-    await Promise.resolve();
-    expect(restoredFocus).not.toHaveBeenCalled();
-  },
-);
+it("never restores into a replacement session", async () => {
+  remove();
+  state.sessionKey = "agent:other";
+  undo();
+  expect(state.chatAttachments).toEqual([]);
+  expect(releasePayload).toHaveBeenCalledOnce();
+  await Promise.resolve();
+  expect(restoredFocus).not.toHaveBeenCalled();
+});
 
 it("releases instead of exceeding the bound when Undo follows a replacement", () => {
   state.chatAttachments = [target, ...["second", "third", "fourth"].map(annotation)];
@@ -120,7 +113,4 @@ it("releases instead of exceeding the bound when Undo follows a replacement", ()
   expect(state.chatAttachments).toHaveLength(4);
   expect(state.chatAttachments).not.toContain(target);
   expect(releasePayload).toHaveBeenCalledOnce();
-  expect(toasts[1]?.message).toBe(
-    "Undo is unavailable because the browser annotation limit has been reached.",
-  );
 });

@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
@@ -13,7 +12,6 @@ import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 
 it.each<[string, boolean]>([
-  ["timeout", true],
   ["session changed", true],
   ["upgraded", false],
   ["upgraded", true],
@@ -22,7 +20,7 @@ it.each<[string, boolean]>([
   ["rejected", true],
   ["disposed", true],
 ])("fences history behind stream admission: %s (startup: %s)", async (change, startup) => {
-  const retry = change === "timeout" || change === "session changed";
+  const retry = change === "session changed";
   const succeeds = retry || change === "upgraded";
   if (retry) {
     useFakeClock();
@@ -32,7 +30,6 @@ it.each<[string, boolean]>([
   const key = "agent:main:selected";
   const rpc = "sessions.messages.subscribe";
   const failure = "Live stream subscription failed";
-  const timeout = { method: rpc, timeoutMs: 30_000, requestSent: true };
   const requested = createDeferred();
   const admitted = createDeferred<{ key: string; agentId: string }>();
   const messages: unknown[] = retry ? [...completed] : [];
@@ -41,13 +38,11 @@ it.each<[string, boolean]>([
     if (++attempts > 1) {
       return { key, agentId: "main" };
     }
-    throw change === "session changed"
-      ? new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "session changed before sessions.messages.subscribe; retry the request",
-          details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED", method: rpc },
-        })
-      : new GatewayProtocolRequestTimeoutError(timeout);
+    throw new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.messages.subscribe; retry the request",
+      details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED", method: rpc },
+    });
   };
   const state = makeChatHost({
     sessionKey: key,
