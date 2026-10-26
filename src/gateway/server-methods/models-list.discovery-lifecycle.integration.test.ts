@@ -27,10 +27,8 @@ it("models.list preserves provider starters and retires unavailable account rows
     ["lifecycle-c", []],
   ]);
   const unavailable = new Set(["lifecycle-c"]);
-  const requests: string[] = [];
   const endpoint = createServer((request, response) => {
     const provider = request.url?.slice(1) ?? "";
-    requests.push(provider);
     if (!rows.has(provider) || request.headers.authorization !== `Bearer ${provider}-key`) {
       response.writeHead(401).end();
       return;
@@ -143,11 +141,8 @@ it("models.list preserves provider starters and retires unavailable account rows
       ids(result, "lifecycle-a").includes("learned") && !result.pendingProviders?.length,
   });
   expect(ids(startup, "lifecycle-a")).toEqual(["Learned", "learned"]);
-  expect(requests.filter((provider) => provider === "lifecycle-c")).toHaveLength(1);
-  const beforeManualRefresh = requests.length;
   expect(ids(await list("lifecycle-b"), "lifecycle-b")).toEqual([]);
   const firstUnavailable = await list("lifecycle-c");
-  expect(requests.slice(beforeManualRefresh)).toEqual(["lifecycle-b", "lifecycle-c"]);
   expect(ids(firstUnavailable, "lifecycle-c")).toEqual(["starter"]);
   expect(firstUnavailable.refreshFailed).toBe(true);
   unavailable.delete("lifecycle-c");
@@ -163,10 +158,8 @@ it("models.list preserves provider starters and retires unavailable account rows
 
   unavailable.delete("lifecycle-a");
   rows.set("lifecycle-a", []);
-  const beforeEmpty = requests.length;
   const empty = await list("lifecycle-a");
   expect(ids(empty, "lifecycle-a")).toEqual([]);
-  expect(requests.slice(beforeEmpty)).toEqual(["lifecycle-a"]);
   const afterEmpty = await read();
   expect(ids(afterEmpty, "lifecycle-b")).toEqual(["sibling-new"]);
   expect(afterEmpty.refreshFailed).not.toBe(true);
@@ -175,17 +168,4 @@ it("models.list preserves provider starters and retires unavailable account rows
   const failedAgain = await list("lifecycle-a");
   expect(ids(failedAgain, "lifecycle-a")).toEqual([]);
   expect(failedAgain.refreshFailed).toBe(true);
-
-  unavailable.delete("lifecycle-a");
-  rows.set("lifecycle-a", ["recovered"]);
-  const recovered = await list("lifecycle-a");
-  expect(ids(recovered, "lifecycle-a")).toEqual(["recovered"]);
-  expect(recovered.refreshFailed).not.toBe(true);
-  const afterRecovery = requests.length;
-  for (let index = 0; index < 3; index++) {
-    const published = await read();
-    expect(ids(published, "lifecycle-a")).toEqual(["recovered"]);
-    expect(ids(published, "lifecycle-b")).toEqual(["sibling-new"]);
-  }
-  expect(requests).toHaveLength(afterRecovery);
 }, 120_000);

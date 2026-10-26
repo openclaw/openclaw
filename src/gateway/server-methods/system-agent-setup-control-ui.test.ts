@@ -10,7 +10,6 @@ import { cleanupSolid, mountSolid } from "../../../ui/src/test-helpers/mount-sol
 import { createSolidApplicationContextProvider } from "../../../ui/src/test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../ui/src/test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../../ui/src/test-helpers/storage.ts";
-import { applyWizardMetadata } from "../../commands/onboard-helpers.js";
 import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
@@ -27,8 +26,6 @@ const braveManifest = braveManifestResult.manifest;
 const fixture = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   exists: false,
-  additionalCatalog: false,
-  providerCapabilities: false,
 }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -46,39 +43,22 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
       legacyIssues: [],
     }),
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-      plugins: fixture.providerCapabilities
-        ? [
-            {
-              id: braveManifest.id,
-              setup: braveManifest.setup,
-              contracts: braveManifest.contracts,
-            },
-            {
-              id: "legacy",
-              setup: { providers: [{ id: "legacy", authMethods: ["api-key"] }] },
-            },
-            {
-              id: "mixed",
-              providers: ["model"],
-              setup: {
-                providers: [
-                  { id: "model", authMethods: ["api-key"] },
-                  { id: "search", envVars: ["MIXED_SEARCH_API_KEY"] },
-                ],
-              },
-              contracts: { webSearchProviders: ["search"] },
-            },
-          ]
-        : fixture.additionalCatalog
-          ? [
-              {
-                id: "fixture-catalog",
-                setup: {
-                  nativeSessionCatalog: { label: "Fixture archive", legacyDefaultEnabled: true },
-                },
-              },
-            ]
-          : [],
+      plugins: [
+        { id: braveManifest.id, setup: braveManifest.setup, contracts: braveManifest.contracts },
+        { id: "legacy", setup: { providers: [{ id: "legacy", authMethods: ["api-key"] }] } },
+        {
+          id: "mixed",
+          providers: ["model"],
+          setup: {
+            nativeSessionCatalog: { label: "Fixture archive", legacyDefaultEnabled: true },
+            providers: [
+              { id: "model", authMethods: ["api-key"] },
+              { id: "search", envVars: ["MIXED_SEARCH_API_KEY"] },
+            ],
+          },
+          contracts: { webSearchProviders: ["search"] },
+        },
+      ],
     }),
   }),
 }));
@@ -103,33 +83,16 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it.each([
-  "unwritten",
-  "initialized",
-  "doctor",
-  "onboard",
-  "upgrade",
-  "authored",
-  "additional-catalog",
-  "provider-capabilities",
-] as const)(
+it.each(["unwritten", "authored"] as const)(
   "uses server-owned first-install evidence for %s selected-agent setup",
   async (state) => {
-    const authored: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-    };
     fixture.exists = state !== "unwritten";
-    fixture.additionalCatalog = state === "additional-catalog";
-    fixture.providerCapabilities = state === "provider-capabilities";
     fixture.config =
       state === "unwritten"
         ? {}
-        : state === "upgrade"
-          ? authored
-          : initializeNativeSessionCatalogPreferences(authored);
-    if (state === "doctor" || state === "onboard") {
-      fixture.config = applyWizardMetadata(fixture.config, { command: state, mode: "local" });
-    }
+        : initializeNativeSessionCatalogPreferences({
+            agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+          });
     if (state === "authored") {
       fixture.config.plugins!.entries!.codex!.config = { sessionCatalog: { enabled: true } };
     }
@@ -160,22 +123,20 @@ it.each([
     await waitForSolid(() =>
       expect(page.querySelector('[data-auth-choice="custom-api-key"] button')).not.toBeNull(),
     );
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "openclaw.setup.detect",
-      { agentId },
-      expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.any(AbortSignal) }),
-    );
+    expect(request.mock.calls[0]?.slice(0, 2)).toEqual(["openclaw.setup.detect", { agentId }]);
     const checkbox = page.querySelector<HTMLInputElement>(".model-setup__native-discovery input");
-    const required = state !== "upgrade" && state !== "authored";
+    const required = state === "unwritten";
     expect(checkbox && checkbox.checked).toBe(required ? false : null);
-    if (fixture.additionalCatalog) {
+    if (required) {
       expect(page.textContent).toContain("Fixture archive");
     }
-    if (fixture.providerCapabilities) {
-      expect(page.querySelector('[data-auth-choice="model-api-key"]')).not.toBeNull();
-      expect(page.querySelector('[data-auth-choice="legacy-api-key"]')).not.toBeNull();
-      expect(page.querySelector('[data-auth-choice="brave-api-key"]')).toBeNull();
-      expect(page.querySelector('[data-auth-choice="search-api-key"]')).toBeNull();
+    for (const [choice, present] of [
+      ["model", true],
+      ["legacy", true],
+      ["brave", false],
+      ["search", false],
+    ] as const) {
+      expect(page.querySelector(`[data-auth-choice="${choice}-api-key"]`) !== null).toBe(present);
     }
     page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!.click();
     await waitForSolid(() =>

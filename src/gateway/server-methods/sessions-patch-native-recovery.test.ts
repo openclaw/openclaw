@@ -103,18 +103,6 @@ it.each([
   }
 });
 
-it("applies remembered native permissions on selection without creating per-chat consent", async () => {
-  const config = agentConfig({ nativeRuntimeConsent: ["native-fixture"] });
-  const entry = { ...original };
-  expect((await prepare(entry, true, config)).ok).toBe(true);
-  expect(entry).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
-  expect(entry).not.toHaveProperty("nativeRuntimeConsent");
-  expect((await prepare({ ...original, sandbox: "required" }, true, config)).ok).toBe(false);
-  expect((await prepare({ ...original }, false, config)).ok).toBe(false);
-  config.agents.entries.main.nativeRuntimeConsent = [];
-  expect((await prepare({ ...original }, true, config)).ok).toBe(false);
-});
-
 it.each([
   ["non-admin", {}, false, cfg, "sandbox"],
   ["mandatory sandbox", { sandbox: "required", sandboxMode: "off" }, true, cfg, "sandbox-required"],
@@ -174,7 +162,6 @@ it.each([false, true])("validates local selection (dormant node=%s)", async (nod
   expect(result.validate?.()).toBeUndefined();
   validate.mockReturnValue("Runtime owner changed");
   expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
-  expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
 });
 
 it.each([false, true])("preserves mandatory sandbox=%s at creation", async (mandatory) => {

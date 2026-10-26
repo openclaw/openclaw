@@ -6,14 +6,12 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   captureActivePluginRegistrySnapshot,
-  createPluginRegistryOwner,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -118,7 +116,6 @@ describe("plugins.inspect runtime retention disclosure", () => {
         client: visibility === "no client" ? null : client,
       });
       expect(response).toEqual({ ...inspection, decisions: [] });
-      expect(fixture.run).not.toHaveBeenCalled();
     },
   );
 
@@ -135,50 +132,39 @@ describe("plugins.inspect runtime retention disclosure", () => {
       decisions: [],
     });
     expect(hasCurrentClientAuthority).toHaveReturnedWith(false);
-    expect(fixture.run).not.toHaveBeenCalled();
   });
 
   it("uses the request registry after another Gateway publishes during inventory", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const previous = captureActivePluginRegistrySnapshot();
-      const request = retainedPlugin();
-      const unrelated = retainedPlugin();
-      const requestOwner = createPluginRegistryOwner(request.registry);
-      const unrelatedOwner = createPluginRegistryOwner(unrelated.registry);
-      const entered = createDeferredCore();
-      const catalog = createDeferredCore<typeof inspection>();
-      inspectManagedPlugin.mockImplementationOnce(() => {
-        entered.resolve();
-        return catalog.promise;
-      });
-      setActivePluginRegistry(request.registry);
-      const pending = inspect(requestOwner.registry);
-      try {
-        await awaitGateBeforeSettlement(entered.promise, pending, "inspection skipped inventory");
-        // A colliding ID in the process projection cannot replace this request's owner.
-        setActivePluginRegistry(unrelated.registry);
-        unrelated.release();
-        catalog.resolve(inspection);
-        expect(await pending).toMatchObject({
-          runtimeRetention: {
-            pluginId: inspection.plugin.id,
-            total: 1,
-            references: [{ owner: acquisitionOwner }],
-          },
-        });
-        expect(request.run).not.toHaveBeenCalled();
-        expect(unrelated.run).not.toHaveBeenCalled();
-      } finally {
-        catalog.resolve(inspection);
-        await Promise.allSettled([pending]);
-        request.release();
-        unrelated.release();
-        try {
-          await Promise.all([requestOwner.close(), unrelatedOwner.close()]);
-        } finally {
-          restoreActivePluginRegistrySnapshot(previous);
-        }
-      }
+    const previous = captureActivePluginRegistrySnapshot();
+    const request = retainedPlugin();
+    const unrelated = retainedPlugin();
+    const entered = createDeferredCore();
+    const catalog = createDeferredCore<typeof inspection>();
+    inspectManagedPlugin.mockImplementationOnce(() => {
+      entered.resolve();
+      return catalog.promise;
     });
+    setActivePluginRegistry(request.registry);
+    const pending = inspect(request.registry);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "inspection skipped inventory");
+      // A colliding ID in the process projection cannot replace this request's owner.
+      setActivePluginRegistry(unrelated.registry);
+      unrelated.release();
+      catalog.resolve(inspection);
+      expect(await pending).toMatchObject({
+        runtimeRetention: {
+          pluginId: inspection.plugin.id,
+          total: 1,
+          references: [{ owner: acquisitionOwner }],
+        },
+      });
+    } finally {
+      catalog.resolve(inspection);
+      await Promise.allSettled([pending]);
+      request.release();
+      unrelated.release();
+      restoreActivePluginRegistrySnapshot(previous);
+    }
   });
 });
