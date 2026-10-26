@@ -16,6 +16,10 @@ function prepareSend(params: PreparedSend["ctx"]["params"], payload: PreparedSen
   });
 }
 const presentation = { blocks: [{ type: "text" as const, text: "Quoted chart" }] };
+const { actions: pluginActions, agentPrompt } = telegramPlugin;
+function describeActions(cfg: OpenClawConfig, accountId?: string) {
+  return pluginActions?.describeMessageTool?.({ cfg, accountId });
+}
 
 describe("telegram actions contract", () => {
   it("requires send and poll permission on the same discoverable account", () => {
@@ -38,7 +42,7 @@ describe("telegram actions contract", () => {
       ["senderOnly", true],
       ["pollOnly", false],
     ] as const) {
-      const actions = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions;
+      const actions = describeActions(cfg, accountId)?.actions;
       expect(actions?.includes("send")).toBe(sends);
       expect(actions).not.toContain("poll");
     }
@@ -55,8 +59,8 @@ describe("telegram actions contract", () => {
         },
       },
     });
-    const root = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" });
-    const work = telegramPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" });
+    const root = describeActions(cfg, "default");
+    const work = describeActions(cfg, "work");
     expect(root?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
     expect(root?.actions).not.toContain("react");
     expect(root?.actions).not.toContain("emoji-list");
@@ -87,29 +91,25 @@ describe("telegram actions contract", () => {
         },
       },
     });
-    const scoped = telegramPlugin.actions?.describeMessageTool?.({
-      cfg,
-      accountId: "carey-notifications",
-    });
+    const scoped = describeActions(cfg, "carey-notifications");
     expect(scoped?.actions).toContain("send");
     expect(scoped?.actions).not.toContain("react");
     expect(scoped?.actions).not.toContain("poll");
-    expect(telegramPlugin.actions?.describeMessageTool?.({ cfg })?.actions).toEqual(
+    expect(describeActions(cfg)?.actions).toEqual(
       expect.arrayContaining(["send", "react", "poll"]),
     );
-    expect(
-      telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg, accountId: "carey-notifications" })
-        ?.level,
-    ).toBe("extensive");
-    expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
+    expect(agentPrompt?.reactionGuidance?.({ cfg, accountId: "carey-notifications" })?.level).toBe(
+      "extensive",
+    );
+    expect(agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
   });
 
   it.each(["disabled", "tokenless", "unknown"] as const)(
     "hides actions and capabilities for a %s scoped account",
     (accountId) => {
       expect(
-        telegramPlugin.actions?.describeMessageTool?.({
-          cfg: telegramConfig({
+        describeActions(
+          telegramConfig({
             ...(accountId !== "tokenless" ? { botToken: "tok-root" } : {}),
             accounts: {
               healthy: { botToken: "tok-healthy" },
@@ -118,7 +118,7 @@ describe("telegram actions contract", () => {
             },
           }),
           accountId,
-        }),
+        ),
       ).toEqual({ actions: [], capabilities: [], schema: null });
     },
   );
@@ -130,7 +130,6 @@ describe("telegram actions contract", () => {
         plain: { botToken: "tok-plain" },
       },
     });
-    const agentPrompt = telegramPlugin.agentPrompt;
     const rich = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "rich" });
     const plain = agentPrompt?.inboundFormattingHints?.({ cfg, accountId: "plain" });
 
@@ -148,7 +147,7 @@ describe("telegram actions contract", () => {
 
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {
     const args = { channel: "telegram", target: "-1003894873578", message: "hello" };
-    const request = telegramPlugin.actions?.resolveCliActionRequest?.({
+    const request = pluginActions?.resolveCliActionRequest?.({
       action: "thread-create",
       args: { ...args, threadName: "Build Updates" },
     });
@@ -184,10 +183,7 @@ describe("telegram actions contract", () => {
     await expect(
       prepareSend(
         { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
-        {
-          text: "Choose",
-          presentation,
-        },
+        { text: "Choose", presentation },
       ),
     ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
   });
