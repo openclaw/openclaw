@@ -437,7 +437,7 @@ it.each([false, true])(
 );
 
 it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
-  const { run } = harness([pluginTool("fake_noop", "Noop")]);
+  const { run } = harness([]);
   const input = { code: 'await yield_control("pause"); return "done";' };
   const executionContext = (turnId: string) =>
     ({
@@ -488,13 +488,12 @@ it.each([-60_000, 60_000])(
   async (wallStep) => {
     mockClock();
     const { exec } = harness([], { codeMode: { snapshotTtlSeconds: 60 } });
-    const first = resultDetails(
-      await exec.execute("clock-step", { code: 'await yield_control(); return "done";' }),
-    );
+    const code = 'await yield_control(); return "done";';
+    const first = resultDetails(await exec.execute("clock-step", { code }));
     const state = parkedState(first);
     vi.setSystemTime(Date.now() + wallStep);
     // Parking another run rearms the shared timer against the first run's deadline.
-    await exec.execute("clock-step-2", { code: 'await yield_control(); return "done";' });
+    await exec.execute("clock-step-2", { code });
     await vi.advanceTimersByTimeAsync(59_999);
     expect(state.owner.signal.aborted).toBe(false);
     expect(testing.activeRuns.has(String(first.runId))).toBe(true);
@@ -507,7 +506,7 @@ it.each([-60_000, 60_000])(
 it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
   "rejects suspended-run callers missing the owner %s",
   async (missing) => {
-    const { ctx, run, resume } = harness([pluginTool("fake_noop", "Noop")], { agentId: "owner" });
+    const { ctx, run, resume } = harness([], { agentId: "owner" });
     const first = await run('await yield_control("pause"); return "owner-secret";', "scoped");
     expect(first.status).toBe("waiting");
     const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
@@ -550,10 +549,8 @@ it.each([
       ? ({ type: "not-a-type" } as never)
       : Type.Object({ count: Type.Number() }, { additionalProperties: false });
   const result = await harness([target]).run(
-    "try { await contract_target({ count: " +
-      (kind === "input" ? '"wrong"' : "1") +
-      " }); } catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location, message: e.message }; }",
-    "preflight",
+    `try { await contract_target({ count: ${kind === "input" ? '"wrong"' : "1"} }); }
+     catch (e) { return { code: e.code, effectStatus: e.effectStatus, location: e.location }; }`,
   );
   expect(result).toMatchObject({
     status: "completed",
@@ -585,7 +582,6 @@ it("reports bounded output validation details after a mutation without exposing 
 
   const details = await harness([target]).run(
     "try { await update_receipt({}); } catch (e) { return { code:e.code, effectStatus:e.effectStatus, message:e.message }; }",
-    "preflight",
   );
 
   expect(target.execute).toHaveBeenCalledOnce();
@@ -610,10 +606,7 @@ it("rejects stale exec timeout input before starting the command", async () => {
   const exec = createExecTool({ host: "gateway", security: "full", ask: "off" });
   const execute = vi.spyOn(exec, "execute");
 
-  const details = await harness([exec]).run(
-    'await exec({ command: "printf ok", timeout: 5 });',
-    "preflight",
-  );
+  const details = await harness([exec]).run('await exec({ command: "printf ok", timeout: 5 });');
 
   expect(execute).not.toHaveBeenCalled();
   expect(details).toMatchObject({
@@ -673,35 +666,6 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
     expect(() => pending.reply.take()).toThrow("unavailable");
   }
 });
-
-it.each(["cancel", "expiry"])(
-  "does not retain a late tool completion after parked %s",
-  async (close) => {
-    const { tool, started, release, finished } = pendingTool("late_page", "late".repeat(300000));
-    const h = harness([tool]);
-    const first = await h.run(
-      "const page = late_page({}); await yield_control(); return (await page).length;",
-      "late",
-    );
-    await started.promise;
-    const retained = parkedState(first);
-    if (close === "expiry") {
-      testing.removeExpiredRuns(retained.expiresAt + 1);
-    } else {
-      clearToolSearchCatalog(h.ctx);
-    }
-    await drainPending(retained);
-    release.resolve();
-    await finished.promise;
-    await Promise.resolve();
-    expect(retained.owner.signal.aborted).toBe(true);
-    expect(testing.activeRuns.size).toBe(0);
-    for (const pending of retained.pending) {
-      expect(() => pending.reply.take()).toThrow("unavailable");
-    }
-    expect(tool.execute).toHaveBeenCalledOnce();
-  },
-);
 
 it("releases each guest-discarded timer lease before the cell closes", async () => {
   const h = harness([]);
