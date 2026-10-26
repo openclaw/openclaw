@@ -74,6 +74,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Inspect handler wiring without starting realtime transport.
 vi.mock("./webhook/realtime-handler.js", () => ({
   RealtimeCallHandler: class {
     constructor(...args: ConstructorParameters<typeof RealtimeCallHandler>) {

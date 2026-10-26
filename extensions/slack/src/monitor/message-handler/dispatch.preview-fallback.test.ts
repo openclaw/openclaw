@@ -423,6 +423,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: () => undefined,
 }));
 
+// mock-isolation: Keep status reactions local to this dispatch fixture.
 vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
   createStatusReactionController: () => statusReactionControllerMock,
   logAckFailure: () => {},

@@ -450,7 +450,7 @@ function storeFixture(dsn = connection!) {
   const opened: PostgresSyncConnection[] = [];
   return {
     anchor,
-    open(selectedSchema: StoreSchema, existingVersion = false) {
+    open(this: void, selectedSchema: StoreSchema, existingVersion = false) {
       const db = openPostgresEngineTestStore({
         anchor,
         schema: selectedSchema,
@@ -466,7 +466,7 @@ function storeFixture(dsn = connection!) {
       opened.push(db);
       return db;
     },
-    close() {
+    close(this: void) {
       try {
         if (opened[0]) {
           opened[0].exec(`DROP SCHEMA "${opened[0].schema}" CASCADE`);

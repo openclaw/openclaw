@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const editSlackMessageMock = vi.fn();
 
+// mock-isolation: Capture preview edits without Slack API calls.
 vi.mock("../../actions.js", () => ({
   editSlackMessage: editSlackMessageMock,
   editSlackRenderedMessage: editSlackMessageMock,

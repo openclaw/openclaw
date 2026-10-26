@@ -6,6 +6,7 @@ import {
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
 
+// mock-isolation: Test explicit registry entries without loading installed providers.
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
 }));
