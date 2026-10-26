@@ -83,13 +83,6 @@ const mocks = vi.hoisted(() => {
         value: { cert: "public-certificate", fingerprintSha256: "sha256:local-fingerprint" },
       }),
     ),
-    inspectWindowsGatewayFirewall: vi.fn<() => Promise<unknown>>(async () => ({
-      applies: false,
-      severity: "info",
-      code: "windows_firewall_not_applicable",
-      message: "Windows LAN firewall diagnostics do not apply.",
-      details: [],
-    })),
     probeGateway: vi.fn<typeof import("../gateway/probe.js").probeGateway>(async ({ url }) =>
       successfulProbe(url),
     ),
@@ -136,10 +129,6 @@ vi.mock("../infra/ssh-config.js", () => ({
 
 vi.mock("../infra/tls/gateway.js", () => ({
   inspectGatewayTlsCertificate: mocks.inspectGatewayTlsCertificate,
-}));
-
-vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
-  inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
 }));
 
 vi.mock("../gateway/probe.js", async (importOriginal) => ({
@@ -206,20 +195,6 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
       },
     },
   } as never);
-}
-
-function requireUnresolvedSecretRefWarning(runtimeLogs: string[]) {
-  const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-    warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-  };
-  return expectDefined(
-    parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-    ),
-    "expected unresolved gateway auth token SecretRef warning",
-  );
 }
 
 const localGatewayConfig = (token = "ltok", tls = false): OpenClawConfig => ({
@@ -316,28 +291,6 @@ describe("gateway-status command", () => {
     );
   });
 
-  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", async () => {
-    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
-    probeGateway.mockImplementation(async ({ url }) =>
-      createUnreachableGatewayProbe(url, "connection refused"),
-    );
-
-    await expect(run()).rejects.toThrow("__exit__:1");
-
-    expect(output()).toMatchObject({
-      ok: false,
-      primaryTargetId: null,
-      warnings: [
-        {
-          code: "no_gateway_reachable",
-          message:
-            "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
-          targetIds: ["localLoopback"],
-        },
-      ],
-    });
-  });
-
   it.each([
     [
       "same process via SSH",
@@ -391,28 +344,24 @@ describe("gateway-status command", () => {
     },
   );
 
-  it("rejects configured and ambient credentials before probing an explicit URL", async () => {
-    const configuredGateway = localGatewayConfig("configured-local-token");
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
-        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
-      },
-      async () => {
-        await readBestEffortConfig.withImplementation(
-          async () => configuredGateway as never,
-          async () => {
-            await expect(
-              run({
-                url: "wss://attacker.example:18789",
-              }),
-            ).rejects.toMatchObject({
+  it.each([undefined, "token", "password"] as const)(
+    "requires explicit URL credentials and honors %s without ambient credentials",
+    async (credential) => {
+      readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("configured-local-token"));
+      await withEnvAsync(
+        {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+          OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+        },
+        async () => {
+          const url = "wss://attacker.example:18789";
+          if (!credential) {
+            await expect(run({ url })).rejects.toMatchObject({
               name: "GatewayExplicitAuthRequiredError",
               message: expect.stringContaining(
                 "gateway url override requires explicit credentials",
               ),
             });
-
             for (const effect of [
               readBestEffortConfig,
               discoverGatewayBeacons,
@@ -421,43 +370,15 @@ describe("gateway-status command", () => {
             ]) {
               expect(effect).not.toHaveBeenCalled();
             }
-          },
-        );
-      },
-    );
-  });
-
-  it.each([
-    {
-      credential: "token",
-      options: { token: "explicit-remote-token" },
-      expectedAuth: { token: "explicit-remote-token", password: undefined },
-    },
-    {
-      credential: "password",
-      options: { password: "explicit-remote-password" },
-      expectedAuth: { token: undefined, password: "explicit-remote-password" },
-    },
-  ])(
-    "honors an explicit $credential for an explicit Gateway URL",
-    async ({ options, expectedAuth }) => {
-      const explicitUrl = "wss://attacker.example:18789";
-      readBestEffortConfig.mockResolvedValueOnce(
-        localGatewayConfig("configured-local-token") as never,
-      );
-
-      await withEnvAsync(
-        {
-          OPENCLAW_GATEWAY_TOKEN: "ambient-local-token",
-          OPENCLAW_GATEWAY_PASSWORD: "ambient-local-password",
-        },
-        async () => {
-          await run({
-            url: explicitUrl,
-            ...options,
+            return;
+          }
+          const value = "explicit-remote-credential";
+          await run({ url, [credential]: value });
+          expect(requireProbeCall(url).auth).toEqual({
+            token: undefined,
+            password: undefined,
+            [credential]: value,
           });
-
-          expect(requireProbeCall(explicitUrl).auth).toEqual(expectedAuth);
         },
       );
     },
@@ -476,7 +397,7 @@ describe("gateway-status command", () => {
     });
   });
 
-  it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
+  it("reports unreachable gateways and unresolved SecretRef diagnostics when probing fails", async () => {
     await withEnvAsync(
       { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
       async () => {
@@ -490,10 +411,19 @@ describe("gateway-status command", () => {
     );
 
     expect(capture.runtimeErrors).toHaveLength(0);
-    const unresolvedWarning = requireUnresolvedSecretRefWarning(capture.runtimeLogs);
-    expect(unresolvedWarning.targetIds).toContain("localLoopback");
-    expect(unresolvedWarning.message).toContain("env:default:MISSING_GATEWAY_TOKEN");
-    expect(unresolvedWarning.message).not.toContain("missing or empty");
+    expect(output()).toMatchObject({ ok: false, primaryTargetId: null });
+    const warnings = output<{ warnings: unknown[] }>().warnings;
+    expect(warnings).toContainEqual({
+      code: "auth_secretref_unresolved",
+      message: "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
+      targetIds: ["localLoopback"],
+    });
+    expect(warnings).toContainEqual({
+      code: "no_gateway_reachable",
+      message:
+        "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+      targetIds: ["localLoopback"],
+    });
   });
 
   it("does not replace an unresolved local token SecretRef with OPENCLAW_GATEWAY_TOKEN", async () => {
@@ -724,34 +654,37 @@ describe("gateway-status command", () => {
   );
 
   it.each([
-    { ssh: undefined, port: 2222, explicitPort: false },
-    { ssh: "alias:22", port: 22, explicitPort: true },
-  ])("resolves SSH port $port with explicit=$explicitPort", async ({ ssh, port, explicitPort }) => {
-    await withEnvAsync({ USER: "steipete" }, async () => {
-      readBestEffortConfig.mockResolvedValueOnce(
-        makeRemoteGatewayConfig("ws://peters-mac-studio-1.sheep-coho.ts.net:18789"),
-      );
-      resolveSshConfig.mockResolvedValueOnce({
-        user: "steipete",
-        host: "peters-mac-studio-1.sheep-coho.ts.net",
-        port,
-        identityFiles: ["/tmp/id_ed25519"],
+    { ssh: undefined, port: 2222, explicitPort: false, sshIdentity: undefined },
+    { ssh: "alias:22", port: 22, explicitPort: true, sshIdentity: undefined },
+    { ssh: undefined, port: 22, explicitPort: false, sshIdentity: "/tmp/explicit_id" },
+  ])(
+    "resolves SSH port $port and identity $sshIdentity",
+    async ({ ssh, port, explicitPort, sshIdentity }) => {
+      await withEnvAsync({ USER: "steipete" }, async () => {
+        readBestEffortConfig.mockResolvedValueOnce(
+          makeRemoteGatewayConfig("ws://studio.example:18789"),
+        );
+        resolveSshConfig.mockResolvedValueOnce({
+          user: "steipete",
+          host: "studio.example",
+          port,
+          identityFiles: ["/tmp/id_ed25519"],
+        });
+        await run({ ssh, sshIdentity });
+        expect(startSshPortForward).toHaveBeenCalledTimes(1);
+        expect(resolveSshConfig).toHaveBeenCalledWith(expect.anything(), {
+          explicitPort,
+          identity: sshIdentity,
+          timeoutMs: 800,
+          signal: expect.any(AbortSignal),
+        });
+        expect(requireSshForwardCall()).toMatchObject({
+          target: `steipete@studio.example:${port}`,
+          identity: sshIdentity ?? "/tmp/id_ed25519",
+        });
       });
-
-      await run({ ssh });
-
-      expect(startSshPortForward).toHaveBeenCalledTimes(1);
-      expect(resolveSshConfig).toHaveBeenCalledWith(expect.anything(), {
-        explicitPort,
-        identity: undefined,
-        timeoutMs: 800,
-        signal: expect.any(AbortSignal),
-      });
-      const call = requireSshForwardCall();
-      expect(call.target).toBe(`steipete@peters-mac-studio-1.sheep-coho.ts.net:${port}`);
-      expect(call.identity).toBe("/tmp/id_ed25519");
-    });
-  });
+    },
+  );
 
   it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
     await withEnvAsync({ USER: "" }, async () => {
@@ -765,25 +698,6 @@ describe("gateway-status command", () => {
       const call = requireSshForwardCall();
       expect(call.target).toBe("studio.example");
     });
-  });
-
-  it("keeps explicit SSH identity even when ssh config provides one", async () => {
-    readBestEffortConfig.mockResolvedValueOnce(
-      makeRemoteGatewayConfig("wss://studio.example:18789"),
-    );
-    resolveSshConfig.mockResolvedValueOnce({
-      user: "me",
-      host: "studio.example",
-      port: 22,
-      identityFiles: ["/tmp/id_from_config"],
-    });
-
-    await run({
-      sshIdentity: "/tmp/explicit_id",
-    });
-
-    const call = requireSshForwardCall();
-    expect(call.identity).toBe("/tmp/explicit_id");
   });
 
   it("derives summary capability from reachable probes only in json output", async () => {
