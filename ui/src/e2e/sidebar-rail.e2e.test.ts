@@ -246,7 +246,7 @@ suite.define(() => {
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark" },
+            { "ui.themeMode": "dark", "new-session.migration.v1": true },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
