@@ -22,7 +22,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
 
   async function prepareAndDispatch(
     finalText: string,
-    conversationContext?: string,
+    conversationContext = history(),
     reasoningSnapshots: readonly string[] = [],
   ) {
     const errors: unknown[] = [];
@@ -43,46 +43,40 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
         })
       : undefined;
     try {
-      if (conversationContext || preview) {
-        const messageId = `reply-scaffolding-${++messageSequence}`;
-        await dispatchInboundMessage({
-          cfg,
-          ctx: {
-            Body: conversationContext,
-            BodyForAgent: conversationContext,
-            ChatType: "direct",
-            From: "123",
-            MessageSid: messageId,
-            Provider: "telegram",
-            SessionKey: `agent:test:${messageId}`,
-            Surface: "telegram",
-            To: "456",
-          },
-          dispatcher,
-          outboundHooks: "disabled",
-          replyOptions: preview
-            ? {
-                onReasoningStream: async ({ text }) => {
-                  const { reasoningText } = splitTelegramReasoningText(text, true);
-                  if (reasoningText) {
-                    preview.update(reasoningText);
-                    await preview.flush();
-                  }
-                },
-              }
-            : undefined,
-          replyResolver: async (_ctx, options) => {
-            for (const text of reasoningSnapshots) {
-              await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+      const messageId = `reply-scaffolding-${++messageSequence}`;
+      await dispatchInboundMessage({
+        cfg,
+        ctx: {
+          Body: conversationContext,
+          BodyForAgent: conversationContext,
+          ChatType: "direct",
+          From: "123",
+          MessageSid: messageId,
+          Provider: "telegram",
+          SessionKey: `agent:test:${messageId}`,
+          Surface: "telegram",
+          To: "456",
+        },
+        dispatcher,
+        outboundHooks: "disabled",
+        replyOptions: preview
+          ? {
+              onReasoningStream: async ({ text }) => {
+                const { reasoningText } = splitTelegramReasoningText(text, true);
+                if (reasoningText) {
+                  preview.update(reasoningText);
+                  await preview.flush();
+                }
+              },
             }
-            return { text: finalText };
-          },
-        });
-      } else {
-        dispatcher.sendFinalReply({ text: finalText });
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-      }
+          : undefined,
+        replyResolver: async (_ctx, options) => {
+          for (const text of reasoningSnapshots) {
+            await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
+          }
+          return { text: finalText };
+        },
+      });
       expect(errors).toEqual([]);
     } finally {
       await preview?.discard();
