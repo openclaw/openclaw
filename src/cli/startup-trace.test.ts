@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createGatewayDispatchStartupTrace } from "./startup-trace.js";
+import { createGatewayDispatchStartupTrace, measureGatewayBootstrapStep } from "./startup-trace.js";
 
 function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
   flushDiagnosticsTimeline();
@@ -60,6 +60,22 @@ it.each(["gateway", "status"])("foreground progress: %s", async (command) => {
     expect(messages()[1]).toMatch(/startup phase: entry.run-main-import \d+\.\dms total=/);
   }
 });
+
+it.each(["0", "1"])(
+  "captures phase memory before buffered logs flush (trace=%s)",
+  async (enabled) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+    const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(128 * 1024 * 1024);
+    const trace = makeTrace(["gateway"], "cli.main");
+    await trace.measure("gateway-run-select-environment", () => {});
+    rss.mockReturnValue(256 * 1024 * 1024);
+    trace.setLineFormatter((message) => message);
+    expect(messages().at(-1)).toMatch(/ rssMb=128\.0 heapUsedMb=\d+\.\d\n$/);
+
+    await measureGatewayBootstrapStep("cli.bootstrap.admission.database-readiness", () => {});
+    expect(messages().at(-1)).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d\n$/);
+  },
+);
 
 it.each([
   [false, 2],
