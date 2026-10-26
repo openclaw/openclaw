@@ -16,22 +16,11 @@ const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   ensureCliPath: true,
   networkProxy: "default",
 };
+const bypass = { networkProxy: "bypass" } as const;
+const skip = { ...bypass, configGuard: "skip" } as const;
 
-type NetworkProxyResolver = Extract<
-  CliCommandPathPolicy["networkProxy"],
-  (ctx: { argv: string[]; commandPath: string[] }) => unknown
->;
-type LoadPluginsResolver = Extract<
-  CliCommandPathPolicy["loadPlugins"],
-  (ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => unknown
->;
-type ConfigGuardResolver = Extract<
-  CliCommandPathPolicy["configGuard"],
-  (ctx: { argv: string[]; commandPath: string[] }) => unknown
->;
-
-function expectResolvedPolicy(commands: string[], expected: Partial<CliCommandPathPolicy>): void {
-  for (const command of commands) {
+function expectResolvedPolicy(commands: string, expected: Partial<CliCommandPathPolicy>): void {
+  for (const command of commands.split("|")) {
     expect(resolveCliCommandPathPolicy(command.split(" ")), command).toEqual({
       ...DEFAULT_EXPECTED_POLICY,
       ...expected,
@@ -41,19 +30,25 @@ function expectResolvedPolicy(commands: string[], expected: Partial<CliCommandPa
 
 function expectNetworkProxyResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { networkProxy: NetworkProxyResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  networkProxy: Exclude<CliCommandPathPolicy["networkProxy"], string>;
+} {
   expect(typeof policy.networkProxy).toBe("function");
 }
 
 function expectLoadPluginsResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { loadPlugins: LoadPluginsResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  loadPlugins: Exclude<CliCommandPathPolicy["loadPlugins"], string>;
+} {
   expect(typeof policy.loadPlugins).toBe("function");
 }
 
 function expectConfigGuardResolver(
   policy: CliCommandPathPolicy,
-): asserts policy is CliCommandPathPolicy & { configGuard: ConfigGuardResolver } {
+): asserts policy is CliCommandPathPolicy & {
+  configGuard: Exclude<CliCommandPathPolicy["configGuard"], string>;
+} {
   expect(typeof policy.configGuard).toBe("function");
 }
 
@@ -84,23 +79,6 @@ describe("command-path-policy", () => {
     expect(agentPolicy.loadPlugins(commandContext(["agent"], ["--local"], true))).toBe(true);
     expect(agentPolicy.configGuard(commandContext(["agent"]))).toBe("skip");
     expect(agentPolicy.configGuard(commandContext(["agent"], ["--local"]))).toBe("run");
-    expectResolvedPolicy(["agent exec"], {
-      configGuard: "skip",
-      ownsProtocolStdout: true,
-      hideBanner: true,
-    });
-
-    expectResolvedPolicy(["agents", "agents list", "agents bindings"], {
-      configGuard: "skip",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["agents add", "agents team create"], {
-      configGuard: "defer",
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["agents bind", "agents unbind", "agents set-identity", "agents delete"], {
-      networkProxy: "bypass",
-    });
   });
 
   it("loads only sandbox backend owner plugins for runtime commands", () => {
@@ -133,38 +111,42 @@ describe("command-path-policy", () => {
     expect(policy.loadPlugins(commandContext(["sandbox", subcommand], flags))).toBe(false);
   });
 
-  it("resolves mixed startup-only rules", () => {
-    expectResolvedPolicy(["worker"], {
-      configGuard: "skip",
-      hideBanner: true,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(
-      ["install", "status", "pair", "setup"].map((action) => `browser extension ${action}`),
-      { configGuard: "validate", networkProxy: "bypass" },
-    );
-    expectResolvedPolicy(["browser extension native-host"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      hideBanner: true,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["configure"], {
-      configGuard: "skip",
-      stateStoreGuard: "run",
-    });
-    expectResolvedPolicy(["config file"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["config set"], {
-      configGuard: "defer",
-      networkProxy: "bypass",
-    });
+  it.each<[string, Partial<CliCommandPathPolicy>]>([
+    ["agent exec", { configGuard: "skip", ownsProtocolStdout: true, hideBanner: true }],
+    ["agents|agents list|agents bindings", skip],
+    ["agents add|agents team create|config set", { ...bypass, configGuard: "defer" }],
+    ["agents bind|agents unbind|agents set-identity|agents delete", bypass],
+    ["worker", { ...skip, hideBanner: true, ownsProtocolStdout: true }],
+    [
+      "browser extension install|browser extension status|browser extension pair|browser extension setup",
+      { ...bypass, configGuard: "validate" },
+    ],
+    [
+      "browser extension native-host",
+      { ...skip, ensureCliPath: false, hideBanner: true, ownsProtocolStdout: true },
+    ],
+    ["configure", { configGuard: "skip", stateStoreGuard: "run" }],
+    ["config file", { ...skip, ensureCliPath: false, ownsProtocolStdout: true }],
+    ["config schema", { ...skip, ownsProtocolStdout: true }],
+    ["plugins update", { hideBanner: true }],
+    ["plugins list|plugins lint", { ...skip, ensureCliPath: false }],
+    ["plugins install|plugins inspect|plugins registry|plugins doctor", {}],
+    ["plugins build|plugins validate|plugins init|skills search", { configGuard: "skip" }],
+    [
+      "qa suite|config|config validate|gateway status|gateway health|cron list|hooks|hooks list|hooks info|hooks check|skills info",
+      skip,
+    ],
+    [
+      "memory index",
+      { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    ],
+    [
+      "memory search",
+      { configGuard: "skip", loadPlugins: "always", pluginRegistry: { scope: "memory" } },
+    ],
+  ])("resolves static startup policies for %s", expectResolvedPolicy);
+
+  it("resolves dynamic Doctor and memory startup rules", () => {
     const doctorPolicy = resolveCliCommandPathPolicy(["doctor"]);
     expectNetworkProxyResolver(doctorPolicy);
     expect(doctorPolicy).toMatchObject({
@@ -178,55 +160,6 @@ describe("command-path-policy", () => {
     expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--client-credentials"]))).toBe(
       "bypass",
     );
-    expectResolvedPolicy(["config schema"], {
-      configGuard: "skip",
-      ownsProtocolStdout: true,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(["plugins update"], { hideBanner: true });
-    expectResolvedPolicy(["plugins list", "plugins lint"], {
-      configGuard: "skip",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    });
-    expectResolvedPolicy(
-      ["plugins install", "plugins inspect", "plugins registry", "plugins doctor"],
-      {},
-    );
-    // Authoring commands operate on a target package, not operator config, so
-    // a host config the running CLI predates must not abort them.
-    expectResolvedPolicy(["plugins build", "plugins validate", "plugins init", "skills search"], {
-      configGuard: "skip",
-    });
-    expectResolvedPolicy(
-      [
-        "qa suite",
-        "config",
-        "config validate",
-        "gateway status",
-        "gateway health",
-        "cron list",
-        "hooks",
-        "hooks list",
-        "hooks info",
-        "hooks check",
-        "skills info",
-      ],
-      {
-        configGuard: "skip",
-        networkProxy: "bypass",
-      },
-    );
-    expectResolvedPolicy(["memory index"], {
-      configGuard: "validate",
-      loadPlugins: "always",
-      pluginRegistry: { scope: "memory" },
-    });
-    expectResolvedPolicy(["memory search"], {
-      configGuard: "skip",
-      loadPlugins: "always",
-      pluginRegistry: { scope: "memory" },
-    });
     const memoryStatusPolicy = resolveCliCommandPathPolicy(["memory", "status"]);
     expectConfigGuardResolver(memoryStatusPolicy);
     expect(memoryStatusPolicy.loadPlugins).toBe("always");
