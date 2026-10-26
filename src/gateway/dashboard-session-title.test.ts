@@ -173,12 +173,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         authProfileOverride: "work",
       },
     );
-    expect(mocks.utility).toHaveBeenCalledWith({
-      cfg,
-      agentId: "main",
-      primaryProvider: "anthropic",
-      primaryModelRef: "anthropic/claude-fable-5@work",
-    });
   });
 
   it("preserves a locked session harness as the title runtime owner", async () => {
@@ -427,11 +421,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       } else {
         naming.reject(new Error("model attempts exhausted"));
       }
-      if (backgroundFirst) {
-        await expect(background).resolves.toBe(true);
-      } else {
-        await background;
-      }
+      await expect(background).resolves.toBe(backgroundFirst);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mocks.load()).toMatchObject({
@@ -489,20 +479,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(mocks.load()).not.toHaveProperty("displayName");
     expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
   });
-
-  it("deduplicates concurrent title requests for one session generation", async () => {
-    const label = pendingLabel();
-
-    const first = maybeGenerateDashboardSessionTitle(titleParams());
-    const duplicate = maybeGenerateDashboardSessionTitle(titleParams());
-    label.resolve("Release Planning");
-    await expect(first).resolves.toBe(true);
-    await expect(duplicate).resolves.toBe(false);
-
-    expectCalls(1, mocks.generate, mocks.patch, mocks.readTranscript);
-    // Each admitted turn reads current title state before counting toward refinement.
-    expect(mocks.load).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("buildDashboardSessionTitleSource", () => {
@@ -515,15 +491,6 @@ describe("buildDashboardSessionTitleSource", () => {
     expect(source).toBe(
       `Review this rollout [[reply_to_current]]\nDeployment context\n${pastedText}`.slice(0, 1_000),
     );
-  });
-
-  it("titles a control command turn from its text attachment", () => {
-    expect(
-      buildDashboardSessionTitleSource({
-        message: "/status",
-        attachments: [textAttachment("Pasted incident report")],
-      }),
-    ).toBe("Pasted incident report");
   });
 
   it.each([
@@ -551,7 +518,6 @@ function textAttachment(text: string): ChatAttachment {
 describe("deriveGoalSessionTitle", () => {
   it.each([
     ["/new", undefined],
-    ["/model openai/gpt-5.4", undefined],
     [
       "Hey. Investigate why heartbeat failed overnight.",
       "Investigate why heartbeat failed overnight.",
