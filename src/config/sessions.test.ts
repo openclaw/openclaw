@@ -32,7 +32,6 @@ describe("sessions", () => {
         provider: "discord",
         groupChannel: "#general",
         space: "friends-of-openclaw",
-        id: "123",
         key: "discord:group:123",
       }),
     ).toBe("discord:friends-of-openclaw#general");
@@ -90,7 +89,7 @@ describe("sessions", () => {
     for (const agent of ["main", "bot1", "bot2"]) {
       await fs.mkdir(sessionPath(stateDir, agent, ""), { recursive: true });
     }
-    await Promise.all([mainStorePath, bot2SessionPath].map((file) => fs.writeFile(file, "{}")));
+    await fs.writeFile(bot2SessionPath, "{}");
     const sessionFile = inState(() => {
       const opts = withStore
         ? resolveSessionFilePathOptions({ agentId: "bot2", storePath: mainStorePath })

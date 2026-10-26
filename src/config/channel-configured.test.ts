@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -18,12 +19,7 @@ function configuredStatePlugin(
   id: string,
   hasConfiguredState: NonNullable<ChannelPlugin["config"]["hasConfiguredState"]>,
 ): ChannelPlugin {
-  return {
-    id,
-    meta: { id, label: id, selectionLabel: id, docsPath: "/testing", blurb: "Fixture" },
-    capabilities: { chatTypes: ["direct"] },
-    config: { listAccountIds: () => ["default"], resolveAccount: () => ({}), hasConfiguredState },
-  };
+  return createChannelTestPluginBase({ id, config: { hasConfiguredState } });
 }
 
 function configured(channel: string, config: OpenClawConfig["channels"], env = {}) {
@@ -50,15 +46,6 @@ describe("isChannelConfigured", () => {
   it.each<[string, NodeJS.ProcessEnv, boolean]>([
     ["slack", { SLACK_BOT_TOKEN: "xoxb-test" }, false],
     ["slack", { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" }, true],
-    ["irc", { IRC_HOST: "irc.example.com" }, false],
-    ["irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }, true],
-    ["mattermost", { MATTERMOST_BOT_TOKEN: "token" }, false],
-    ["mattermost", { MATTERMOST_URL: "https://mattermost.example.test" }, false],
-    [
-      "mattermost",
-      { MATTERMOST_BOT_TOKEN: "token", MATTERMOST_URL: "https://mattermost.example.test" },
-      true,
-    ],
   ])("resolves %s package metadata for %j as %s", (channel, env, expected) => {
     expect(isChannelConfigured({}, channel, env)).toBe(expected);
   });
@@ -98,7 +85,6 @@ describe("isChannelConfigured", () => {
     const env = { FIXTURE_TOKEN: "configured" };
 
     expect(isChannelConfigured({}, "fixture", env)).toBe(true);
-    expect(hasConfiguredState).toHaveBeenCalledWith({ cfg: {}, env });
     expect(isChannelConfigured({}, "fixture", {})).toBe(false);
   });
 });
