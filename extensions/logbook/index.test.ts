@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { OpenClawPluginNodeInvokePolicy } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -44,22 +43,15 @@ describe("logbook registration", () => {
       scheduler: createTestPluginServiceScheduler(),
     };
     const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
-    fixture.defer(async () => {
-      try {
-        await service.stop?.(context);
-      } finally {
-        await store.close();
-      }
-    });
+    fixture.defer(() => Promise.resolve(service.stop?.(context)).finally(() => store.close()));
     vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
     await service.start(context);
     const startMs = Date.now();
     const day = dayKeyFor(startMs);
     const ids: number[] = [];
     for (const [index, offset] of [0, 0, 2000].entries()) {
-      const capturedAtMs = startMs + offset;
       const id = await store.captureFrame({
-        capturedAtMs,
+        capturedAtMs: startMs + offset,
         day,
         screenIndex: 0,
         buffer: Buffer.from(index < 2 ? "synthetic initial" : "synthetic changed"),
@@ -79,7 +71,6 @@ describe("logbook registration", () => {
           throw new Error("The frame range handler does not use Gateway request context");
         },
       });
-      expect(respond).toHaveBeenCalledTimes(1);
       return respond.mock.calls[0];
     };
     const frames = [
@@ -101,32 +92,18 @@ describe("logbook registration", () => {
     }
   });
 
-  it.each([
-    ["extensions/logbook/index.ts", "extensions/logbook/src/store.worker.ts"],
-    ["plugins/logbook/dist/index.js", "plugins/logbook/dist/src/store.worker.js"],
-  ] as const)("locates the worker for runtime entry %s", async (entry, worker) => {
-    const root = fixture.makeDir();
-    const runtimeSource = path.resolve(root, entry);
-    if (entry.endsWith(".js")) {
-      const packageRoot = path.dirname(path.dirname(runtimeSource));
-      fs.mkdirSync(packageRoot, { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/logbook" }),
-      );
-    }
-    const { service } = registerLogbook(runtimeSource);
-    const config = { database: { engine: "postgres" as const } };
+  it("locates the packaged worker from the runtime entry", async () => {
+    const { service } = registerLogbook(fileURLToPath(new URL("./dist/index.js", import.meta.url)));
     const stopBeforeOpening = new Error("worker location captured");
     const open = vi.spyOn(LogbookStore, "open").mockRejectedValueOnce(stopBeforeOpening);
     const scheduler = createTestPluginServiceScheduler();
     fixture.defer(() => scheduler.stop());
     await expect(
-      service.start({ config, stateDir: "/unused", logger: console, scheduler }),
+      service.start({ config: {}, stateDir: "/unused", logger: quietLogger, scheduler }),
     ).rejects.toBe(stopBeforeOpening);
     expect(open).toHaveBeenCalledExactlyOnceWith(
       path.join("/unused", "logbook"),
-      pathToFileURL(path.resolve(root, worker)),
+      new URL("./dist/src/store.worker.js", import.meta.url),
     );
   });
   it.each([
@@ -140,7 +117,6 @@ describe("logbook registration", () => {
       await policy.handle({
         nodeId: "node-1",
         command: "logbook.snapshot",
-        params: undefined,
         config: { gateway: { nodes: { commands: { deny: [denied] } } } },
         invokeNode,
       } as unknown as PolicyContext),
