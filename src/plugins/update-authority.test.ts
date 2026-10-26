@@ -120,16 +120,13 @@ describe("plugin update authority", () => {
       const packageDir = state.statePath("extensions", pluginId);
       const peerLink = path.join(packageDir, "node_modules", "openclaw");
       const oldHost = state.path("old-host");
+      await state.writeJson("old-host/package.json", { name: "openclaw", version: "0.0.0" });
       await fs.mkdir(path.dirname(peerLink), { recursive: true });
-      await fs.mkdir(oldHost);
-      await fs.writeFile(
-        path.join(oldHost, "package.json"),
-        '{"name":"openclaw","version":"0.0.0"}',
-      );
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: pluginId, version: "1.0.0", peerDependencies: { openclaw: "*" } }),
-      );
+      await state.writeJson(`extensions/${pluginId}/package.json`, {
+        name: pluginId,
+        version: "1.0.0",
+        peerDependencies: { openclaw: "*" },
+      });
       await fs.symlink(oldHost, peerLink, "junction");
       const config = singleInstallConfig(pluginId, {
         source: "npm" as const,

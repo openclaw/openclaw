@@ -67,6 +67,10 @@ const throwingFactory = (error: Error) => () => {
   throw error;
 };
 const pdfFields = { id: "pdf", label: "PDF", mimeTypes: ["application/pdf"] };
+const expectPdf = () =>
+  expect(resolvePluginDocumentExtractors()).toStrictEqual([
+    { ...pdfFields, extract: expect.any(Function), pluginId: "document-extract" },
+  ]);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,19 +87,14 @@ beforeEach(() => {
   );
 });
 
-it("reuses one manifest registry pass in allowlist mode", () => {
-  mocks.readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
-
-  expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
-  expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-});
-
-const normalizedAllow = [" document-extract ", "document-extract"];
 it.each([
   ["global disablement", false, ["document-extract"], []],
   ["cannot expand allowlist", undefined, ["openai"], []],
-  ["normalized allowlist", undefined, normalizedAllow, ["pdf"]],
+  ["normalized allowlist", undefined, [" document-extract ", "document-extract"], ["pdf"]],
 ] as const)("enforces %s", (_name, enabled, allow, expected) => {
+  if (expected.length) {
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("allowlist");
+  }
   const result = resolvePluginDocumentExtractors({
     config: { plugins: { enabled, allow: [...allow] } },
   });
@@ -103,6 +102,8 @@ it.each([
   if (enabled === false) {
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadPublicArtifact).not.toHaveBeenCalled();
+  } else if (expected.length) {
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   }
 });
 
@@ -110,9 +111,7 @@ it("isolates a throwing factory when another extractor factory succeeds", () => 
   const error = new Error("native probe failed");
   mocks.publicArtifactModule.createBrokenDocumentExtractor = throwingFactory(error);
 
-  expect(resolvePluginDocumentExtractors()).toStrictEqual([
-    { ...pdfFields, extract: expect.any(Function), pluginId: "document-extract" },
-  ]);
+  expectPdf();
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(/document extractors.*document-extract/),
     { error },
@@ -148,29 +147,25 @@ it.each([
     }
     return dirName === "document-extract" ? mocks.publicArtifactModule : null;
   });
+  const initializationError = expect.objectContaining({
+    message: `Unable to initialize document extractors for plugin ${pluginId}`,
+    cause: kind === "factories" ? expect.any(AggregateError) : error,
+  });
   if (!healthy) {
     expect(resolvePluginDocumentExtractors).toThrow(
       expect.objectContaining({
         message: "Unable to load document extractor plugins",
-        cause: expect.objectContaining({
-          message: "Unable to initialize document extractors for plugin document-extract",
-          cause: error,
-        }),
+        cause: initializationError,
       }),
     );
     expect(mocks.warn).not.toHaveBeenCalled();
     return;
   }
-  expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+  expectPdf();
   expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("using healthy extractors"),
     {
-      error:
-        kind === "module"
-          ? error
-          : expect.objectContaining({
-              cause: kind === "factory" ? error : expect.any(AggregateError),
-            }),
+      error: kind === "module" ? error : initializationError,
       detail:
         kind === "module"
           ? "broken-extract module failed"

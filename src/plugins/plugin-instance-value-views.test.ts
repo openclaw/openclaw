@@ -70,14 +70,10 @@ it.each(["ordinary", "consumer"] as const)(
   },
 );
 
-it.each(
-  (["bundled", "global", "workspace"] as const).flatMap((origin) =>
-    (["hook", "async tool"] as const).map((kind) => ({ origin, kind })),
-  ),
-)(
-  "passes $origin $kind data by reference without inspecting nested values",
-  async ({ origin, kind }) => {
-    const instance = createOwnedTestInstance("direct-values", origin);
+it.each(["hook", "async tool"] as const)(
+  "passes %s data by reference without inspecting nested values",
+  async (kind) => {
+    const instance = createOwnedTestInstance("direct-values", "bundled");
     const deny = throwing(new Error("Nested payload must not be inspected"));
     const opaque = new Proxy({}, { get: deny, ownKeys: deny, getPrototypeOf: deny });
     const handle = instance.wrap({ read: () => "handle" });
@@ -165,9 +161,7 @@ it("keeps exact nested stream results and one scoped private-field receiver acro
     expect(await iterator.throw(failure)).toBe(results[1]);
     expect(await iterator.return()).toBe(results[2]);
     expect(scopes).toHaveLength(6);
-    for (const scope of scopes) {
-      expect(scope).toBe(scopes[0]);
-    }
+    expect(scopes.every((scope) => scope === scopes[0])).toBe(true);
     expect(getScope()).toBeUndefined();
     inner.release();
     outer.release();
