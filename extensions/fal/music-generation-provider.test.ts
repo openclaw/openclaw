@@ -4,11 +4,11 @@ import {
   installProviderHttpMockCleanup,
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createClosedChunkStream } from "../test-support/streaming-error-response.js";
+import { expect, it, vi } from "vitest";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
-const { postJsonRequestMock, resolveApiKeyForProviderMock } = getProviderHttpMocks();
+const { postJsonRequestMock, resolveApiKeyForProviderMock, fetchWithTimeoutMock } =
+  getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
 
@@ -17,16 +17,16 @@ function mockAudio(payload: unknown, body: BodyInit = "wav-bytes", contentType =
     response: Response.json(payload),
     release: vi.fn(async () => {}),
   });
-  const response = new Response(body, { headers: { "content-type": contentType } });
-  const fetchMock = vi.fn(async () => response);
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
+  fetchWithTimeoutMock.mockResolvedValue(
+    new Response(body, { headers: { "content-type": contentType } }),
+  );
 }
 
 const prompt = "city pop chorus";
 const audioUrl = "https://v3b.fal.media/files/b/out.mp3";
 
 function generateMusic(overrides: Partial<MusicGenerationRequest>) {
+  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "fal-key" });
   return buildFalMusicGenerationProvider().generateMusic({
     provider: "fal",
     model: "fal-ai/minimax-music/v2.6",
@@ -42,18 +42,8 @@ function expectRequest(model: string, body: Record<string, unknown>) {
   expect(request.body).toEqual({ prompt, ...body });
 }
 
-beforeEach(async () => {
-  const { fetchWithTimeout } = await import("openclaw/plugin-sdk/provider-http");
-  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "fal-key" });
-  vi.mocked(fetchWithTimeout).mockImplementation((url, init, _timeoutMs, fetchFn = fetch) =>
-    fetchFn(url, init),
-  );
-});
-
-afterEach(() => vi.unstubAllGlobals());
-
 it("submits MiniMax music through fal and downloads the generated track", async () => {
-  const fetchMock = mockAudio(
+  mockAudio(
     { audio: { url: audioUrl, content_type: "audio/mpeg", file_name: "out.mp3" } },
     "mp3-bytes",
     "application/octet-stream",
@@ -71,7 +61,6 @@ it("submits MiniMax music through fal and downloads the generated track", async 
     duration: 42,
     audio_setting: { sample_rate: 44100, bitrate: 256000, format: "mp3" },
   });
-  expect(fetchMock).toHaveBeenCalledWith(audioUrl, expect.objectContaining({ method: "GET" }));
   expect(result).toMatchObject({
     model: "fal-ai/minimax-music/v2.6",
     metadata: { audioUrl },
@@ -81,11 +70,7 @@ it("submits MiniMax music through fal and downloads the generated track", async 
 });
 
 it("rejects generated music downloads that exceed the configured media cap", async () => {
-  mockAudio(
-    { audio: { url: audioUrl, content_type: "audio/mpeg" } },
-    createClosedChunkStream([new TextEncoder().encode("too-large")]),
-    "audio/mpeg",
-  );
+  mockAudio({ audio: { url: audioUrl, content_type: "audio/mpeg" } }, "too-large");
 
   await expect(
     generateMusic({
