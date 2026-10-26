@@ -9,17 +9,19 @@ import { buildApprovalPollOptions, mapSentPollOptionsToDecisions } from "./appro
 import type { IMessagePayload } from "./monitor/types.js";
 import { pollVote, resolvedApproval } from "./test-support/approval.js";
 
+type Reactions = typeof import("./approval-reactions.js");
+type Polls = typeof import("./approval-polls.js");
 let native: typeof import("./approval-handler.runtime.js").imessageApprovalNativeRuntime;
-let maybeResolveIMessageApprovalPollVote: typeof import("./approval-polls.js").maybeResolveIMessageApprovalPollVote;
-let handleIMessageApprovalReaction: typeof import("./approval-reactions.js").handleIMessageApprovalReaction;
+let maybeResolveIMessageApprovalPollVote: Polls["maybeResolveIMessageApprovalPollVote"];
+let handleIMessageApprovalReaction: Reactions["handleIMessageApprovalReaction"];
 
-let iMessageApprovalPollTargets: typeof import("./approval-polls.js").iMessageApprovalPollTargets;
+let iMessageApprovalPollTargets: Polls["iMessageApprovalPollTargets"];
 let listTargets: typeof import("./approval-reaction-poll-targets.js").listPendingIMessageApprovalReactionPollTargets;
-let addIMessageApprovalReactionHintToStructuredPayload: typeof import("./approval-reactions.js").addIMessageApprovalReactionHintToStructuredPayload;
-let buildIMessageApprovalConversationKeyForTarget: typeof import("./approval-reactions.js").buildIMessageApprovalConversationKeyForTarget;
-let bindDelivered: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTargetForDeliveredPayload;
-let registerRaw: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
-let lookupTarget: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+let addIMessageApprovalReactionHintToStructuredPayload: Reactions["addIMessageApprovalReactionHintToStructuredPayload"];
+let buildIMessageApprovalConversationKeyForTarget: Reactions["buildIMessageApprovalConversationKeyForTarget"];
+let bindDelivered: Reactions["registerIMessageApprovalReactionTargetForDeliveredPayload"];
+let registerRaw: Reactions["registerIMessageApprovalReactionTarget"];
+let lookupTarget: Reactions["resolveIMessageApprovalReactionTargetWithPersistence"];
 
 beforeEach(async () => {
   vi.resetModules();
@@ -76,6 +78,10 @@ const promptBinding = {
   approvalKind: "exec",
   allowedDecisions: ["allow-once", "deny"],
 };
+function expectResolution(fields: Record<string, unknown>) {
+  expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
 function expectSend(text: unknown, options: Record<string, unknown> = {}, to = HANDLE) {
   expect(send).toHaveBeenCalledWith(to, text, expect.objectContaining(options));
 }
@@ -290,22 +296,16 @@ describe("imessageApprovalNativeRuntime", () => {
     });
 
     expect(actionsMock.sendPoll).not.toHaveBeenCalled();
-    const react = async (sender: string) =>
-      (
-        await handleIMessageApprovalReaction({
-          cfg: pollDeliverArgs.cfg,
-          accountId: ACCOUNT_ID,
-          message: {
-            sender,
-            chat_guid: groupChatGuid,
-            is_group: true,
-            is_reaction: true,
-            reaction_emoji: "👍",
-            reacted_to_guid: PROMPT_GUID,
-          },
-          bodyText: "",
-        })
-      ).handled;
+    const react = (sender: string) =>
+      resolveReaction(
+        buildTapbackReactionPayload({
+          sender,
+          chat_guid: groupChatGuid,
+          is_group: true,
+          reacted_to_guid: PROMPT_GUID,
+        }),
+        { cfg: pollDeliverArgs.cfg },
+      );
 
     await expect(react("+15559999999")).resolves.toBe(true);
     expect(approvalGatewayMock.resolve).not.toHaveBeenCalled();
@@ -557,14 +557,12 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
       await resolveVote(pollVote(VOTE_POLL_GUID, [...votes], {}, vote), { gatewayRuntime }),
     ).toBe(true);
     if (decision) {
-      expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "exec-1",
-          decision,
-          senderId: HANDLE,
-          gatewayRuntime,
-        }),
-      );
+      expectResolution({
+        approvalId: "exec-1",
+        decision,
+        senderId: HANDLE,
+        gatewayRuntime,
+      });
     } else {
       expect(approvalGatewayMock.resolve).not.toHaveBeenCalled();
     }
@@ -574,9 +572,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     expect(await bind()).toBe(true);
     const message = buildVote({}, { sender: "", is_from_me: true, destination_caller_id: HANDLE });
     expect(await resolveVote(message)).toBe(true);
-    expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ decision: "allow-once", senderId: HANDLE }),
-    );
+    expectResolution({ decision: "allow-once", senderId: HANDLE });
   });
 
   it.each([
@@ -811,7 +807,7 @@ function requireExecApprovalMetadata(payload: ReplyPayload): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
-function buildTapbackReactionPayload(overrides: Partial<IMessagePayload>): IMessagePayload {
+function buildTapbackReactionPayload(overrides: Partial<IMessagePayload> = {}): IMessagePayload {
   return {
     sender: "+15551230000",
     is_reaction: true,
@@ -829,7 +825,7 @@ async function resolveReaction(
 ) {
   return (
     await handleIMessageApprovalReaction({
-      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      cfg,
       accountId: "default",
       bodyText: "",
       message,
@@ -873,17 +869,15 @@ describe("iMessage approval reactions", () => {
           { gatewayRuntime },
         ),
       ).toBe(true);
-      expect(approvalGatewayMock.resolve).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId,
-          approvalKind: kind,
-          decision: "allow-once",
-          channel: "imessage",
-          accountId: "default",
-          senderId: "+15551230000",
-          gatewayRuntime,
-        }),
-      );
+      expectResolution({
+        approvalId,
+        approvalKind: kind,
+        decision: "allow-once",
+        channel: "imessage",
+        accountId: "default",
+        senderId: "+15551230000",
+        gatewayRuntime,
+      });
     },
   );
 
