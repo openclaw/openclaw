@@ -9,6 +9,10 @@ sidebarTitle: "Config"
 
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
+Validation, dry-run, and config-update reports escape terminal control characters
+in config file paths. JSON path fields and the raw path from `openclaw config file`
+retain their original values.
+
 When a local Gateway owns the state directory, `config set`, `config patch`, and
 `config unset` route the write through that Gateway instead of writing the file
 themselves. The CLI prepares the same change and validation as an offline write,

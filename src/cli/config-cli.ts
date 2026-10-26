@@ -3,6 +3,7 @@ import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { danger, success, warn } from "../globals.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
@@ -503,7 +504,7 @@ export function registerConfigCli(program: Command) {
               0,
             );
           } else {
-            runtime.error(danger(`Config file not found: ${shortPath}`));
+            runtime.error(danger(`Config file not found: ${formatConfigFilePath(outputPath)}`));
             runtime.error(
               `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
             );
@@ -521,7 +522,7 @@ export function registerConfigCli(program: Command) {
               issues,
             });
           } else {
-            runtime.error(`Config needs correction: ${shortPath}`);
+            runtime.error(`Config needs correction: ${formatConfigFilePath(outputPath)}`);
             for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
               runtime.error(`  ${line}`);
             }
@@ -539,7 +540,7 @@ export function registerConfigCli(program: Command) {
         if (json) {
           writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
         } else {
-          runtime.log(success(`Config valid: ${shortPath}`));
+          runtime.log(success(`Config valid: ${formatConfigFilePath(outputPath)}`));
           if (warnings.length > 0) {
             runtime.log(warn(`${warnings.length} warning(s):`));
             for (const line of formatConfigIssueLines(warnings, warn("!"), {

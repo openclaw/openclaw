@@ -22,6 +22,15 @@ afterEach(() => {
 });
 
 describe("config logging", () => {
+  it("escapes config path controls without removing Unicode", () => {
+    const configPath = "/tmp/café\u001b[31m\noperator-forged\tend\rrow\u0007\u0085.json";
+    const display = "/tmp/café\\noperator-forged\\tend\\rrow.json";
+    expect(formatConfigFilePath(configPath)).toBe(display);
+    expect(formatConfigUpdatedMessage(configPath, { backupPath: false })).toBe(
+      `Updated config: ${display}`,
+    );
+  });
+
   it("formats the live config path when no explicit path is provided", () => {
     expect(formatConfigFilePath()).toBe("/tmp/openclaw-dev/openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-next/openclaw.json");

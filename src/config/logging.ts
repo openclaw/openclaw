@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
@@ -14,7 +15,7 @@ type LogConfigUpdatedOptions = {
 export function formatConfigFilePath(
   path: string = resolveConfigPath(process.env, resolveStateDir()),
 ): string {
-  return displayPath(path);
+  return sanitizeTerminalText(displayPath(path));
 }
 
 /** Builds the config-updated log message, including backup detail only when it exists. */
