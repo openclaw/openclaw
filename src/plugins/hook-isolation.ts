@@ -113,6 +113,7 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
   try {
     const unowned: unknown[] = [];
     const positions: Array<{ target: object; key: string }> = [];
+    const freshMetadata = new Set<object>();
     const isolate = (target: object, key: string, value: unknown, owned = false) => {
       const kind = typeof value;
       if (
@@ -122,10 +123,26 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
       ) {
         return;
       }
+      if (typeof value === "object" && freshMetadata.has(value)) {
+        // The projector already detached the envelope; only its children need isolation.
+        isolateProperties(value);
+        return;
+      }
       unowned.push(value);
       positions.push({ target, key });
     };
-    const messages = projectModelContextMessages(event.messages);
+    const isolateProperties = (target: object, skipKey?: string) => {
+      for (const key of Reflect.ownKeys(target)) {
+        if (typeof key === "symbol") {
+          Reflect.deleteProperty(target, key);
+        } else if (key !== skipKey) {
+          isolate(target, key, Reflect.get(target, key));
+        }
+      }
+    };
+    const messages = projectModelContextMessages(event.messages, (metadata) => {
+      freshMetadata.add(metadata);
+    });
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
       if (message && typeof message === "object") {
@@ -157,13 +174,7 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
       isolate(messages, String(index), message);
     }
     const snapshot = { ...event, messages };
-    for (const key of Reflect.ownKeys(snapshot)) {
-      if (typeof key === "symbol") {
-        Reflect.deleteProperty(snapshot, key);
-      } else if (key !== "messages") {
-        isolate(snapshot, key, Reflect.get(snapshot, key));
-      }
-    }
+    isolateProperties(snapshot, "messages");
     if (unowned.length) {
       // One graph clone preserves aliases among unowned values and native-value checks.
       const cloned = cloneHookIsolationValue(hookName, unowned);

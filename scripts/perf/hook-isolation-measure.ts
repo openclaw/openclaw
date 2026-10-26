@@ -1,6 +1,7 @@
 // node --import ./scripts/tsx.mjs scripts/perf/hook-isolation-measure.ts --expect-shared-history
 // Compare the same --calls/--samples with --prompt-chars 16 and 262144 on both revisions.
 // Add --unowned-history to cover callers without transcript-owner sealing.
+// Add --no-result to measure hooks that observe inputs without returning modifications.
 // Counts, unprofiled CPU, and sampled allocations are separate passes; use built Gateway stress too.
 import assert from "node:assert/strict";
 import type { HeapProfiler } from "node:inspector";
@@ -18,6 +19,7 @@ const { values } = parseArgs({
     calls: { type: "string", default: "40" },
     "prompt-chars": { type: "string", default: "16" },
     "unowned-history": { type: "boolean", default: false },
+    "no-result": { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     "start-at": { type: "string", default: "0" },
     "expect-shared-history": { type: "boolean", default: false },
@@ -103,7 +105,7 @@ const cells = [64, 200, 1_000].flatMap((size) => {
     assert.equal(Object.isFrozen(message.content), !values["unowned-history"]);
     assert.ok(!isOwnedTranscriptPayload(message.content));
   }
-  return [1, 2].map((handlers) => {
+  return [0, 1, 2].map((handlers) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;
@@ -125,7 +127,7 @@ const cells = [64, 200, 1_000].flatMap((size) => {
               assert.equal(Object.isFrozen(received.content), expectSharedHistory);
             }
           }
-          return { prependContext: "synthetic context" };
+          return values["no-result"] ? undefined : { prependContext: "synthetic context" };
         },
       });
     }
