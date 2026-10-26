@@ -388,6 +388,7 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
   // Maintained source headers and a dedicated guide invoke these standalone commands by exact path.
+  "scripts/perf/attempt-tool-context-measure.ts!",
   "scripts/perf/catalog-retained-data-measure.ts!",
   "scripts/perf/disk-budget-scan.ts!",
   "scripts/perf/git-operation-allocation-measure.ts!",
