@@ -35,6 +35,7 @@ import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-
 import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
 import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
+import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
 import {
   getPluginRegistryVersion,
   getRetiringPluginRegistries,
@@ -206,8 +207,12 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const registry = canInspectRetentions ? getPluginRegistryForContext() : undefined;
       const record = registry?.plugins.find((entry) => entry.id === inspected.plugin.id);
       const instance = record && getPluginInstance(record);
-      const predecessors = canInspectRetentions
+      const gatewayOwner = registry && getPluginRegistryGatewayOwner(registry);
+      const predecessors = gatewayOwner
         ? getRetiringPluginRegistries().flatMap((previous) => {
+            if (getPluginRegistryGatewayOwner(previous) !== gatewayOwner) {
+              return [];
+            }
             const previousRecord = previous.plugins.find(
               (entry) => entry.id === inspected.plugin.id,
             );

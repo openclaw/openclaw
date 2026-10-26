@@ -17,6 +17,20 @@ import type {
 import type { PluginReplacementOperation } from "./plugin-replacement-operation.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
+export type PluginInstanceCall = {
+  registry?: PluginRegistry;
+  cleanup: boolean;
+  ownerJoined: boolean;
+  ownerLifetime?: true;
+};
+
+export type PluginInstanceConsumerState = {
+  active: boolean;
+  completion: Promise<void>;
+  registry?: PluginRegistry;
+  kind: "work" | "custody";
+};
+
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;

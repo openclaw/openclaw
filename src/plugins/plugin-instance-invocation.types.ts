@@ -8,6 +8,8 @@ export type PluginInstanceInvocation = {
   readonly parent?: PluginInstanceInvocation;
 };
 
+
+
 export type PluginSourceCaptureStorage = Readonly<{
   stateDir: string;
   placement: "state" | "temporary";

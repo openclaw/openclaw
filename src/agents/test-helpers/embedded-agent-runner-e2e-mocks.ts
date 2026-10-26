@@ -127,6 +127,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };

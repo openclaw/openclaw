@@ -127,6 +127,7 @@ vi.mock("./prepared-model-runtime.js", () => {
       const snapshot = await loadSnapshot(params);
       return {
         snapshot,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: snapshotResources.acquire?.().release ?? (async () => {}),
       };
     },

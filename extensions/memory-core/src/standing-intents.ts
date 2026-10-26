@@ -28,15 +28,17 @@ import {
 type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
 type MaintenanceSchedule = (path: string, nextDueAt: number | null) => void;
 // Queue, committed-absence facts, and the selected scheduler share one process owner.
-const maintenance = resolveGlobalSingleton(
-  Symbol.for("openclaw.memoryCore.standingIntents"),
-  () => ({
-    schedule: undefined as MaintenanceSchedule | undefined,
-    owners: new Set<MaintenanceSchedule>(),
-    lifecycleFacts: new Map<string, { empty: boolean }>(),
-    operationQueues: new Map<string, StoreWriterQueue>(),
-  }),
-);
+const maintenance = resolveGlobalSingleton<{
+  schedule: MaintenanceSchedule | undefined;
+  owners: Set<MaintenanceSchedule>;
+  lifecycleFacts: Map<string, { empty: boolean }>;
+  operationQueues: Map<string, StoreWriterQueue>;
+}>(Symbol.for("openclaw.memoryCore.standingIntents"), () => ({
+  schedule: undefined,
+  owners: new Set<MaintenanceSchedule>(),
+  lifecycleFacts: new Map<string, { empty: boolean }>(),
+  operationQueues: new Map<string, StoreWriterQueue>(),
+}));
 const { lifecycleFacts, operationQueues } = maintenance;
 
 export {

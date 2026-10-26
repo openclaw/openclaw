@@ -1,20 +1,6 @@
 import type { Static } from "typebox";
 import type { PluginRuntimeRetentionSchema } from "../../packages/gateway-protocol/src/schema/plugin-retention.js";
-import type { PluginRegistry } from "./registry-types.js";
 
-export type PluginInstanceCall = {
-  registry?: PluginRegistry;
-  cleanup: boolean;
-  ownerJoined: boolean;
-  ownerLifetime?: true;
-};
-
-export type PluginInstanceConsumerState = {
-  active: boolean;
-  completion: Promise<void>;
-  registry?: PluginRegistry;
-  kind: "work" | "custody";
-};
 
 export type PluginInstanceDisposalCleanup = {
   failures: unknown[];

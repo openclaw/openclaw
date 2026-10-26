@@ -554,6 +554,21 @@ describe("owned plugin inspections", () => {
     });
   });
 
+  it("disposes registration resources after the releasing invocation scope closes", async () => {
+    const fixture = createInspectionFixture({ queuedAbortCleanup: true });
+    await withInspection([fixture], async (inspection) => {
+      const resources = getPluginRegistryInspectionResources(inspection.registry)!;
+      const invocation = resources.createInvocationScope(inspection.registry);
+      const releaseInScope = invocation.run(() => AsyncLocalStorage.snapshot());
+      invocation.release();
+
+      await expect(releaseInScope(() => inspection.release())).resolves.toBeUndefined();
+      await expect(fixture.state.captured.abortCleanup).resolves.toBeUndefined();
+      expect(fixture.state.captured.abortRead).toEqual({ value: 42 });
+      expectDisposed(fixture);
+    });
+  });
+
   it("releases Doctor discovery resources without invoking the context engine factory", async () => {
     const fixture = createInspectionFixture({ contextEngine: true, pauseDisposal: true });
     const { collectContextEngineHostCompatibilityWarnings } =

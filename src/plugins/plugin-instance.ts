@@ -17,13 +17,13 @@ import {
   pluginInvocationContext,
   resolvePluginInstanceOwner,
   type PluginInstanceOwner,
+  type PluginInstanceCall,
+  type PluginInstanceConsumerState,
 } from "./plugin-instance-scope.js";
 import { waitForPluginInstanceSettlement } from "./plugin-instance-settlement.js";
 import type {
-  PluginInstanceCall,
   PluginInstanceCallLease,
   PluginInstanceConsumer,
-  PluginInstanceConsumerState,
   PluginInstanceDisposalResult,
   PluginInstanceDisposalCleanup as DisposalCleanup,
   PluginInstanceLifecycle,

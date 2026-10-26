@@ -269,7 +269,10 @@ it("retains plugin tool authority when a worker RPC enters from a separate async
   const record = createPluginRecord({ id: "retained-worker-tool", status: "loaded" });
   registry.plugins.push(record);
   const instance = new PluginInstance(record.id, { record, registry });
-  const result = { content: [{ type: "text" as const, text: "old generation completed" }] };
+  const result = {
+    content: [{ type: "text" as const, text: "old generation completed" }],
+    details: {},
+  };
   const execute = vi.fn(async () => result);
   const tool = {
     name: "retained_plugin_tool",

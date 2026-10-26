@@ -76,6 +76,10 @@ describe("setActivePluginRegistry", () => {
     const instance = new PluginInstance(record.id, { record, registry: previous });
     const parent = instance.retainConsumer(undefined, previous);
     const child = instance.retainConsumer(undefined, previous);
+    const toolEffect = vi.fn(() => "old tool");
+    const endHookEffect = vi.fn(() => "old end hook");
+    const oldTool = instance.wrap(toolEffect);
+    const oldEndHook = instance.wrap(endHookEffect);
     const monitor = instance.retainConsumer(undefined, previous, "custody");
     const stopScheduler = createDeferredCore();
     const scheduler = instance.runInRegistry(previous, () => stopScheduler.promise, {
@@ -105,7 +109,7 @@ describe("setActivePluginRegistry", () => {
         ),
       ).toContain(previous);
       expect(() => instance.run(() => undefined)).toThrow("was reloaded or disabled");
-      expect(parent.run(() => instance.run(() => "old tool"))).toBe("old tool");
+      expect(parent.run(oldTool)).toBe("old tool");
       expect(await waitForPluginRegistryRetirement(previous, { deferConsumers: true })).toEqual({
         cleanupCount: 0,
         failures: [],
@@ -114,7 +118,7 @@ describe("setActivePluginRegistry", () => {
       parent.release();
       await nextTurn();
       expect(events).toEqual([]);
-      expect(child.run(() => instance.run(() => "old end hook"))).toBe("old end hook");
+      expect(child.run(oldEndHook)).toBe("old end hook");
       child.release();
       await expect(waitForPluginRegistryRetirement(previous)).resolves.toMatchObject({
         failures: [],
@@ -122,6 +126,10 @@ describe("setActivePluginRegistry", () => {
       expect(events).toEqual(["service-stop", "dispose"]);
       expect(instance.owner?.revoked).toBe(true);
       expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => oldTool()).toThrow(/reloaded or disabled/);
+      expect(() => oldEndHook()).toThrow(/reloaded or disabled/);
+      expect(toolEffect).toHaveBeenCalledOnce();
+      expect(endHookEffect).toHaveBeenCalledOnce();
     } finally {
       parent.release();
       child.release();
