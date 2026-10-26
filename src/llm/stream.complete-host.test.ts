@@ -8,6 +8,7 @@ import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { withModelTransportContext } from "./model-transport-context.js";
+import { admitProviderRateLimitStream } from "./provider-rate-limit-stream.js";
 import { complete, completeSimple, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
@@ -154,6 +155,57 @@ it.each(
     }
   },
 );
+it("leaves unkeyed and inherited stream consumers intact while gating a changed account", async () => {
+  const { model, message, rateLimit } = createCompletionRuntime();
+  const unkeyed = responseStream(message);
+  const iterate = unkeyed[Symbol.asyncIterator];
+  const result = unkeyed.result.bind(unkeyed);
+  unkeyed.result = result;
+  expect(await admitProviderRateLimitStream(model, undefined, () => unkeyed)).toBe(unkeyed);
+  expect(unkeyed[Symbol.asyncIterator]).toBe(iterate);
+  expect(unkeyed).toHaveProperty("result", result);
+  await expect(unkeyed.result()).resolves.toBe(message);
+
+  vi.useFakeTimers();
+  const source = responseStream(rateLimit("changed-account", 1000));
+  const sourceIterate = source[Symbol.asyncIterator];
+  const sourceResult = source.result.bind(source);
+  source.result = sourceResult;
+  const sameAccount = await admitProviderRateLimitStream(
+    model,
+    { apiKey: "synthetic-outer-account" },
+    async (admittedOptions) => {
+      const inherited = await admitProviderRateLimitStream(model, admittedOptions, () => source);
+      expect(inherited[Symbol.asyncIterator]).toBe(sourceIterate);
+      expect(inherited).toHaveProperty("result", sourceResult);
+      // A delegated request using a different account still owns its observation.
+      return admitProviderRateLimitStream(
+        model,
+        { ...admittedOptions, apiKey: "synthetic-changed-account" },
+        () => inherited,
+      );
+    },
+  );
+  const events = [];
+  for await (const event of sameAccount) {
+    events.push(event);
+  }
+  expect(events).toEqual([
+    { type: "error", reason: "error", error: rateLimit("changed-account", 1000) },
+  ]);
+  await expect(sameAccount.result()).resolves.toEqual(rateLimit("changed-account", 1000));
+  const start = vi.fn(() => responseStream(message));
+  await expect(
+    admitProviderRateLimitStream(
+      model,
+      { apiKey: "synthetic-changed-account", maxRetryDelayMs: 1 },
+      start,
+    ),
+  ).rejects.toMatchObject({ status: 429 });
+  expect(start).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(61000);
+});
+
 it("paces 30 shared-account sessions once per request and admits interactive work first", async () => {
   const { model, runtime, message, providerStream, run, rateLimit, embedded } =
     createCompletionRuntime();

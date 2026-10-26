@@ -523,6 +523,7 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-model-policy-load.mjs!",
   "scripts/perf/operator-model-policy-measure.ts!",
   "scripts/perf/provider-rate-limit-retention.ts!",
+  "scripts/perf/provider-rate-limit-stream-measure.ts!",
   "scripts/perf/session-cost-refresh-measure.ts!",
   "scripts/perf/sqlite-operation-receive-measure.ts!",
   "scripts/perf/tool-search-lexical-measure.ts!",
