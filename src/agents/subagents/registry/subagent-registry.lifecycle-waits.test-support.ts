@@ -43,16 +43,8 @@ export function createLifecycleAgentCallWaits(
       expect(run).toMatchObject({ cleanupHandled: false, delivery: { status: "pending" } });
       expect(Boolean(run?.delivery?.payload)).toBe(true);
     },
-    async settle() {
-      try {
-        await pendingRootWork;
-      } finally {
-        try {
-          await settleRootWork();
-        } finally {
-          await flushAsync();
-        }
-      }
+    settle() {
+      return pendingRootWork.finally(() => settleRootWork()).finally(flushAsync);
     },
   };
 }
@@ -78,24 +70,22 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     }
   };
 
-  const waitForDeliveredCleanup = async (
-    runId: string,
-    options?: { allowPendingRequesterSettleWake?: boolean },
-  ) => {
-    await waitForRun(
-      runId,
-      (run) =>
-        run.delivery?.status === "delivered" &&
-        typeof run.cleanupCompletedAt === "number" &&
-        (options?.allowPendingRequesterSettleWake === true ||
-          run.requesterSettleWake === undefined),
-    );
-  };
-
   return {
     flushAsync,
     waitForRun,
-    waitForDeliveredCleanup,
+    async waitForDeliveredCleanup(
+      runId: string,
+      options?: { allowPendingRequesterSettleWake?: boolean },
+    ) {
+      await waitForRun(
+        runId,
+        (run) =>
+          run.delivery?.status === "delivered" &&
+          typeof run.cleanupCompletedAt === "number" &&
+          (options?.allowPendingRequesterSettleWake === true ||
+            run.requesterSettleWake === undefined),
+      );
+    },
     waitForFrozenResultText: (runId: string, expectedText: string) =>
       waitForRun(runId, (run) => run.completion?.resultText === expectedText),
   };
