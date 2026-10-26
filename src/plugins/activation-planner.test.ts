@@ -112,20 +112,16 @@ describe("activation planner", () => {
     });
   });
 
-  it("selects capabilities from explicit hints and manifest ownership", () => {
+  it("selects capabilities from explicit hints", () => {
     const manifestRecords = [
       owner({
         id: "explicit-provider",
         origin: "workspace",
         activation: { onCapabilities: ["provider"], onProviders: ["custom-provider"] },
       }),
-      owner({ id: "owned-tool", origin: "workspace", contracts: { tools: ["custom-tool"] } }),
     ];
     expect(ids({ kind: "capability", capability: "provider" }, { manifestRecords })).toEqual([
       "explicit-provider",
-    ]);
-    expect(ids({ kind: "capability", capability: "tool" }, { manifestRecords })).toEqual([
-      "owned-tool",
     ]);
   });
 

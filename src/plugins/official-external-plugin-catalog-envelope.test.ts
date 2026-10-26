@@ -11,15 +11,13 @@ import type { OfficialExternalPluginCatalogFeed } from "./official-external-plug
 
 type SigningKey = ReturnType<typeof createSigningKey>;
 
-function fixtureFeed(): OfficialExternalPluginCatalogFeed {
-  return {
-    schemaVersion: 2,
-    id: "clawhub-official",
-    generatedAt: "2026-06-30T00:00:00.000Z",
-    sequence: 42,
-    entries: [],
-  };
-}
+const feed: OfficialExternalPluginCatalogFeed = {
+  schemaVersion: 2,
+  id: "clawhub-official",
+  generatedAt: "2026-06-30T00:00:00.000Z",
+  sequence: 42,
+  entries: [],
+};
 
 function expectVerification(
   envelope: unknown,
@@ -45,11 +43,7 @@ function signedEnvelope(
     payloadType?: string;
   } = {},
 ) {
-  return signCatalogEnvelope(
-    params.feed ?? fixtureFeed(),
-    params.keys ?? [key],
-    params.payloadType,
-  );
+  return signCatalogEnvelope(params.feed ?? feed, params.keys ?? [key], params.payloadType);
 }
 
 let key: SigningKey;
@@ -83,10 +77,9 @@ it("enforces distinct trusted key material for signature thresholds", () => {
 });
 
 it("rejects payload bytes changed after signing", () => {
-  envelope.payload = Buffer.from(
-    JSON.stringify({ ...fixtureFeed(), sequence: 43 }),
-    "utf8",
-  ).toString("base64url");
+  envelope.payload = Buffer.from(JSON.stringify({ ...feed, sequence: 43 }), "utf8").toString(
+    "base64url",
+  );
   expectVerification(envelope, "invalid-signature");
 });
 

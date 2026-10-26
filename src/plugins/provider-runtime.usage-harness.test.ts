@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
@@ -9,6 +8,7 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "./provider-runtime.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
@@ -20,21 +20,14 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
 function makeCodexManifestEnv(): NodeJS.ProcessEnv {
   const bundledPluginsDir = path.join(makeTempDir(), "extensions");
   const pluginDir = path.join(bundledPluginsDir, "codex");
-  fs.mkdirSync(pluginDir, { recursive: true });
-  const files = {
+  writeArtifacts(pluginDir, {
     "package.json": { name: "@openclaw/codex-test", openclaw: { extensions: ["./index.cjs"] } },
     "openclaw.plugin.json": {
       id: "codex",
       activation: { onAgentHarnesses: ["codex"] },
       configSchema: { type: "object" },
     },
-  };
-  for (const [name, contents] of Object.entries(files)) {
-    fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(contents));
-  }
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `module.exports = {
+    "index.cjs": `module.exports = {
       id: "codex",
       register(api) {
         api.registerAgentHarness({
@@ -42,15 +35,11 @@ function makeCodexManifestEnv(): NodeJS.ProcessEnv {
           label: "Codex",
           supports: () => ({ supported: true }),
           runAttempt: async () => ({ ok: false, error: "unused" }),
-          fetchUsageSnapshot: async () => ({
-            provider: "openai",
-            displayName: "OpenAI",
-            windows: [{ label: "5h", usedPercent: 9 }],
-          }),
+          fetchUsageSnapshot: async () => (${JSON.stringify(usageSnapshot)}),
         });
       },
     };\n`,
-  );
+  });
   return makeIsolatedEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir });
 }
 
