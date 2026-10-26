@@ -16,7 +16,6 @@ const classify = vi.fn<InferenceWorkerClient["classify"]>();
 const warn = vi.fn();
 const provider = createOnnxProvider({ classify }, warn);
 const prepared = createPreparedOnnxProvider({ classify }, warn);
-const p = expect.closeTo;
 beforeEach(() => vi.resetAllMocks());
 
 const preparedContext = (): DecisionProviderContextV2 => ({
@@ -34,14 +33,18 @@ it("preserves classifier estimates and the physical worker admission callback", 
     { logits: [Math.log(4), 0], inputTokens: 14 },
   ]);
   const ctx = preparedContext();
-  const probabilities = { trip: p(0.75, 14), cash: p(0.25, 14) };
+  const probabilities = { trip: expect.closeTo(0.75, 14), cash: expect.closeTo(0.25, 14) };
   expect(await prepared.evaluate(decisionBatchV1ToV2(batch)!, ctx)).toEqual({
     status: "ok",
     result: {
       model,
       answers: {
         topic: { type: "choice", choice: "trip", probabilities },
-        rating: { type: "score", score: p(1.6), probabilities: [p(0.1), p(0.2), p(0.7)] },
+        rating: {
+          type: "score",
+          score: expect.closeTo(1.6),
+          probabilities: [expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.7)],
+        },
         mentioned: { type: "boolean", probabilityTrue: 0.8 },
       },
       usage: { inputTokens: 41 },
