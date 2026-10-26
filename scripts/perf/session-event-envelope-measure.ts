@@ -16,6 +16,9 @@
  * clients to measure reuse within interleaved audiences rather than across all clients.
  * --fresh-fields replaces every nested field per event to measure misses separately.
  * --profile <path> saves the sampled profile when used with --allocations.
+ * Add --no-turbo-inlining to Node for callee attribution. Compare --clients 1/10/60
+ * with --audiences 1/8/8 to distinguish single-recipient and audience fanout costs.
+ * --sessions 64 rotates changing rows through the connection-owned delivery histories.
  * --encode-envelopes includes JSON encoding once per distinct projected payload,
  * checking object-shape costs as well as projection; it does not measure transport.
  */
@@ -41,6 +44,7 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     audiences: { type: "string", default: "2" },
+    sessions: { type: "string", default: "1" },
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
     "encode-envelopes": { type: "boolean", default: false },
@@ -50,12 +54,14 @@ const { values } = parseArgs({
 const events = Number(values.events);
 const clients = Number(values.clients);
 const audiences = Number(values.audiences);
+const sessions = Number(values.sessions);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(clients) && clients > 0);
+assert(Number.isSafeInteger(sessions) && sessions > 0);
 assert(Number.isSafeInteger(audiences) && audiences > 0 && audiences <= clients);
 const owner = path.resolve(values.owner);
 const ownerSha256 = createHash("sha256").update(readFileSync(owner)).digest("hex");
-const key = "agent:main:stream-envelope";
+let key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
 let audienceRows: GatewaySessionRow[];
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
@@ -186,9 +192,9 @@ const peers = Array.from({ length: clients }, (_, index) => ({
       maxProtocol: 3,
       scopes: [String(index % audiences)],
       caps:
-        index % 10 === 0
+        (index + 1) % 10 === 0
           ? []
-          : ["session-row-deltas", ...(index % 5 ? ["session-event-field-refs"] : [])],
+          : ["session-row-deltas", ...((index + 1) % 5 ? ["session-event-field-refs"] : [])],
     },
   } satisfies GatewayClient,
   rows: new ConnectionSessionRows(),
@@ -207,6 +213,8 @@ const prepare = prepareSessionEventProjection(projection);
 let envelopeEncodings = 0;
 let envelopeBytes = 0;
 function publish(index: number, digest?: ReturnType<typeof createHash>) {
+  key = `agent:main:stream-envelope-${index % sessions}`;
+  record.entry.sessionId = `synthetic-session-${index % sessions}`;
   row = freezeTrustedJsonSnapshot({
     ...rowFields,
     ...(values["fresh-fields"]
@@ -222,7 +230,7 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     agentId: "main",
     kind: "direct",
     updatedAt: 1,
-    sessionId: "synthetic-session",
+    sessionId: record.entry.sessionId,
     lifecycleRevision: "1",
     runtimeMs: index,
     label: "Streaming tool turn",
@@ -317,6 +325,7 @@ console.log(
     events,
     clients,
     audiences,
+    sessions,
     freshFields: values["fresh-fields"],
     encodeEnvelopes: values["encode-envelopes"],
     ...measuredEncoding,

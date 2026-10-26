@@ -242,8 +242,14 @@ export function prepareSessionEventProjection(
           // Names index the immutable full row; values need no per-audience entry tuples.
           const fields = (audience.rowFields ??= Object.keys(row)
             .filter((field) => Reflect.get(row, field) !== undefined)
-            .toSorted());
-          audience.rowFieldIndices ??= new Map(fields.map((field, index) => [field, index]));
+            // oxlint-disable-next-line unicorn/no-array-sort -- The filtered array is private to this audience.
+            .sort());
+          if (!audience.rowFieldIndices) {
+            audience.rowFieldIndices = new Map();
+            for (let index = 0; index < fields.length; index++) {
+              audience.rowFieldIndices.set(fields[index]!, index);
+            }
+          }
           refs = { indices: [], omitted: new Uint8Array(fields.length) };
           for (let index = 0; index < fields.length; index++) {
             const field = fields[index]!;
