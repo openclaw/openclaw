@@ -272,6 +272,28 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expectHidden(events, "SECRET");
   });
 
+  it("snapshots only retained events while coalescing buffered deltas", async () => {
+    let snapshots = 0;
+    const first = { ...queuedReasoning, delta: "first", partial: { marker: 1 } };
+    const last = { ...queuedReasoning, delta: "last", partial: { marker: 2 } };
+    const source = [first, last].map(
+      (event) =>
+        new Proxy(event, {
+          ownKeys(target) {
+            snapshots++;
+            return Reflect.ownKeys(target);
+          },
+        }),
+    );
+    const events = await collect([textEvent("[tool:re"), ...source], streamOptions);
+
+    expect(events).toEqual([{ ...first, delta: "firstlast", partial: last.partial }]);
+    expect(first.delta).toBe("first");
+    expect(first.partial).toEqual({ marker: 1 });
+    expect(last.delta).toBe("last");
+    expect(snapshots).toBe(1);
+  });
+
   it("preserves fence protection after replaying a false prefix at the auxiliary queue cap", async () => {
     const prefix = "[tool:read] " + " ".repeat(256);
     const invalidation = "nope\n\n```text\n";

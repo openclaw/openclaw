@@ -18,6 +18,7 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-context-binding.js";
+import * as sessionStateNotices from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { clearOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../../../state/openclaw-quarantine-store.test-support.js";
@@ -184,6 +185,7 @@ it.each(["0", "1"])(
     expect(process.memoryUsage().heapUsed - before).toBeLessThan(6 * 1024 * 1024);
     expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
     expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
+    expect(subagentRuns.get("retained-0")?.completion?.terminalReply).toBeUndefined();
 
     const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
     const full = prepared.consume((rows) => rows.get("retained-0"));
@@ -193,6 +195,10 @@ it.each(["0", "1"])(
     }
     expect(full.value?.task).toHaveLength(128 * 1024);
     expect(full.value?.completion?.resultText).toHaveLength(128 * 1024);
+    expect(full.value?.completion?.terminalReply).toEqual({
+      disposition: "visible",
+      text: full.value?.completion?.resultText?.slice(0, 4096),
+    });
     await change("retained-0", { label: "updated after completion" });
     const durable = stored("retained-0");
     expect(durable?.task).toBe(full.value?.task);
@@ -203,18 +209,27 @@ it.each(["0", "1"])(
     await restore();
     expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
     expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
+    expect(subagentRuns.get("retained-0")?.completion?.terminalReply).toBeUndefined();
+    const restarted = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
+    expect(restarted.consume((rows) => rows.get("retained-0")?.completion)).toEqual({
+      ready: true,
+      value: durable?.completion,
+    });
     const resident = subagentRuns.get("retained-1");
     expect(resident?.task).toBe("short task");
     expect(resident?.completion?.resultText).toBeUndefined();
     expect(resident?.completion?.fallbackResultText).toBeUndefined();
+    expect(resident?.completion?.terminalReply).toBeUndefined();
     await change("retained-1", (row) => {
       delete row.completion!.resultText;
       delete row.completion!.fallbackResultText;
+      delete row.completion!.terminalReply;
     });
     const cleared = stored("retained-1");
     expect(cleared).toBeDefined();
     expect(cleared?.completion?.resultText).toBeUndefined();
     expect(cleared?.completion?.fallbackResultText).toBeUndefined();
+    expect(cleared?.completion?.terminalReply).toBeUndefined();
   },
 );
 
@@ -384,6 +399,141 @@ function holdFirstAck(onWrite = () => {}) {
   });
   return { reached, release };
 }
+
+it.each(["delivered", "lost"] as const)(
+  "publishes native registry receipts once without repeating their payload in the reply (%s)",
+  async (delivery) => {
+    const original = entry(`native-receipt-${delivery}`);
+    await register(original);
+    const replies: unknown[] = [];
+    probe.command(stateWorker, async (command, executeOptions, scope) => {
+      const reply = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        replies.push(reply);
+        if (delivery === "lost") {
+          throw new SqliteWorkerError("Synthetic lost registry ACK", "outcome-unknown");
+        }
+      }
+      return reply;
+    });
+    const notify = vi
+      .spyOn(sessionStateNotices, "enqueueSessionStateNotice")
+      .mockImplementation(() => {});
+    const published = vi.fn();
+    const stop = subscribeSubagentRunChanges("persistence", published);
+    const onPublished = vi.fn();
+    try {
+      const value = await mutateSubagentRuns(
+        [original.runId],
+        (rows) => ({
+          value: "updated",
+          postimages: new Map([
+            [original.runId, { ...rows.get(original.runId)!, label: "native receipt" }],
+          ]),
+          terminalEvents: [
+            {
+              input: {
+                event: {
+                  sessionKey: original.childSessionKey,
+                  agentId: "main",
+                  kind: "goal_changed",
+                  actorType: "system",
+                  summary: "Synthetic registry receipt notice",
+                  watcherSessionKeys: [original.requesterSessionKey],
+                },
+                now: Date.now(),
+              },
+            },
+          ],
+        }),
+        { onPublished },
+      );
+      expect(value).toBe("updated");
+      expect(subagentRuns.get(original.runId)?.label).toBe("native receipt");
+      expect(stored(original.runId)?.label).toBe("native receipt");
+      expect(published).toHaveBeenCalledOnce();
+      expect(onPublished).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledExactlyOnceWith({
+        watcherSessionKey: original.requesterSessionKey,
+        watcherStorePath: null,
+        targetSessionKey: original.childSessionKey,
+        lastSeenSequence: 0,
+        queueOnly: false,
+      });
+      expect(replies).toEqual([undefined]);
+    } finally {
+      stop();
+    }
+  },
+);
+
+it.each(["after acknowledgment", "lost acknowledgment", "missing receipt"] as const)(
+  "preserves the registry commit outcome and failure with %s",
+  async (fault) => {
+    const original = entry(`settlement-${fault}`);
+    await register(original);
+    const failure =
+      fault === "lost acknowledgment"
+        ? new SqliteWorkerError("Synthetic registry settlement failure", "outcome-unknown")
+        : new Error("Synthetic registry settlement failure");
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+      (context, operation, options) => {
+        let admission: operationAdmission.SqliteWorkerOperationAdmission | undefined;
+        const loseReceipt = () => {
+          expect(admission?.committed).toBeDefined();
+          Object.defineProperty(admission, "committed", { value: undefined });
+        };
+        return run(
+          context,
+          async (scope) => {
+            const value = await operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                if (
+                  command.type === "subagents.persistChanges" &&
+                  fault !== "after acknowledgment"
+                ) {
+                  loseReceipt();
+                  if (fault === "lost acknowledgment") {
+                    throw failure;
+                  }
+                }
+                return result;
+              },
+            });
+            if (fault === "after acknowledgment") {
+              loseReceipt();
+              throw failure;
+            }
+            return value;
+          },
+          {
+            ...options,
+            createAdmission: (nativeOperation) => {
+              const prepared = options!.createAdmission!(nativeOperation);
+              admission = prepared.admission;
+              return prepared;
+            },
+          },
+        );
+      },
+    );
+    const outcome = await change(original.runId, { label: "durably updated" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(stored(original.runId)?.label).toBe("durably updated");
+    expect(subagentRuns.get(original.runId)?.label).toBe(original.label);
+    expect(outcome).toMatchObject({
+      outcome: fault === "after acknowledgment" ? "committed" : "unknown",
+      cause:
+        fault === "missing receipt"
+          ? expect.objectContaining({ message: "Registry committed receipt is unavailable" })
+          : failure,
+    });
+  },
+);
 
 it("publishes overlapping durable and runtime-only mutations in FIFO order", async () => {
   await register({ ...entry("overlap"), cleanupHandled: false });

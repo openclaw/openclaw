@@ -159,6 +159,11 @@ queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
 
+Task deadlines include queueing by default. Internal retained owners can select
+`timeoutFrom: "dispatch"` when preceding work has an owner-controlled lifetime;
+the budget then starts at slot assignment and still covers input preparation,
+execution, and host exchanges. The scheduler owns both deadline modes.
+
 The caller's execution deadline also bounds host exchanges. Responses may
 shorten that deadline, never renew it. Code Mode explicitly uses
 `hostTimeout: "owner"` because its host budget already accounts for approval

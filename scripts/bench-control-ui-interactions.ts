@@ -26,7 +26,10 @@ import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-col
 import {
   createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
   settleSidebarBackgroundWork,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
   type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
@@ -363,6 +366,7 @@ type Result = {
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
+  navigationPreloads?: InteractionNavigationPreloads;
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
   processWakeups?: ProcessWakeups;
@@ -773,6 +777,7 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             // Random per-load pets can repaint continuously; measure the selected interaction.
             await page.addInitScript(
               ({ key, gatewayUrl }) => {
@@ -920,6 +925,9 @@ try {
                 await page.waitForFunction(() => window.openclawControlUi !== undefined);
                 await settleSidebarBackgroundWork(page);
               }
+            }
+            if (scenario.route !== "/instance-resource-fixture.html") {
+              result.navigationPreloads = await settleInteractionNavigationPreloads(page);
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");

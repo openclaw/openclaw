@@ -1236,13 +1236,14 @@ export async function drainPendingDeliveriesCore(
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
-      (entry) => shouldInspectQueuedDelivery(entry, now, opts.selectEntry),
+      (entry) => Boolean(entry.settlement) || opts.selectEntry(entry, now).match,
     );
+    // Leased matches still need a later scan, but cannot acquire an inspection claim yet.
     if (matchingEntries.length > 0) {
       opts.onPending?.();
     }
     await recoveryCoordinator.scan({
-      entries: matchingEntries,
+      entries: matchingEntries.filter((entry) => shouldInspectQueuedDelivery(entry, now)),
       laneKey: (entry) => recoveryLaneKey(entry, opts.cfg, stateContext.stateDir),
       loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
       onMissingEntry: (entry) => {
