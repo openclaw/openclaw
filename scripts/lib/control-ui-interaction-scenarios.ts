@@ -121,7 +121,9 @@ export type InteractionScenario = {
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
   fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
-  createRequestHandlers?: () => Record<string, (params: unknown) => unknown>;
+  createRequestHandlers?: (
+    defaults: Readonly<Record<string, (params: unknown) => unknown>>,
+  ) => Record<string, (params: unknown) => unknown>;
   dataPage?: string;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
