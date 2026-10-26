@@ -384,20 +384,15 @@ function createSharedStateWorkerOwner() {
                 ...source,
                 databasePath: admission.databasePath,
                 existingOnly,
-                ...(existingOnly && admission.identity.key.startsWith("file:")
-                  ? {
-                      admission: {
-                        identity: admission.identity.key,
-                        birthtime: admission.identity.birthtime,
-                        assertCurrent: openingGuard.assertCurrent,
-                      },
-                    }
-                  : {}),
               },
               context,
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
+                // Opening binds the captured file; later commands retain their own authority.
+                ...(existingOnly && admission.identity.key.startsWith("file:")
+                  ? { createAdmission: openingGuard.createAdmission }
+                  : {}),
                 retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;

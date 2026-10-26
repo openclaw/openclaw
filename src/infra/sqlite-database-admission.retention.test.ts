@@ -269,8 +269,8 @@ it("retires the final closed handle's facts while preserving open siblings and d
     using open = vi.spyOn(fs, "openSync");
     using read = vi.spyOn(fs, "readFileSync");
     using lstat = vi.spyOn(fs, "lstatSync");
-    retainLocation(location);
-    retainLocation(location);
+    retainLocation(location, original.physicalIdentity);
+    retainLocation(location, original.physicalIdentity);
     expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
     expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
     for (const probe of [stat, fstat, realpath, open, read, lstat]) {

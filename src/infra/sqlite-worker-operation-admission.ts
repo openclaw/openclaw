@@ -59,6 +59,7 @@ type AdmissionFailureSource = "authority" | "domain" | "protocol";
 type DatabaseAuthority = {
   /** Canonical identity captured when the database owner was admitted. */
   databasePath: string;
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
   /** Only the broker can identify an initial open of its captured primary database. */
   coldOpenPath?: string;
   assertRequest?(): void;
@@ -350,7 +351,14 @@ function createOperationAdmission(
             if (create) {
               prepareSqliteDatabaseAdmission(location, { create: true });
             }
-            retainSqliteDatabaseAdmissionLocation(location);
+            const identity = databaseAuthority?.databaseIdentity;
+            retainSqliteDatabaseAdmissionLocation(
+              location,
+              identity &&
+                (location === identity.databasePath || location === databaseAuthority?.databasePath)
+                ? identity
+                : undefined,
+            );
           } catch (error) {
             if (!isRecord(error) || error.code !== "ENOENT") {
               throw error;

@@ -193,6 +193,7 @@ export async function dispatchSqliteWorkerJob(
           };
           retained.admission.bindDatabaseAuthority({
             databasePath,
+            databaseIdentity: job.request.databaseIdentity,
             ...(job.request.type === "open" &&
             !job.request.existingIdentity &&
             resolveIdentityPathViaExistingAncestorSync(job.request.databasePath) ===

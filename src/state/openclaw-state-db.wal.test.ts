@@ -664,7 +664,7 @@ it.runIf(process.platform !== "win32")(
       expect(database.walMaintenance.health).toMatchObject({
         state: "error",
         error: expect.stringContaining(
-          "SQLite Worker path no longer matches its borrowed native owner",
+          "SQLite database file identity changed before existing-only open",
         ),
       });
       expect(observations).toEqual(["error"]);

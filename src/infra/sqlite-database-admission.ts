@@ -39,6 +39,7 @@ import {
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -191,13 +192,19 @@ function exchange(target: string | Admission, create?: boolean): void {
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
-export function retainSqliteDatabaseAdmissionLocation(location: string): void {
+export function retainSqliteDatabaseAdmissionLocation(
+  location: string,
+  expectedIdentity?: DatabaseFileIdentity,
+): void {
   const retained = state.registry.forLocation(location);
   if (
     retained &&
+    expectedIdentity?.birthtime !== undefined &&
+    retained.physicalIdentity.key === expectedIdentity.key &&
+    retained.physicalIdentity.birthtime === expectedIdentity.birthtime &&
     state.registry.descriptors.get(retained.identity)?.descriptor === retained.descriptor
   ) {
-    // Native opens check physical identity; warm exchanges retain the original descriptor facts.
+    // Bound workers check this physical identity; unbound opens still discover the current file.
     seals.load(retained);
     return;
   }
