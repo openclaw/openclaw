@@ -13,7 +13,13 @@ async function makeWorkspace() {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-mxc-",
   });
-  return Object.assign(workspace, { root: await fs.realpath(workspace.dir) });
+  const root = await fs.realpath(workspace.dir);
+  return Object.assign(workspace, {
+    root,
+    workspaceDir: path.join(root, "sandbox"),
+    agentWorkspaceDir: path.join(root, "agent"),
+    skillsWorkspaceDir: path.join(root, "materialized"),
+  });
 }
 
 async function writeFile(root: string, relative: string, content: string) {
@@ -33,6 +39,18 @@ const edit = (filePath: string, oldText: string, newText: string) => ({
   path: filePath,
   edits: [{ oldText, newText }],
 });
+const text = (result: Awaited<ReturnType<AnyAgentTool["execute"]>>) =>
+  result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+type RunTool = (name: string, args: unknown) => Promise<string>;
+async function denyMutations(run: RunTool, file: string, oldText: string, error: string | RegExp) {
+  for (const [name, args] of [
+    ["write", { path: file, content: "DENIED" }],
+    ["edit", edit(file, oldText, "DENIED")],
+    ["apply_patch", { input: patch(`*** Add File: ${file}.new`, "+DENIED") }],
+  ] as const) {
+    await expect(run(name, args)).rejects.toThrow(error);
+  }
+}
 
 function makeSandbox(workspaceDir: string, overrides: Partial<SandboxContext> = {}) {
   return createSandboxTestContext({
@@ -50,8 +68,7 @@ function makeSandbox(workspaceDir: string, overrides: Partial<SandboxContext> = 
 
 function directoryReader(params: Partial<SandboxContext> & { workspaceDir: string }) {
   const bridge = new MxcFsBridge(makeSandbox(params.workspaceDir, params));
-  const read = expectDefined(bridge.readDirectory?.bind(bridge), "MXC directory reader");
-  return (filePath: string, cwd?: string) => read({ filePath, cwd });
+  return (filePath: string, cwd?: string) => bridge.readDirectory({ filePath, cwd });
 }
 
 test("lists entry names and types relative to the mounted directory", async () => {
@@ -67,9 +84,7 @@ test("lists entry names and types relative to the mounted directory", async () =
 
 test("lists the protected skill mount instead of its workspace shadow", async () => {
   await using workspace = await makeWorkspace();
-  const root = workspace.root;
-  const workspaceDir = path.join(root, "sandbox");
-  const skillsWorkspaceDir = path.join(root, "materialized");
+  const { workspaceDir, skillsWorkspaceDir } = workspace;
   const skillPath = path.join(".openclaw", "sandbox-skills", "skills");
   await fs.mkdir(path.join(workspaceDir, skillPath, "shadow"), { recursive: true });
   await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
@@ -80,8 +95,7 @@ test("lists the protected skill mount instead of its workspace shadow", async ()
 
 test("rejects a directory symlink that escapes the mounted root", async () => {
   await using workspace = await makeWorkspace();
-  const root = workspace.root;
-  const workspaceDir = path.join(root, "sandbox");
+  const { root, workspaceDir } = workspace;
   const outsideDir = path.join(root, "outside");
   await fs.mkdir(workspaceDir);
   await fs.mkdir(outsideDir);
@@ -98,10 +112,7 @@ test("rejects a directory symlink that escapes the mounted root", async () => {
 
 test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspaceOnly) => {
   await using workspace = await makeWorkspace();
-  const root = workspace.root;
-  const workspaceDir = path.join(root, "sandbox");
-  const agentWorkspaceDir = path.join(root, "agent");
-  const skillsWorkspaceDir = path.join(root, "materialized");
+  const { root, workspaceDir, agentWorkspaceDir, skillsWorkspaceDir } = workspace;
   await writeFile(skillsWorkspaceDir, materializedSkill, "skill-data");
   await writeFile(agentWorkspaceDir, "agent.txt", "agent-data");
   await writeFile(workspaceDir, "agent.txt", "shadow-data");
@@ -138,19 +149,14 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
         expect(tools.some((tool) => tool.name === name)).toBe(false);
       }
     }
-    return async (name: string, args: unknown) =>
-      text(
-        await expectDefined(
-          tools.find((tool) => tool.name === name),
-          `Missing ${name}`,
-        ).execute(name, args),
+    return async (name: string, args: unknown) => {
+      const selected = expectDefined(
+        tools.find((tool) => tool.name === name),
+        `Missing ${name}`,
       );
+      return text(await selected.execute(name, args));
+    };
   };
-  const text = (result: Awaited<ReturnType<AnyAgentTool["execute"]>>) =>
-    result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
   const rw = makeTools("rw");
   for (const filePath of ["note.txt", path.join(workspaceDir, "note.txt")]) {
     await rw("write", { path: filePath, content: "original\n" });
@@ -172,16 +178,8 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
     "agent-data",
   );
   expect(await rw("read", { path: skillRelative })).toContain("skill-data");
-  const denySkillMutation = (result: ReturnType<typeof rw>) =>
-    expect(result).rejects.toThrow(/read-only|Path escapes sandbox root/);
   for (const filePath of [skillRelative, path.join(workspaceDir, skillRelative)]) {
-    await denySkillMutation(rw("write", { path: filePath, content: "DENIED" }));
-    await denySkillMutation(rw("edit", edit(filePath, "skill-data", "DENIED")));
-    await denySkillMutation(
-      rw("apply_patch", {
-        input: patch(`*** Add File: ${filePath}.new`, "+DENIED"),
-      }),
-    );
+    await denyMutations(rw, filePath, "skill-data", /read-only|Path escapes sandbox root/);
   }
   if (workspaceOnly) {
     await expectOutside(ro("ls", { path: agentWorkspaceDir }));
@@ -192,20 +190,11 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
   expect(await none("read", { path: "agent.txt" })).toContain("shadow-data");
   expect(await none("ls", { path: workspaceDir })).toContain("agent.txt");
   await expectOutside(none("read", { path: path.join(agentWorkspaceDir, "agent.txt") }));
-  for (const name of ["read", "write", "edit", "ls"]) {
-    await expectOutside(
-      rw(name, {
-        path: path.join(root, "outside.txt"),
-        content: "DENIED",
-        edits: [{ oldText: "outside-data", newText: "DENIED" }],
-      }),
-    );
+  const outside = path.join(root, "outside.txt");
+  for (const name of ["read", "ls"]) {
+    await expectOutside(rw(name, { path: outside }));
   }
-  await expectOutside(
-    rw("apply_patch", {
-      input: patch(`*** Add File: ${path.join(root, "outside-new.txt")}`, "+DENIED"),
-    }),
-  );
+  await denyMutations(rw, outside, "outside-data", "Path escapes sandbox root");
   expect(
     await Promise.all([
       readText(root, "outside.txt"),
