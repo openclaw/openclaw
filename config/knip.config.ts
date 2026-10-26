@@ -426,6 +426,17 @@ const repositoryScriptEntries = [
   "scripts/perf/tool-source-reply-completion-measure.mjs!",
   "scripts/perf/transcript-model-context-measure.ts!",
   "scripts/perf/ws-event-metrics-measure.ts!",
+  // Maintained source headers invoke these standalone analysis commands by exact path.
+  "scripts/bench-inbound-metadata-stream.mts!",
+  "scripts/perf/avatar-inline-measure.ts!",
+  "scripts/perf/codex-catalog-page-decode.ts!",
+  "scripts/perf/compaction-serialization-measure.mjs!",
+  "scripts/perf/exec-policy-sort-measure.mjs!",
+  "scripts/perf/mcp-acquisition-measure.ts!",
+  "scripts/perf/shell-extract-bench.ts!",
+  "scripts/perf/subagent-active-read-measure.ts!",
+  "scripts/perf/trusted-snapshot-freeze-measure.mjs!",
+  "scripts/perf/git-read-sharing-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
   "scripts/perf/child-memory-fixture.cjs!",
