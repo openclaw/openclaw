@@ -19,11 +19,9 @@ log({
   credentialBackend: process.env.TBH_CREDENTIAL_BACKEND,
   configHome: process.env.XDG_CONFIG_HOME,
   path: process.env.PATH,
-  inheritedValue: process.env.MUSE_FIXTURE_INHERITED_VALUE,
 });
 
 let cursor = 0;
-let sessionCount = 0;
 let active;
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
@@ -99,10 +97,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       providerId: "meta",
       profileId: "fixture",
       source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
-      models:
-        process.env.META_API_KEY === "rejected-test-key"
-          ? []
-          : [{ providerId: "meta", modelId: "muse-spark-1.3" }],
+      models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
     });
   } else if (method === "session/start" || method === "session/resume") {
     const resumed = method === "session/resume";
@@ -115,11 +110,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (resumed && refusal) {
       return reject(id, ...refusal);
     }
-    const sessionId = resumed
-      ? params.sessionId
-      : process.env.MUSE_REQUEST_LOG
-        ? randomUUID()
-        : `session-${++sessionCount}`;
+    const sessionId = resumed ? params.sessionId : randomUUID();
     sessions.set(sessionId, resumed);
     reply(id, {
       session: { sessionId },
