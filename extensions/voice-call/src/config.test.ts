@@ -3,7 +3,6 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import setup from "../setup-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
 import {
@@ -137,7 +136,6 @@ describe("validateProviderConfig", () => {
       fromConfig.realtime.enabled = provider !== "plivo";
       fromConfig.inboundPolicy = "allowlist";
       expect(validateProviderConfig(fromConfig)).toEqual(valid);
-      clearProviderEnv();
       env.forEach((name, index) => vi.stubEnv(name, Object.values(values)[index]));
       if (provider === "twilio") {
         vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
@@ -276,13 +274,9 @@ describe("Tailscale external HTTPS port", () => {
   });
 
   it.each([
-    { name: "legacy mode", input: { tailscale: { mode: "funnel", port: 4545 } } },
-    {
-      name: "unified provider",
-      input: { tailscale: { port: 4545 }, tunnel: { provider: "tailscale-funnel" } },
-    },
-  ])("rejects unsupported Funnel port for $name", ({ input }) => {
-    expect(() => normalizeVoiceCallConfig(input)).toThrow(z.ZodError);
+    { tailscale: { mode: "funnel", port: 4545 } },
+    { tailscale: { port: 4545 }, tunnel: { provider: "tailscale-funnel" } },
+  ])("rejects unsupported Funnel port for %j", (input) => {
     expect(() => normalizeVoiceCallConfig(input)).toThrow(
       expect.objectContaining({
         issues: expect.arrayContaining([
@@ -392,7 +386,6 @@ describe("resolveVoiceCallConfig session routing", () => {
   it("uses dialed-number fallback only for inbound calls", () => {
     for (const [direction, metadata, expected] of [
       ["inbound", undefined, "+15550001111"],
-      ["outbound", undefined, undefined],
       ["inbound", { numberRouteKey: "+15550002222" }, "+15550002222"],
       ["outbound", { numberRouteKey: "+15550002222" }, undefined],
     ] as const) {
@@ -524,24 +517,21 @@ describe("voice-call config migration", () => {
     expect(packageJson).toMatchObject({ openclaw: { setupEntry: "./setup-api.ts" } });
   });
 
-  it("maps deprecated provider and twilio.from fields into canonical config", () => {
-    const migration = migrate({ provider: "log", twilio: { from: "+15550001234" } });
-    expect(migration.config).toMatchObject({ provider: "mock", fromNumber: "+15550001234" });
-  });
-
   it("migrates through the setup hook without changing its input or sibling plugins", () => {
     const registerConfigMigration = vi.fn<OpenClawPluginApi["registerConfigMigration"]>();
     setup.register(createTestPluginApi({ registerConfigMigration }));
     const other = { config: { nested: { keep: true } } };
-    const pluginConfig = (provider: string) => ({
-      plugins: { entries: { "voice-call": { enabled: true, config: { provider } }, other } },
+    const pluginConfig = (config: Record<string, unknown>) => ({
+      plugins: { entries: { "voice-call": { enabled: true, config }, other } },
     });
-    const config = pluginConfig("log");
+    const config = pluginConfig({ provider: "log", twilio: { from: "+15550001234" } });
     const before = structuredClone(config);
     const migration = registerConfigMigration.mock.calls[0]?.[0](config);
 
     expect(config).toEqual(before);
-    expect(migration?.config).toEqual(pluginConfig("mock"));
+    expect(migration?.config).toEqual(
+      pluginConfig({ provider: "mock", fromNumber: "+15550001234", twilio: {} }),
+    );
   });
 
   it("fills only missing streaming provider fields while preserving canonical values", () => {

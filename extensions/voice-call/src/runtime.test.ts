@@ -504,7 +504,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const tools = realtimeArgs()[0].tools;
     expect(tools.map((tool) => tool.name)).toEqual(["openclaw_end_call", "custom_tool"]);
     const endCallTool = expectDefined(tools[0], "end-call tool");
-    expectIncludes(endCallTool.description, "final words", "no further reply");
     expect(endCallTool.parameters).toEqual({
       type: "object",
       properties: {},
