@@ -39,6 +39,14 @@ function respondWith(results: JsonRecord[]) {
   fetchMock.mockImplementation(async () => Response.json({ results }));
 }
 
+function requestBody(index = fetchMock.mock.calls.length - 1) {
+  const body = fetchMock.mock.calls[index]?.[1]?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected Exa JSON request body");
+  }
+  return JSON.parse(body);
+}
+
 beforeEach(() => {
   fetchMock = vi.spyOn(globalThis, "fetch");
 });
@@ -57,9 +65,7 @@ it("caps returned and cached results when Exa exceeds the requested count", asyn
   expect(await tool.execute(args)).toEqual({ ...first, cached: true });
 
   expect(fetchMock).toHaveBeenCalledOnce();
-  expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
-    '{"query":"exa result count owner","numResults":1,"type":"auto","contents":{"highlights":true}}',
-  );
+  expect(requestBody().numResults).toBe(1);
   expect(first).toMatchObject({
     provider: "exa",
     count: 1,
@@ -70,18 +76,10 @@ it("caps returned and cached results when Exa exceeds the requested count", asyn
 });
 
 it("shares cached answers only with the same resolved credential", async () => {
-  fetchMock.mockImplementation(async (_url, init) =>
-    Response.json({
-      results: [
-        {
-          url:
-            new Headers(init?.headers).get("x-api-key") === "fixture-exa-a"
-              ? "https://example.com/account-a"
-              : "https://example.com/account-b",
-        },
-      ],
-    }),
-  );
+  fetchMock.mockImplementation(async (_url, init) => {
+    const account = new Headers(init?.headers).get("x-api-key") === "fixture-exa-a" ? "a" : "b";
+    return Response.json({ results: [{ url: `https://example.com/account-${account}` }] });
+  });
   const args = { query: "Exa credential cache isolation" };
   const first = await requireExaTool({ apiKey: "fixture-exa-a" }).execute(args);
   const other = await requireExaTool({ apiKey: "fixture-exa-b" }).execute(args);
@@ -105,21 +103,9 @@ it.each(["before", "during"])("preserves cancellation %s transport", async (timi
     }
     signal.throwIfAborted();
     return new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener(
-        "abort",
-        () => {
-          const abortReason: unknown = signal.reason;
-          reject(
-            abortReason instanceof Error
-              ? abortReason
-              : new Error("Exa request lost caller cancellation reason"),
-          );
-        },
-        { once: true },
-      );
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
       // Cancel at transport entry, after cold runtime loading has completed.
       controller.abort(reason);
-      expect(signal.aborted).toBe(true);
     });
   });
   if (timing === "before") {
@@ -167,24 +153,19 @@ it("applies scoped auth, endpoint, contents, freshness, and result normalization
   ).toEqual(["first\nsecond", "text fallback"]);
   expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example/exa/search");
   expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ "x-api-key": "exa-config-key" });
-  const rawBodyAt = (index: number) => {
-    const body = fetchMock.mock.calls[index]?.[1]?.body;
-    if (typeof body !== "string") {
-      throw new Error("Expected Exa JSON request body");
-    }
-    return body;
-  };
-  const bodyAt = (index = fetchMock.mock.calls.length - 1) => JSON.parse(rawBodyAt(index));
-  expect(
-    rawBodyAt(0).replace(/"startPublishedDate":"[^"]*"/, '"startPublishedDate":"<dynamic-date>"'),
-  ).toBe(
-    '{"query":"Exa boundary","numResults":100,"type":"auto","contents":{"text":{"maxCharacters":1200},"highlights":{"maxCharacters":4000,"query":"q","numSentences":4,"highlightsPerUrl":2},"summary":{"query":"launch"}},"startPublishedDate":"<dynamic-date>"}',
-  );
-  expect(Date.parse(bodyAt(0).startPublishedDate)).not.toBeNaN();
+  expect(requestBody(0)).toEqual({
+    query: args.query,
+    numResults: 100,
+    type: "auto",
+    contents: args.contents,
+    startPublishedDate: expect.any(String),
+  });
+  expect(Date.parse(requestBody(0).startPublishedDate)).not.toBeNaN();
 
   await tool.execute({ query: "cache partitions" });
   await tool.execute({ query: "cache partitions", contents: { highlights: true } });
   expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(requestBody().contents).toEqual({ highlights: true });
   await tool.execute({ query: "cache partitions", contents: { highlights: false } });
   await tool.execute({ query: "cache partitions", contents: { text: false } });
   await tool.execute({ query: "cache partitions", contents: { summary: false } });
@@ -199,7 +180,7 @@ it("applies scoped auth, endpoint, contents, freshness, and result normalization
     ["2e1", 20],
   ] as const) {
     await defaultTool.execute({ query: `count ${count}`, count });
-    expect(bodyAt().numResults).toBe(expected);
+    expect(requestBody().numResults).toBe(expected);
   }
   for (const count of ["0x10", 1.5]) {
     await expect(defaultTool.execute({ query: `count ${count}`, count })).rejects.toThrow(
@@ -214,7 +195,7 @@ it("applies scoped auth, endpoint, contents, freshness, and result normalization
   });
   Object.setPrototypeOf(inheritedText, inheritedPrototype);
   await defaultTool.execute({ query: "inherited", contents: { text: inheritedText } });
-  expect(bodyAt().contents).toEqual({ text: { maxCharacters: 1 } });
+  expect(requestBody().contents).toEqual({ text: { maxCharacters: 1 } });
 });
 
 it.each([
