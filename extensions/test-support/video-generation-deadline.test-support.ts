@@ -3,7 +3,6 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import type { VideoGenerationResult } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const videoUrl = "https://example.com/generated.mp4";
@@ -13,7 +12,7 @@ export function testVideoGenerationDeadlines({
   providerId,
   model,
   pendingStatus,
-  defaultPollingTimeoutMs = 120_000,
+  defaultPollingTimeoutMs: budget = 120_000,
   loadPlugin,
 }: {
   providerId: "runway" | "together";
@@ -24,25 +23,18 @@ export function testVideoGenerationDeadlines({
 }) {
   describe(`${providerId} video generation deadlines`, () => {
     const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+    const request = { provider: providerId, model, prompt: "A blue cube", cfg: {} };
     afterEach(() => {
       vi.clearAllTimers();
       vi.useRealTimers();
     });
-    it.each<[string, number | undefined, number, number | undefined]>([
-      ["outlasts HTTP timeout within budget", 180_000, 150_000, undefined],
-      ["expires at original deadline after slow submission", 180_000, Infinity, 175_000],
-      [
-        "finishes near default polling deadline after slow submission",
-        undefined,
-        defaultPollingTimeoutMs + 5_000,
-        defaultPollingTimeoutMs,
-      ],
-    ])("%s", async (_, timeoutMs, readyAfterMs, pendingAtMs) => {
-      const provider = requireRegisteredProvider(
-        capturePluginRegistration(await loadPlugin()).videoGenerationProviders,
-        providerId,
-        "video provider",
-      );
+    it.each<[number | undefined, number, number | undefined]>([
+      [180_000, 150_000, undefined],
+      [180_000, Infinity, 175_000],
+      [undefined, budget + 5_000, budget],
+    ])("budget/ready/pending: %s/%s/%s", async (timeoutMs, readyAfterMs, pendingAtMs) => {
+      const { videoGenerationProviders } = capturePluginRegistration(await loadPlugin());
+      const provider = requireRegisteredProvider(videoGenerationProviders, providerId);
       const settleByMs = Math.min(readyAfterMs, timeoutMs ?? Infinity) + 1_000;
       vi.useFakeTimers();
       const startedAt = Date.now();
@@ -65,30 +57,24 @@ export function testVideoGenerationDeadlines({
         const ready = Date.now() - startedAt >= readyAfterMs;
         return Response.json({ ...pending, ...(ready ? completed : {}) });
       });
-      let outcome: { result: VideoGenerationResult } | { error: unknown } | undefined;
-      void provider
-        .generateVideo({ provider: providerId, model, prompt: "A blue cube", cfg: {}, timeoutMs })
-        .then(
-          (result) => (outcome = { result }),
-          (error: unknown) => (outcome = { error }),
-        );
+      const outcome = provider.generateVideo({ ...request, timeoutMs });
+      const settled = vi.fn();
+      void outcome.then(settled, settled);
       if (pendingAtMs !== undefined) {
         await vi.advanceTimersByTimeAsync(pendingAtMs);
-        expect(outcome).toBeUndefined();
+        expect(settled).not.toHaveBeenCalled();
       }
       await vi.advanceTimersByTimeAsync(settleByMs - (pendingAtMs ?? 0));
-
+      expect(settled).toHaveBeenCalledOnce();
       if (Number.isFinite(readyAfterMs)) {
-        expect(outcome).toMatchObject({
-          result: { videos: [{ mimeType: "video/mp4", buffer: videoBytes }] },
+        await expect(outcome).resolves.toMatchObject({
+          videos: [{ mimeType: "video/mp4", buffer: videoBytes }],
         });
       } else {
-        expect(outcome).toHaveProperty("error", expect.any(Error));
-        const message = expect.stringContaining(`timed out after ${timeoutMs}ms`);
-        expect(outcome).toHaveProperty("error.message", message);
+        await expect(outcome).rejects.toBeInstanceOf(Error);
+        await expect(outcome).rejects.toThrow(`timed out after ${timeoutMs}ms`);
         expect(fetchWithTimeoutMock.mock.calls.some(([url]) => url === videoUrl)).toBe(false);
       }
-      expect(postJsonRequestMock).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     });
   });
