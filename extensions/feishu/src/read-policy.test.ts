@@ -72,6 +72,8 @@ describe("Feishu read policy", () => {
       "wildcard defaults",
       { dmPolicy: "open", groups: { "*": { requireMention: false } } },
       "oc_unconfigured",
+      undefined,
+      undefined,
     ],
     ["disabled policy", { groupPolicy: "disabled" }, "oc_current", undefined, currentContext],
     [

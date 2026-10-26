@@ -32,7 +32,11 @@ it.each([
   "allocates the resolved OS and runs compatible setup (configured=%s, requested=%s)",
   async (configured, requested, targetArgs, setup) => {
     const { provider, calls, provision } = scenario();
-    const profile = { ...PROFILE, target: configured, setup };
+    const profile = {
+      ...PROFILE,
+      ...(configured ? { target: configured } : {}),
+      ...(setup ? { setup } : {}),
+    };
     const lease = await provision(profile, requested);
     await provider.destroy({ ...lease, profile });
     const warmup = calls.find(({ argv }) => argv[1] === "warmup")!.argv;

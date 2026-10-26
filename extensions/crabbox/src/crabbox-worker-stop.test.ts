@@ -12,7 +12,7 @@ import {
 const lease = { leaseId: LEASE_ID, profile: { ...PROFILE, warmImage: false } };
 
 describe("Crabbox worker stop confirmation", () => {
-  it.each(["direct stop", "capture"] as const)(
+  it.for(["direct stop", "capture"] as const)(
     "retains destroy confirmation while waiting for %s",
     async (phase, { signal }) => {
       const started = Promise.withResolvers<void>();

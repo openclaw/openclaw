@@ -8,12 +8,44 @@ import { forceDisconnectPlaywrightForTarget } from "./pw-session.js";
 
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
 
-const socketOpened = vi.hoisted(() =>
-  vi.fn(function (_url: string, _options?: { agent?: unknown }) {
-    throw new Error("test socket should not open");
-  }),
-);
-vi.mock("openclaw/plugin-sdk/websocket-runtime", () => ({ WebSocket: socketOpened }));
+const wsMockState = vi.hoisted(() => ({
+  constructorUrls: [] as string[],
+  constructorOptions: [] as Array<{ agent?: unknown } | undefined>,
+}));
+
+vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
+  class MockWebSocket {
+    static OPEN = 1;
+
+    readyState = 0;
+    private readonly handlers = new Map<string, (error?: Error) => void>();
+
+    constructor(url: string, options?: { agent?: unknown }) {
+      wsMockState.constructorUrls.push(url);
+      wsMockState.constructorOptions.push(options);
+      setTimeout(() => {
+        this.handlers.get("error")?.(new Error("test socket should not open"));
+      }, 0);
+    }
+
+    on(event: string, handler: (error?: Error) => void) {
+      this.handlers.set(event, handler);
+      return this;
+    }
+
+    close() {
+      if (this.readyState === 3) {
+        return;
+      }
+      this.readyState = 3;
+      this.handlers.get("close")?.();
+    }
+
+    send() {}
+  }
+
+  return { WebSocket: MockWebSocket };
+});
 
 vi.mock(
   "./pw-session-cdp-transport.js",
@@ -41,7 +73,8 @@ function installBrowserMock() {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketEndpointSpy.mockReset();
-  socketOpened.mockClear();
+  wsMockState.constructorUrls = [];
+  wsMockState.constructorOptions = [];
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -71,7 +104,7 @@ describe("pw-session termination CDP SSRF guard", () => {
     await expect(
       forceDisconnectPlaywrightForTarget({ cdpUrl, page, targetId: "TARGET_1" }),
     ).resolves.toBeUndefined();
-    expect(socketOpened).not.toHaveBeenCalled();
+    expect(wsMockState.constructorUrls).toEqual([]);
     expect(browserClose).toHaveBeenCalledOnce();
   });
 
@@ -88,7 +121,7 @@ describe("pw-session termination CDP SSRF guard", () => {
     await listPagesViaPlaywright({ cdpUrl });
     discovery.resolve(targetResponse("127.0.0.1:18792"));
     await termination;
-    expect(socketOpened).not.toHaveBeenCalled();
+    expect(wsMockState.constructorUrls).toEqual([]);
     expect(replacement.browserClose).not.toHaveBeenCalled();
   });
 
@@ -101,18 +134,23 @@ describe("pw-session termination CDP SSRF guard", () => {
     const fetchUrls = fetchSpy.mock.calls.map((call) => call[0]);
     expect(fetchUrls).toContain(`${cdpUrl}/json/list`);
     expect(fetchUrls).not.toContain("http://169.254.169.254/json/list");
-    expect(socketOpened).not.toHaveBeenCalled();
+    expect(wsMockState.constructorUrls).toEqual([]);
     expect(browserClose).toHaveBeenCalledTimes(1);
   });
 
   it("uses the discovered target lookup pin for best-effort termination sockets", async () => {
     const { page } = installBrowserMock();
-    const lookup = vi.fn<typeof import("node:dns").lookup>();
+    const lookup = vi.fn((_hostname: string, options: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof cb === "function") {
+        cb(null, "127.0.0.1", 4);
+      }
+    });
     const assertAllowedSpy = vi
       .spyOn(await import("./cdp.helpers.js"), "assertCdpEndpointAllowed")
       .mockImplementation(async (url: string) =>
         url.includes("/devtools/page/")
-          ? { hostname: "cdp-pinned.test", addresses: ["127.0.0.1"], lookup }
+          ? { hostname: "cdp-pinned.test", addresses: ["127.0.0.1"], lookup: lookup as never }
           : undefined,
       );
     onTestFinished(() => {
@@ -126,9 +164,7 @@ describe("pw-session termination CDP SSRF guard", () => {
       targetId: "TARGET_1",
       ssrfPolicy: {},
     });
-    expect(socketOpened.mock.calls.map(([url]) => url)).toEqual([
-      "ws://cdp-pinned.test/devtools/page/TARGET_1",
-    ]);
-    expect(socketOpened.mock.calls[0]?.[1]?.agent).toBeDefined();
+    expect(wsMockState.constructorUrls).toEqual(["ws://cdp-pinned.test/devtools/page/TARGET_1"]);
+    expect(wsMockState.constructorOptions[0]?.agent).toBeDefined();
   });
 });

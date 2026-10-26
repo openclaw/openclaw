@@ -239,7 +239,13 @@ describe("resolveTelegramToken", () => {
       undefined,
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     ],
-  ] as const)("resolves or rejects SecretRef %j", (botToken, secrets, expected) => {
+  ] satisfies Array<
+    [
+      NonNullable<Parameters<typeof telegramConfig>[0]>["botToken"],
+      OpenClawConfig["secrets"],
+      string | RegExp,
+    ]
+  >)("resolves or rejects SecretRef %j", (botToken, secrets, expected) => {
     vi.stubEnv("TG_TOKEN", "secretref-env-token");
     const resolve = () => resolveTelegramToken(telegramConfig({ botToken }, secrets));
     if (typeof expected === "string") {

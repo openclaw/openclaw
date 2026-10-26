@@ -23,18 +23,17 @@ beforeEach(() => {
 });
 
 function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creating") {
+  const operation = captureOperation(SELECTOR, {
+    startedAtMs: Date.now() - 1_200_000,
+    phase,
+    ...(phase === "uncertain" ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] } : {}),
+  });
   const record = warmRecord({
     image: warmImage("chk_last_good"),
-    operation: captureOperation(SELECTOR, {
-      startedAtMs: Date.now() - 1_200_000,
-      phase,
-      ...(phase === "uncertain"
-        ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] }
-        : {}),
-    }),
+    operation,
   });
   openWarmImageStore().register("profile", record);
-  return record;
+  return { ...record, operation };
 }
 
 async function runCli(...args: string[]) {

@@ -74,7 +74,7 @@ it.each([
       talkDurationMs: 42,
     },
   });
-  expectPrivateFieldsAbsent(JSON.stringify(diagnostics.mock.calls));
+  expectPrivateFieldsAbsent(JSON.stringify(logs));
   await flushLogger();
   const fileLog = fs.readFileSync(logFile, "utf8");
   const records = fileLog

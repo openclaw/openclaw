@@ -98,5 +98,14 @@ it("adds formatting overrides only to chunked text units", () => {
     chunkedTextFormatting: { parseMode: "HTML" },
     overrides: {},
   });
-  expect(units).toEqual([expectedUnit("<b>bold</b>", { formatting: { parseMode: "HTML" } })]);
+  expect(units).toEqual([
+    {
+      text: "<b>bold</b>",
+      overrides: {
+        formatting: { parseMode: "HTML" },
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      },
+    },
+  ]);
 });

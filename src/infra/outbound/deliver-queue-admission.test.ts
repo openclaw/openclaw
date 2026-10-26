@@ -87,7 +87,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
         preparationState: "prepared",
         preparationLeaseExpiresAt: 200,
       };
-      let current = { ...snapshot, preparationLeaseExpiresAt: 100 };
+      let current: StableDeliveryPreparation = { ...snapshot, preparationLeaseExpiresAt: 100 };
       const release = createDeferredCore<StableDeliveryPreparation>();
       const entered = createDeferredCore();
       spool.stageQueuePayloadMedia.mockImplementationOnce(async () => {
