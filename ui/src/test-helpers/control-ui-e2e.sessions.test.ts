@@ -8,6 +8,45 @@ import { sessionClient } from "./session-gateway-client.test-support.ts";
 
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
 
+it("serves requested initial history through the startup response owner", async ({ connect }) => {
+  const messages = [{ role: "assistant", content: "Cached conversation" }];
+  const client = sessionClient(
+    await connect({ sessions: [notes], sessionTranscripts: { [notes.key]: { messages } } }),
+    notes.key,
+  );
+  const subscribe = (initialHistory?: Record<string, unknown>) =>
+    client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory });
+  expect(await subscribe()).not.toHaveProperty("initialHistory");
+  expect(await subscribe({})).toMatchObject({
+    key: notes.key,
+    initialHistory: {
+      ok: true,
+      payload: { messages, sessionId: notes.sessionId, sessionInfo: notes },
+    },
+  });
+  const delta = { kind: "delta", deltaCursor: "next", messages: [] };
+  client.controls.setMethodResponse("chat.startup", {
+    cases: [{ match: { sessionKey: notes.key, cursor: "cached" }, response: delta }],
+  });
+  expect(await subscribe({ cursor: "cached" })).toMatchObject({
+    initialHistory: { ok: true, payload: delta },
+  });
+  const error = { code: "UNAVAILABLE", message: "History is not ready", retryable: true };
+  client.controls.setMethodResponse("chat.startup", { __mockError: error });
+  expect(
+    await client.request("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).toMatchObject({ ok: true, payload: { initialHistory: { ok: false, error } } });
+});
+
+it("omits initial history only when the scenario explicitly exercises the fallback", async ({
+  connect,
+}) => {
+  const client = sessionClient(await connect({ subscriptionInitialHistory: false }), notes.key);
+  expect(
+    await client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).not.toHaveProperty("initialHistory");
+});
+
 it("preserves stale wire responses without consuming sequences or replacing canonical identity", async ({
   connect,
 }) => {
@@ -72,8 +111,8 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
     await client.patch({ expectedSessionId: replacement.sessionId, label: replacement.label }),
   ).toMatchObject({ ok: true });
   expect(await client.rows()).toMatchObject([replacement]);
-  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
-    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
+  for (const method of ["sessions.describe", "sessions.dispatch", "chat.history", "chat.startup"]) {
+    const params = method.startsWith("sessions.") ? { key: notes.key } : { sessionKey: notes.key };
     expect(await client.payload(method, params)).toMatchObject(
       method === "sessions.describe"
         ? { session: { sessionId: replacement.sessionId } }

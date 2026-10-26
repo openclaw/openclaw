@@ -6,12 +6,13 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
+import { result as commandResult } from "./bootstrap.test-support.js";
 import * as support from "./service.test-support.js";
 
 const CLASSLESS_PROFILE = {
@@ -22,18 +23,6 @@ const CLASSLESS_PROFILE = {
   setup: "true",
 };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
-
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 describe("Crabbox runtime preflight cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -87,6 +76,78 @@ describe("Crabbox runtime preflight cleanup", () => {
     }
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("reclaims after Crabbox accepts stop while retaining waiting-stop release confirmation", async ({
+    signal,
+  }) => {
+    const environmentId = "worker-fast-reclaim";
+    const leaseId = "cbx_0123456789ab";
+    const acceptedStop = createDeferred();
+    const finishRelease = createDeferred();
+    const calls: string[][] = [];
+    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
+      if (argv[1] === "--version") {
+        return commandResult({ stdout: "999.0.0" });
+      }
+      calls.push(argv);
+      expect(argv[1]).toBe("stop");
+      if (argv.includes("--wait=false")) {
+        acceptedStop.resolve();
+      } else {
+        await withinTest(finishRelease.promise, signal);
+      }
+      return commandResult();
+    });
+    const provider = await registerProvider();
+    // Seed the real persisted provider snapshot without allocating any cloud resource.
+    const intent = await support.testState.store.createIntent({
+      environmentId,
+      providerId: "crabbox",
+      profileId: "development",
+      profileSnapshot: {
+        settings: { ...PROFILE, provider: "aws", warmImage: false },
+      },
+      provisionOperationId: "fast-reclaim-operation",
+    });
+    await support.testState.store.transition({
+      environmentId: intent.environmentId,
+      from: "requested",
+      to: "provisioning",
+    });
+    await support.testState.store.transition({
+      environmentId,
+      from: "provisioning",
+      to: "bootstrapping",
+      patch: { leaseId, sshEndpoint: support.SSH_ENDPOINT },
+    });
+    await support.testState.store.transition({
+      environmentId: intent.environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: support.readyPatch(intent.environmentId),
+    });
+    const service = support.createService(provider);
+    const reclaim = service.reclaim(intent.environmentId);
+    try {
+      await withinTest(acceptedStop.promise, signal);
+      await expect(withinTest(reclaim, signal)).resolves.toMatchObject({ state: "destroying" });
+      expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+        state: "destroying",
+        leaseId,
+      });
+      finishRelease.resolve();
+      await expect(service.destroy(intent.environmentId)).resolves.toMatchObject({
+        state: "destroyed",
+      });
+      expect(calls.map((argv) => argv.slice(1))).toEqual([
+        ["stop", "--provider", "aws", "--id", leaseId, "--wait=false"],
+        ["stop", "--provider", "aws", "--id", leaseId],
+      ]);
+    } finally {
+      finishRelease.resolve();
+      await reclaim;
+    }
   });
 
   it.each(["spawn", "config"])(

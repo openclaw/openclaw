@@ -1,4 +1,4 @@
-import { readDeferredPluginSessionArtifactPaths } from "../../infra/deferred-plugin-session-sources.js";
+import { readDeferredPluginSessionArtifactPaths } from "../../infra/deferred-plugin-session-source-read.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { readSessionCleanupSnapshotInDatabase } from "./cleanup-service-read.kernel.js";
 import type {

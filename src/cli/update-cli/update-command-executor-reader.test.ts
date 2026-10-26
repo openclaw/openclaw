@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -91,11 +92,11 @@ function expectLeaseReleased() {
 }
 
 function snapshot() {
-  return fs
-    .readdirSync(root, { recursive: true })
-    .toSorted((left, right) => String(left).localeCompare(String(right)))
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
+    .toSorted((left, right) => left.localeCompare(right))
     .map((relative) => {
-      const name = String(relative);
+      const name = relative;
       const file = path.join(root, name);
       const stat = fs.lstatSync(file);
       return {

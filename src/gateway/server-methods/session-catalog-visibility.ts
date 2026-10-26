@@ -42,7 +42,7 @@ export function resolveSessionCatalogVisibility(
   client: GatewayClient | null,
   config: OpenClawConfig,
 ): SessionCatalogVisibility {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const scopes = client?.connect.scopes ?? [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
   const multipleIdentities = !admin && hasMultipleResidentSessionSharingIdentities();
   const attachedProfileId = client?.authenticatedUserProfile?.profileId;

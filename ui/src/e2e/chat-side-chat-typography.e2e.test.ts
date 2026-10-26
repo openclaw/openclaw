@@ -70,10 +70,10 @@ suite.define(() => {
       );
       const sideInput = await typography(side.getByRole("textbox"));
       if (width === 390) {
-        // The collapsed mobile composer has a compact 22px row; Side chat
+        // The collapsed narrow composer has a compact 22px row; Side chat
         // retains its multiline editor. Both consume the same text scale.
-        expect(mainInput).toMatchObject({ size: "20px", lineHeight: "22px", weight: "500" });
-        expect(sideInput).toEqual({ ...mainInput, lineHeight: "30px", weight: "400" });
+        expect(mainInput).toMatchObject({ size: "17.5px", lineHeight: "22px", weight: "500" });
+        expect(sideInput).toEqual({ ...mainInput, lineHeight: "26.25px", weight: "400" });
       } else {
         expect(sideInput).toEqual(mainInput);
       }

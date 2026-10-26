@@ -17,19 +17,13 @@ const IDLE_POLL_MS = 30 * 1000;
 
 type RelayDaemonExitReason = "port-in-use" | "no-credential" | "idle" | "stopped";
 
-type RelayDaemonRun = {
-  /** Resolves when the daemon decides to exit; the caller owns process.exit. */
-  done: Promise<RelayDaemonExitReason>;
-  /** Bound relay port when the server started; null when startup was refused. */
-  port: number | null;
-  stop: () => void;
-};
-
 /**
  * Run the standalone extension relay daemon: one loopback relay server with no
  * Gateway. The daemon stays alive while the paired extension holds its relay
  * connection or a CDP client is attached, and exits once both sides have been
  * gone for the idle grace so an idle daemon never outlives Chrome.
+ * The caller awaits done and owns process.exit.
+ * The returned port is null when startup was refused.
  */
 export async function runExtensionRelayDaemon(params: {
   port: number;
@@ -41,7 +35,7 @@ export async function runExtensionRelayDaemon(params: {
    * silently reverted. The extension and mcporter both speak v2.
    */
   allowLegacyAuth?: boolean;
-}): Promise<RelayDaemonRun> {
+}) {
   const allowLegacyAuth = params.allowLegacyAuth ?? false;
   const now = Date.now;
   const completion = createDeferred<RelayDaemonExitReason>();

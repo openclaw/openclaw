@@ -1,3 +1,4 @@
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -5,31 +6,12 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
-}));
 
 // mock-isolation: Control inference completion without contacting providers.
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
-}));
-// mock-isolation: Keep audit persistence local while testing hosted session ownership and disposal.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
 }));
 // mock-isolation: Keep greeting discovery and provider inference outside session-lifecycle tests.
 vi.mock("../../system-agent/greeting.js", () => ({

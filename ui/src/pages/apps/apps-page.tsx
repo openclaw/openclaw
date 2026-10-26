@@ -1,10 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
-import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
@@ -19,12 +19,15 @@ import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
 
-const DiscoveryStatus = lazy(() => import("../../components/mcp-app-discovery-status.tsx"));
+const AppsConversation = lazy(() => {
+  // Start the app view with the conversation; the panel owns failures and launch admission.
+  void McpAppView.preload().catch(() => undefined);
+  return import("./apps-conversation.tsx");
+});
 
-type AppsPageProps = { appSearch?: string };
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
-export function AppsPage(props: AppsPageProps) {
+export function AppsPage(props: { appSearch?: string }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
@@ -38,22 +41,13 @@ export function AppsPage(props: AppsPageProps) {
     }),
     () => true,
   );
-  const conversationReady = createMemo(async () => {
-    if (appRoute()) {
-      await ensureCustomElementDefined(
-        "openclaw-chat-pane",
-        () => import("../chat/route-entry.ts"),
-      );
-    }
-    return null;
-  });
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
-    const agentId = selection.read().state.selectedId ?? undefined;
+    const target = catalog.target();
     const key = JSON.stringify([
       appSearch(),
-      state.snapshot.sessionKey,
-      agentId,
+      target.sessionKey,
+      target.agentId,
       state.connectionRevision,
     ]);
     const route = appRoute();
@@ -91,8 +85,7 @@ export function AppsPage(props: AppsPageProps) {
       detail:
         server && entrypoint
           ? {
-              sessionKey: state.snapshot.sessionKey,
-              agentId,
+              ...target,
               owner: state.snapshot.client,
               serverName: server.serverName,
               entrypoint,
@@ -103,10 +96,6 @@ export function AppsPage(props: AppsPageProps) {
           : undefined,
     };
   });
-  const paneKey = () =>
-    launch().detail
-      ? JSON.stringify([launch().detail?.sessionKey, gateway.read().connectionRevision])
-      : "";
   const canPairDevice = () =>
     gateway.read().snapshot.phase === "connected" &&
     hasOperatorAdminAccess(gateway.read().snapshot.hello?.auth ?? null);
@@ -149,29 +138,11 @@ export function AppsPage(props: AppsPageProps) {
           )}
         >
           <Loading on={appRoute()} fallback={<p role="status">{t("mcpApp.loading")}</p>}>
-            {conversationReady()}
-            <Show
-              when={paneKey()}
-              keyed
-              fallback={
-                <Loading fallback={<p role="status">{t("mcpApp.loading")}</p>}>
-                  <DiscoveryStatus
-                    request={catalog.request()}
-                    emptyMessage={t("mcpApp.invalidLink")}
-                    emptyRole="alert"
-                  />
-                </Loading>
-              }
-            >
-              <openclaw-chat-pane
-                class="mcp-app-conversation"
-                prop:sessionKey={launch().detail!.sessionKey}
-                prop:agentId={launch().detail!.agentId}
-                prop:paneId="plugin-app"
-                prop:presentationId={`plugin-app:${launch().detail!.sessionKey}`}
-                prop:mcpAppLaunch={launch().detail}
-              />
-            </Show>
+            <AppsConversation
+              launch={launch().detail}
+              connectionRevision={gateway.read().connectionRevision}
+              request={catalog.request()}
+            />
           </Loading>
         </Errored>
       </Show>

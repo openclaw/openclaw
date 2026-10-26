@@ -7,11 +7,11 @@ import {
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
 import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
-import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
 import {
   boundSessionEntryMetadataReceipts,

@@ -52,7 +52,7 @@ openclaw doctor
 
 Common causes:
 
-- `tools.profile: "minimal"` allows `session_status` and update-only `gateway`.
+- `tools.profile: "minimal"` allows `session_status` and `gateway` maintenance (`update.run`, `restart`, and `update.cleanup`), but not configuration reads.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
 - `tools.profile: "coding"` selects repo, file, shell, and runtime work.
 - `tools.profile: "full"` is the local onboarding default. It removes core profile

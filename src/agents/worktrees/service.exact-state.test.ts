@@ -238,7 +238,12 @@ describe("managed exact-state retirement", () => {
     let swapped = false;
     vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
       const result = await write(...args);
-      if (!swapped && typeof args[0] === "string" && args[0].endsWith("/files/" + temporaryName)) {
+      if (
+        !swapped &&
+        typeof args[0] === "string" &&
+        path.basename(args[0]) === temporaryName &&
+        path.basename(path.dirname(args[0])) === "files"
+      ) {
         swapped = true;
         await fs.rename(
           path.join(created.path, "nested"),

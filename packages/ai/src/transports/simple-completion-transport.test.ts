@@ -1,8 +1,10 @@
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import { registerSynchronousTestApi } from "../providers/provider-stream.test-support.js";
 
 const vertexStream = vi.fn();
 const registerApi = vi.fn();
@@ -22,16 +24,13 @@ const initialHost = getAiTransportHost();
 function makeModel<T extends Api>(
   overrides: Pick<Model<T>, "api" | "provider" | "baseUrl"> & Partial<Model<T>>,
 ): Model<T> {
-  return {
-    id: "test-model",
+  return makeProviderModel(overrides.api, overrides.provider, "test-model", {
     name: "Test Model",
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 4096,
     ...overrides,
-  };
+  });
 }
 
 function makeChatGPTModel(baseUrl: string) {
@@ -54,21 +53,6 @@ vi.mock("./provider-transport-stream.js", () => ({
 
 let prepareImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
-
-function requireSynchronousStream(
-  stream: ReturnType<StreamFn>,
-): AssistantMessageEventStreamContract {
-  if (
-    stream instanceof Promise ||
-    !("push" in stream) ||
-    !("end" in stream) ||
-    typeof stream.push !== "function" ||
-    typeof stream.end !== "function"
-  ) {
-    throw new Error("Expected synchronous assistant event stream");
-  }
-  return stream as AssistantMessageEventStreamContract;
-}
 
 function prepare(params: Omit<Parameters<typeof prepareImpl>[0], "apiRegistry">) {
   return prepareImpl({ ...params, apiRegistry });
@@ -119,14 +103,7 @@ describe("prepareModelForSimpleCompletion", () => {
   afterAll(() => configureAiTransportHost(initialHost));
 
   it("keeps each selected auth and agent policy when completions share a model registry", () => {
-    registerApi.mockImplementation((registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
-      if (registry.getApiProvider(api)) {
-        return false;
-      }
-      const stream = (...args: Parameters<StreamFn>) => requireSynchronousStream(streamFn(...args));
-      registry.registerApiProvider({ api, stream, streamSimple: stream });
-      return true;
-    });
+    registerApi.mockImplementation(registerSynchronousTestApi);
     wrapStream.mockImplementation(
       ({ context }) =>
         (model: Model, messages: Parameters<StreamFn>[1], options: Parameters<StreamFn>[2]) =>
@@ -232,7 +209,7 @@ describe("prepareModelForSimpleCompletion", () => {
       api: "openai-completions",
       provider: "llama-cpp",
       baseUrl: "local://llama-cpp",
-      headers: { Authorization: null } as never,
+      headers: { Authorization: null },
     });
 
     const result = prepare({ model });

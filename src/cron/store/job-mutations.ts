@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { assertCronBindApplies } from "../bind-parent.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -17,6 +18,7 @@ import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js"
 import {
   reconcileCronChannelRequesterAuthority,
   reconcileCronOperatorSource,
+  resolveCronOperatorExecutionRevision,
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
@@ -153,6 +155,7 @@ export function planCronJobMutation(
           mutation.input,
           {
             ...validation,
+            createdAtMs: mutation.createdAtMs,
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
@@ -194,6 +197,10 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.bindSourceConversation) {
+        assertCronBindApplies(previousJob, options.bindSourceConversation);
+        nextJob.sourceConversation = { ...options.bindSourceConversation };
+      }
       applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
@@ -240,13 +247,27 @@ export function planCronJobMutation(
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
-      previousJob,
+      // Bind only records the parent link; the authenticated requester stays bound to an
+      // unchanged executable definition, so compare against the same link.
+      previousJob:
+        previousJob && options.bindSourceConversation
+          ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
+          : previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
-    reconcileCronOperatorSource({ job: nextJob, previousJob, captured: options.operatorSource });
+    reconcileCronOperatorSource({
+      job: nextJob,
+      previousJob,
+      captured: options.operatorSource,
+      capturedExecutionRevision:
+        mutation.kind === "add"
+          ? resolveCronOperatorExecutionRevision(nextJob)
+          : options.operatorSourceExecutionRevision,
+      defaultAgentId,
+    });
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&

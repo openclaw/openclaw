@@ -19,6 +19,7 @@ import { createRetiredModelFixture } from "./doctor-retired-models.test-support.
 import { repairCronCodexModelRefsAfterConfigWrite } from "./doctor/cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.codex.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 async function fixture(...args: Parameters<typeof createRetiredModelFixture>) {
   const { cfg, state } = await createRetiredModelFixture(...args);
@@ -57,7 +58,7 @@ it("repairs only the retired physical route in OAuth config", async () => {
   defaults.pdfModel = { primary: noSuccessor, timeoutMs: 50 };
   defaults.voiceModel = retiredRef;
   defaults.mediaModels = { image: retiredRef, video: retiredRef, music: retiredRef };
-  defaults.compaction = { memoryFlush: { model: retiredRef } };
+  defaults.compaction = { model: retiredRef };
   main.tools = { exec: { reviewer: { model: retiredRef } } };
   main.tts = { summaryModel: retiredRef };
   cfg.tools = { exec: { reviewer: { model: retiredRef } } };
@@ -231,15 +232,7 @@ it.each([
     main.models = { [currentModel]: { agentRuntime: { id: "codex" } } };
     const legacyRef = `openai-codex/${retiredId}`;
     if (blocked) {
-      const model = {
-        id: retiredId,
-        name: "Synthetic",
-        reasoning: false,
-        input: ["text"] as const,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 1024,
-      };
+      const model = createTestModelDefinition(retiredId, { name: "Synthetic", maxTokens: 1024 });
       cfg.models!.providers!.openai = {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses",
@@ -310,7 +303,7 @@ it("clears session pin ownership when inheriting another provider", async () => 
     authProfileOverrideSource: "user",
   });
   const result = await sessions();
-  expect(result.repairedSessions).toBe(1);
+  expect(result.changes[0]).toContain("in 1 session across ");
   const entry = readSession(state, sessionKey);
   expect(entry?.modelOverride).toBeUndefined();
   expect(entry?.providerOverride).toBeUndefined();
@@ -334,7 +327,7 @@ it("preserves a retired session pin when its successor is only the configured de
   await writeSession(state, sessionKey, entry);
   for (const shouldRepair of [false, true, true]) {
     const result = await sessions(shouldRepair);
-    expect(result.repairedSessions).toBe(0);
+    expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain(`"${currentModel}" is not permitted`);
     expect(readSession(state, sessionKey)).toMatchObject(entry);
   }
@@ -380,7 +373,7 @@ it("repairs session choices and model-derived state while preserving Platform pi
   expect(preview.warnings.join("\n")).toContain("doctor --fix");
   expect(readSession(state, "agent:main:chatgpt")?.modelOverride).toBe("retired-with-successor");
   const result = await sessions();
-  expect(result.repairedSessions).toBe(3);
+  expect(result.changes[0]).toContain("in 3 sessions across ");
   const repaired = readSession(state, "agent:main:chatgpt");
   expect(repaired).toMatchObject({
     modelOverride: "current-model",

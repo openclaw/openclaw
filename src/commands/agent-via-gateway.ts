@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -251,12 +254,6 @@ async function loadRemoteGatewayRosterWithShellEnvFallback(
 
 function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string {
   return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
-function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
-  if (opts.json === true) {
-    routeLogsToStderr();
-  }
 }
 
 function missingAgentMessageError(): Error {
@@ -540,55 +537,6 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
-async function abortAcceptedGatewayAgentRunWithRetries(params: {
-  runId: string | undefined;
-  sessionKey: string | undefined;
-  agentId?: string;
-  signal: AgentCliSignal | undefined;
-  runtime: RuntimeEnv;
-  request: GatewayAbortRequest;
-  logFailure?: boolean;
-}): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
-    const logFailure = params.logFailure !== false && isFinalAttempt;
-    if (params.signal && params.runId && params.sessionKey) {
-      try {
-        const response = await params.request(
-          "chat.abort",
-          {
-            sessionKey: params.sessionKey,
-            runId: params.runId,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          },
-          { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
-        );
-        if (isConfirmedChatAbortResponseForRun(response, params.runId)) {
-          return true;
-        }
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; Gateway run ${params.runId} was not confirmed aborted.`,
-          );
-        }
-      } catch (err) {
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; failed to abort Gateway run ${params.runId}: ${String(
-              err,
-            )}`,
-          );
-        }
-      }
-    }
-    if (isFinalAttempt) {
-      return false;
-    }
-    await sleep(retryDelayMs);
-  }
-  return false;
-}
-
 function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
   if (!signal) {
     return false;
@@ -728,16 +676,53 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
-  const abortGatewayRun = (request: GatewayAbortRequest, logFailure = true) =>
-    abortAcceptedGatewayAgentRunWithRetries({
-      runId: runContext.accepted?.runId ?? idempotencyKey,
-      sessionKey: runContext.accepted?.sessionKey ?? abortSessionKey,
-      agentId: runContext.accepted?.agentId,
-      signal: signalBridge.getReceivedSignal(),
-      runtime,
-      request,
-      logFailure,
-    });
+  const abortGatewayRun = async (
+    request: GatewayAbortRequest,
+    shouldLogFailure = true,
+  ): Promise<boolean> => {
+    const abortRunId = runContext.accepted?.runId ?? idempotencyKey;
+    const abortSessionKeyForRun = runContext.accepted?.sessionKey ?? abortSessionKey;
+    const abortAgentId = runContext.accepted?.agentId;
+    const abortSignal = signalBridge.getReceivedSignal();
+    for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
+      const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+      const logFailure = shouldLogFailure && isFinalAttempt;
+      if (abortSignal && abortRunId && abortSessionKeyForRun) {
+        try {
+          const abortResponse = await request(
+            "chat.abort",
+            {
+              sessionKey: abortSessionKeyForRun,
+              runId: abortRunId,
+              ...(abortAgentId ? { agentId: abortAgentId } : {}),
+            },
+            { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
+          );
+          if (isConfirmedChatAbortResponseForRun(abortResponse, abortRunId)) {
+            return true;
+          }
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; Gateway run ${abortRunId} was not confirmed aborted.`,
+            );
+          }
+        } catch (err) {
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; failed to abort Gateway run ${abortRunId}: ${String(
+                err,
+              )}`,
+            );
+          }
+        }
+      }
+      if (isFinalAttempt) {
+        return false;
+      }
+      await sleep(retryDelayMs);
+    }
+    return false;
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -940,11 +925,12 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       throw new Error(`${flag} must not be blank`);
     }
   }
-  protectJsonStdout(opts);
+  if (opts.json === true) {
+    routeLogsToStderr();
+  }
   const { messageFile: rawMessageFile, ...rest } = opts;
-  const messageFile = rawMessageFile?.trim();
-  const hasInlineMessage = opts.message !== undefined;
-  if (hasInlineMessage && messageFile) {
+  const messageFile = readNonBlankString(rawMessageFile);
+  if (opts.message !== undefined && messageFile) {
     throw new Error("Use either --message or --message-file, not both.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
@@ -956,17 +942,16 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       ? new Error(`Message file is empty: ${messageFile}`)
       : missingAgentMessageError();
   }
-  const messageOpts = { ...rest, message };
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
-  if (isCompactControlCommand(messageOpts.message)) {
+  if (isCompactControlCommand(message)) {
     throw new Error(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch({ ...rest, message });
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts

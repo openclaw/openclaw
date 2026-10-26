@@ -38,6 +38,7 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
+  ".openclaw/tmp",
   ".local/share/pnpm/store",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
@@ -61,7 +62,7 @@ const userFiles = {
   ".artifacts/build-all-cache/authored.txt": "original input\n",
   ".artifacts/build-cache-inputs/authored.json": "original input\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
-  ".openclaw/tmp/unit.log": "guest log\n",
+  ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
   ...Object.fromEntries(

@@ -14,6 +14,7 @@ import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { observeIntersection } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
@@ -369,13 +370,11 @@ function ActivityPill(props: {
           badge: props.view.badge.label,
         })
       : props.view.label);
-  onSettled(() => {
-    const observer = new IntersectionObserver(([entry]) =>
+  onSettled(() =>
+    observeIntersection([button], ([entry]) =>
       button.toggleAttribute("data-out-of-view", !entry?.isIntersecting),
-    );
-    observer.observe(button);
-    return () => observer.disconnect();
-  });
+    ),
+  );
   return (
     <button
       ref={[
@@ -480,7 +479,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         (agent) => agent.status === "running" || agent.status === "waiting",
       ) ?? [],
   );
-  const hasGoal = () => Boolean(props.goal && !props.goal.hidden);
+  const hasGoal = () => Boolean(props.goal);
   onSettled(() => {
     const scroll = observeScrollState(
       strip,
@@ -615,7 +614,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
             onOpen={(source) => props.goal!.onOpen(source)}
           />
         </Show>
-        <Show when={!props.approvalPending && props.progress?.showInChat}>
+        <Show when={!props.approvalPending && props.progress}>
           <ActivityPill
             registerButton={registerButton}
             family="progress"

@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applyEdits, format } from "jsonc-parser";
 import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "./chat-types.ts";
+
+registerChatToolLabelsEnglish();
 
 export const TOOL_OUTPUT_PREVIEW_CHARS = 8_000;
 

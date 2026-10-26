@@ -11,6 +11,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { OutboundDeliveryError } from "./deliver-types.js";
 import { runMessageAction as runAction } from "./message-action-runner.js";
+import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
 type SendInput = Omit<Parameters<typeof runAction>[0], "action" | "cfg"> & { cfg?: OpenClawConfig };
 function runMessageAction({ params, ...input }: SendInput) {
@@ -50,28 +51,6 @@ const receipt = (channel: string, messageId: string, chatId: string) => ({
   messageId,
   chatId,
 });
-
-function registerSlackTextPlugin(
-  accountIds: string[] = ["default"],
-  defaultAccountId?: string,
-  deliveryMode: "direct" | "gateway" = "direct",
-) {
-  const sendText = vi.fn().mockResolvedValue(receipt("slack", "m1", "C123"));
-  registerPlugin(
-    "slack",
-    { deliveryMode, sendText },
-    {
-      config: {
-        listAccountIds: () => accountIds,
-        ...(defaultAccountId ? { defaultAccountId: () => defaultAccountId } : {}),
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
-      threading: { threadAddressing: "message" },
-    },
-  );
-  return sendText;
-}
 
 describe("runMessageAction core send routing", () => {
   afterEach(() => {

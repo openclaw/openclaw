@@ -6,7 +6,7 @@ import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -21,6 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import {
   claudeUser,
@@ -28,7 +29,6 @@ import {
   LEGACY_EXEC_COMPLETION_PROMPT,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";
@@ -282,10 +282,26 @@ it("applies native history eligibility to actual empty, message, and marker-only
       tokensBefore: 100,
       firstKeptEntryId: null,
     };
+    const cronInput = {
+      ...message,
+      message: {
+        role: "user",
+        content: "[cron:job-cli native CLI override] Run the bounded task.",
+        provenance: {
+          kind: "internal_system",
+          sourceSessionKey: "agent:main:cron:job-cli:run:cli-eligibility",
+          sourceTool: "cron",
+          sourcePromptPrefix: "[cron:job-cli native CLI override]",
+          jobId: "job-cli",
+          runId: "cli-eligibility",
+        },
+      },
+    };
     for (const cell of [
       { provider: "claude-cli", events: [message], imported: true },
       { provider: "anthropic", events: [message], imported: true },
       { provider: "openai", events: [message], imported: false },
+      { provider: "openai", events: [cronInput], imported: false },
       { provider: "openai", events: [marker], imported: false },
       { provider: "openai", events: [], imported: true },
     ]) {

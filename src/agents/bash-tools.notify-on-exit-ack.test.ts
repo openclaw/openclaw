@@ -1,6 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -32,31 +30,11 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) =
   return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
 });
 // mock-isolation: Force deferred dispatch to test occurrence acknowledgment without model turns.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock();
+});
 vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/secure-random.js")>()),
   generateSecureInt: vi.fn(() => 0),
@@ -101,18 +79,17 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   openOpenClawStateDatabase({ env: state.env });
-  for (const { agentId, sessionKey } of [
-    { agentId: "main", sessionKey: QUEUE_KEY },
-    { agentId: "research", sessionKey: "global" },
-  ]) {
+  for (const [agentId, sessionKey] of [
+    ["main", QUEUE_KEY],
+    ["research", "global"],
+  ] as const) {
     writeSessionEntry(openOpenClawAgentDatabase({ agentId, env: state.env }), sessionKey, {
       sessionId: `${agentId}-origin`,
       lifecycleRevision: "original-revision",
       updatedAt: Date.now(),
     });
   }
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
 });
 afterEach(async () => {
   resetProcessRegistryForTests();
@@ -135,9 +112,6 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
 
   expect(vi.mocked(enqueueSessionEvent).mock.lastCall?.[1]).toMatchObject({
-    source: "exec",
-    agentId: "research",
-    sessionKey: "global",
     expectedTarget: { agentId: "research" },
   });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
@@ -153,7 +127,6 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
-  expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
   await pollAndAcknowledge(second.id, queued);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);

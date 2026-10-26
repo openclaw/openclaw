@@ -32,6 +32,18 @@ function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(asy
 }
 
 describe("AcpTranslatorSessionUpdates", () => {
+  it("advertises Ultra in the thinking command", async () => {
+    const sessionUpdate = vi.fn<AgentSideConnection["sessionUpdate"]>(async () => {});
+    const { updates } = harness(sessionUpdate);
+    await updates.sendAvailableCommands(session, { record: false });
+    const publishedUpdate = sessionUpdate.mock.calls[0]?.[0].update;
+    const think =
+      publishedUpdate?.sessionUpdate === "available_commands_update"
+        ? publishedUpdate.availableCommands.find((command) => command.name === "think")
+        : undefined;
+    expect(think?.description).toContain("off|minimal|low|medium|high|xhigh|adaptive|max|ultra");
+  });
+
   it("joins admitted ledger work and blocks reads and writes after shutdown starts", async () => {
     const reading = createDeferred<{ complete: boolean; events: [] }>();
     const { updates, ledger, sessionUpdate } = harness();
@@ -48,13 +60,13 @@ describe("AcpTranslatorSessionUpdates", () => {
     await updates.startLedgerSession({ ...session, cwd: "/tmp" }, { complete: true });
     await updates.recordUserPrompt(session, "run-1", []);
     await updates.emit(emission);
-    await expect(updates.readLedgerReplay(session)).resolves.toEqual(emptyReplay);
-    await expect(updates.readLedgerReplayBySessionId(session.sessionId)).resolves.toEqual(
-      emptyReplay,
-    );
-    await expect(updates.readLedgerReplayBySessionKey(session.sessionKey)).resolves.toEqual(
-      emptyReplay,
-    );
+    expect(
+      await Promise.all([
+        updates.readLedgerReplay(session),
+        updates.readLedgerReplayBySessionId(session.sessionId),
+        updates.readLedgerReplayBySessionKey(session.sessionKey),
+      ]),
+    ).toEqual([emptyReplay, emptyReplay, emptyReplay]);
     expect(sessionUpdate).not.toHaveBeenCalled();
     for (const method of Object.values(ledger)) {
       expect(method).not.toHaveBeenCalled();
@@ -62,103 +74,59 @@ describe("AcpTranslatorSessionUpdates", () => {
   });
 
   it.each([false, true])(
-    "drains admitted queued ledger updates during shutdown (first write fails: %s)",
+    "isolates session queues and drains them independently of delivery on shutdown (first write fails: %s)",
     async (firstFails) => {
       const writing = createDeferred();
       const release = createDeferred();
-      const { updates, ledger } = harness();
+      const delivery = createDeferred();
+      const { updates, ledger } = harness(
+        vi.fn().mockReturnValueOnce(delivery.promise).mockResolvedValue(undefined),
+      );
       const firstUpdate = textUpdate("first");
       const secondUpdate = textUpdate("second");
-      ledger.recordUpdate.mockImplementation(async ({ update: recordedUpdate }) => {
-        if (
-          recordedUpdate.sessionUpdate === "agent_message_chunk" &&
-          recordedUpdate.content.type === "text" &&
-          recordedUpdate.content.text === "first"
-        ) {
-          writing.resolve();
-          await release.promise;
-          if (firstFails) {
-            throw new Error("ledger write failed during shutdown");
-          }
+      ledger.recordUpdate.mockImplementationOnce(async () => {
+        writing.resolve();
+        await release.promise;
+        if (firstFails) {
+          throw new Error("ledger write failed during shutdown");
         }
       });
       const first = updates.emit({ ...emission, update: firstUpdate });
       await writing.promise;
-      const second = updates.emit({ ...emission, update: secondUpdate });
+      const second = updates.emit({ ...emission, update: secondUpdate, waitForDelivery: false });
+      await updates.emit({
+        ...emission,
+        sessionId: "session-2",
+        sessionKey: "agent:main:session-2",
+      });
+      expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
+        "session-1",
+        "session-2",
+      ]);
       const stopped = vi.fn();
       const closing = updates.stop().then(stopped);
       try {
         await Promise.resolve();
         expect(stopped).not.toHaveBeenCalled();
         release.resolve();
-        await Promise.all([first, second, closing]);
-        expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
-          firstUpdate,
-          secondUpdate,
+        await second;
+        expect(
+          ledger.recordUpdate.mock.calls.map(([params]) => [params.sessionId, params.update]),
+        ).toEqual([
+          [session.sessionId, firstUpdate],
+          ["session-2", update],
+          [session.sessionId, secondUpdate],
         ]);
-        expect(ledger.markIncomplete).toHaveBeenCalledTimes(firstFails ? 1 : 0);
-        if (firstFails) {
-          expect(ledger.markIncomplete).toHaveBeenCalledWith(session);
-        }
+        expect(ledger.markIncomplete.mock.calls).toEqual(firstFails ? [[session]] : []);
+        await expect(Promise.race([first, Promise.resolve("pending")])).resolves.toBe("pending");
+        expect(stopped).not.toHaveBeenCalled();
+        delivery.resolve();
+        await Promise.all([first, closing]);
       } finally {
         release.resolve();
+        delivery.resolve();
         await Promise.allSettled([first, second, closing]);
       }
     },
   );
-
-  it("preserves ledger order without waiting for ACP delivery", async () => {
-    const delivery = createDeferred();
-    const recorded = createDeferred();
-    const { updates, ledger } = harness(
-      vi.fn().mockReturnValueOnce(delivery.promise).mockResolvedValue(undefined),
-    );
-    ledger.recordUpdate.mockImplementation(async () => {
-      recorded.resolve();
-    });
-    const firstUpdate = textUpdate("first");
-    const interruption = textUpdate("interrupted");
-    const first = updates.emit({ ...emission, update: firstUpdate });
-    await recorded.promise;
-    await updates.emit({ ...emission, update: interruption, waitForDelivery: false });
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
-      firstUpdate,
-      interruption,
-    ]);
-    await expect(Promise.race([first, Promise.resolve("pending")])).resolves.toBe("pending");
-    delivery.resolve();
-    await first;
-  });
-
-  it("does not let a stalled ledger session block another session", async () => {
-    const write = createDeferred();
-    const writing = createDeferred();
-    const { updates, ledger } = harness();
-    ledger.recordUpdate.mockImplementation(async ({ sessionId }) => {
-      if (sessionId === session.sessionId) {
-        writing.resolve();
-        await write.promise;
-      }
-    });
-    const stalled = updates.emit({ ...emission, waitForDelivery: false });
-    await writing.promise;
-    const queued = updates.emit({ ...emission, waitForDelivery: false });
-    await updates.emit({
-      ...emission,
-      sessionId: "session-2",
-      sessionKey: "agent:main:session-2",
-      waitForDelivery: false,
-    });
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
-      "session-1",
-      "session-2",
-    ]);
-    write.resolve();
-    await Promise.all([stalled, queued]);
-    expect(ledger.recordUpdate.mock.calls.map(([params]) => params.sessionId)).toEqual([
-      "session-1",
-      "session-2",
-      "session-1",
-    ]);
-  });
 });

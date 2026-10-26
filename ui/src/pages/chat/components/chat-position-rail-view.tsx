@@ -1,7 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createMemo, untrack } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -12,6 +13,8 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -73,7 +76,7 @@ export type PositionRailAssistant = {
 export type PositionRailViewParams = {
   assistant?: PositionRailAssistant;
   markers: Readonly<ChatPositionIndex["markers"]>;
-  liveMarkers?: ChatPositionIndex["liveMarkers"];
+  resolveLiveMessage?: ChatPositionIndex["resolveLiveMessage"];
   renderedIndexes: readonly number[];
   activeId: string | undefined;
   visibleIds: ReadonlySet<string>;
@@ -115,10 +118,24 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
       separated: renderedIndex > 0 && index > renderedIndexes()[renderedIndex - 1]! + 1,
     })),
   );
+  const markerRef = (id: string) => {
+    const bindMarker = props.bindMarker;
+    return elementRef((element: HTMLButtonElement) => {
+      bindMarker(id, element);
+      return () => bindMarker(id);
+    });
+  };
   const previewMarker = createMemo(() => {
-    const marker = props.markers.find((candidate) => candidate.id === props.previewId);
-    const live = props.liveMarkers?.find((candidate) => candidate.id === props.previewId);
-    return marker && live ? { ...marker, message: live.message } : marker;
+    const id = props.previewId;
+    if (!id) {
+      return undefined;
+    }
+    const marker = props.markers.find((candidate) => candidate.id === id);
+    if (!marker) {
+      return undefined;
+    }
+    const message = marker.message;
+    return { ...marker, message: props.resolveLiveMessage?.(message) ?? message };
   });
   const previewMessage = createMemo(() => {
     const marker = previewMarker();
@@ -207,8 +224,6 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
           <div class="chat-position-rail__virtual-space">
             <For each={entries()} keyed={(entry) => entry.marker.id}>
               {(entry) => {
-                // The For key fixes this marker's identity for its owner.
-                const initialMarkerId = untrack(() => entry().marker.id);
                 return (
                   <>
                     <Show when={entry().separated}>
@@ -222,13 +237,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                       aria-setsize={count()}
                     >
                       <button
-                        ref={[
-                          elementRef((element: HTMLButtonElement) => {
-                            const bindMarker = props.bindMarker;
-                            bindMarker(initialMarkerId, element);
-                            return () => bindMarker(initialMarkerId);
-                          }),
-                        ]}
+                        ref={[markerRef(entry().marker.id)]}
                         class="chat-position-rail__marker"
                         style={{ top: `${entry().index * POSITION_RAIL_MARKER_HEIGHT}px` }}
                         type="button"

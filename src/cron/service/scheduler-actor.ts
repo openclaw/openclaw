@@ -16,7 +16,6 @@ import {
 } from "../../state/openclaw-state-worker-store.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
 import { getCronJobsStoreRevision } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
 import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
@@ -68,7 +67,7 @@ async function publish(
       nextRunAtMs: job.state.nextRunAtMs,
     });
   }
-  const publishedRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const publishedRevision = getCronJobsStoreRevision(state.deps.storeKey);
   await runPostPersistCronNotifications(state, result.notifications);
   return publishedRevision;
 }
@@ -82,7 +81,7 @@ export async function startCronScheduler(
   }
   const channelName = `openclaw.cron.${randomUUID()}`;
   const generation = state.lifecycleGeneration;
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const channel = new BroadcastChannel(channelName);
   channel.unref();
   const context = captureOpenClawStateWorkerContext();
@@ -225,11 +224,11 @@ async function runCronSchedulerTick(
         return;
       }
       await runCronSchedulerMaintenance(state);
-      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
       const result = await connection.lease.execute({
         type: "cron.schedulerTick",
         input: {
-          storeKey: cronStoreKey(state.deps.storePath),
+          storeKey: state.deps.storeKey,
           channelName: connection.channelName,
           paused: false,
           requests: getCronRunQueueRequests(state),
@@ -261,13 +260,13 @@ export function refreshCronScheduler(state: CronServiceState): void {
         return;
       }
       const snapshot = await captureCronSchedulerSnapshot(state);
-      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
       await publish(
         state,
         await connection.lease.execute({
           type: "cron.schedulerRefresh",
           input: {
-            storeKey: cronStoreKey(state.deps.storePath),
+            storeKey: state.deps.storeKey,
             snapshot,
             channelName: connection.channelName,
             paused: state.schedulingPaused,

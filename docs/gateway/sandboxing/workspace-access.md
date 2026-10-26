@@ -73,8 +73,9 @@ Host recovery snapshots retain host data under their existing rules, but
 restoration does not admit that data to the guest. Use the
 session's managed GitHub publication action to publish accepted changes; host credentials are not
 copied into the sandbox. The runtime-owned `.openclaw/sandbox-skills` subtree
-is excluded from workspace reconciliation and publication; other project content
-under `.openclaw` is retained. Its empty mount targets are created by the host
+is excluded from workspace reconciliation and publication, as is the scratch
+directory described below. Other project content under `.openclaw` is retained.
+Its empty mount targets are created by the host
 workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
@@ -84,13 +85,23 @@ At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/opencl
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
-`.artifacts/dist-artifacts.lock/` ownership files.
+`.artifacts/dist-artifacts.lock/` ownership files. The root `.openclaw/tmp/`
+scratch directory also stays local, including downloaded toolchains and browsers.
+Scratch remains available to later commands in the same runtime, but is not
+synchronized or restored onto another runtime. Save durable outputs outside it;
+other `.openclaw/` content and nested project fixtures still reconcile.
 Synchronization and recovery of older pending results exclude these exact paths,
 so dependency and test-tool downloads do not count as authored workspace results.
 Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
 reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
+
+Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
+it or move it outside synchronization before retrying; repeated messages cannot
+resolve the size violation. For a newly created local sandbox file,
+[`openclaw sandbox recover`](/cli/sandbox#openclaw-sandbox-recover) preserves the
+file outside synchronization so the next turn can settle the remaining edits.
 
 Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
 build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original

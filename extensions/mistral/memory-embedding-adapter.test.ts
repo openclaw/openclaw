@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { describe, expect, it } from "vitest";
-import { createMistralEmbeddingProvider } from "./embedding-provider.js";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 function createOptions(
@@ -19,6 +21,31 @@ function createOptions(
 async function identity(...params: Parameters<typeof createOptions>) {
   return (await mistralMemoryEmbeddingProviderAdapter.create(createOptions(...params))).runtime
     ?.cacheKeyData;
+}
+
+async function outboundHeaders(...params: Parameters<typeof createOptions>) {
+  let headers: IncomingHttpHeaders = {};
+  const server = createServer((request, response) => {
+    headers = request.headers;
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, 2] }] }));
+  });
+  onTestFinished(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const port = await listenOnLoopback(server);
+  const options = createOptions(...params);
+  const { provider } = await mistralMemoryEmbeddingProviderAdapter.create({
+    ...options,
+    remote: { ...options.remote, baseUrl: `http://127.0.0.1:${port}/v1` },
+  });
+  assert(provider, "expected configured Mistral embedding provider");
+  await expect(provider.embed("fixture input")).resolves.toEqual([1, 2]);
+  return headers;
 }
 
 describe("Mistral memory embedding index identity", () => {
@@ -57,12 +84,13 @@ describe("Mistral memory embedding index identity", () => {
         "X-Tenant": "tenant-a",
       },
     });
-    const { client } = await createMistralEmbeddingProvider(createOptions(firstParams));
-
-    expect(client.headers).toMatchObject({
-      Authorization: "Bearer fixture-mistral-key-before",
-      ...headers,
-    });
+    expect(await outboundHeaders(firstParams)).toMatchObject(
+      Object.fromEntries(
+        Object.entries({ Authorization: "Bearer fixture-mistral-key-before", ...headers }).map(
+          ([name, value]) => [name.toLowerCase(), value],
+        ),
+      ),
+    );
     expect(first).toMatchObject({
       provider: "mistral",
       model: "mistral-embed",
@@ -95,7 +123,7 @@ describe("Mistral memory embedding index identity", () => {
       baseUrl: "https://remote-region.example.test/v1",
       headers: { "X-Tenant": "remote-a" },
     };
-    const { client } = await createMistralEmbeddingProvider(createOptions(remoteParams, config));
+    const requestHeaders = await outboundHeaders(remoteParams, config);
 
     expect(await identity({}, config)).toMatchObject({
       baseUrl: providerBaseUrl,
@@ -105,7 +133,7 @@ describe("Mistral memory embedding index identity", () => {
       baseUrl: "https://remote-region.example.test/v1",
       headers: [["X-Tenant", "remote-a"]],
     });
-    expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
-    expect(client.headers["X-Tenant"]).toBe("remote-a");
+    expect(requestHeaders).not.toHaveProperty("x-provider-tenant");
+    expect(requestHeaders["x-tenant"]).toBe("remote-a");
   });
 });

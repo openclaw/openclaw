@@ -81,6 +81,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   onExit: (code: number | undefined, counted: boolean) => void;
 }): WorkerLifecycle {
   const { slot, options } = params;
+  let observeStart = params.host.captureWorkerStartObserver?.(options.workerUrl);
   const worker: WorkerLifecycle = params.runInContext(() => {
     const prepared = options.prepareWorker?.();
     slot.releaseResources = prepared?.releaseResources;
@@ -116,6 +117,8 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     }
     counted = true;
     params.onStarted(worker);
+    observeStart?.();
+    observeStart = undefined;
   };
   if (slot.native) {
     slot.native.on("started", started);

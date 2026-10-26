@@ -122,6 +122,8 @@ function desktopHarness(mutableRecord = false) {
   });
   const waitInvoked = (count = 1) =>
     support.waitForFast(() => expect(invoke).toHaveBeenCalledTimes(count));
+  const observe = (options: Partial<Parameters<typeof carrier.observe>[0]> = {}) =>
+    carrier.observe({ record, control: false, ...options });
   return {
     authority,
     carrier,
@@ -131,6 +133,7 @@ function desktopHarness(mutableRecord = false) {
     transport: nodeTransport,
     streamed,
     waitInvoked,
+    observe,
   };
 }
 
@@ -149,6 +152,8 @@ it("reloads desktop policy without replacing workers or closing other desktop so
   const workerService = support.createService(support.createProvider(), {
     nodeDesktopCarrier: carrier,
   });
+  const observe = () =>
+    workerService.observeDesktop({ environmentId: record.environmentId, control: false });
   await registry.activate({ sourceKey: "host", ownerEpoch: 1 });
   const hostClosed = vi.fn();
   const hostObserver = registry.attachObserver("host", {
@@ -159,17 +164,12 @@ it("reloads desktop policy without replacing workers or closing other desktop so
   const pendingNode = createDeferred<NodeWorkerSupervisorNodeProof>();
   try {
     expect(workerService.get(record.environmentId)?.desktopAvailable).toBe(false);
-    await expect(
-      workerService.observeDesktop({ environmentId: record.environmentId, control: false }),
-    ).rejects.toThrow("worker desktop observe is disabled");
+    await expect(observe()).rejects.toThrow("worker desktop observe is disabled");
 
     support.testState.config.cloudWorkers!.desktop = true;
     await workerService.reconcileDesktopPolicy();
     expect(workerService.get(record.environmentId)?.desktopAvailable).toBe(true);
-    const observing = workerService.observeDesktop({
-      environmentId: record.environmentId,
-      control: false,
-    });
+    const observing = observe();
     await waitInvoked();
     const stream = streamed.attachNext();
     await observing;
@@ -182,9 +182,7 @@ it("reloads desktop policy without replacing workers or closing other desktop so
     const getCurrentNode = vi
       .spyOn(transport, "getCurrentNode")
       .mockReturnValue(pendingNode.promise);
-    const pendingObservation = workerService
-      .observeDesktop({ environmentId: record.environmentId, control: false })
-      .catch((error: unknown) => error);
+    const pendingObservation = observe().catch((error: unknown) => error);
     const pendingLaunch = workerService
       .launchDesktopApp({ environmentId: record.environmentId, app: "browser" })
       .catch((error: unknown) => error);
@@ -209,10 +207,7 @@ it("reloads desktop policy without replacing workers or closing other desktop so
     pendingNode.resolve(proof);
     support.testState.config.cloudWorkers!.desktop = true;
     await workerService.reconcileDesktopPolicy();
-    const reopened = workerService.observeDesktop({
-      environmentId: record.environmentId,
-      control: false,
-    });
+    const reopened = observe();
     await waitInvoked(2);
     streamed.attachNext();
     await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
@@ -226,35 +221,23 @@ it("reloads desktop policy without replacing workers or closing other desktop so
 it.each(["connection close", "token release"] as const)(
   "releases abandoned observer slots on %s without disturbing another viewer",
   async (release) => {
-    const { carrier, registry, streamed, waitInvoked } = desktopHarness(true);
+    const { observe, registry, streamed, waitInvoked } = desktopHarness(true);
     const controller = new AbortController();
-    const requester = desktopRequester(controller);
     const closeKeeper = vi.fn();
     const explicitRelease = release === "token release";
     const count = explicitRelease ? 20 : 8;
-    if (explicitRelease) {
-      await registry.activate({ sourceKey: record.environmentId, ownerEpoch: record.ownerEpoch });
-    }
-    const keeper = explicitRelease
-      ? registry.attachObserver(record.environmentId, {
-          ownerEpoch: record.ownerEpoch,
-          control: true,
-          close: closeKeeper,
-        })
-      : undefined;
-    if (explicitRelease) {
-      expect(keeper).toBeDefined();
-    }
+    await registry.activate({ sourceKey: record.environmentId, ownerEpoch: record.ownerEpoch });
+    const keeper = registry.attachObserver(record.environmentId, {
+      ownerEpoch: record.ownerEpoch,
+      control: true,
+      close: closeKeeper,
+    });
+    expect(keeper).toBeDefined();
     try {
       for (let index = 0; index < count; index += 1) {
         const connection = explicitRelease ? controller : new AbortController();
-        const pending = carrier.observe({
-          record,
-          control: explicitRelease,
-          requester: explicitRelease
-            ? requester
-            : { signal: connection.signal, isCurrent: () => !connection.signal.aborted },
-        });
+        const requester = desktopRequester(connection);
+        const pending = observe({ control: explicitRelease, requester });
         await waitInvoked(index + 1);
         const stream = streamed.attachNext();
         const observed = await pending;
@@ -266,23 +249,19 @@ it.each(["connection close", "token release"] as const)(
           expect(await observeBridge.releaseDesktopObserverToken(observed.wsPath, requester)).toBe(
             false,
           );
-          expect(closeKeeper).not.toHaveBeenCalled();
         } else {
           connection.abort();
         }
       }
-      if (explicitRelease) {
-        expect(controller.signal.aborted).toBe(false);
-        expect(streamed.streams.every((stream) => stream.destroyed)).toBe(true);
-      } else {
-        await support.waitForFast(() =>
-          expect(streamed.streams.filter((stream) => !stream.destroyed)).toHaveLength(0),
-        );
-        const reopened = carrier.observe({ record, control: false });
-        await waitInvoked(9);
-        streamed.attachNext();
-        await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
-      }
+      expect(controller.signal.aborted).toBe(false);
+      await support.waitForFast(() =>
+        expect(streamed.streams.filter((stream) => !stream.destroyed)).toHaveLength(0),
+      );
+      expect(closeKeeper).not.toHaveBeenCalled();
+      const reopened = observe();
+      await waitInvoked(count + 1);
+      streamed.attachNext();
+      await expect(reopened).resolves.toMatchObject({ transport: "rfb" });
     } finally {
       controller.abort();
       keeper?.release();
@@ -293,7 +272,8 @@ it.each(["connection close", "token release"] as const)(
 it.each(["observation release", "epoch replacement"] as const)(
   "joins retiring invocation settlement when stop overlaps %s",
   async (retirement) => {
-    const { authority, carrier, registry, invoke, streamed, waitInvoked } = desktopHarness(true);
+    const { authority, carrier, observe, registry, invoke, streamed, waitInvoked } =
+      desktopHarness(true);
     const invocation = deferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
     const completionOrder: string[] = [];
     invoke.mockImplementation(async () => {
@@ -314,14 +294,14 @@ it.each(["observation release", "epoch replacement"] as const)(
     const requester = desktopRequester(controller);
     const canceledResult = { ok: false, error: { code: "ABORTED", message: "invoke aborted" } };
     try {
-      const observing = carrier.observe({ record, control: false, requester });
+      const observing = observe({ requester });
       await waitInvoked();
       const stream = streamed.attachNext();
       const observed = await observing;
       const current = replacing ? { ...record, ownerEpoch: record.ownerEpoch + 1 } : record;
       authority.record = current;
       const retiring = replacing
-        ? carrier.observe({ record: current, control: false, requester }).then(
+        ? observe({ record: current, requester }).then(
             () => true,
             () => false,
           )
@@ -357,19 +337,15 @@ it.each([undefined, "worker"])(
   "observes an exact durable node desktop with lease username %s",
   async (username) => {
     const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-    const client = { invalidated: false };
-    const requester = {
-      signal: new AbortController().signal,
-      isCurrent: () => !client.invalidated,
-    };
+    const requester = desktopRequester();
     if (username) {
       record.desktop = { ...record.desktop!, username };
     }
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const { authority, carrier, invoke, streamed, waitInvoked } = desktopHarness(true);
+    const { authority, carrier, observe, invoke, streamed, waitInvoked } = desktopHarness(true);
 
-    const observing = carrier.observe({ record, control: false, requester });
+    const observing = observe({ requester });
     await waitInvoked();
     nowMs = 50_000;
     const credentials = username
@@ -381,36 +357,20 @@ it.each([undefined, "worker"])(
     });
 
     const observed = await observing;
-    expect(observed).toMatchObject({
+    expect(observed).toEqual({
       transport: "rfb",
       wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
       expiresAtMs: 110_000,
       control: false,
     });
-    expect(observed).not.toHaveProperty("vncPassword");
-    expect(observed).not.toHaveProperty("preauth");
     expect(mint.mock.calls[0]?.[0].preauth).toEqual({
       auth: username ? "ard-account" : "vnc-password",
       credentials,
     });
-    const mintedRequester = mint.mock.calls[0]?.[0].requester;
-    expect(mintedRequester).toBe(requester);
-    expect(mintedRequester?.isCurrent()).toBe(true);
-    client.invalidated = true;
-    expect(mintedRequester?.isCurrent()).toBe(false);
-    expect(requester.signal.aborted).toBe(false);
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          ticket: "a".repeat(48),
-          attachPath: `/node-desktop/attach?ticket=${"a".repeat(48)}`,
-          port: 5900,
-          passwordFilePath: "/var/lib/crabbox/vnc.password",
-          ...(username ? { username } : {}),
-        },
-        timeoutMs: 0,
-      }),
-    );
+    expect(mint.mock.calls[0]?.[0].requester).toBe(requester);
+    if (username) {
+      expect(invoke.mock.calls[0]?.[0].params).toHaveProperty("username", username);
+    }
 
     authority.record = undefined;
     authority.proofCurrent = false;
@@ -424,8 +384,8 @@ it.each([
   { auth: "vnc-password" as const, vncPassword: "secret" },
 ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
   record.desktop = { ...record.desktop!, username: "worker" };
-  const { carrier, streamed, waitInvoked } = desktopHarness(true);
-  const observing = carrier.observe({ record, control: false });
+  const { observe, streamed, waitInvoked } = desktopHarness(true);
+  const observing = observe();
   await waitInvoked();
   const stream = streamed.attachNext(metadata);
   await expect(observing).rejects.toThrow("managed authentication");
@@ -476,9 +436,9 @@ it.each([
   if (record.leaseId === null) {
     throw new Error("Expected a leased desktop fixture");
   }
-  const { authority, carrier, streamed, waitInvoked } = desktopHarness(_name !== "pairing proof");
+  const { authority, observe, streamed, waitInvoked } = desktopHarness(_name !== "pairing proof");
 
-  const observing = carrier.observe({ record, control: true });
+  const observing = observe({ control: true });
   await waitInvoked();
   authority.record = mutate(record);
   authority.proofCurrent = _name !== "pairing proof";

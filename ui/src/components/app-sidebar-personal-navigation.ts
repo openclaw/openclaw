@@ -4,7 +4,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type {
   SessionConnectionScope,
@@ -71,13 +71,11 @@ export function hidePersonalSidebarCatalog(
   recoveryLink.className = "session-link";
   recoveryLink.href = recoveryHref;
   recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  listen(recoveryLink, "click", (event) => {
-    if (!shouldHandleNavigationClick(event)) {
-      return;
-    }
-    event.preventDefault();
-    host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
-  });
+  listen(recoveryLink, "click", (event) =>
+    handleNavigationClick(event, () =>
+      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
+    ),
+  );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
     message,
@@ -113,7 +111,12 @@ export function createSidebarPinnedSessions(
     return source;
   }
 
-  function seed(snapshot: SidebarSnapshotModel["pinnedSessions"]): void {
+  function seed(
+    snapshot: readonly Pick<
+      GatewaySessionRow,
+      "key" | "agentId" | "label" | "icon" | "color" | "pinned" | "archived" | "boardFace"
+    >[],
+  ): void {
     synchronize();
     if (!scope) {
       return;
@@ -201,14 +204,18 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       return [];
     }
     const loaded = host.findSidebarSessionByKey(entry.key);
-    const snapshot = loaded
+    const catalog = loaded
       ? undefined
-      : (host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key) ??
-        host.pinnedSessions.get(entry.key));
-    const row =
-      loaded ??
-      (snapshot ? host.getSessionNavigationState().toSidebarSession(snapshot) : undefined);
-    return row ? [row] : [];
+      : host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key);
+    const live =
+      loaded ?? (catalog ? host.getSessionNavigationState().toSidebarSession(catalog) : undefined);
+    if (live) {
+      // A query replacement must not collapse a visible pin while its descriptor loads.
+      host.pinnedSessions.seed([live]);
+      return [live];
+    }
+    const snapshot = host.pinnedSessions.get(entry.key);
+    return snapshot ? [host.getSessionNavigationState().toSidebarSession(snapshot)] : [];
   });
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
@@ -274,7 +281,7 @@ export function personalSidebarOwnerProjection(
   });
 }
 
-/** Rendering and selection share archive visibility; saved pins survive restoration. */
+/** Rendering and selection share archive visibility for personal references. */
 export function sidebarPinnedSessionRows(
   zone: SidebarPinZone,
   archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],

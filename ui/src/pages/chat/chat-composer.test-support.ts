@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -225,25 +226,20 @@ export function createComposerContainer() {
 }
 
 export function findComposerButton(container: Element, label: string): HTMLButtonElement {
-  const result = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  if (!result) {
-    throw new Error(`expected button ${label}`);
-  }
-  return result;
+  return expectDefined(
+    container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+    `expected button ${label}`,
+  );
 }
 
 export function findPrimaryButton(container: Element): HTMLButtonElement {
-  const actions = container.querySelector(".agent-chat__composer-actions");
-  const result = actions?.querySelector<HTMLButtonElement>(
-    ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
-  );
-  if (!result) {
-    throw new Error("expected one primary composer button");
-  }
-  expect(
-    actions?.querySelectorAll(":scope > .chat-desktop-primary-action > openclaw-tooltip > button"),
-  ).toHaveLength(1);
-  return result;
+  const buttons = container
+    .querySelector(".agent-chat__composer-actions")
+    ?.querySelectorAll<HTMLButtonElement>(
+      ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
+    );
+  expect(buttons).toHaveLength(1);
+  return expectDefined(buttons?.[0], "expected one primary composer button");
 }
 
 export async function resetComposerFixture(afterStateReset?: () => void): Promise<void> {

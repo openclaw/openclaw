@@ -140,16 +140,13 @@ export async function updateRegistry(entry: SandboxRegistryEntry, guard?: Worksp
 /** Removes one sandbox runtime registry entry by container name. */
 export async function removeRegistryEntry(
   containerName: string,
-  options: { preserveRemovalIntent?: boolean; guard?: WorkspaceStateGuard } = {},
+  options: { preserveRemovalIntent?: boolean } = {},
 ) {
-  await writeRegistry(
-    {
-      operation: "remove",
-      containerName,
-      preserveRemovalIntent: options.preserveRemovalIntent,
-    },
-    options.guard,
-  );
+  await writeRegistry({
+    operation: "remove",
+    containerName,
+    preserveRemovalIntent: options.preserveRemovalIntent,
+  });
 }
 
 /** Atomically select one generation for a backend/scope before provider allocation. */

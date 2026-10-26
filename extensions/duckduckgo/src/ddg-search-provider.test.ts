@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
 import type { MockInstance } from "vitest";
 import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { hangingFetchUntilAbort } from "../../test-support/hanging-fetch.test-support.js";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
 import { runDuckDuckGoSearch } from "./ddg-client.js";
@@ -14,8 +16,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-function createSearchTool(config: OpenClawConfig = {}) {
-  const tool = createDuckDuckGoWebSearchProvider().createTool({ config });
+function createSearchTool(config: OpenClawConfig = {}, searchConfig?: SearchConfigRecord) {
+  const tool = createDuckDuckGoWebSearchProvider().createTool({ config, searchConfig });
   assert(tool, "Expected tool definition");
   return tool;
 }
@@ -58,19 +60,8 @@ it("rejects an already canceled search without fetching", async () => {
 
 it("aborts an in-flight DuckDuckGo request without caching its result", async () => {
   fetch.mockImplementation(async (_url, init) => {
-    const signal = init?.signal;
-    assert(signal, "DuckDuckGo request lost caller cancellation");
-    return await new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener(
-        "abort",
-        () => {
-          const reason: unknown = signal.reason;
-          assert(reason instanceof Error, "Expected the fixture's cancellation error");
-          reject(reason);
-        },
-        { once: true },
-      );
-    });
+    assert(init?.signal, "DuckDuckGo request lost caller cancellation");
+    return await hangingFetchUntilAbort(_url, init);
   });
   const controller = new AbortController();
   const tool = createSearchTool();
@@ -111,32 +102,27 @@ it("bounds successful DuckDuckGo HTML bodies without using response.text()", asy
 });
 
 it.each([
-  { label: "configured region", options: { region: "de-de" }, region: "de-de", safeSearch: "-1" },
-  { label: "blank region", options: { region: "   " }, region: null, safeSearch: "-1" },
-  { label: "default safeSearch", options: {}, region: null, safeSearch: "-1" },
-  { label: "strict safeSearch", options: { safeSearch: "strict" }, region: null, safeSearch: "1" },
-  { label: "off safeSearch", options: { safeSearch: "off" }, region: null, safeSearch: "-2" },
-])(
-  "sends $label from plugin config in the search request",
-  async ({ label, options, region, safeSearch }) => {
-    fetch.mockResolvedValue(htmlResponse(""));
-    await createSearchTool(pluginConfig(options)).execute({ query: `DuckDuckGo config ${label}` });
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0]?.[0];
-    assert(typeof request === "string", "Expected DuckDuckGo request URL");
-    const url = new URL(request);
-    expect(url.searchParams.get("kl")).toBe(region);
-    expect(url.searchParams.get("kp")).toBe(safeSearch);
-  },
-);
+  [{ region: "de-de" }, "de-de", "-1"],
+  [{ region: "   " }, null, "-1"],
+  [{}, null, "-1"],
+  [{ safeSearch: "strict" }, null, "1"],
+  [{ safeSearch: "off" }, null, "-2"],
+] as const)("sends plugin config %j in the search request", async (options, region, safeSearch) => {
+  fetch.mockResolvedValue(htmlResponse(""));
+  await createSearchTool(pluginConfig(options)).execute({
+    query: `DuckDuckGo ${JSON.stringify(options)}`,
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+  const request = fetch.mock.calls[0]?.[0];
+  assert(typeof request === "string", "Expected DuckDuckGo request URL");
+  const url = new URL(request);
+  expect([url.searchParams.get("kl"), url.searchParams.get("kp")]).toEqual([region, safeSearch]);
+});
 
 it("parses href-first links and highlights without mistaking snippets for a challenge", async () => {
-  const html = `
-        <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
-          &#38; Caf<b>é</b>
-        </a>
-        <a class="result__snippet">Fast&nbsp;&hellip; caf<b>é</b></a>
-        ${resultHtml("https://example.org/direct", "Coding Challenge", "A coding challenge.")}`;
+  const html = `<a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">&#38; Caf<b>é</b></a>
+    <a class="result__snippet">Fast&nbsp;&hellip; caf<b>é</b></a>
+    ${resultHtml("https://example.org/direct", "Coding Challenge", "A coding challenge.")}`;
   const payload = await search("href ordering", html);
   expect(payload.results).toMatchObject([
     {
@@ -216,4 +202,39 @@ it("uses an honest User-Agent and returns the first two valid results with their
   ];
   expect(result).toMatchObject({ count: expected.length, results: expected });
   expect(JSON.stringify(result)).not.toContain("Discarded");
+});
+
+it.each([
+  { label: "configured maxResults", maxResults: 2, count: undefined },
+  { label: "explicit count over maxResults", maxResults: 1, count: 2 },
+])("honors $label", async ({ maxResults, count }) => {
+  fetch.mockResolvedValue(
+    htmlResponse(
+      [1, 2, 3].map((i) => resultHtml(`https://example.com/${i}`, `Result ${i}`)).join(""),
+    ),
+  );
+  const tool = createSearchTool(
+    { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+    { maxResults, timeoutSeconds: 2 },
+  );
+  const result = await tool.execute({ query: "openclaw docs", count });
+  expect(result.results).toHaveLength(2);
+});
+
+it.each([
+  { label: "configured", searchConfig: { timeoutSeconds: 1 }, deadline: 1_000 },
+  { label: "fallback", searchConfig: undefined, deadline: 20_000 },
+])("cancels a slow search at the $label deadline", async ({ searchConfig, deadline }) => {
+  vi.useFakeTimers();
+  try {
+    fetch.mockImplementation(hangingFetchUntilAbort);
+    const tool = createSearchTool({}, searchConfig);
+    const pending = expect(tool.execute({ query: `${deadline} deadline` })).rejects.toThrow(
+      /timed out|TimeoutError|aborted/i,
+    );
+    await vi.advanceTimersByTimeAsync(deadline);
+    await pending;
+  } finally {
+    vi.useRealTimers();
+  }
 });

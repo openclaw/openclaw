@@ -6,8 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { resolveProfileOverride } from "../auto-reply/reply/directive-handling.auth-profile.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { resolveModelSelectionFromDirective } from "../auto-reply/reply/directive-handling.model-selection.js";
+import { parseInlineSessionDirectives } from "../auto-reply/reply/directive-handling.parse.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -51,11 +54,11 @@ import {
 } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
 import {
   preparePersonalModelAccountSelection,
   prepareUserModelAccountAction,
 } from "./server-methods/users-model-account-access.js";
+import { usersHandlers as usersAuthConnectHandlers } from "./server-methods/users.js";
 import {
   createContext,
   createOperatorClient,
@@ -136,8 +139,35 @@ const operator = (profileId: string) =>
     profileId,
     scopes: ["operator.read", "operator.write", "operator.admin"],
   });
-const resolvePin = (rawProfile: string, requesterProfileId: string) =>
-  resolveProfileOverride({ rawProfile, provider: credential.provider, requesterProfileId });
+function createPinResolver() {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        modelPolicy: { allow: ["synthetic/probe"] },
+        models: { "synthetic/probe": { alias: "pin-test" } },
+      },
+    },
+  };
+  const agentDir = resolveEffectiveAgentDir(cfg, "main");
+  const modelPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog: [],
+    defaultProvider: "synthetic",
+    defaultModel: "probe",
+  });
+  return (rawProfile: string, requesterProfileId: string) =>
+    resolveModelSelectionFromDirective({
+      directives: parseInlineSessionDirectives(`/model pin-test@${rawProfile}`),
+      cfg,
+      agentDir,
+      modelPolicy,
+      defaultProvider: "synthetic",
+      defaultModel: "probe",
+      aliasIndex: modelPolicy.selectionAliasIndex,
+      allowedModelKeys: modelPolicy.allowedKeys,
+      requesterProfileId,
+    });
+}
 const rolesConfig = (
   roles: NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>,
 ): OpenClawConfig => ({ gateway: { roles } });
@@ -395,8 +425,9 @@ it("prepares cold personal account policy with GitHub assignments and current ro
 
 it("prepares personal account ownership from the next foreign commit", () =>
   withAccount("pin-freshness@example.test", async (owner) => {
+    const resolvePin = createPinResolver();
     const { authProfileId } = await connectAccount(owner);
-    expect((await resolvePin(authProfileId, owner)).profileId).toBe(authProfileId);
+    expect((await resolvePin(authProfileId, owner)).profileOverride).toBe(authProfileId);
     const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
     try {
       foreign
@@ -405,7 +436,7 @@ it("prepares personal account ownership from the next foreign commit", () =>
         )
         .run(owner, `model-account:${authProfileId}`);
       expect(await resolvePin(authProfileId, owner)).toMatchObject({
-        error: expect.stringContaining("signed-in profile"),
+        errorText: expect.stringContaining("signed-in profile"),
       });
     } finally {
       foreign.close();
@@ -414,14 +445,15 @@ it("prepares personal account ownership from the next foreign commit", () =>
 
 it("prepares and validates personal pins without caller SQL, retaining identity authority", () =>
   withAccount("pin-owner@example.test", async (owner) => {
+    const resolvePin = createPinResolver();
     const successor = ensureProfileForEmail("pin-successor@example.test").id;
     const { authProfileId } = await connectAccount(owner);
     const selected = await withoutSql(async () => {
       const pin = await resolvePin(authProfileId, owner);
-      expect(pin.profileId).toBe(authProfileId);
-      expect(pin.validateSelection?.()).toBeUndefined();
+      expect(pin.profileOverride).toBe(authProfileId);
+      expect(pin.validateAuthProfileSelection?.()).toBeUndefined();
       expect(await resolvePin(authProfileId, successor)).toMatchObject({
-        error: expect.stringContaining("signed-in profile"),
+        errorText: expect.stringContaining("signed-in profile"),
       });
       return pin;
     });
@@ -430,10 +462,10 @@ it("prepares and validates personal pins without caller SQL, retaining identity 
       provider: credential.provider,
       ...authority,
     });
-    expect(selected.validateSelection?.()).toBeUndefined();
+    expect(selected.validateAuthProfileSelection?.()).toBeUndefined();
     linkEmail("pin-owner@example.test", successor);
     await withoutSql(() => {
-      expect(selected.validateSelection?.()).toContain("signed-in profile");
+      expect(selected.validateAuthProfileSelection?.()).toContain("signed-in profile");
     });
   }));
 
@@ -772,3 +804,22 @@ it("does not replay a committed account mutation whose worker reply is lost", ()
       emitted.mockRestore();
     }
   }));
+
+it("leaves the writer free while the host decides account admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("contention@example.test").id;
+    using contention = probe.writerLock(resolveOpenClawStateSqlitePath());
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (isRecord(request.facts) && request.facts.kind === "model-account-links") {
+        contention.observe(request.stage);
+      }
+      admit(request, grant);
+    });
+    const { authProfileId } = await connectAccount(owner);
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(credential);
+    expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toContainEqual(
+      expect.objectContaining({ authProfileId }),
+    );
+  });
+});

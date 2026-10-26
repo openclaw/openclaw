@@ -1,18 +1,20 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
-import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
+import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { BrowserToolbar } from "./browser-panel-toolbar.tsx";
 import "../../styles/session-panel-rail.css";
 
@@ -70,22 +72,18 @@ function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.undoStroke()}
-      >
-        {t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.clearStrokes()}
-      >
-        {t("browser.annotateClear")}
-      </button>
+      <For each={["undoStroke", "clearStrokes"] as const}>
+        {(action) => (
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={props.controller.strokes.length === 0}
+            onClick={() => props.controller.input[action]()}
+          >
+            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
+          </button>
+        )}
+      </For>
       <button
         class="bp-btn"
         type="button"
@@ -190,13 +188,13 @@ function ViewportContent(
       </Match>
       <Match when={props.emptyError}>
         <PanelEmptyState
-          presentation="desktop"
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
           description={props.controller.errorText!}
           action={
             <button
-              class="bp-btn bp-empty-action"
+              class="btn"
               type="button"
               disabled={props.controller.loading}
               onClick={() => void props.controller.retryEmptyError()}
@@ -221,14 +219,14 @@ function ViewportContent(
         }
       >
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("browser.notRunning")}
           action={
             props.controller.host.fixedTab ? undefined : (
               <button
-                class={["bp-btn", { "bp-empty-action": !props.mobilePresentation }]}
+                class="btn"
                 type="button"
                 onClick={() => void props.controller.startBrowserNow()}
               >
@@ -245,7 +243,7 @@ function ViewportContent(
           </div>
         ) : (
           <PanelEmptyState
-            presentation="desktop"
+            presentation={props.mobilePresentation ? "mobile" : "desktop"}
             icon={<Icon name="globe" />}
             heading={t("chat.sidePanel.browser")}
             description={props.controller.unavailableTabText!}
@@ -253,11 +251,11 @@ function ViewportContent(
         )}
       </Match>
       <Match when={!props.controller.view && props.controller.loading}>
-        <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
+        <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
       <Match when={!props.controller.view}>
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("chat.sidePanel.browserEmpty")}
@@ -334,20 +332,19 @@ export function BrowserPanelChrome(
   onSettled(() => {
     const controller = props.controller;
     const viewport = controller.input.elements.viewport!;
-    const observer =
+    const stopResize =
       typeof ResizeObserver === "function"
-        ? new ResizeObserver(([entry]) => {
+        ? observeResize([viewport], ([entry]) => {
             if (entry) {
               controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
             }
           })
         : undefined;
-    observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
-      observer?.disconnect();
+      stopResize?.();
       stopWheel();
     };
   });
@@ -358,6 +355,38 @@ export function BrowserPanelChrome(
       !props.controller.host.fixedTab &&
       (!props.embedded || (!props.tabsInHeader && props.controller.tabs.length > 0)),
   );
+  function BrowserTabs() {
+    const sourceTabs = createMemo(() => props.controller.tabs);
+    const tabs = createMemo(() =>
+      browserPanelHostedTabs(sourceTabs(), document).map((tab, index) => ({
+        id: tab.id,
+        domId: `${panelId}-tab-${tab.id}`,
+        label: tab.label,
+        title: `${t(sourceTabs()[index]?.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+        icon: tab.favicon ? (
+          <img class="tabstrip-tab__favicon" src={tab.favicon} alt="" />
+        ) : (
+          tab.icon
+        ),
+        closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+      })),
+    );
+    return (
+      <PanelTabStrip
+        focusOwner={tabFocus}
+        tabs={tabs()}
+        activeId={props.controller.activeTargetId}
+        ariaControls={panelId}
+        onSelect={(id) => void props.controller.selectTab(id)}
+        onClose={(id) => props.controller.closeTab(id)}
+        onNew={() => props.controller.beginNewTab()}
+        newLabel={t("browser.newTab")}
+        newTabAction
+        newControl={props.embedded ? null : undefined}
+      />
+    );
+  }
+
   // Keep a usable page visible when an action fails. Only an empty desktop
   // viewport replaces its placeholder with the owner's actual failure.
   const emptyError = () =>
@@ -380,16 +409,7 @@ export function BrowserPanelChrome(
       {!props.embedded ? props.resizer : null}
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
-          <BrowserPanelTabs
-            focusOwner={tabFocus}
-            panelId={panelId}
-            tabs={props.controller.tabs}
-            activeTargetId={props.controller.activeTargetId}
-            onSelect={(id) => void props.controller.selectTab(id)}
-            onClose={(id) => props.controller.closeTab(id)}
-            onNew={() => props.controller.beginNewTab()}
-            hideNewControl={props.embedded}
-          />
+          <BrowserTabs />
           {!props.embedded ? (
             <HeaderActions
               controller={props.controller}
@@ -402,7 +422,6 @@ export function BrowserPanelChrome(
       ) : null}
       <BrowserToolbar
         controller={props.controller}
-        embedded={props.embedded}
         mobilePresentation={props.mobilePresentation}
         fetchFavicon={props.fetchFavicon}
       />

@@ -8,10 +8,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
+import { createStatfsFixture } from "../infra/disk-space.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { registerUpdateCliLifecycle } from "./update-cli-lifecycle.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
@@ -31,10 +33,10 @@ export function createUpdateCliFixture() {
   for (const directory of [".git", "src", "extensions"]) {
     fsSync.mkdirSync(path.join(checkoutRoot, directory));
   }
-  fsSync.writeFileSync(
-    path.join(checkoutRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION }),
-  );
+  writeFixtureJsonSync(path.join(checkoutRoot, "package.json"), {
+    name: "openclaw",
+    version: VERSION,
+  });
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
 
@@ -139,11 +141,7 @@ export function createUpdateCliFixture() {
       const packageJsonPath = path.join(packageRoot, "package.json");
       fsSync.mkdirSync(path.dirname(entrypoint), { recursive: true });
       fsSync.writeFileSync(entrypoint, "// test entrypoint\n", "utf8");
-      fsSync.writeFileSync(
-        packageJsonPath,
-        JSON.stringify({ name: "openclaw", version: targetVersion }),
-        "utf8",
-      );
+      writeFixtureJsonSync(packageJsonPath, { name: "openclaw", version: targetVersion });
       tempDirsToCleanup.add(packageRoot);
     }
     mocks.pathExists.mockImplementation(
@@ -234,10 +232,6 @@ export function createUpdateCliFixture() {
     ...packageFixtures,
     baseConfig,
     baseSnapshot,
-    clawHubRiskWarning:
-      "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
-      "│ Outcome: Review                                         │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯",
     clawHubSuspiciousPayloadWarning:
       "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
       "│ Outcome: Review                                         │\n" +
@@ -437,20 +431,7 @@ export function createUpdateCliFixture() {
       return { updatedRoot, updatedEntrypoint };
     },
     setupUpdatedRootRefresh,
-    statfsFixture: (params: {
-      bavail: number;
-      bsize?: number;
-      blocks?: number;
-    }): ReturnType<typeof fsSync.statfsSync> => ({
-      type: 0,
-      bsize: params.bsize ?? 1024,
-      blocks: params.blocks ?? 2_000_000,
-      bfree: params.bavail,
-      bavail: params.bavail,
-      files: 0,
-      frsize: params.bsize ?? 1024,
-      ffree: 0,
-    }),
+    statfsFixture: createStatfsFixture,
     tempDirs,
     tempDirsToCleanup,
     useNativeScheduledTaskControl: async () => {

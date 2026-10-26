@@ -1,6 +1,5 @@
 // Plugin config runtime helpers load and normalize plugin-owned configuration at execution time.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig as readNormalizedPluginsConfig } from "../plugins/config-state.js";
 
@@ -25,8 +24,7 @@ export function resolvePluginConfigObject(
   config: OpenClawConfig | undefined,
   pluginId: string,
 ): Record<string, unknown> | undefined {
-  const plugins =
-    getRuntimeConfigCapture(config)?.plugins ?? readNormalizedPluginsConfig(config?.plugins);
+  const plugins = readNormalizedPluginsConfig(config?.plugins);
   const pluginConfig = plugins.entries[pluginId]?.config;
   return asOptionalRecord(pluginConfig);
 }

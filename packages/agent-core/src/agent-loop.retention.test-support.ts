@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { makeAssistantMessage, model as baseModel, user } from "./agent-loop.test-support.js";
+import {
+  createTurnSequenceStream,
+  makeAssistantMessage,
+  makeCall,
+  makeTool,
+  model as baseModel,
+  user,
+} from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
+import { getAgentToolExecutionContext } from "./tool-execution-context.js";
 import type { AgentMessage } from "./types.js";
 
 export type ContextRetentionResult = {
@@ -12,6 +21,13 @@ export type ContextRetentionResult = {
   observedHistories: number;
   retained: number[];
   completed: boolean;
+  settledToolContext: {
+    snapshots: number;
+    agentRetained: boolean;
+    historyRetained: boolean;
+    attributionPreserved: boolean;
+    pendingInput: boolean;
+  };
 };
 
 const gc = globalThis.gc;
@@ -81,11 +97,63 @@ try {
   await run;
 }
 assert.equal(agent.state.errorMessage, undefined);
+
+const snapshots: ReturnType<typeof AsyncLocalStorage.snapshot>[] = [];
+function createContextCapturingTool() {
+  return {
+    ...makeTool("capture_context"),
+    execute: async () => {
+      assert.ok(getAgentToolExecutionContext()?.pendingInput);
+      snapshots.push(AsyncLocalStorage.snapshot());
+      return { content: [{ type: "text" as const, text: "captured" }], details: {} };
+    },
+  };
+}
+
+async function completeToolRun() {
+  const oldHistory = user("settled-history:" + "x".repeat(1024 * 1024), 0);
+  const completedAgent = new Agent({
+    initialState: { model, messages: [oldHistory], tools: [createContextCapturingTool()] },
+    streamFn: createTurnSequenceStream([
+      [makeCall("capture_context", "retained-tool-call")],
+      [{ type: "text", text: "complete" }],
+    ]),
+  });
+  await completedAgent.prompt("capture this tool invocation");
+  assert.equal(completedAgent.state.errorMessage, undefined);
+  assert.equal(completedAgent.state.isStreaming, false);
+  return { agent: new WeakRef(completedAgent), history: new WeakRef(oldHistory) };
+}
+
+const settled = await completeToolRun();
+const unowned = new WeakRef({});
+await setImmediate();
+for (let pass = 0; pass < 8; pass += 1) {
+  gc();
+  await setImmediate();
+}
+assert.equal(unowned.deref(), undefined, "The unowned GC control must collect");
+const restoredContext = snapshots[0]?.(() => {
+  const context = getAgentToolExecutionContext();
+  return {
+    attributionPreserved:
+      context?.toolCall.id === "retained-tool-call" &&
+      context.assistantMessage.content.includes(context.toolCall),
+    pendingInput: context?.pendingInput?.hasPending() ?? false,
+  };
+});
 const result: ContextRetentionResult = {
   calls,
   replacements,
   observedHistories: histories.length,
   retained,
   completed: true,
+  settledToolContext: {
+    snapshots: snapshots.length,
+    agentRetained: settled.agent.deref() !== undefined,
+    historyRetained: settled.history.deref() !== undefined,
+    attributionPreserved: restoredContext?.attributionPreserved === true,
+    pendingInput: restoredContext?.pendingInput ?? false,
+  },
 };
 process.stdout.write(JSON.stringify(result));

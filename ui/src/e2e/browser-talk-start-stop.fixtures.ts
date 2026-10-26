@@ -140,6 +140,10 @@ function installTalkMediaBrowserFixture(profile: TalkMediaFixtureProfile) {
     async close() {
       state.audioContextsClosed += 1;
     }
+
+    async suspend() {}
+
+    async resume() {}
   }
 
   Object.defineProperty(window, "AudioContext", {

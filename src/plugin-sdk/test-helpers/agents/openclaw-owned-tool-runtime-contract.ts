@@ -50,6 +50,8 @@ import * as ttsRuntime from "../../../tts/tts.js";
 
 export { createToolTerminalObserver as createContractToolTerminalObserver } from "../../../agents/tool-terminal-outcome.js";
 
+type ToolResult = AgentToolResult<unknown>;
+
 /** Real process poll producer and notification queue, with a synthetic completed process. */
 export function createProcessPollDeliveryContract(sessionId: string) {
   const sessionKey = `agent:main:${sessionId}`;
@@ -79,6 +81,7 @@ export function createProcessPollDeliveryContract(sessionId: string) {
 export function createRequiredExecRuntimeContract() {
   const started = createDeferredCore();
   const exit = createDeferredCore<RunExit>();
+  const stdout = "REQUIRED_NATIVE_RESULT";
   let input: SpawnInput | undefined;
   let settled = false;
   const finish = (reason: RunExit["reason"] = "exit") => {
@@ -86,14 +89,8 @@ export function createRequiredExecRuntimeContract() {
       return;
     }
     settled = true;
-    input?.onStdout?.("REQUIRED_NATIVE_RESULT");
-    exit.resolve(
-      createRunExit({
-        reason,
-        exitCode: reason === "exit" ? 0 : null,
-        stdout: "REQUIRED_NATIVE_RESULT",
-      }),
-    );
+    input?.onStdout?.(stdout);
+    exit.resolve(createRunExit({ reason, exitCode: reason === "exit" ? 0 : null, stdout }));
   };
   const spawn = vi.spyOn(getProcessSupervisor(), "spawn").mockImplementation(async (next) => {
     input = next;
@@ -132,16 +129,13 @@ export function createRequiredExecRuntimeContract() {
   };
 }
 
-export function textToolResult(
-  text: string,
-  details: Record<string, unknown> = {},
-): AgentToolResult<unknown> {
+export function textToolResult(text: string, details: Record<string, unknown> = {}): ToolResult {
   return { content: [{ type: "text", text }], details };
 }
 
 type ContractToolParams = {
   name: string;
-  result: AgentToolResult<unknown>;
+  result: ToolResult;
 };
 
 function createContractTool(
@@ -159,7 +153,7 @@ function createContractTool(
 
 export function createTerminalPresentationContractTool(
   params: ContractToolParams & {
-    format: (params: unknown, result: AgentToolResult<unknown>) => string | undefined;
+    format: (params: unknown, result: ToolResult) => string | undefined;
   },
 ): AnyAgentTool {
   return setToolTerminalPresentation(createContractTool(params), (toolParams, result) => {
@@ -245,7 +239,7 @@ export function installOpenClawOwnedToolHooks(params?: {
 
 /** Installs result middleware only; use installOpenClawOwnedToolHooks for before/after hooks. */
 export function installCodexToolResultMiddleware(
-  handler: (event: AgentToolResultMiddlewareEvent) => AgentToolResult<unknown>,
+  handler: (event: AgentToolResultMiddlewareEvent) => ToolResult,
 ) {
   const middleware = vi.fn(async (event: AgentToolResultMiddlewareEvent) => ({
     result: handler(event),

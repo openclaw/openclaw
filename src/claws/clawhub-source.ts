@@ -253,6 +253,23 @@ function readExactClawArtifact(
   };
 }
 
+function assertClawHubDownloadIntegrity(
+  download: Awaited<ReturnType<typeof downloadClawHubPackageArchive>>,
+  expected: ReturnType<typeof readExactClawArtifact>,
+): void {
+  if (
+    download.artifact !== "clawpack" ||
+    download.sha256Hex !== expected.sha256 ||
+    download.npmIntegrity !== expected.npmIntegrity ||
+    (expected.npmShasum !== undefined && download.npmShasum !== expected.npmShasum)
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_artifact_integrity_mismatch",
+      "ClawHub artifact integrity changed during download.",
+    );
+  }
+}
+
 export async function listClawHubClaws(
   params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
 ): Promise<ClawHubClawCatalogEntry[]> {
@@ -411,17 +428,7 @@ async function readClawHubClawContents(
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
   });
   try {
-    if (
-      download.artifact !== "clawpack" ||
-      download.sha256Hex !== expected.sha256 ||
-      download.npmIntegrity !== expected.npmIntegrity ||
-      (expected.npmShasum !== undefined && download.npmShasum !== expected.npmShasum)
-    ) {
-      throw new ClawHubSourceError(
-        "clawhub_artifact_integrity_mismatch",
-        "ClawHub artifact integrity changed during download.",
-      );
-    }
+    assertClawHubDownloadIntegrity(download, expected);
     const artifactByteLength = (await fs.stat(download.archivePath)).size;
     const extracted = await withExtractedArchiveRoot({
       archivePath: download.archivePath,
@@ -594,18 +601,7 @@ export async function withResolvedClawHubSource<T>(
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
   });
   try {
-    if (
-      download.artifact !== "clawpack" ||
-      download.sha256Hex !== expectedSha256 ||
-      download.npmIntegrity !== resolvedArtifact.npmIntegrity ||
-      (resolvedArtifact.npmShasum !== undefined &&
-        download.npmShasum !== resolvedArtifact.npmShasum)
-    ) {
-      throw new ClawHubSourceError(
-        "clawhub_artifact_integrity_mismatch",
-        "ClawHub artifact integrity changed during download.",
-      );
-    }
+    assertClawHubDownloadIntegrity(download, resolvedArtifact);
     const artifactByteLength = (await fs.stat(download.archivePath)).size;
     const extracted = await withExtractedArchiveRoot({
       archivePath: download.archivePath,

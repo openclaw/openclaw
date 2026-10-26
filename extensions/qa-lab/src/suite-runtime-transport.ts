@@ -8,10 +8,6 @@ import {
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 
-type WaitForNoOutboundOptions = {
-  sinceIndex?: number;
-};
-
 async function waitForQaInboundCompletion(
   state: QaBusState,
   inbound: QaBusMessage,
@@ -102,7 +98,9 @@ async function waitForOutboundMessage(
 async function waitForNoOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
-  options?: WaitForNoOutboundOptions,
+  options?: {
+    sinceIndex?: number;
+  },
 ) {
   await sleep(timeoutMs);
   const outbound = state

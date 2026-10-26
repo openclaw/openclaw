@@ -320,18 +320,14 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
   it.each([
     [
       "OpenCode Zen DeepSeek V4 Flash Free",
-      {
+      makeCompletionsModel({
         id: "deepseek-v4-flash-free",
         name: "DeepSeek V4 Flash Free",
-        api: "openai-completions" as const,
         provider: "opencode",
         baseUrl: "https://opencode.ai/zen/v1",
         reasoning: false,
-        input: ["text"] as ("text" | "image")[],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 65_536,
-        maxTokens: 8192,
-      },
+      }),
     ],
   ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {
     const assistant = getAssistantMessage(

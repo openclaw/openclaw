@@ -7,6 +7,7 @@ import type { UsageSessionEntry } from "./types.ts";
 import {
   createUsagePageFixture,
   usageCalls,
+  usageButton,
   textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -99,6 +100,53 @@ function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   return { move, end: () => document.dispatchEvent(new MouseEvent("mouseup")) };
 }
 
+it("retains chart bars across conversation changes and updates chart modes", async () => {
+  const { page } = await timelineFixture("stable-instance", "[Tool: read]\nRetained turn");
+  await vi.waitFor(() => expect(page.querySelectorAll(".session-log-tools")).toHaveLength(3));
+  await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.context.read]);
+  await page.updateComplete;
+  const bars = [...page.querySelectorAll(".ts-bar")];
+  expect(bars).toHaveLength(3);
+  const expectRetainedBars = () => {
+    const current = [...page.querySelectorAll(".ts-bar")];
+    expect(current).toHaveLength(bars.length);
+    current.forEach((bar, index) => expect(bar).toBe(bars[index]));
+  };
+
+  usageButton(page, "Expand All", ".session-logs-header button").click();
+  await page.updateComplete;
+  expect(
+    [...page.querySelectorAll<HTMLDetailsElement>(".session-log-tools")].every(
+      (tools) => tools.open,
+    ),
+  ).toBe(true);
+  expectRetainedBars();
+
+  const search = page.querySelector<HTMLInputElement>(".session-log-filters input[type=text]")!;
+  for (const [query, rows] of [
+    ["absent", 0],
+    ["Retained", 3],
+  ] as const) {
+    search.value = query;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(rows);
+    expectRetainedBars();
+  }
+
+  usageButton(page, "Cumulative", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("300 tokens");
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+  usageButton(page, "Per Turn", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("100 tokens");
+  expect(page.querySelectorAll(".ts-bar.usage-token-input")).toHaveLength(3);
+  usageButton(page, "Total", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+});
+
 it.each([
   { refresh: "automatic", points: 1, activeDrag: false },
   { refresh: "manual", points: 2, activeDrag: true },
@@ -146,17 +194,22 @@ it.each([
     const overview = overviewFixture({ sessionId: "original-instance", label: "Original session" });
     const row = overview.sessions[0]!;
     const retired = deferred<SessionUsageTimeSeries>();
+    const started = deferred();
     let holdOriginal = false;
     let replaced = false;
     const detailResponse = (method: "logs" | "timeseries") => {
       if (replaced) {
         throw new Error("Replacement details unavailable");
       }
-      return holdOriginal
-        ? retired.promise
-        : method === "logs"
-          ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
-          : { sessionId: "original-instance", points: [] };
+      if (holdOriginal) {
+        if (method === "timeseries") {
+          started.resolve();
+        }
+        return retired.promise;
+      }
+      return method === "logs"
+        ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
+        : { sessionId: "original-instance", points: [] };
     };
     const request = usageRequest({
       "sessions.usage": () => readOverview(overview),
@@ -170,7 +223,8 @@ it.each([
 
     holdOriginal = true;
     const oldLoad = page.refresh();
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(true));
+    await started.promise;
+    await oldLoad;
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     replaced = true;
@@ -188,18 +242,22 @@ it.each([
     expect.soft(page.usageSelectedSessions).toEqual(["global"]);
     expect.soft(page.read().detail).toMatchObject({ timeSeries: null, sessionLogs: null });
     retired.resolve({ sessionId: "retired-instance", points: [] });
-    await oldLoad;
-    await vi.waitFor(() => {
-      expect(page.read().detail).toMatchObject({
-        timeSeriesLoading: false,
-        sessionLogsLoading: false,
-      });
-    });
+    await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.sessionLogsRead]);
     expect.soft(page.read().detail).toMatchObject({
       timeSeries: null,
       sessionLogs: null,
-      timeSeriesStatus: { error: "Replacement details unavailable" },
-      sessionLogsStatus: { error: "Replacement details unavailable" },
+      timeSeriesStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
+      sessionLogsStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
     });
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       const requests = request.mock.calls.slice(beforeRefresh).filter(([name]) => name === method);
@@ -235,7 +293,7 @@ it.each([
     await vi.waitFor(() =>
       expect(textOf(page, ".session-bar-selection")).toContain(state.row.label),
     );
-    await vi.waitFor(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     await page.updateComplete;
     expect(textOf(page, ".session-bar-selection")).toContain(state.row.label);
     await vi.waitFor(() => expect(page.read().data.selectedSession?.usage?.totalTokens).toBe(350));
@@ -285,7 +343,7 @@ it.each([
       return { providers: [], logs: [], points: [] };
     });
     const { page } = await selectSession(request);
-    await vi.waitFor(() => expect(page.read().detail.context.loading).toBe(false));
+    await page.read().detail.context.read;
     await page.updateComplete;
     if (conflict) {
       expect.soft(page.read().detail.context.weight).toBeUndefined();

@@ -11,17 +11,16 @@ export type SessionRowView = {
   modelRows?: Readonly<GatewaySessionRow>[];
 };
 
-type PublicationRows = WeakMap<
-  records.MaterializedRow["materialized"],
-  {
-    facts: readonly unknown[];
-    views: Map<string, SessionRowView[]>;
-    target: SessionSharingTarget;
-  }
->;
 type Publication = {
   factsRevision: number;
-  rows: PublicationRows;
+  rows: WeakMap<
+    records.MaterializedRow["materialized"],
+    {
+      facts: readonly unknown[];
+      views: Map<string, SessionRowView[]>;
+      target: SessionSharingTarget;
+    }
+  >;
   lists: SessionListViewCache;
 };
 export type PublicationView = () => Publication;

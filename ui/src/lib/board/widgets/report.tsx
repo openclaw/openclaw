@@ -1,10 +1,13 @@
 import { createMemo, For, Show } from "solid-js";
 import { parseBoardReport, type BoardReport } from "../../../../../src/boards/board-report.ts";
 import { BoardWidgetError } from "../../../components/board/board-widget-error.tsx";
-import { t } from "../../reactive/i18n.ts";
+import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-document.ts";
+import { registerEnglishCatalog, t } from "../../reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./report.css";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 type ReportBlock = BoardReport["blocks"][number];
 type ReportWidgetProps = { widget?: BoardWidget };
@@ -170,13 +173,22 @@ function ReportBlockView(props: { block: ReportBlock }) {
 }
 
 function ReportWidgetContent(props: ReportWidgetProps) {
-  const content = createMemo(() => {
-    try {
-      return { report: parseBoardReport(props.widget?.props) };
-    } catch (error) {
-      return { error };
-    }
-  });
+  const content = createMemo(
+    () => {
+      try {
+        return { report: parseBoardReport(props.widget?.props) };
+      } catch (error) {
+        return { error };
+      }
+    },
+    {
+      // Keep parsed content and focus when only the widget metadata changes.
+      equals: (previous, next) =>
+        previous.report !== undefined &&
+        next.report !== undefined &&
+        JSON.stringify(previous.report) === JSON.stringify(next.report),
+    },
+  );
   return (
     <Show when={content().report} fallback={<BoardWidgetError error={content().error} />}>
       {(report) => (

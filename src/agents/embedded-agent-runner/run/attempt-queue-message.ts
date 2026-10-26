@@ -92,6 +92,7 @@ async function steerWithTranscriptLifecycle(
   options: EmbeddedAgentQueueMessageOptions,
   canInject?: () => boolean,
   prepareInjection?: () => Promise<void>,
+  onAccepted?: () => void,
 ): Promise<void> {
   const {
     abortSignal,
@@ -188,7 +189,7 @@ async function steerWithTranscriptLifecycle(
         ),
       Math.max(1, timeoutMs),
     );
-    timer.unref?.();
+    timer.unref();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (
         event.type === "message_end" &&
@@ -254,6 +255,7 @@ async function steerWithTranscriptLifecycle(
       () => acceptanceOpen && (canInject?.() ?? true),
       currentInboundContext,
       prepareInjection,
+      onAccepted,
     );
     void steering.then(
       () => {
@@ -320,6 +322,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
   prepareInjection?: () => Promise<void>,
+  onAccepted?: () => void,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const mayAnswerPendingQuestion = options?.allowPendingUserInputAnswer !== false;
@@ -349,6 +352,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     isPlainTextAnswer &&
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
+    onAccepted?.();
     notifyQueueObserver(() => options?.onQueueAccepted?.(true));
     notifyQueueObserver(options?.onQueueSettled);
     return;
@@ -365,6 +369,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         canInject,
         options?.currentInboundContext,
         prepareInjection,
+        onAccepted,
       );
     } catch (error) {
       if (!hasAcceptedSteeringCustody(error)) {
@@ -376,7 +381,14 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   try {
-    await steerWithTranscriptLifecycle(activeSession, text, options, canInject, prepareInjection);
+    await steerWithTranscriptLifecycle(
+      activeSession,
+      text,
+      options,
+      canInject,
+      prepareInjection,
+      onAccepted,
+    );
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
       return { transcriptCommit: "unconfirmed", errorMessage: error.message };

@@ -1,7 +1,8 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { t } from "../../../i18n/index.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
@@ -19,11 +20,15 @@ import {
   readLiveTerminalRunId,
 } from "../terminal-message-identity.ts";
 import {
+  parseGeneratedAsyncAnswer,
+  quoteQuestion,
+  readAsyncQuestions,
+} from "./chat-async-question-content.ts";
+import {
   persistAsyncQuestionDrafts,
   restoreAsyncQuestionDrafts,
   type AsyncQuestionDraftSession,
 } from "./chat-async-question-draft.ts";
-import { parseGeneratedAsyncAnswer, quoteQuestion } from "./chat-async-question-summary.ts";
 import type {
   AsyncQuestionDraft,
   AsyncQuestionPresentation,
@@ -31,6 +36,8 @@ import type {
 } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-card.ts";
+
+registerChatQuestionsEnglish();
 
 registerChatSessionEnglish();
 
@@ -557,45 +564,6 @@ export function createAsyncQuestionPresentation(
   };
   state.asyncQuestionPresentation = presentation;
   return presentation;
-}
-
-function boundedText(value: unknown, limit: number): value is string {
-  return typeof value === "string" && value.length <= limit && value.trim().length > 0;
-}
-
-export function readAsyncQuestions(message: unknown): AsyncQuestions | null {
-  if (!isRecord(message) || message.role !== "assistant") {
-    return null;
-  }
-  const metadata = message.openclawAsyncDelivery;
-  if (
-    !isRecord(metadata) ||
-    !boundedText(metadata.itemId, 256) ||
-    !Array.isArray(metadata.questions) ||
-    metadata.questions.length === 0 ||
-    metadata.questions.length > 12
-  ) {
-    return null;
-  }
-  const questions: AsyncQuestions["questions"] = [];
-  for (const question of metadata.questions) {
-    if (
-      !isRecord(question) ||
-      !boundedText(question.title, 4096) ||
-      (question.options !== undefined &&
-        (!Array.isArray(question.options) ||
-          question.options.length === 0 ||
-          question.options.length > 4 ||
-          !question.options.every((option) => boundedText(option, 256))))
-    ) {
-      return null;
-    }
-    questions.push({ title: question.title, options: question.options });
-  }
-  const identity = readSessionMessageIdentity(message);
-  const sourceMessageId =
-    identity?.id && identity.sequence !== null && !identity.isImported ? identity.id : undefined;
-  return { itemId: metadata.itemId, ...(sourceMessageId ? { sourceMessageId } : {}), questions };
 }
 
 function getQuestionDraft(questions: AsyncQuestions, drafts: Map<string, AsyncQuestionDraft>) {

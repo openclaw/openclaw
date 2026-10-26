@@ -849,12 +849,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
@@ -1065,12 +1060,7 @@ describe("active-memory plugin", () => {
   });
 
   it("joins concurrent identical recall attempts in one run", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
@@ -1141,12 +1131,7 @@ describe("active-memory plugin", () => {
   });
 
   it("evicts a rejected replacement after timeout cleanup settles", async () => {
-    let releaseCleanup: () => void = () => {
-      throw new Error("cleanup gate was not initialized");
-    };
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const { promise: cleanupGate, resolve: releaseCleanup } = createDeferred<void>();
     const pending: Array<ReturnType<typeof resolveActiveRecallForRun>> = [];
     const recall = (start: Parameters<typeof resolveActiveRecallForRun>[1]) => {
       const result = resolveActiveRecallForRun("run-rejected-replacement", start);
@@ -2299,17 +2284,14 @@ describe("active-memory plugin", () => {
       ],
     ];
     const expectMemoryResult = ({ toolName, details, text, expected }: MemoryResultCase) => {
-      const record = {
-        message: {
-          role: "toolResult",
-          toolName,
-          details,
-          content: (Array.isArray(text) ? text : [text]).map((value) => ({
-            type: "text",
-            text: value,
-          })),
-        },
-      };
+      const record = memoryToolRecord(
+        toolName,
+        details,
+        (Array.isArray(text) ? text : [text]).map((value) => ({
+          type: "text",
+          text: value,
+        })),
+      );
       const toolsAllow = toolName.startsWith("memory_")
         ? toolName === "memory_lookup_custom"
           ? [toolName]
@@ -2896,10 +2878,7 @@ describe("active-memory plugin", () => {
     seedSession(sessionKey, "s-terminal-unavailable-then-summary", 0);
     const verboseSummary =
       "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
-    let markDelayScheduled: (() => void) | undefined;
-    const delayScheduled = new Promise<void>((resolve) => {
-      markDelayScheduled = resolve;
-    });
+    const { promise: delayScheduled, resolve: markDelayScheduled } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         memoryToolRecord(
@@ -3072,7 +3051,11 @@ describe("active-memory plugin", () => {
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+    const recallStarted = createDeferred<void>();
+    runEmbeddedAgent.mockImplementationOnce(() => {
+      recallStarted.resolve();
+      return new Promise<never>(() => {});
+    });
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? delayed recall start" },
@@ -3081,18 +3064,7 @@ describe("active-memory plugin", () => {
       },
     );
     await vi.advanceTimersByTimeAsync(1_490);
-    const hasStartedRecall = () =>
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes("session=agent:main:delayed-recall-start"),
-        );
-    for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
-    expect(hasStartedRecall()).toBe(true);
+    await recallStarted.promise;
     await vi.advanceTimersByTimeAsync(250);
     await vi.advanceTimersByTimeAsync(1_499);
 
@@ -3608,72 +3580,67 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it.each(["cooldown", "a successful recall"] as const)(
-    "allows recall again after %s clears consecutive timeouts",
-    async (resetReason) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const CONFIGURED_TIMEOUT_MS = 250;
-      const COOLDOWN_MS = 60_000;
-      registerPluginConfig({
-        timeoutMs: CONFIGURED_TIMEOUT_MS,
-        logging: true,
-        circuitBreakerMaxTimeouts: 2,
-        circuitBreakerCooldownMs: COOLDOWN_MS,
+  it("pauses failed cooldown probes and clears the streak after a completed recall", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const CONFIGURED_TIMEOUT_MS = 250;
+    const COOLDOWN_MS = 60_000;
+    registerPluginConfig({
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+      circuitBreakerMaxTimeouts: 2,
+      circuitBreakerCooldownMs: COOLDOWN_MS,
+    });
+    const sessionKey = "agent:main:cb-reset";
+    const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
+    const timeOutRecall = async (prompt: string) => {
+      const embeddedStarted = createDeferred<void>();
+      runEmbeddedAgent.mockImplementationOnce(
+        async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+          await writeTranscriptJsonl(params.sessionFile, []);
+          embeddedStarted.resolve();
+          return await waitForAbort(params.abortSignal);
+        },
+      );
+      const resultPromise = runPromptBuild({ prompt }, { sessionKey });
+      await embeddedStarted.promise;
+      await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
+      await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
+      expect(await resultPromise).toBeUndefined();
+    };
+    const recallSuccessfully = async (prompt: string, summary: string) => {
+      runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+        await writeUsableMemoryTranscript(params.sessionFile, summary);
+        return { payloads: [{ text: summary }] };
       });
-      const sessionKey = "agent:main:cb-reset";
-      const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
-      const timeOutRecall = async (prompt: string) => {
-        const embeddedStarted = createDeferred<void>();
-        runEmbeddedAgent.mockImplementationOnce(
-          async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-            await writeTranscriptJsonl(params.sessionFile, []);
-            embeddedStarted.resolve();
-            return await waitForAbort(params.abortSignal);
-          },
-        );
-        const resultPromise = runPromptBuild({ prompt }, { sessionKey });
-        await embeddedStarted.promise;
-        await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
-        await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
-        expect(await resultPromise).toBeUndefined();
-      };
-      const recallSuccessfully = async (prompt: string, summary: string) => {
-        runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-          await writeUsableMemoryTranscript(params.sessionFile, summary);
-          return { payloads: [{ text: summary }] };
-        });
-        const result = await runPromptBuild({ prompt }, { sessionKey });
-        expect(result?.prependContext).toContain(summary);
-      };
+      const result = await runPromptBuild({ prompt }, { sessionKey });
+      expect(result?.prependContext).toContain(summary);
+    };
 
-      try {
-        await timeOutRecall("cb reset test timeout");
-        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    try {
+      await timeOutRecall("first timeout before a long gap");
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS + 1);
+      await timeOutRecall("second timeout after a long gap");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      await runPromptBuild({ prompt: "paused after spaced failures" }, { sessionKey });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
 
-        if (resetReason === "cooldown") {
-          await timeOutRecall("cb reset second consecutive timeout");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await runPromptBuild({ prompt: "cb reset test skipped" }, { sessionKey });
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
-        } else {
-          await recallSuccessfully("cb reset first success", "lemon pepper wings");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await timeOutRecall("cb reset second timeout");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-        }
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
+      await timeOutRecall("failed cooldown probe");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+      await runPromptBuild({ prompt: "paused after failed probe" }, { sessionKey });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
 
-        await recallSuccessfully("cb reset test success", "buffalo wings");
-        expect(runEmbeddedAgent).toHaveBeenCalledTimes(resetReason === "cooldown" ? 3 : 4);
-        if (resetReason === "cooldown") {
-          await recallSuccessfully("cb reset test still ok", "blue cheese");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
-        }
-      } finally {
-        await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
-      }
-    },
-  );
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
+      await recallSuccessfully("successful cooldown probe", "buffalo wings");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
+      await timeOutRecall("first timeout after completed recall");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(5);
+      await recallSuccessfully("allowed below a fresh threshold", "blue cheese");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(6);
+    } finally {
+      await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
+    }
+  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

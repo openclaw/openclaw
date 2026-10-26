@@ -21,6 +21,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -40,6 +41,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
+  parseUpdateChannel,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -107,14 +109,7 @@ export async function updateFinalizeCommand(
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel !== undefined && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
+  const requestedChannel = parseUpdateChannel(opts.channel);
 
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
@@ -137,9 +132,13 @@ export async function updateFinalizeCommand(
                   recoverOrphanedSidecars: false,
                 });
                 await retainCliProcessJobUntilExit();
+                const reportResult = await readUpdateResultPolicy(process.env);
                 phase.assertCurrent();
                 // Public repair supplies a recovery selection, even when it is empty.
-                const admittedRunId = lifecycle.attachLedger(recoveryRunIds !== undefined);
+                const admittedRunId = lifecycle.attachLedger(
+                  recoveryRunIds !== undefined,
+                  reportResult,
+                );
                 const resolvedRoot = await resolveUpdateRoot();
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
@@ -396,16 +395,17 @@ async function updateFinalizeCommandInternal(
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
       await lifecycle.run(
         "doctor",
-        () =>
+        (phase) =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             ...doctorParams,
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
+            serviceInspectionDeadlineAtMs: phase.deadlineAtMs,
           }),
         undefined,
         {
-          enter: async () => {
+          enter: async (serviceInspectionDeadlineAtMs) => {
             if (!ownsMaintenance) {
               return;
             }
@@ -415,6 +415,7 @@ async function updateFinalizeCommandInternal(
               runId: invokingRunId,
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
+              serviceInspectionDeadlineAtMs,
             });
             lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.

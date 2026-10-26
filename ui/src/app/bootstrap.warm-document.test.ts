@@ -6,6 +6,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords } from "./boot-record.ts";
 import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { captureGatewayClients } from "./gateway-store.test-support.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 const originalUrl = window.location.href;
@@ -20,7 +21,6 @@ const mainRecord = () =>
     groups: [{ name: "Main private group", position: 0 }],
     sectionOrder: ["Main private group"],
   });
-
 const replies = new Map<string, () => unknown>([
   ["agents.list", () => mainRecord().agents],
   ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
@@ -46,14 +46,7 @@ beforeEach(() => {
   vi.spyOn(NativeClient.prototype, "request").mockImplementation(
     async (method) => replies.get(method)?.() ?? {},
   );
-  vi.spyOn(browserGateway, "GatewayBrowserClient").mockImplementation(
-    class extends NativeClient {
-      constructor(options: GatewayBrowserClientOptions) {
-        super(options);
-        connections.push(options);
-      }
-    },
-  );
+  captureGatewayClients((_client, options) => connections.push(options));
 });
 afterEach(async () => {
   runtimes.splice(0).forEach((runtime) => runtime.stop());
@@ -64,7 +57,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 function open(path: string) {
   window.history.replaceState({}, "", path);
   const runtime = bootstrapApplication();

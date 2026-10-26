@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -323,7 +324,15 @@ export function completeEmbeddedAttemptResult(
         Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
       );
   }
+  const accessProgram = asOptionalRecord(
+    sessionRuntime.transport.effectiveExtraParams.accessPrograms,
+  )?.cyber;
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
+    ...(accessProgram === "standard" ||
+    accessProgram === "daybreak_blue" ||
+    accessProgram === "daybreak_red"
+      ? { cyberAccessProgram: accessProgram }
+      : {}),
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,

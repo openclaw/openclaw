@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -34,10 +35,7 @@ import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
-import {
-  resolveQueuedReplyExecutionConfig,
-  resolveQueuedReplyRuntimeConfig,
-} from "./agent-runner-utils.js";
+import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
@@ -148,8 +146,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
   const assertOperatorCurrent = () => params.queued.operatorAuthority?.assertCurrent();
   assertOperatorCurrent();
   const readAdmissionConfig = () =>
-    params.queued.readAdmissionConfig?.() ??
-    resolveQueuedReplyRuntimeConfig(params.queued.run.config);
+    params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);
   const existingClaim = params.queued.controllerInput?.claim;
   const claimQueuedFirst = !params.providedReplyOperation && !params.claimSource;
@@ -219,10 +216,20 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 : undefined,
               hasSessionModelOverride: selected.hasSessionModelOverride,
               modelOverrideSource: selected.modelOverrideSource,
+              // Scheduled fallback policy is derived from the selection; its authority stays bound.
+              ...(run.scheduledAutomation
+                ? {
+                    scheduledAutomation: {
+                      ...run.scheduledAutomation,
+                      modelFallbackPolicy: selected.scheduledAutomation?.modelFallbackPolicy,
+                    },
+                  }
+                : {}),
               authProfileId: selected.authProfileId,
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,
               thinkingCatalog: selected.thinkingCatalog,
+              cyberAccessProgram: selected.cyberAccessProgram,
             };
           },
           resetTriggered: params.resetTriggered === true,
@@ -263,6 +270,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
+    // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
+    if (kind === "queued_followup" && admission.sessionEntry) {
+      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+    }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;

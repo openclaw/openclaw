@@ -4,8 +4,8 @@ import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { registerHeadlessToolSearchCatalog } from "./tool-search-catalog.js";
-import { buildToolSchemaDirectoryPrompt } from "./tool-search-directory.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
+import { buildToolSchemaDirectoryPrompt } from "./tool-search.js";
 
 const optionalNames = [
   "browser",

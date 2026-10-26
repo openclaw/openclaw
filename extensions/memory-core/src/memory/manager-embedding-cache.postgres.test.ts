@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, threadId } from "node:worker_threads";
@@ -25,7 +26,17 @@ import {
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
-const provider = { id: identity.provider, model: identity.model };
+const canonicalAgentSql = fs.readFileSync(
+  new URL("../../../../src/state/postgres-schema.generated/agent.postgres.sql", import.meta.url),
+  "utf8",
+);
+const cacheSchema = [
+  canonicalAgentSql.match(/CREATE TABLE "memory_embedding_cache" \([\s\S]*?\n\);/)?.[0],
+  canonicalAgentSql.match(/CREATE INDEX "idx_memory_embedding_cache_updated_at"[^;]+;/)?.[0],
+];
+if (cacheSchema.some((sql) => !sql)) {
+  throw new Error("Canonical embedding-cache PostgreSQL schema is missing");
+}
 
 describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
   const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -45,16 +56,19 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       hash: `hash-${String(index).padStart(3, "0")}`,
       embedding: [index, Math.PI],
     }));
-  const publish = (rows: ReturnType<typeof entries>, maxEntries?: number, now = 1) =>
+  const publish = (
+    rows: ReturnType<typeof entries>,
+    options: Partial<Omit<Parameters<typeof upsertMemoryEmbeddingCache>[0], "db" | "entries">> = {},
+  ) =>
     write(() =>
       upsertMemoryEmbeddingCache({
         db: database,
-        cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-        provider,
+        cacheSize: options.cacheSize ?? { size: countMemoryEmbeddingCache(database), exact: true },
+        provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
         entries: () => rows,
-        maxEntries,
-        now,
+        now: 1,
+        ...options,
       }),
     );
   const read = (hashes: string[]) =>
@@ -73,13 +87,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
           id: "memory_cache",
           version: 1,
           sqlite: "",
-          postgres: `CREATE TABLE memory_embedding_cache (
-            provider TEXT COLLATE "C" NOT NULL, model TEXT COLLATE "C" NOT NULL,
-            provider_key TEXT COLLATE "C" NOT NULL, hash TEXT COLLATE "C" NOT NULL,
-            embedding BYTEA NOT NULL, dims BIGINT, updated_at BIGINT NOT NULL,
-            PRIMARY KEY (provider, model, provider_key, hash)
-          ); CREATE INDEX idx_memory_embedding_cache_updated_at
-            ON memory_embedding_cache(updated_at);
+          postgres: `${cacheSchema.join("\n")}
           CREATE TABLE memory_index_chunks (
             id TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at BIGINT NOT NULL
           );`,
@@ -112,6 +120,44 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     });
   });
 
+  it("evicts through the canonical timestamp index and stops at the limit", () => {
+    write(() => {
+      db().exec(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        SELECT 'local', 'fixture', 'fixture', 'hash-' || n, decode('00', 'hex'), 1, n
+        FROM generate_series(1, 50000) AS n;
+        ANALYZE memory_embedding_cache`);
+      const query = db().query.bind(db());
+      let eviction: Parameters<typeof query> | undefined;
+      const capture = vi.spyOn(db(), "query").mockImplementation((sql, parameters) => {
+        if (/^delete from "memory_embedding_cache"/iu.test(sql)) {
+          eviction = [sql, parameters];
+        }
+        return query(sql, parameters);
+      });
+      try {
+        expect(pruneMemoryEmbeddingCache(database, { size: 50000, exact: true }, 49990)).toEqual({
+          size: 49990,
+          exact: true,
+        });
+      } finally {
+        capture.mockRestore();
+      }
+      expect(
+        db().prepare("SELECT min(updated_at) AS oldest FROM memory_embedding_cache").get(),
+      ).toEqual({ oldest: 11 });
+      if (!eviction) {
+        throw new Error("Eviction did not execute a DELETE");
+      }
+      const plan = query(`EXPLAIN (ANALYZE, BUFFERS) ${eviction[0]}`, eviction[1]).rows.map((row) =>
+        String(row["QUERY PLAN"]),
+      );
+      const scan = plan.find((line) => line.includes("idx_memory_embedding_cache_updated_at"));
+      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11 loops=1/);
+      expect(plan.some((line) => line.includes("Seq Scan"))).toBe(false);
+    });
+  });
+
   it("upserts 129 canonical vectors within the binding budget and rolls back both batches", () => {
     const rows = entries(129);
     const query = db().query.bind(db());
@@ -128,7 +174,6 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       spy.mockRestore();
     }
     expect(insertBindings).toEqual([128 * 7, 7]);
-    expect(Math.max(...insertBindings)).toBeLessThanOrEqual(65_535);
     const expected = new Map(rows.map(({ hash, embedding }) => [hash, embedding]));
     expected.set("hash-000", [Number.EPSILON, -0]);
     expect(read(rows.map(({ hash }) => hash))).toEqual(expected);
@@ -144,7 +189,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         upsertMemoryEmbeddingCache({
           db: database,
           cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-          provider,
+          provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => entries(129).map(({ hash }) => ({ hash, embedding: [-1, -1] })),
         });
@@ -156,16 +201,9 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
 
   it("evicts only one composite identity when providers share a hash", () => {
     for (const id of ["a", "z"]) {
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-          provider: { id, model: identity.model },
-          providerKey: identity.providerKey,
-          entries: () => [{ hash: "shared", embedding: [1, 2] }],
-          now: 1,
-        }),
-      );
+      publish([{ hash: "shared", embedding: [1, 2] }], {
+        provider: { id, model: identity.model },
+      });
     }
     expect(write(() => pruneMemoryEmbeddingCache(database, { size: 2, exact: true }, 1))).toEqual({
       size: 1,
@@ -191,7 +229,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.slice(100).map(({ hash, embedding }) => [hash, embedding])),
     );
-    publish([{ hash: "fresh", embedding: [42, 43] }], 3, 2);
+    publish([{ hash: "fresh", embedding: [42, 43] }], { maxEntries: 3, now: 2 });
     expect(read([...rows.map(({ hash }) => hash), "fresh"])).toEqual(
       new Map([
         ["hash-399", [399, Math.PI]],
@@ -208,16 +246,12 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     chunks: Array<[hash: string, updatedAt: number]>,
   ) {
     for (const [id, providerKey, hash, now] of cache) {
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: 0, exact: false },
-          provider: { id, model: "m" },
-          providerKey,
-          entries: () => [{ hash, embedding: [1, 2] }],
-          now,
-        }),
-      );
+      publish([{ hash, embedding: [1, 2] }], {
+        provider: { id, model: "m" },
+        providerKey,
+        now,
+        cacheSize: { size: 0, exact: false },
+      });
     }
     write(() => {
       for (const [hash, updatedAt] of chunks) {
@@ -281,18 +315,14 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       [["live", 10]],
     );
     const insert = (hash: string, identities: Array<typeof a>) =>
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: 4, exact: true },
-          provider: { id: "openai", model: "m" },
-          providerKey: "k",
-          entries: () => [{ hash, embedding: [3, 4] }],
-          maxEntries: 4,
-          unreferencedFirst: { identities },
-          now: 30,
-        }),
-      );
+      publish([{ hash, embedding: [3, 4] }], {
+        provider: { id: a.provider, model: a.model },
+        providerKey: a.providerKey,
+        maxEntries: 4,
+        now: 30,
+        cacheSize: { size: 4, exact: true },
+        unreferencedFirst: { identities },
+      });
     // Both listed identities are preferred before the live row, oldest first.
     insert("new-1", [a, b]);
     insert("new-2", [a, b]);

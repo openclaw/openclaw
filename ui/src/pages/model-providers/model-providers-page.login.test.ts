@@ -8,13 +8,14 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -60,23 +61,7 @@ describe("Models provider login", () => {
   ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
-      capabilities: [
-        {
-          provider: "meta",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
-              featured: true,
-              requiresSetup: true,
-            },
-          ],
-        },
-      ],
+      capabilities: [museCodeCapability()],
     });
     const originalRequest = request.getMockImplementation()!;
     const authStatusReady = deferred();
@@ -258,7 +243,7 @@ describe("Models provider login", () => {
       try {
         await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
-          expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
+          expect(page.querySelector<HTMLAnchorElement>(".wizard-sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
         );
@@ -276,8 +261,10 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-            .find((button) => button.textContent?.trim() === "Cancel")!
+          page
+            .querySelector<HTMLButtonElement>(
+              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
+            )!
             .click();
           await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");

@@ -4,7 +4,6 @@ import { collectPluginSchemaMetadataCore } from "../config/channel-config-metada
 import { buildConfigSchemaCore, lookupConfigSchema } from "../config/schema.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
-import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 
 // Load the public manifest only; config validation must not activate provider runtime.
 const rootDir = path.resolve("extensions/vllm");
@@ -22,6 +21,9 @@ const schemaFor = (registry = manifestRegistry) =>
   buildConfigSchemaCore({ plugins: collectPluginSchemaMetadataCore(registry) });
 const priorityPath = (scope: string, provider = "vllm") =>
   `${scope}.models.${provider}/model.params.priorityScheduling`;
+const scopes = ["agents.defaults", "agents.entries.main"] as const;
+const schemaAt = (response: ReturnType<typeof schemaFor>, key: string) =>
+  lookupConfigSchema(response, key)?.schema;
 type Models = Record<string, { params: Record<string, unknown> }>;
 const validate = (models: Models, agentModels?: Models, registry = manifestRegistry) =>
   validateConfigObjectRawWithPlugins(
@@ -39,7 +41,7 @@ describe("provider-owned model params", () => {
     const result = validate(priority("true"), priority(1));
     expect(result).toMatchObject({
       ok: false,
-      issues: ["agents.defaults", "agents.entries.main"].map((scope) => ({
+      issues: scopes.map((scope) => ({
         path: priorityPath(scope),
         message: "invalid model params: must be boolean",
       })),
@@ -52,52 +54,37 @@ describe("provider-owned model params", () => {
       "vllm/interactive": { params: { priorityScheduling: true } },
       "other/model": { params: { priorityScheduling: "other-provider-contract" } },
     };
-    const result = validate(models, { "vllm/interactive": { params: { temperature: 0.5 } } });
+    const agentModels = { "vllm/interactive": { params: { temperature: 0.5 } } };
+    const result = validate(models, agentModels);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.agents?.defaults?.models).toEqual(models);
-      expect(result.config.agents?.entries?.main?.models).toEqual({
-        "vllm/interactive": { params: { temperature: 0.5 } },
-      });
+      expect([
+        result.config.agents?.defaults?.models,
+        result.config.agents?.entries?.main?.models,
+      ]).toEqual([models, agentModels]);
     }
   });
 
   it("exposes the model schema and server prerequisite only for vLLM model paths", () => {
-    const response = schemaFor();
-    for (const scope of ["agents.defaults", "agents.entries.main"]) {
-      expect(lookupConfigSchema(response, priorityPath(scope))?.schema).toMatchObject({
+    const registry = {
+      ...manifestRegistry,
+      plugins: manifestRegistry.plugins.flatMap((plugin) => [
+        { ...plugin, id: "z-first", providerRequest: { providers: { vllm: model("string") } } },
+        { ...plugin, id: "a-last" },
+      ]),
+    };
+    const response = schemaFor(registry);
+    expect(validate(priority(true), undefined, registry).ok).toBe(true);
+    for (const scope of scopes) {
+      expect(schemaAt(response, priorityPath(scope))).toMatchObject({
         type: "boolean",
         title: "Priority scheduling",
         description: expect.stringContaining("--scheduling-policy priority"),
       });
-      const unrelated = lookupConfigSchema(response, priorityPath(scope, "other"));
-      expect(unrelated?.schema.type).toBeUndefined();
-      expect(unrelated?.schema.description).toBeUndefined();
-      expect(lookupConfigSchema(response, `${scope}.models.vllm/model.alias`)?.schema.type).toBe(
-        "string",
-      );
+      const unrelated = schemaAt(response, priorityPath(scope, "other"));
+      expect([unrelated?.type, unrelated?.description]).toEqual([undefined, undefined]);
+      expect(schemaAt(response, `${scope}.models.vllm/model.alias`)?.type).toBe("string");
     }
-  });
-
-  it("uses the request metadata owner for validation and schema presentation", () => {
-    const registry = {
-      ...manifestRegistry,
-      plugins: manifestRegistry.plugins.flatMap((plugin) => [
-        {
-          ...plugin,
-          id: "z-first",
-          providerRequest: { providers: { vllm: model("string") } },
-        },
-        { ...plugin, id: "a-last" },
-      ]),
-    };
-    expect(validate(priority(true), undefined, registry).ok).toBe(true);
-    expect(
-      lookupConfigSchema(schemaFor(registry), priorityPath("agents.defaults"))?.schema.type,
-    ).toBe("boolean");
-    expect(
-      buildPluginMetadataProviderFacts(registry.plugins).providerRequests.get("vllm"),
-    ).toMatchObject(model("boolean"));
   });
 
   it("budgets both default and per-agent copies of provider model schemas", () => {
@@ -110,10 +97,9 @@ describe("provider-owned model params", () => {
     const response = buildConfigSchemaCore({
       plugins: [{ id: "budget", providerRequest: { providers } }],
     });
-    for (const scope of ["agents.defaults", "agents.entries.main"]) {
+    for (const scope of scopes) {
       const description = (index: number) =>
-        lookupConfigSchema(response, `${scope}.models.demo${index}/model.params`)?.schema
-          .description;
+        schemaAt(response, `${scope}.models.demo${index}/model.params`)?.description;
       expect(description(3)).toHaveLength(220 * 1024);
       expect(description(4)).toContain("exceeded the Gateway response budget");
     }

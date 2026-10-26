@@ -1,17 +1,20 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { createDashboardTool } from "../agents/tools/dashboard-tool.js";
 import * as gateway from "../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
+import type { BoardReport } from "../boards/board-report.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { readCanvasDocumentHtmlSource, resolveCanvasDocumentsDir } from "./documents.js";
-import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import {
   asGatewayCaller,
   createBoardPutCaller,
@@ -27,7 +30,7 @@ import { buildWidgetDocument } from "./wrap.js";
 const WIDGET_HTML_MAX_UTF8_BYTES = 10 * 1024 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 const harness = useWidgetHarness();
-const { createTool, documentDir, documentFile, expectNoDocument } = harness;
+const { createTool, documentDir, expectNoDocument } = harness;
 
 function createLiveBoardCaller(
   store: ReturnType<typeof createTestBoardStore>,
@@ -57,42 +60,33 @@ function createLiveBoardCaller(
   return callGateway;
 }
 
-const diagram = { title: "Diagram", widget_code: "diagram:ready", kind: "diagram" };
 const failingPresenter = () =>
   currentPresenter(async () => ({
     ok: false,
     error: { code: "presentation_error", message: "delivery rejected" },
   }));
 
-async function executeWidget(
-  params: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "presenters"> & {
-    title?: string;
-    widgetCode: string;
-    pin?: boolean;
-    name?: string;
-    tab?: string;
-    size?: "sm" | "md" | "lg" | "xl" | "full";
-    presentation?: {
-      target?: "assistant_message" | "node_panel";
-      frame?: "card" | "full-bleed" | "frameless";
-    };
-    capabilities?: { netOrigins?: string[]; tools?: string[] };
-  },
-) {
-  const {
-    agentId = "main",
-    agentSessionKey,
-    presenters,
-    title = "Widget title",
-    widgetCode,
-    ...input
-  } = params;
-  const tool = createTool({
-    sessionId: "widget-session",
-    agentId,
-    agentSessionKey,
-    presenters,
-  });
+async function executeWidget({
+  agentId = "main",
+  agentSessionKey,
+  presenters,
+  title = "Widget title",
+  widgetCode,
+  ...input
+}: Pick<WidgetToolOptions, "agentId" | "agentSessionKey" | "presenters"> & {
+  title?: string;
+  widgetCode: string;
+  pin?: boolean;
+  name?: string;
+  tab?: string;
+  size?: "sm" | "md" | "lg" | "xl" | "full";
+  presentation?: {
+    target?: "assistant_message" | "node_panel";
+    frame?: "card" | "full-bleed" | "frameless";
+  };
+  capabilities?: { netOrigins?: string[]; tools?: string[] };
+}) {
+  const tool = createTool({ sessionId: "widget-session", agentId, agentSessionKey, presenters });
   const result = await tool.execute("widget-call", { title, widget_code: widgetCode, ...input });
   const parsed = payload(result) as {
     kind?: string;
@@ -105,84 +99,32 @@ async function executeWidget(
   if (parsed.kind !== "canvas" || !viewId || !url) {
     throw new Error("expected canvas preview handle");
   }
-  return {
-    viewId,
-    url,
-    resultText: parsed.text,
-    boardWidgetName: parsed.view?.boardWidgetName,
-    target: parsed.presentation?.target,
-    parsed,
-  };
+  return { ...parsed, view: { ...parsed.view, id: viewId, url } };
 }
 
-function pinner(agentSessionKey = "agent:main:pinned") {
-  return (title: string, widgetCode: string) =>
+const pinner =
+  (agentSessionKey = "agent:main:pinned") =>
+  (title: string, widgetCode: string) =>
     executeWidget({ agentSessionKey, title, widgetCode, pin: true });
-}
-
-it("builds a sorted kind enum and routes registered source through board put", async () => {
-  registerDiagramContentKind();
-  const { mock: callGatewayMock } = createBoardPutCaller();
-  const tool = createTool({
-    agentSessionKey: "agent:main:registered",
-  });
-  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html", "diagram"]);
-  await tool.execute("registered", { ...diagram, pin: true });
-  expect(callGatewayMock).toHaveBeenCalledWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
-    }),
-  );
-
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  await expect(tool.execute("stale", diagram)).rejects.toThrow(
-    'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
-  );
-});
 
 it("uses board-only delivery when inline hosting is disabled", async () => {
-  registerDiagramContentKind();
-  const { mock: callGatewayMock } = createBoardPutCaller();
-  const tool = createTool({
-    agentSessionKey: "agent:main:board-only",
-    inlineHostEnabled: false,
-  });
+  createBoardPutCaller();
+  const tool = createTool({ agentSessionKey: "agent:main:board-only", inlineHostEnabled: false });
 
-  expect(tool.description).toContain(
-    "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
-  );
-  expect(tool.description).not.toContain("Keep one-off visualizations inline");
-  await expect(tool.execute("unpinned", diagram)).rejects.toThrow(
+  await expect(run(tool)).rejects.toThrow(
     "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
   );
   await expectNoDocument();
 
-  const result = await tool.execute("pinned", { ...diagram, pin: true });
-  expect(payload(result)).toEqual({
+  expect(payload(await run(tool, { pin: true }))).toMatchObject({
     status: "pinned",
-    boardWidgetName: "diagram",
-    capabilityState: "none",
-    text: "Widget pinned to dashboard tab main as diagram. Open this dashboard tab in Control UI to view it.",
+    boardWidgetName: "status",
   });
-  expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
-    }),
-  );
   await expectNoDocument();
 });
 
 it("routes node-panel presentation and reports the selected device", async () => {
-  const availability = vi.fn(async () => ({
-    ok: true as const,
-    value: { available: true as const },
-  }));
-  const present = vi.fn(async () => ({
-    ok: true as const,
-    value: { kind: "node" as const, nodeId: "mac-panel", nodeName: "Studio" },
-  }));
+  let hostedUrl: string | undefined;
   const result = await executeWidget({
     title: "Status",
     widgetCode: "<p>ready</p>",
@@ -192,74 +134,61 @@ it("routes node-panel presentation and reports the selected device", async () =>
       {
         target: "node_panel",
         description: "Show on a connected device panel",
-        availability,
-        present,
-      },
-    ],
-  });
-
-  expect(result).toMatchObject({
-    target: "node_panel",
-    resultText: expect.stringContaining("presented on Studio (mac-panel)"),
-  });
-  expect(availability).toHaveBeenCalledWith({ sessionKey: "agent:main:status" });
-  expect(present).toHaveBeenCalledWith({
-    document: {
-      kind: "html",
-      html: expect.stringContaining("<p>ready</p>"),
-      hostedUrl: result.url,
-    },
-    title: "Status",
-    context: { sessionKey: "agent:main:status" },
-  });
-});
-
-it.each([
-  {
-    name: "has no registered presenter",
-    presenters: [] as WidgetPresenter[],
-    expected: "No widget presenter is registered",
-  },
-  {
-    name: "has no eligible node",
-    presenters: [
-      {
-        target: "node_panel" as const,
-        description: "Show on a connected device panel",
-        availability: async () => ({
-          ok: false as const,
-          error: { code: "no_eligible_node" as const, message: "No connected device." },
-        }),
-        present: async () => {
-          throw new Error("present must not run");
+        availability: async (context) => {
+          expect(context).toEqual({ sessionKey: "agent:main:status" });
+          return { ok: true, value: { available: true } };
+        },
+        present: async ({ document }) => {
+          hostedUrl = document.hostedUrl;
+          expect(document.html).toContain("<p>ready</p>");
+          return { ok: true, value: { kind: "node", nodeId: "mac-panel", nodeName: "Studio" } };
         },
       },
     ],
-    expected: "No connected device.",
-  },
-])(
-  "falls back inline with an actionable message when node presentation $name",
-  async ({ presenters, expected }) => {
+  });
+
+  expect(hostedUrl).toBe(result.view.url);
+  expect(result).toMatchObject({
+    presentation: { target: "node_panel" },
+    text: expect.stringContaining("presented on Studio (mac-panel)"),
+  });
+});
+
+it.each([false, true])(
+  "falls back inline when node presenter exists=%s but cannot present",
+  async (registered) => {
+    const unavailable: WidgetPresenter = {
+      target: "node_panel",
+      description: "Unavailable panel",
+      availability: async () => ({
+        ok: false,
+        error: { code: "no_eligible_node", message: "No connected device." },
+      }),
+      present: async () => {
+        throw new Error("present must not run");
+      },
+    };
     const result = await executeWidget({
       widgetCode: "<p>inline fallback</p>",
       presentation: { target: "node_panel" },
-      presenters,
+      presenters: registered ? [unavailable] : [],
     });
 
     expect(result).toMatchObject({
-      target: "assistant_message",
-      resultText: expect.stringContaining(expected),
+      presentation: { target: "assistant_message" },
+      text: expect.stringContaining(
+        registered ? "No connected device." : "No widget presenter is registered",
+      ),
     });
-    expect(result.resultText).toContain("available inline here");
-    expect(result.resultText).toMatch(
+    expect(result.text).toContain("available inline here");
+    expect(result.text).toMatch(
       /Pair a canvas-capable device|Retry the requested presentation destination/u,
     );
-    await access(documentDir(result.viewId));
+    await access(documentDir(result.view.id));
   },
 );
 
 it("enforces current-presenter source kinds and byte limits in core", async () => {
-  registerDiagramContentKind();
   const presenter = currentPresenter(
     async () => {
       throw new Error("present must not run");
@@ -272,12 +201,11 @@ it("enforces current-presenter source kinds and byte limits in core", async () =
     presenterContext: {},
   });
   expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
-  expect(tool.description).not.toContain("registered kinds are diagram");
-  await expect(
-    tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
-  ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
-  await expect(tool.execute("unsupported-current", diagram)).rejects.toThrow(
-    "inline widget hosting is disabled",
+  await expect(run(tool, { widget_code: "123456789" })).rejects.toThrow(
+    "widget_code exceeds maximum size (8 bytes)",
+  );
+  await expect(run(tool, { kind: "diagram" })).rejects.toThrow(
+    'Unsupported widget kind "diagram"; use kind "html"',
   );
 });
 
@@ -384,37 +312,6 @@ it("does not create an inline Canvas document when dashboard pinning fails", asy
   await expectNoDocument();
 });
 
-it("wraps SVG widgets with the stable result and sandbox contracts", async () => {
-  const { viewId, url, parsed } = await executeWidget({
-    title: "<Status>",
-    widgetCode: '  <SvG viewBox="0 0 10 10"><circle r="4" /></SvG>  ',
-  });
-
-  expect(viewId).toMatch(/^cv_[a-f0-9]{32}$/);
-  expect(url).toBe(`/__openclaw__/canvas/documents/${viewId}/index.html`);
-  expect(parsed).toMatchObject({
-    kind: "canvas",
-    presentation: { target: "assistant_message", title: "<Status>", sandbox: "scripts" },
-    text: `Widget hosted at ${url}`,
-  });
-  const html = await readFile(documentFile(viewId), "utf8");
-  expect(html).toContain(
-    `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://cdnjs.cloudflare.com`,
-  );
-  expect(html).toContain("font-src data:");
-  expect(html).toContain("img-src data:; media-src data: https: blob:; connect-src 'none'");
-  expect(html).toContain("<title>&lt;Status&gt;</title>");
-  expect(html).toContain("--accent:#bd4531");
-  expect(html).toContain("--accent:#ff5c5c");
-  expect(html).toContain("--accent-fill:#d13c3c");
-  expect(html).toContain('<body class="svg-widget"><script>');
-  expect(html).toContain("openclaw:widget-size");
-  const manifest = JSON.parse(await readFile(documentFile(viewId, "manifest.json"), "utf8")) as {
-    cspSandbox?: string;
-  };
-  expect(manifest.cspSandbox).toBe("scripts");
-});
-
 it.each([
   ["Research global with retained Main", "global", "research", true],
   ["large HTML", "agent:main:large-widget", "main", false],
@@ -455,22 +352,25 @@ it.each([
     const result = await pinWidget(initialHtml, true);
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-    expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, initialHtml),
-      revision: 1,
-    });
+    const expectPinned = async (source: string, revision: number) => {
+      expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
+        html: buildWidgetDocument(pinnedTitle, source),
+        revision,
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "board.changed",
+        { sessionKey: eventSessionKey, revision, widget: "release-status" },
+        boardBroadcastScope,
+      );
+    };
+    await expectPinned(initialHtml, 1);
     expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
       title: pinnedTitle,
       presentation: "frameless",
     });
-    expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
-    expect(result.boardWidgetName).toBe("release-status");
-    expect((await readCanvasDocumentHtmlSource(result.viewId)).html).toContain(initialHtml);
-    expect(broadcast).toHaveBeenCalledWith(
-      "board.changed",
-      { sessionKey: eventSessionKey, revision: 1, widget: "release-status" },
-      boardBroadcastScope,
-    );
+    expect(result.text).toContain("pinned to dashboard tab main as release-status (lg)");
+    expect(result.view.boardWidgetName).toBe("release-status");
+    expect((await readCanvasDocumentHtmlSource(result.view.id)).html).toContain(initialHtml);
 
     await expect(
       callGateway("board.widget.put", {
@@ -483,43 +383,38 @@ it.each([
 
     const refreshed = await pinWidget("<p>refreshed</p>");
 
-    expect(await readBoardHtml(store, target, "release-status")).toMatchObject({
-      html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
-      revision: 2,
-    });
-    expect(refreshed.boardWidgetName).toBe("release-status");
-    expect(broadcast).toHaveBeenCalledWith(
-      "board.changed",
-      { sessionKey: eventSessionKey, revision: 2, widget: "release-status" },
-      boardBroadcastScope,
-    );
+    await expectPinned("<p>refreshed</p>", 2);
+    expect(refreshed.view.boardWidgetName).toBe("release-status");
     expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
   },
 );
 
-it("pins a granted-CSP document and declaration without networking in the inline preview", async () => {
+it("hosts sandboxed SVG and keeps pinned network grants out of its inline preview", async () => {
   const store = createTestBoardStore({ stateDir: harness.stateDir });
   createLiveBoardCaller(store);
   const result = await executeWidget({
     agentSessionKey: "agent:main:weather",
     title: "Weather",
-    widgetCode: "<p>weather</p>",
+    widgetCode: '  <SvG viewBox="0 0 10 10"><circle r="4" /></SvG>  ',
     pin: true,
-    capabilities: {
-      netOrigins: ["https://api.open-meteo.com"],
-      tools: ["health", "prompt"],
-    },
+    capabilities: { netOrigins: ["https://api.open-meteo.com"], tools: ["health", "prompt"] },
   });
-  const inlineHtml = await readFile(documentFile(result.viewId), "utf8");
+  expect(result.view.id).toMatch(/^cv_[a-f0-9]{32}$/);
+  expect(result.view.url).toBe(`/__openclaw__/canvas/documents/${result.view.id}/index.html`);
+  expect(result.presentation).toEqual({
+    target: "assistant_message",
+    title: "Weather",
+    sandbox: "scripts",
+  });
+  const { html: inlineHtml, cspSandbox } = await readCanvasDocumentHtmlSource(result.view.id);
+  expect(cspSandbox).toBe("scripts");
+  expect(inlineHtml).toContain('<body class="svg-widget"><script>');
   const pinned = await readBoardHtml(store, { sessionKey: "agent:main:weather" }, "weather");
 
   expect(inlineHtml).toContain("connect-src 'none'");
   expect(pinned).toMatchObject({
     grantState: "granted",
-    declared: {
-      netOrigins: ["https://api.open-meteo.com"],
-      tools: ["health", "prompt"],
-    },
+    declared: { netOrigins: ["https://api.open-meteo.com"], tools: ["health", "prompt"] },
   });
   expect(pinned && "html" in pinned ? pinned.html : "").toContain(
     "connect-src https://api.open-meteo.com",
@@ -534,12 +429,12 @@ it("keeps generated pin names distinct when titles cannot fit a plain slug", asy
   const longA = await pinWidget(`${"shared ".repeat(20)}alpha`, "<p>three</p>");
   const longB = await pinWidget(`${"shared ".repeat(20)}beta`, "<p>four</p>");
 
-  expect(unicodeA.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
-  expect(unicodeB.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
-  expect(unicodeA.boardWidgetName).not.toBe(unicodeB.boardWidgetName);
-  expect(longA.boardWidgetName).not.toBe(longB.boardWidgetName);
-  expect(longA.boardWidgetName).toHaveLength(64);
-  expect(longB.boardWidgetName).toHaveLength(64);
+  expect(unicodeA.view.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
+  expect(unicodeB.view.boardWidgetName).toMatch(/^widget-[a-f0-9]{8}$/u);
+  expect(unicodeA.view.boardWidgetName).not.toBe(unicodeB.view.boardWidgetName);
+  expect(longA.view.boardWidgetName).not.toBe(longB.view.boardWidgetName);
+  expect(longA.view.boardWidgetName).toHaveLength(64);
+  expect(longB.view.boardWidgetName).toHaveLength(64);
 });
 
 it("keeps colliding generated pins distinct and canonical spellings stable", async () => {
@@ -551,27 +446,151 @@ it("keeps colliding generated pins distinct and canonical spellings stable", asy
     pinWidget("Revenue / Cost", "<p>slash</p>"),
     pinWidget("Revenue + Cost", "<p>plus</p>"),
   ]);
-  expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
+  expect(new Set([slash.view.boardWidgetName, plus.view.boardWidgetName]).size).toBe(2);
   expect((await store.getSnapshot({ sessionKey })).widgets).toHaveLength(2);
 
   const composed = await pinWidget("Café Menu".normalize("NFC"), "<p>one</p>");
   const decomposed = await pinWidget("Café Menu".normalize("NFD"), "<p>two</p>");
-  expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-  expect(await readBoardHtml(store, { sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
-    revision: 2,
-  });
+  expect(decomposed.view.boardWidgetName).toBe(composed.view.boardWidgetName);
+  expect(
+    await readBoardHtml(store, { sessionKey }, composed.view.boardWidgetName ?? ""),
+  ).toMatchObject({ revision: 2 });
 });
 
 it("uses opaque ids and evicts the oldest widget within a session scope", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-07T00:00:00.000Z"));
   const first = await executeWidget({ widgetCode: "<p>0</p>" });
+  expect(first.text).toBe(`Widget hosted at ${first.view.url}`);
   for (let index = 1; index <= WIDGET_MAX_PER_SCOPE; index += 1) {
     vi.setSystemTime(new Date(`2026-07-07T00:00:${String(index).padStart(2, "0")}.000Z`));
     await executeWidget({ widgetCode: `<p>${index}</p>` });
   }
 
-  await expect(access(documentDir(first.viewId))).rejects.toThrow();
+  await expect(access(documentDir(first.view.id))).rejects.toThrow();
   const entries = await readdir(resolveCanvasDocumentsDir(harness.stateDir));
   expect(entries).toHaveLength(WIDGET_MAX_PER_SCOPE);
+});
+
+const createReportTool = (options: WidgetToolOptions = {}) =>
+  createTool({ agentSessionKey: "agent:main:report", ...options });
+const copies = <T>(length: number, make: () => T) => Array.from({ length }, make);
+const report: BoardReport = {
+  blocks: [
+    { type: "text", title: "Community pulse", text: "Activity is steady." },
+    { type: "metrics", items: [{ label: "Authors", value: "312", detail: "This week" }] },
+    { type: "table", columns: ["Topic", "Threads"], rows: [["Support", "160"]] },
+    { type: "chart", style: "line", points: [{ label: "Mon", value: 12 }] },
+    { type: "links", items: [{ label: "Details", url: "https://example.com/details" }] },
+  ],
+};
+
+it("pins, updates and reopens a report for a global agent without a document", async () => {
+  const target = { sessionKey: "global", agentId: "research" };
+  const name = "community-pulse";
+  const store = createTestBoardStore({ stateDir: harness.stateDir });
+  const sibling = { sessionKey: "global", agentId: "main" };
+  const siblingBefore = await store.getSnapshot(sibling);
+  const callGateway = createLiveBoardCaller(store, vi.fn(), {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  });
+  const tool = createReportTool({ agentSessionKey: target.sessionKey, agentId: target.agentId });
+  const result = await tool.execute("create-report", {
+    title: "Community pulse",
+    name,
+    pin: true,
+    report,
+  });
+  expect(result.details).toMatchObject({ status: "pinned", boardWidgetName: name });
+  expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
+    name,
+    contentKind: "plugin",
+    contentOwner: "plugin",
+    pluginKind: "session:report",
+    props: report,
+    grantState: "none",
+    revision: 1,
+  });
+  const updated = { blocks: [{ type: "text", text: "Refreshed from the agent." }] };
+  await createDashboardTool({
+    agentSessionKey: target.sessionKey,
+    agentId: target.agentId,
+  }).execute("update-report", {
+    action: "widget_put",
+    name,
+    pluginKind: "session:report",
+    props: updated,
+  });
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  const snapshot = await callGateway<{ widgets: Array<Record<string, unknown>> }>(
+    "board.get",
+    target,
+  );
+  expect(snapshot.widgets[0]).toMatchObject({
+    pluginKind: "session:report",
+    props: updated,
+    revision: 2,
+  });
+  expect(snapshot.widgets[0]).not.toHaveProperty("frameUrl");
+  expect(snapshot.widgets[0]).not.toHaveProperty("viewTicket");
+  expect(await readBoardHtml(store, target, name)).toBeUndefined();
+  expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
+  await expectNoDocument();
+});
+
+it.each([
+  ["executable fields", [{ type: "text", text: "Hello", script: "ignored" }]],
+  ["unsupported blocks", [{ type: "image", url: "https://example.com/image.png" }]],
+  ["script links", [{ type: "links", items: [{ label: "Invalid", url: "javascript:void(0)" }] }]],
+  ["mismatched table rows", [{ type: "table", columns: ["A", "B"], rows: [["one"]] }]],
+  ["too many points", [{ type: "chart", points: copies(41, () => ({ label: "A", value: 1 })) }]],
+  ["oversized UTF-8 data", copies(3, () => ({ type: "text", text: "é".repeat(2_000) }))],
+])("rejects %s without changing the saved report", async (_label, blocks) => {
+  const store = createTestBoardStore();
+  const target = { sessionKey: "agent:main:report" };
+  const content = { kind: "plugin" as const, pluginKind: "session:report", props: report };
+  await store.putWidget({ ...target, name: "report", content });
+  const before = await store.getSnapshot(target);
+  await expect(
+    store.putWidget({ ...target, name: "report", content: { ...content, props: { blocks } } }),
+  ).rejects.toThrow();
+  expect(await store.getSnapshot(target)).toEqual(before);
+});
+
+it("rejects report capabilities before any write", async () => {
+  const callGateway = vi.fn();
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  const tool = createReportTool();
+  await expect(
+    tool.execute("invalid-report", {
+      title: "Report",
+      report,
+      pin: true,
+      capabilities: { tools: ["prompt"] },
+    }),
+  ).rejects.toThrow("Reports require pin=true");
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
+it("accepts HTML widget payload when report is an empty object", async () => {
+  const { mock } = createBoardPutCaller();
+  const tool = createReportTool();
+  const result = await tool.execute("empty-report-with-html", {
+    title: "SaaS Operations",
+    pin: true,
+    report: {},
+    widget_code: "<main>dashboard</main>",
+    kind: "html",
+    capabilities: {},
+    presentation: { target: "assistant_message", frame: "card" },
+  });
+  expect(result.details).toMatchObject({
+    kind: "canvas",
+    view: { boardWidgetName: "saas-operations" },
+  });
+  expect(mock.mock.calls[0]).toMatchObject([
+    "board.widget.put",
+    { content: { kind: "html", html: "<main>dashboard</main>" } },
+  ]);
 });

@@ -1,8 +1,12 @@
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
-import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  getOrCreateAccountThrottler,
+  releaseAccountThrottler,
+  runReplaceableTelegramRequest,
+} from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
@@ -501,4 +505,144 @@ it("does not group-throttle fractional chat ids", async () => {
 
   firstGate.resolve();
   await Promise.all([first, second]);
+});
+
+describe("releaseAccountThrottler", () => {
+  it.each([42, "-100123"])(
+    "settles queued sends and rejects retired work for chat %s",
+    async (chatId) => {
+      vi.useFakeTimers();
+      const fakeSetInterval = globalThis.setInterval;
+      const fakeClearInterval = globalThis.clearInterval;
+      const live = new Set<ReturnType<typeof setInterval>>();
+      globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+        const handle = fakeSetInterval(...args);
+        live.add(handle);
+        return handle;
+      }) as typeof setInterval;
+      globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+        if (handle !== undefined) {
+          live.delete(handle);
+        }
+        return fakeClearInterval(handle);
+      }) as typeof clearInterval;
+      const firstGate = deferred<void>();
+      try {
+        const account = getOrCreateAccountThrottler("settle-release");
+        const entered: string[] = [];
+        const prev = vi.fn(async (_method: string, payload: unknown) => {
+          const request = payload as { text?: string };
+          entered.push(request.text ?? "");
+          if (entered.length === 1) {
+            await firstGate.promise;
+          }
+          return { ok: true, result: request.text ?? "" };
+        }) as unknown as TelegramPreviousCall;
+        const send = (text: string) =>
+          callLooseSendMessage(account.transformer, prev, { chat_id: chatId, text });
+        const first = send("first");
+        await tick(1_000);
+        expect(entered).toEqual(["first"]);
+        expect(live.size).toBeGreaterThan(0);
+        const rejected = expect(send("queued")).rejects.toThrow(
+          chatId === 42 ? /stopped/i : /released/i,
+        );
+        const releasing = releaseAccountThrottler("settle-release");
+        await tick(0);
+        await rejected;
+        firstGate.resolve();
+        await tick(1_000);
+        await first;
+        await expect(releasing).resolves.toBe(true);
+        await expect(releaseAccountThrottler("settle-release")).resolves.toBe(false);
+        expect(live.size).toBe(0);
+        await expect(send("after-release")).rejects.toThrow(/released/i);
+        await expect(
+          account.transformer(
+            prev,
+            "sendChatAction",
+            { chat_id: chatId, action: "typing" },
+            undefined,
+          ),
+        ).rejects.toThrow(/released/i);
+        expect(getOrCreateAccountThrottler("settle-release")).not.toBe(account);
+      } finally {
+        firstGate.resolve();
+        globalThis.setInterval = fakeSetInterval;
+        globalThis.clearInterval = fakeClearInterval;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["pacing", "running predecessor"])(
+    "settles an action behind %s on retirement",
+    async (wait) => {
+      vi.useFakeTimers();
+      const held = deferred<Response>();
+      let sent = 0;
+      const api = createApi("action-retire", false, async () => {
+        sent++;
+        return sent === 1 && wait === "running predecessor" ? held.promise : response(success);
+      });
+      const first = typing(api, 1);
+      finishClock(
+        2_000,
+        () => Promise.allSettled([first]),
+        () => held.resolve(response(success)),
+      );
+      await tick(0);
+      if (wait === "pacing") {
+        await first;
+      }
+      expect(sent).toBe(1);
+      const second = typing(api, 2);
+      const rejected = expect(second).rejects.toThrow(/released/i);
+      if (wait === "pacing") {
+        await tick(100);
+      }
+      const releasing = releaseAccountThrottler("action-retire");
+      await tick(0);
+      await rejected;
+      held.resolve(response(success));
+      await tick(2_000);
+      await first;
+      await releasing;
+      expect(sent).toBe(1);
+    },
+  );
+
+  it.each([-100123, 42])("settles a backing-off action immediately for chat %s", async (chatId) => {
+    vi.useFakeTimers();
+    let sent = 0;
+    const group = chatId < 0;
+    const api = createApi("backoff-retire", false, async () => {
+      sent++;
+      return response(group && sent > 1 ? success : unauthorized);
+    });
+    const send = (thread: number) =>
+      group ? typing(api, thread) : api.sendChatAction(chatId, "typing");
+    const failed = Array.from({ length: group ? 1 : 4 }, () =>
+      expect(send(1)).rejects.toThrow("Unauthorized"),
+    );
+    if (group) {
+      await tick(0);
+      await Promise.all(failed);
+    }
+    const second = send(2);
+    const settled = vi.fn();
+    const outcome = second.then(settled, settled);
+    finishClock(600_000, () => Promise.allSettled([...failed, outcome]));
+    await tick(group ? 1_500 : 9_500);
+    await Promise.all(failed);
+    expect(sent).toBe(group ? 1 : 4);
+    const releasing = releaseAccountThrottler("backoff-retire");
+    await tick(group ? 0 : 10);
+    expect(settled).toHaveBeenCalledOnce();
+    await expect(second).rejects.toThrow(/released/i);
+    await releasing;
+    await tick(600_000);
+    expect(sent).toBe(group ? 1 : 4);
+    await outcome;
+  });
 });

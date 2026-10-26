@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -14,19 +13,6 @@ import { createTranscriptsTool } from "./transcripts-tool.js";
 export type CaptureStart = NonNullable<TranscriptSourceProvider["start"]>;
 export type CaptureStop = NonNullable<TranscriptSourceProvider["stop"]>;
 export type AutoStarts = NonNullable<NonNullable<OpenClawConfig["transcripts"]>["autoStart"]>;
-
-export function captureGate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
 
 export function captureFixture(
   state: { stateDir: string; store?: TranscriptsStore },

@@ -175,6 +175,51 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
   });
 });
 
+it.each(["proposal", "rollback"])(
+  "keeps malformed UTF-8 %s bytes out of workspace recovery",
+  async (damaged) => {
+    const { env, config, proposalsDir, skillDir, skillFile, opsExports } = fixture({
+      workspace: true,
+    });
+    const bundle = path.join(proposalsDir, "deploy-procedure-1");
+    const records = {
+      proposal: {
+        status: "pending",
+        origin: { agentId: "ops" },
+        target: { skillDir, skillFile },
+        supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
+        note: "damaged",
+      },
+      rollback: {
+        targetSkillFile: skillFile,
+        previousContent: "before\n",
+        supportFiles: [
+          { path: "references/notes.md", existed: true, previousContent: "damaged\n" },
+        ],
+      },
+    };
+    writeFiles(bundle, {
+      "PROPOSAL.md": "# Deploy\n",
+      "proposal.json": JSON.stringify(records.proposal),
+      "rollback.json": JSON.stringify(records.rollback),
+    });
+    const source = path.join(bundle, `${damaged}.json`);
+    const bytes = fs.readFileSync(source);
+    bytes[bytes.indexOf("damaged")] = 0xff;
+    fs.writeFileSync(source, bytes);
+    writeFiles(skillDir, { "SKILL.md": "before\n", "references/notes.md": "proposed\n" });
+
+    const result = await retireSkillWorkshopProposals({ config, env });
+
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(read(skillFile)).toBe("before\n");
+    expect(read(skillDir, "references/notes.md")).toBe("proposed\n");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+    expect(fs.existsSync(opsExports)).toBe(false);
+  },
+);
+
 it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
   const { env, config, proposalsDir, opsWorkspace, opsExports } = fixture({ workspace: true });
   const bundle = (id: string, record?: object) => {

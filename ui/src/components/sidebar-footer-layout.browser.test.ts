@@ -21,7 +21,7 @@ const describeBrowserLayout = chromiumAvailable ? describe : describe.skip;
 let browser: Browser;
 let page: Page;
 
-const uiCss = ["base.css", "components.css", "layout.css"]
+const uiCss = ["base.css", "components.css", "layout.css", "settings.css"]
   .map((file) => readStyleSheet(`ui/src/styles/${file}`))
   .join("\n");
 async function footerGeometry(includeIdentity = false) {

@@ -510,6 +510,7 @@ openclaw pairing list signal
 Common failures:
 
 - Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
+- Event stream repeatedly closes: inspect the daemon or proxy; a healthy idle stream stays open, and unexpected closure appears as a lost connection in logs and channel status.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.

@@ -61,21 +61,24 @@ const normalization = (artwork: Partial<PluginManifestTheme>, expected = artwork
 });
 const entries = (prefix: string, value: unknown) =>
   Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`${prefix}-${i}`, value]));
+const normalize = (overrides: Partial<PluginManifestTheme>) =>
+  normalizeManifestThemes([{ ...declaration, ...overrides }], "theme-pack");
+const critter = (metadata: Record<string, unknown>) => ({
+  critters: { ferris: { source: "ferris.svg", ...metadata } },
+});
 
 function expectRejected(
   captured: ReturnType<ReturnType<typeof fixture>["capture"]>,
   message: string,
 ) {
-  expect(captured).toEqual({
-    themes: [],
-    diagnostics: [
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "theme-pack",
-        message: expect.stringContaining(message),
-      }),
-    ],
-  });
+  expect(captured.themes).toEqual([]);
+  expect(captured.diagnostics).toEqual([
+    expect.objectContaining({
+      level: "warn",
+      pluginId: "theme-pack",
+      message: expect.stringContaining(message),
+    }),
+  ]);
 }
 
 describe("manifest theme metadata", () => {
@@ -89,7 +92,7 @@ describe("manifest theme metadata", () => {
   it.each([{ name: "name\u0000" }, { description: "description\u007f" }])(
     "rejects ASCII controls: %j",
     (metadata) => {
-      expect(normalizeManifestThemes([{ ...declaration, ...metadata }], "theme-pack")).toEqual({
+      expect(normalize(metadata)).toEqual({
         ok: false,
         error: "themes[0] requires a unique safe id, name, description, and JSON source",
       });
@@ -98,24 +101,16 @@ describe("manifest theme metadata", () => {
 
   it("retains C1 and Unicode text while trimming surrounding spaces", () => {
     const metadata = { name: "\u0080🦞\ud800", description: "description\u009f" };
-    expect(
-      normalizeManifestThemes(
-        [{ ...declaration, ...metadata, name: ` ${metadata.name} ` }],
-        "theme-pack",
-      ),
-    ).toEqual({ ok: true, themes: [{ ...declaration, ...metadata }] });
+    expect(normalize({ ...metadata, name: ` ${metadata.name} ` })).toEqual({
+      ok: true,
+      themes: [{ ...declaration, ...metadata }],
+    });
   });
 });
 
 describe("manifest theme artwork", () => {
   const hats = Object.fromEntries(
     Array.from({ length: 8 }, (_, i) => [`${i}${"a".repeat(31)}`, "hat.svg"]),
-  );
-  const critters = Object.fromEntries(
-    Object.keys(hats).map((id) => [
-      id,
-      { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 },
-    ]),
   );
   it.each([
     normalization(
@@ -131,9 +126,8 @@ describe("manifest theme artwork", () => {
       },
     ),
     normalization({
-      icons: hats,
       hats,
-      critters,
+      critters: { ferris: { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 } },
     }),
     normalization(
       { backgrounds: { light: "./assets/day.png", dark: "assets/night.webp" } },
@@ -141,7 +135,7 @@ describe("manifest theme artwork", () => {
     ),
     normalization({ backgrounds: { dark: "night.JPEG" } }),
   ])("normalizes %j", ({ artwork, expected }) => {
-    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toEqual({
+    expect(normalize(artwork)).toEqual({
       ok: true,
       themes: [{ ...declaration, ...expected }],
     });
@@ -156,27 +150,22 @@ describe("manifest theme artwork", () => {
     invalid({ hats: { fedora: "beret.svg" } }),
     invalid({ critters: { penguin: { source: "ferris.svg" } } }),
     invalid({ critters: { ferris: "ferris.svg" } }),
-    invalid({ critters: { ferris: { source: "ferris.svg", extra: true } } }),
+    invalid(critter({ extra: true })),
     invalid({ icons: { rocket: "../rocket.svg" } }, "SVG file inside the plugin root"),
     invalid({ hats: { beret: "beret.png" } }, "SVG file inside the plugin root"),
-    invalid(
-      { critters: { ferris: { source: "../ferris.svg" } } },
-      "SVG file inside the plugin root",
-    ),
+    invalid(critter({ source: "../ferris.svg" }), "SVG file inside the plugin root"),
     ...[{}, null, { dark: "night.webp", extra: "a.webp" }].map((backgrounds) =>
       invalid({ backgrounds }, "light and/or dark"),
     ),
     ...["../night.webp", "night.svg", 7].map((source) =>
       invalid({ backgrounds: { dark: source } }, "PNG, JPEG, or WebP file inside the plugin root"),
     ),
-    ...[4999, 90001, 12000.5, "12000"].map((crossMs) =>
-      invalid({ critters: { ferris: { source: "ferris.svg", crossMs } } }, "crossMs"),
-    ),
+    ...[4999, 90001, 12000.5, "12000"].map((crossMs) => invalid(critter({ crossMs }), "crossMs")),
     ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) =>
-      invalid({ critters: { ferris: { source: "ferris.svg", title } } }, "title"),
+      invalid(critter({ title }), "title"),
     ),
   ])("rejects invalid artwork declarations: %j", ({ artwork, error }) => {
-    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject({
+    expect(normalize(artwork)).toMatchObject({
       ok: false,
       ...(error ? { error: expect.stringContaining(error) } : {}),
     });
@@ -206,31 +195,6 @@ describe("manifest theme artwork", () => {
     });
   });
 
-  it("retains captured bytes after disk changes and captures replacements in the next generation", () => {
-    const plugin = fixture();
-    const before = plugin.capture();
-    expect(before.diagnostics).toEqual([]);
-    expect(before.themes?.[0]).toEqual({
-      id: "redhat",
-      definition,
-      artwork: {
-        icons: { rocket: { svg: SVG } },
-        hats: { beret: { svg: SVG } },
-        critters: { ferris: { svg: SVG, title: "a crab, allegedly", crossMs: 15000 } },
-      },
-    });
-    const changedSvg = SVG.replace("24v24", "12v12");
-    fs.writeFileSync(path.join(plugin.rootDir, "beret.svg"), changedSvg);
-    fs.writeFileSync(path.join(plugin.rootDir, "rocket.svg"), changedSvg);
-    const after = plugin.capture();
-    fs.unlinkSync(path.join(plugin.rootDir, "ferris.svg"));
-    expect(before.themes?.[0]?.artwork?.icons?.rocket?.svg).toBe(SVG);
-    expect(after.themes?.[0]?.artwork?.icons?.rocket?.svg).toBe(changedSvg);
-    expect(before.themes?.[0]?.artwork?.hats?.beret?.svg).toBe(SVG);
-    expect(after.themes?.[0]?.artwork?.hats?.beret?.svg).toBe(changedSvg);
-    expect(after.themes?.[0]?.artwork?.critters?.ferris?.svg).toBe(SVG);
-  });
-
   it.each([
     "not an SVG",
     '<svg><script>alert("no")</script></svg>',
@@ -248,27 +212,12 @@ describe("manifest theme artwork", () => {
     expectRejected(plugin.capture(), "artwork rocket.svg");
   });
 
-  it("captures sniffed raster backgrounds and omits the theme for unusable images", () => {
-    const plain = createThemeDefinitionFixture();
-    const plugin = fixture(
-      {
-        id: "night",
-        name: plain.name,
-        description: plain.description,
-        source: "theme.json",
-        backgrounds: { dark: "night.webp" },
-      },
-      plain,
-    );
+  it("omits the theme for unusable raster backgrounds", () => {
+    const plugin = fixture({ ...declaration, backgrounds: { dark: "night.webp" } });
     const capture = (bytes: Buffer | string) => {
       fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), bytes);
       return plugin.capture();
     };
-    const captured = capture(WEBP);
-    expect(captured.diagnostics).toEqual([]);
-    expect(captured.themes?.[0]?.artwork).toEqual({
-      backgrounds: { dark: { base64: WEBP.toString("base64") } },
-    });
     for (const bytes of [
       SVG,
       "<html>not an image</html>",

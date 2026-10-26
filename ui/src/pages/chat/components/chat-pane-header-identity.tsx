@@ -142,7 +142,6 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
             <button
               class="chat-pane__session-title chat-pane__session-title-button"
               type="button"
-              title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
               onClick={() => props.onBeginRename()}
             >
@@ -262,14 +261,6 @@ export function ProjectCrumb(props: ChatPaneHeaderProps) {
       placement="bottom-start"
       label={t("chat.sessionHeader.workspaceAria", { workspace: props.workspaceLabel ?? "" })}
       triggerClass={`chat-pane__workspace-chip${!copied() && !props.workspaceIcon ? " chat-pane__workspace-chip--fallback-icon" : ""}`}
-      triggerAttributes={{
-        title:
-          props.workspaceLabel === t("sessionHovercard.workspaceLabel")
-            ? props.workspaceLabel
-            : props.mergedChrome
-              ? undefined
-              : (props.workspaceRoot ?? props.workspaceLabel ?? undefined),
-      }}
       items={items()}
       onSelect={(item) => {
         if (item.id === "reveal" || item.id === "copy-path" || item.id === "copy-branch") {

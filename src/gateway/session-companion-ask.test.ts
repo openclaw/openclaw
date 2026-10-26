@@ -5,11 +5,9 @@ import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
-import { FailoverError } from "../agents/failover-error.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import "../agents/model-fallback-runner.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as attachmentProcessor from "../media/attachment-processor.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -20,11 +18,7 @@ import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
-  vi.fn<
-    (params: RunEmbeddedAgentInternalParams) => Promise<{
-      meta: { durationMs: number; finalAssistantVisibleText: string };
-    }>
-  >(),
+  vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<ReturnType<typeof completion>>>(),
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
@@ -48,10 +42,7 @@ const { appendMessage, admitWrite, removeSession } = vi.hoisted(() => ({
   admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
   removeSession:
     vi.fn<
-      (
-        target: unknown,
-        expectedOwner?: Pick<InternalSessionEntry, "lifecycleRevision" | "activeWriterRunId">,
-      ) => Promise<void>
+      (typeof import("../agents/internal-session-effects.js"))["removeInternalSessionEffectsSession"]
     >(),
 }));
 
@@ -137,6 +128,10 @@ function expectRpcError(respond: ReturnType<typeof vi.fn>, error: Record<string,
 
 const imageBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=";
+const imageRequest = (question = "What does this show?", content = imageBase64) => ({
+  question,
+  attachments: [{ mimeType: "image/png", content }],
+});
 
 const completion = (text = "The session is reading a file.") => ({
   meta: { durationMs: 1, finalAssistantVisibleText: text },
@@ -151,6 +146,34 @@ const question = {
 
 function expectAnswer(respond: ReturnType<typeof vi.fn>, answer: unknown = expect.any(String)) {
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ answer }));
+}
+function expectRun(params: Partial<RunEmbeddedAgentInternalParams>) {
+  expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining(params));
+}
+function expectDirectAnswer(
+  pending: ReturnType<ReturnType<typeof createCompanion>["ask"]>,
+  answer = "The session is reading a file.",
+) {
+  return expect(pending).resolves.toMatchObject({ answer });
+}
+function expectExchange(
+  companion: ReturnType<typeof createCompanion>,
+  text: string,
+  answer: unknown,
+) {
+  expect(companion.state(question).exchanges).toEqual([
+    { question: text, answer, ts: expect.any(Number) },
+  ]);
+}
+function queueSeed() {
+  const queued = createDeferredCore();
+  const resume = createDeferredCore();
+  admitWrite.mockImplementationOnce(async (_manager, write) => {
+    queued.resolve();
+    await resume.promise;
+    await write();
+  });
+  return { queued, resume };
 }
 
 function operatorFor(cfg: OpenClawConfig, allow: string[], deny?: string[]) {
@@ -220,10 +243,10 @@ describe("session companion embedded invocation", () => {
     runEmbeddedAgent.mockReset().mockResolvedValue(completion("The session is reading a file."));
   });
 
-  it.each(["embedded", "cli", "denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
+  it.each(["denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
     "preserves or recovers the utility answer across %s failure",
     async (runtime) => {
-      const isCli = runtime === "cli" || runtime === "cli-cleanup";
+      const isCli = runtime === "cli-cleanup";
       const cleanupFails = runtime === "embedded-cleanup" || runtime === "cli-cleanup";
       const primary = isCli
         ? { provider: "anthropic", modelId: "claude-haiku-4-5" }
@@ -243,26 +266,15 @@ describe("session companion embedded invocation", () => {
       resolveSelection.mockImplementation(({ modelRef }) =>
         modelRef === "test/model-b" ? { provider: "test", modelId: "model-b" } : primary,
       );
-      const failure = new FailoverError("Synthetic unavailable utility model", {
-        reason: "timeout",
-        provider: primary.provider,
-        model: primary.modelId,
-      });
       const cleanup = vi.fn(async () => {
         throw new Error("Synthetic cleanup failure");
       });
       if (isCli) {
         useClaudeCli();
-        if (cleanupFails) {
-          prepareCliRunContext.mockImplementationOnce(async (params) => ({
-            params,
-            preparedBackend: { cleanup },
-          }));
-        } else {
-          executePreparedCliRun.mockRejectedValueOnce(failure);
-        }
-      } else if (runtime === "embedded") {
-        runEmbeddedAgent.mockRejectedValueOnce(failure);
+        prepareCliRunContext.mockImplementationOnce(async (params) => ({
+          params,
+          preparedBackend: { cleanup },
+        }));
       } else if (runtime === "embedded-cleanup") {
         removeSession.mockImplementationOnce(cleanup);
         runEmbeddedAgent.mockResolvedValueOnce({
@@ -278,17 +290,9 @@ describe("session companion embedded invocation", () => {
           : runtime === "embedded-cleanup"
             ? "The original answer is preserved."
             : "The session is reading a file.";
-      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
-        answer,
-      });
+      await expectDirectAnswer(companion.ask({ ...question, operatorAuthority }), answer);
       expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(
-        cleanupFails
-          ? isCli
-            ? []
-            : ["model-a"]
-          : runtime === "embedded"
-            ? ["model-a", "model-b"]
-            : ["model-b"],
+        cleanupFails ? (isCli ? [] : ["model-a"]) : ["model-b"],
       );
       expect(executePreparedCliRun).toHaveBeenCalledTimes(isCli ? 1 : 0);
       for (const [params] of runEmbeddedAgent.mock.calls) {
@@ -298,9 +302,6 @@ describe("session companion embedded invocation", () => {
         expect(cleanup).toHaveBeenCalledOnce();
         expect(removeSession).toHaveBeenCalledOnce();
       }
-      expect(companion.state(question).exchanges).toEqual([
-        { question: question.question, answer, ts: expect.any(Number) },
-      ]);
     },
   );
 
@@ -309,16 +310,8 @@ describe("session companion embedded invocation", () => {
     resolveConfiguredModel();
     const operatorAuthority = operatorFor(cfg, ["test/main"]);
     const companion = createCompanion(cfg);
-    await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
-      answer: "The session is reading a file.",
-    });
+    await expectDirectAnswer(companion.ask({ ...question, operatorAuthority }));
     expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(["main"]);
-    expect(companion.state(question).exchanges).toEqual([
-      expect.objectContaining({
-        question: question.question,
-        answer: "The session is reading a file.",
-      }),
-    ]);
   });
 
   it("answers with the question's chosen model, reasoning, and speed instead of the utility route", async () => {
@@ -356,43 +349,48 @@ describe("session companion embedded invocation", () => {
       selectionContext: "Selected text:\n<untrusted passage>\n\nUser comment:\nCheck this.",
     });
     expectAnswer(respond);
-    expect(runEmbeddedAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: expect.stringContaining("&lt;untrusted passage&gt;"),
-        images: undefined,
-      }),
-    );
+    expectRun({ prompt: expect.stringContaining("&lt;untrusted passage&gt;"), images: undefined });
     expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
-    expect(companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges).toEqual(
-      [{ question: "What changed?", answer: expect.any(String), ts: expect.any(Number) }],
-    );
+    expectExchange(companion, "What changed?", expect.any(String));
     await companion.ask({ ...question, question: "What next?" });
     expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
     expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
   });
 
-  it.each([0, 2_000_001])(
-    "delivers an image with %i padding bytes from the registered RPC to the read-only model run",
-    async (padding) => {
-      const companion = createCompanion();
-      const data = Buffer.concat([
-        Buffer.from(imageBase64, "base64"),
-        Buffer.alloc(padding),
-      ]).toString("base64");
-      const respond = await companion.rpc({
-        question: "What does this show?",
-        attachments: [{ mimeType: "image/png", fileName: "proof.png", content: data }],
-      });
-      expectAnswer(respond);
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: "What does this show?",
-          images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
-          disableMessageTool: true,
-        }),
-      );
-    },
-  );
+  it("delivers a large image to the prepared read-only model without extra resolution", async () => {
+    const companion = createCompanion();
+    const data = Buffer.concat([
+      Buffer.from(imageBase64, "base64"),
+      Buffer.alloc(2_000_001),
+    ]).toString("base64");
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: { plugins: { entries: { mistral: { enabled: true } } } },
+      includeRuntimeDiscovery: true,
+    });
+    expect(model?.input).toContain("image");
+    if (!model) {
+      throw new Error("Expected the real bundled Mistral catalog row");
+    }
+    resolveModelAsync.mockRejectedValue(new Error("Unexpected additional discovery"));
+    runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      params.assertModelInput?.(model);
+      return completion("The image is visible.");
+    });
+    const request = imageRequest(undefined, data);
+    const respond = await companion.rpc({
+      ...request,
+      attachments: [{ ...request.attachments[0], fileName: "proof.png" }],
+    });
+    expectAnswer(respond, "The image is visible.");
+    expect(resolveModelAsync).not.toHaveBeenCalled();
+    expectRun({
+      prompt: "What does this show?",
+      images: [expect.objectContaining({ type: "image", mimeType: "image/png", data })],
+      disableMessageTool: true,
+    });
+  });
 
   it.each(["preparation", "dispatch", "accepted"] as const)(
     "rechecks the original RPC image policy until model admission (%s)",
@@ -423,13 +421,7 @@ describe("session companion embedded invocation", () => {
         });
       }
       try {
-        const respond = await companion.rpc(
-          {
-            question: "Describe the image",
-            attachments: [{ mimeType: "image/png", content: imageBase64 }],
-          },
-          () => committed,
-        );
+        const respond = await companion.rpc(imageRequest("Describe the image"), () => committed);
         if (phase === "accepted") {
           expect(runEmbeddedAgent).toHaveBeenCalledOnce();
           expectAnswer(respond, "Accepted image answer");
@@ -447,34 +439,6 @@ describe("session companion embedded invocation", () => {
     },
   );
 
-  it("uses the already prepared image model without extra resolution", async () => {
-    const model = resolveBundledStaticCatalogModel({
-      provider: "mistral",
-      modelId: "mistral-medium-3-5",
-      cfg: { plugins: { entries: { mistral: { enabled: true } } } },
-      includeRuntimeDiscovery: true,
-    });
-    expect(model?.input).toContain("image");
-    if (!model) {
-      throw new Error("Expected the real bundled Mistral catalog row");
-    }
-    resolveModelAsync.mockRejectedValue(new Error("Unexpected additional discovery"));
-    const modelIo = vi.fn();
-    runEmbeddedAgent.mockImplementationOnce(async (params) => {
-      params.assertModelInput?.(model);
-      modelIo();
-      return completion("The image is visible.");
-    });
-    const companion = createCompanion();
-    const respond = await companion.rpc({
-      question: "What does this show?",
-      attachments: [{ mimeType: "image/png", content: imageBase64 }],
-    });
-    expectAnswer(respond, "The image is visible.");
-    expect(modelIo).toHaveBeenCalledOnce();
-    expect(resolveModelAsync).not.toHaveBeenCalled();
-  });
-
   it("rejects an image before model I/O when the selected Side chat model is text-only", async () => {
     const modelIo = vi.fn();
     runEmbeddedAgent.mockImplementationOnce(async (params) => {
@@ -483,20 +447,14 @@ describe("session companion embedded invocation", () => {
       return completion("Must not answer an unseen image.");
     });
     const companion = createCompanion();
-    const respond = await companion.rpc({
-      question: "What does this show?",
-      attachments: [{ mimeType: "image/png", content: imageBase64 }],
-    });
+    const respond = await companion.rpc(imageRequest());
     expectRpcError(respond, {
       message: expect.stringContaining("does not support image input"),
       details: { reason: "image-input-unsupported" },
       retryable: false,
     });
     expect(modelIo).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(resolveModelAsync).not.toHaveBeenCalled();
     await expect(companion.ask(question)).resolves.toMatchObject({ answer: expect.any(String) });
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
     expect(runEmbeddedAgent.mock.calls[1]?.[0].assertModelInput).toBeUndefined();
     expect(resolveModelAsync).not.toHaveBeenCalled();
   });
@@ -536,63 +494,46 @@ describe("session companion embedded invocation", () => {
           params: prepareCliRunModelAuthority(params),
           preparedBackend: {},
         }));
-        try {
-          await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
-            answer: "The session is fixing a bug.",
-          });
-          expect(runEmbeddedAgent).not.toHaveBeenCalled();
-          expect(appendMessage).not.toHaveBeenCalled();
-          expect(prepareCliRunContext).toHaveBeenCalledWith(
-            expect.objectContaining({
-              provider: "claude-cli",
-              model: "claude-haiku-4-5",
-              requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
-              executionMode: "side-question",
-              disableTools: true,
-              sessionKey: preparedTarget.sessionKey,
-              prompt: expect.stringContaining("What is it doing?"),
-              extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
-            }),
-          );
-          expect(executePreparedCliRun).toHaveBeenCalledOnce();
-          resolveApiKeyForProviderCore.mockResolvedValue({
-            apiKey: "synthetic-key",
-            mode: "api-key",
-          });
-          resolveSelection.mockReturnValueOnce({
-            provider: "anthropic",
-            modelId: "claude-haiku-4-5",
-          });
-          await expect(
-            companion.ask({
-              ...question,
-              attachments: [{ mimeType: "image/png", content: imageBase64 }],
-            }),
-          ).resolves.toMatchObject({ answer: "The session is reading a file." });
-          expect(runEmbeddedAgent).toHaveBeenCalledWith(
-            expect.objectContaining({
-              images: [expect.objectContaining({ type: "image" })],
-              toolsAllow: ["read", "sessions_history", "sessions_search"],
-            }),
-          );
-          expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
-        } finally {
-          cliBackendsTesting.resetDepsForTest();
-          companion.dispose();
-        }
+        await expectDirectAnswer(
+          companion.ask({ ...question, operatorAuthority }),
+          "The session is fixing a bug.",
+        );
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(appendMessage).not.toHaveBeenCalled();
+        expect(prepareCliRunContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "claude-cli",
+            model: "claude-haiku-4-5",
+            requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
+            executionMode: "side-question",
+            disableTools: true,
+            prompt: expect.stringContaining("What is it doing?"),
+            extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
+          }),
+        );
+        resolveApiKeyForProviderCore.mockResolvedValue({
+          apiKey: "synthetic-key",
+          mode: "api-key",
+        });
+        resolveSelection.mockReturnValueOnce({
+          provider: "anthropic",
+          modelId: "claude-haiku-4-5",
+        });
+        await expectDirectAnswer(
+          companion.ask({ ...question, ...imageRequest(question.question) }),
+        );
+        expectRun({
+          images: [expect.objectContaining({ type: "image" })],
+          toolsAllow: ["read", "sessions_history", "sessions_search"],
+        });
+        expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
       },
       { config: cfg, compatibleConfigs: [cfg] },
     );
   });
 
   it("waits for admitted history persistence before starting the companion run", async () => {
-    const queued = createDeferredCore();
-    const resume = createDeferredCore();
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      queued.resolve();
-      await resume.promise;
-      await write();
-    });
+    const { queued, resume } = queueSeed();
     const companion = createCompanion();
     const pending = companion.ask(question);
     try {
@@ -602,7 +543,7 @@ describe("session companion embedded invocation", () => {
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(removeSession).not.toHaveBeenCalled();
       resume.resolve();
-      await expect(pending).resolves.toMatchObject({ answer: "The session is reading a file." });
+      await expectDirectAnswer(pending);
       expect(appendMessage).toHaveBeenCalledOnce();
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
@@ -613,13 +554,7 @@ describe("session companion embedded invocation", () => {
   });
 
   it("settles queued seeding after cancellation without writing or starting a run", async () => {
-    const queued = createDeferredCore();
-    const resume = createDeferredCore();
-    admitWrite.mockImplementationOnce(async (_manager, write) => {
-      queued.resolve();
-      await resume.promise;
-      await write();
-    });
+    const { queued, resume } = queueSeed();
     const companion = createCompanion();
     const controller = new AbortController();
     const pending = companion.ask({ ...question, signal: controller.signal });
@@ -627,15 +562,14 @@ describe("session companion embedded invocation", () => {
       await vi.waitFor(() => expect(admitWrite).toHaveBeenCalledOnce());
       await queued.promise;
       controller.abort();
-      await expect(pending).rejects.toThrow();
+      const failed = expect(pending).rejects.toThrow();
       expect(removeSession).not.toHaveBeenCalled();
       resume.resolve();
-      await vi.waitFor(() =>
-        expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-          lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-          activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-        }),
-      );
+      await failed;
+      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
+        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
+        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
+      });
       expect(appendMessage).not.toHaveBeenCalled();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     } finally {

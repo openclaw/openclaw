@@ -121,7 +121,7 @@ function groupHasFailedResult(group: MessageGroup): boolean {
   );
 }
 
-function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 
@@ -264,7 +264,26 @@ export function collapseCompletedTurnWork(
     }
     // Independent reply-less runs retain their own activity rollup, rather than
     // becoming work for an earlier answer merely because no user spoke between them.
-    const replyRunIds = runIdsWithVisibleReplies(turn);
+    // Completed work may include activity after an answer only when that activity
+    // belongs to a run with a visible reply, not an independent background wake.
+    const replyRunIds = new Set<string>();
+    for (const item of turn) {
+      if (item.kind === "stream-run") {
+        if (item.runId) {
+          replyRunIds.add(item.runId);
+        }
+        continue;
+      }
+      if (item.kind !== "group" || item.runId === undefined) {
+        continue;
+      }
+      // Tool-group text is the tool's own output shown inside the card, never a
+      // reply; assistant/user text is the run's visible response.
+      const includeText = item.role.toLowerCase() !== "tool";
+      if (item.isStreaming || groupHasVisibleReplyContent(item, includeText)) {
+        replyRunIds.add(item.runId);
+      }
+    }
     while (segmentEnd + 1 < turn.length) {
       const next = turn[segmentEnd + 1]!;
       if (!isTurnOutputGroup(next) || (next.runId && !replyRunIds.has(next.runId))) {
@@ -344,30 +363,6 @@ export function collapseCompletedTurnWork(
 }
 
 export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
-
-// Completed work may include activity after an answer only when that activity
-// belongs to a run with a visible reply, not an independent background wake.
-function runIdsWithVisibleReplies(items: CompletedTurnRenderItem[]): Set<string> {
-  const replyRunIds = new Set<string>();
-  for (const item of items) {
-    if (item.kind === "stream-run") {
-      if (item.runId) {
-        replyRunIds.add(item.runId);
-      }
-      continue;
-    }
-    if (item.kind !== "group" || item.runId === undefined) {
-      continue;
-    }
-    // Tool-group text is the tool's own output shown inside the card, never a
-    // reply; assistant/user text is the run's visible response.
-    const includeText = item.role.toLowerCase() !== "tool";
-    if (item.isStreaming || groupHasVisibleReplyContent(item, includeText)) {
-      replyRunIds.add(item.runId);
-    }
-  }
-  return replyRunIds;
-}
 
 // Adjacent activity is one disclosure even when automatic continuations use
 // new run IDs. Visible content, not other output elsewhere in those runs,

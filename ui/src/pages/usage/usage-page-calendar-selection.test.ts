@@ -45,19 +45,13 @@ async function loadCalendar(
     totals: {
       ...base.totals,
       totalTokens,
-      ...(!pending ? { input: totalTokens } : {}),
-      ...(daily.some((day) => day.usageReport?.state === "unavailable")
-        ? { usageReport: { state: "unavailable" as const } }
-        : {}),
+      input: pending ? base.totals.input : totalTokens,
+      usageReport: daily.find((day) => day.usageReport?.state === "unavailable")?.usageReport,
     },
     sessions: daily.map((day, index) => ({
       key: `agent:main:${day.date}`,
-      label: pending
-        ? undefined
-        : day.date === "2026-05-03"
-          ? "Excluded session"
-          : `Usage on ${day.date}`,
-      agentId: pending ? undefined : "main",
+      label: day.date === "2026-05-03" ? "Excluded session" : `Usage on ${day.date}`,
+      agentId: "main",
       usage: {
         ...day,
         activityDates: [day.date],

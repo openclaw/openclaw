@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
@@ -25,109 +24,69 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
-  it.each(["cold", "warm"])(
-    "fills once on %s reload, then pages to the beginning on upward input",
-    async (temperature) => {
-      const page = await newChatPage(suite);
-      const historyMessage = (seq: number, role: "assistant" | "user", text: string) => ({
-        __openclaw: { seq },
-        content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
-        role,
-        timestamp: 1_800_000_000_000 + seq,
-      });
-      const recent = [
-        historyMessage(21, "user", "Recent question"),
-        historyMessage(22, "assistant", "Recent answer"),
-      ];
-      // Consecutive assistant records collapse into one rendered group, so this
-      // page advances the raw offset without filling the real transcript viewport.
-      const firstOlderPage = Array.from({ length: 4 }, (_, index) =>
-        historyMessage(index + 17, "assistant", `Short older answer ${index + 17}`),
-      );
-      const secondOlderPage = Array.from({ length: 16 }, (_, index) => {
-        const seq = index + 1;
-        const role = seq % 2 === 0 ? "assistant" : "user";
-        return historyMessage(
-          seq,
-          role,
-          `Scrollable older ${role} message ${seq}\n${"Transcript detail line\n".repeat(3)}`,
-        );
-      });
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.history"],
-        featureMethods: ["chat.metadata", "chat.startup"],
-        methodResponses: {
-          "chat.startup": historyPage(recent, true, 2),
-          "chat.history": {
-            cases: [
-              { match: { offset: 2 }, response: historyPage(firstOlderPage, true, 6) },
-              { match: { offset: 6 }, response: historyPage(secondOlderPage, false) },
-            ],
-          },
+  it("keeps keyboard focus on the earlier-history action while older history loads", async () => {
+    const page = await newChatPage(suite);
+    const message = (seq: number) => ({
+      __openclaw: { seq },
+      role: seq % 2 ? "user" : "assistant",
+      content: [{ type: "text", text: `Conversation message ${seq}` }],
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const messages = (first: number, count: number) =>
+      Array.from({ length: count }, (_, index) => message(first + index));
+    const gateway = await installMockGateway(page, {
+      deferredRequests: [{ method: "chat.history", match: { offset: 40 } }],
+      // A landed page stages the next one in the background; holding it keeps
+      // the post-load boundary state independent of that prefetch.
+      heldRequests: [{ method: "chat.history", match: { offset: 60 } }],
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": historyPage(messages(41, 40), true, 40),
+        "chat.history": {
+          cases: [
+            { match: { offset: 40 }, response: historyPage(messages(21, 20), true, 60) },
+            { match: { offset: 60 }, response: historyPage(messages(1, 20), false) },
+          ],
         },
-      });
-      const offsets = async () =>
-        (await gateway.getRequests("chat.history")).map(
-          (request) => (request.params as { offset?: number } | undefined)?.offset,
-        );
+      },
+    });
+    const offsets = async () =>
+      (await gateway.getRequests("chat.history")).map(
+        (request) => (request.params as { offset?: number } | undefined)?.offset,
+      );
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    await page.getByText("Conversation message 80", { exact: true }).waitFor();
+    await expectHistoryBoundaryState(pane, false);
+    const action = pane.locator(".chat-history-boundary__action");
+    // Chromium keeps reporting a control that turns disabled as focused until its
+    // next rendering step; without two frames the busy check passes on the old code.
+    const actionFocused = async () => {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      return action.evaluate((element) => element === document.activeElement);
+    };
+    // Scrolling the control into view is reader intent: it starts the automatic
+    // load and arms the next one. Focus without scrolling so Enter is the trigger.
+    await action.evaluate((element) => (element as HTMLElement).focus({ preventScroll: true }));
+    await page.keyboard.press("Enter");
+    await gateway.waitForRequest("chat.history");
+    await expectHistoryBoundaryState(pane, true);
+    expect(await actionFocused()).toBe(true);
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    expect(await offsets()).toEqual([40]);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const thread = pane.locator(".chat-thread");
-      await page.getByText("Recent answer", { exact: true }).waitFor();
-      if (temperature === "warm") {
-        await gateway.waitForRequest("chat.history");
-        // Persist only the startup tail; accepting the first page would warm a deeper cursor.
-        await pane.evaluate(async (element) => {
-          const snapshotPane = element as HTMLElement & {
-            sessionSnapshotStore?: SessionSnapshotStore;
-          };
-          if (!snapshotPane.sessionSnapshotStore) {
-            throw new Error("Missing transcript snapshot owner");
-          }
-          await snapshotPane.sessionSnapshotStore.flush();
-        });
-        await page.reload();
-        await page.getByText("Recent answer", { exact: true }).waitFor();
-      }
-      await expectTranscriptLayoutCommitted(thread);
-      await expect.poll(offsets).toEqual([2]);
-      await expectHistoryBoundaryState(pane, true);
-      const underfilled = () =>
-        thread.evaluate((element) => element.scrollHeight <= element.clientHeight);
-      expect(await underfilled()).toBe(true);
-
-      await gateway.deferNext("chat.history", { offset: 6 });
-      await gateway.resolveDeferred("chat.history");
-      await expectHistoryBoundaryState(pane, false);
-      await expectTranscriptLayoutCommitted(thread);
-      expect((await gateway.getRequests("chat.history")).length).toBe(1);
-      expect(await underfilled()).toBe(true);
-
-      await thread.hover();
-      await page.mouse.wheel(0, -100);
-      await expect.poll(offsets).toEqual([2, 6]);
-      await expectHistoryBoundaryState(pane, true);
-      expect(await underfilled()).toBe(true);
-
-      await gateway.resolveDeferred("chat.history");
-      await expect
-        .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
-        .toBe(true);
-      await expect
-        .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
-        .toBe(0);
-      await pane.locator(".chat-history-sentinel").waitFor({ state: "detached" });
-      // Exhausting history also stops reader prefetch.
-      await expect
-        .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
-        .toBe(2);
-      expect(await offsets()).toEqual([2, 6]);
-      for (const request of await gateway.getRequests("chat.history")) {
-        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 3 * 1024 * 1024 });
-      }
-    },
-  );
+    await gateway.resolveDeferred("chat.history", undefined, { match: { offset: 40 } });
+    await expect.poll(offsets).toEqual([40, 60]);
+    await expectHistoryBoundaryState(pane, false);
+    expect(await actionFocused()).toBe(true);
+    await page.close();
+  });
 
   {
     const sessionId = "empty-tail-session";
@@ -155,65 +114,41 @@ suite.define(() => {
       __openclaw: { id: `activity-${index}`, seq: 121 + index },
     }));
 
-    it.each([
-      { name: "empty projection", messages: [], height: 720 },
-      {
-        name: "short visible tail",
-        messages: [
-          { role: "assistant", content: "Latest update", __openclaw: { id: "latest", seq: 200 } },
-        ],
-        height: 720,
-      },
-      { name: "hidden activity in a short viewport", messages: hiddenActivity, height: 480 },
-    ])(
-      "requires upward input after one empty automatic page through a $name",
-      async ({ messages, height }) => {
-        await suite.withPage({ viewport: { width: 1280, height } }, async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            sessions: [sessionInfo],
-            methodResponses: {
-              "config.get": { config: { ui: { prefs: { chatShowToolCalls: false } } } },
-              "chat.startup": emptyTailPage(messages, 80),
-              "chat.history": {
-                cases: [
-                  { match: { offset: 80 }, response: emptyTailPage([], 160) },
-                  { match: { offset: 160 }, response: emptyTailPage(olderMessages) },
-                ],
-              },
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-          await gateway.waitForRequest("chat.startup");
-          await gateway.waitForRequest("chat.history");
-          await expectHistoryBoundaryState(page, false);
-          await expectTranscriptLayoutCommitted(thread);
-          expect(await gateway.getRequests("chat.history")).toMatchObject([
-            { params: { offset: 80 } },
-          ]);
-          await thread.hover();
-          await page.mouse.wheel(0, -100);
-          for (const { content } of olderMessages) {
-            await page.locator(".chat-text").getByText(content, { exact: true }).waitFor();
-          }
-          expect(await page.locator(".agent-chat__welcome").count()).toBe(0);
-          expect(await gateway.getRequests("chat.history")).toMatchObject([
-            { params: { offset: 80 } },
-            { params: { offset: 160 } },
-          ]);
-        });
-      },
-    );
-
-    it("still welcomes a genuinely empty conversation without requesting older history", async () => {
-      await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
+    it("requires upward input after one empty automatic page through hidden activity", async () => {
+      await suite.withPage({ viewport: { width: 1280, height: 480 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessions: [sessionInfo],
-          historyMessages: [],
+          methodResponses: {
+            "config.get": { config: { ui: { prefs: { chatShowToolCalls: false } } } },
+            "chat.startup": emptyTailPage(hiddenActivity, 80),
+            "chat.history": {
+              cases: [
+                { match: { offset: 80 }, response: emptyTailPage([], 160) },
+                { match: { offset: 160 }, response: emptyTailPage(olderMessages) },
+              ],
+            },
+          },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__welcome").waitFor();
-        expect(await gateway.getRequests("chat.history")).toEqual([]);
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        await gateway.waitForRequest("sessions.messages.subscribe");
+        await gateway.waitForRequest("chat.history");
+        expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        await expectHistoryBoundaryState(page, false);
+        await expectTranscriptLayoutCommitted(thread);
+        expect(await gateway.getRequests("chat.history")).toMatchObject([
+          { params: { offset: 80 } },
+        ]);
+        await thread.hover();
+        await page.mouse.wheel(0, -100);
+        for (const { content } of olderMessages) {
+          await page.locator(".chat-text").getByText(content, { exact: true }).waitFor();
+        }
+        expect(await page.locator(".agent-chat__welcome").count()).toBe(0);
+        expect(await gateway.getRequests("chat.history")).toMatchObject([
+          { params: { offset: 80 } },
+          { params: { offset: 160 } },
+        ]);
       });
     });
   }

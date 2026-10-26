@@ -34,6 +34,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 let instance: OpenClawTestInstance;
 let provider: Awaited<ReturnType<typeof startBackgroundWorkProvider>>;
 let artifactDir: string;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const screenshots: string[] = [];
 const proof: Record<string, unknown> = {
   provider: "loopback OpenAI Responses fixture; no external live API",
@@ -128,8 +129,10 @@ async function capture(page: Page, name: string, focus: Locator) {
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  await page.screenshot({ path: path.join(artifactDir, name + ".png") });
-  screenshots.push(name + ".png");
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(artifactDir, name + ".png") });
+    screenshots.push(name + ".png");
+  }
   await saveProof();
 }
 

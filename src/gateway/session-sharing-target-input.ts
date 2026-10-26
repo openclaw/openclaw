@@ -236,7 +236,8 @@ export function resolveTalkSessionTargetInput(
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&
-    method !== "talk.client.steer"
+    method !== "talk.client.steer" &&
+    method !== "talk.client.say"
   ) {
     return undefined;
   }

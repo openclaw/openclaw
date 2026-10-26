@@ -14,33 +14,10 @@ const WINDOWS_DEFAULT_ROUTE_COMMAND =
   "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
   "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
-type AdvertisedLanHostCommandResult = {
-  code: number | null;
-  stdout: string;
-};
-
-type AdvertisedLanHostCommandRunner = (
-  argv: string[],
-  opts: { timeoutMs: number; maxOutputBytes?: number },
-) => Promise<AdvertisedLanHostCommandResult>;
-
-type ResolveAdvertisedLanHostOptions = {
-  networkInterfaces?: () => NetworkInterfacesSnapshot;
-  runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
-};
-
 type WindowsRouteRow = {
   InterfaceAlias?: unknown;
   InterfaceMetric?: unknown;
   RouteMetric?: unknown;
-};
-
-type RankedWindowsRouteRow = {
-  interfaceName: string;
-  effectiveMetric: number;
-  routeMetric: number;
-  interfaceMetric: number;
-  order: number;
 };
 
 function normalizeMetric(value: unknown): number {
@@ -61,7 +38,13 @@ function parseWindowsDefaultRouteHints(stdout: string): string[] {
   }
 
   const parsed = safeParseJson(trimmed);
-  const rankedRows: RankedWindowsRouteRow[] = [];
+  const rankedRows: {
+    interfaceName: string;
+    effectiveMetric: number;
+    routeMetric: number;
+    interfaceMetric: number;
+    order: number;
+  }[] = [];
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   for (const [order, row] of rows.entries()) {
     if (!row || typeof row !== "object") {
@@ -111,7 +94,13 @@ function parseLinuxDefaultRouteHints(stdout: string): string[] {
 }
 
 export async function resolveAdvertisedLanHostCore(
-  options: ResolveAdvertisedLanHostOptions = {},
+  options: {
+    networkInterfaces?: () => NetworkInterfacesSnapshot;
+    runCommandWithTimeout?: (
+      argv: string[],
+      opts: { timeoutMs: number; maxOutputBytes?: number },
+    ) => Promise<{ code: number | null; stdout: string }>;
+  } = {},
 ): Promise<string | null> {
   const candidates = listExternalInterfaceAddresses(
     safeNetworkInterfaces(options.networkInterfaces),

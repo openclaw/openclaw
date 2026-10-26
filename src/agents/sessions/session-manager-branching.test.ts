@@ -20,17 +20,14 @@ import {
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 afterEach(() => vi.restoreAllMocks());

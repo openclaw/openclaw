@@ -41,12 +41,93 @@ export function localWorkspaceManifestRootReference(
 export function createLocalWorkspaceManifestTree(
   nodes: readonly LocalWorkspaceManifestNode[],
 ): Map<string, LocalWorkspaceManifestRecord> {
+  type Pending = {
+    node: LocalWorkspaceManifestNode;
+    priority: string;
+    left?: Pending;
+    right?: Pending;
+    children?: Pending;
+  };
+  const root: Pending = { node: { path: "", type: "directory" }, priority: "" };
+  const pending = new Map<string, Pending>([["", root]]);
+  const rightSpines = new Map<string, Pending[]>();
+  // Sorted siblings form the same deterministic treap as incremental insertion.
+  // Link it first so each node and ancestor is hashed only once during a full build.
+  for (const node of nodes.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
+    if (node.path === "") {
+      throw new Error("The workspace manifest root cannot be changed");
+    }
+    const directoryPath = parentPath(node.path);
+    const directory = pending.get(directoryPath);
+    if (directory?.node.type !== "directory") {
+      throw new Error(`Missing workspace manifest directory: ${directoryPath}`);
+    }
+    const next: Pending = { node, priority: digest("priority", node.path) };
+    const spine = rightSpines.get(directoryPath) ?? [];
+    while (spine.length && spine.at(-1)!.priority > next.priority) {
+      next.left = spine.pop();
+    }
+    const previous = spine.at(-1);
+    if (previous) {
+      previous.right = next;
+    } else {
+      directory.children = next;
+    }
+    spine.push(next);
+    rightSpines.set(directoryPath, spine);
+    pending.set(node.path, next);
+  }
   const records = new Map<string, LocalWorkspaceManifestRecord>();
-  updateLocalWorkspaceManifestTree(
-    records,
-    nodes.map((node) => ({ path: node.path, node })),
-  );
+  const finish = (entry: Pending | undefined): LocalWorkspaceManifestRecord | undefined => {
+    if (!entry) {
+      return undefined;
+    }
+    const record = manifestRecord(
+      entry.node,
+      finish(entry.left),
+      finish(entry.right),
+      finish(entry.children),
+    );
+    records.set(entry.node.path, record);
+    return record;
+  };
+  finish(root);
   return records;
+}
+
+function manifestRecord(
+  node: LocalWorkspaceManifestNode,
+  left: LocalWorkspaceManifestRecord | undefined,
+  right: LocalWorkspaceManifestRecord | undefined,
+  children: LocalWorkspaceManifestRecord | undefined,
+  previous?: LocalWorkspaceManifestRecord,
+): LocalWorkspaceManifestRecord {
+  const contentRef =
+    node.type === "directory"
+      ? digest("directory", node.path, children?.treeRef ?? EMPTY_REF)
+      : previous?.node === node
+        ? previous.contentRef
+        : node.type === "file"
+          ? digest("file", node.path, node.mode, node.size, node.sha256)
+          : digest("symlink", node.path, node.mode, node.target);
+  const record: LocalWorkspaceManifestRecord = {
+    node,
+    left: left?.node.path ?? null,
+    right: right?.node.path ?? null,
+    children: children?.node.path ?? null,
+    contentRef,
+    treeRef: digest(
+      "siblings",
+      left?.treeRef ?? EMPTY_REF,
+      contentRef,
+      right?.treeRef ?? EMPTY_REF,
+    ),
+  };
+  if (previous?.contentRef === contentRef) {
+    record.canonicalIdentity = previous.canonicalIdentity;
+    record.projectionIdentity = previous.projectionIdentity;
+  }
+  return record;
 }
 
 /** Each directory owns a deterministic sibling treap, so a flat directory is incremental too. */
@@ -66,35 +147,13 @@ export function updateLocalWorkspaceManifestTree(
     right: string | null,
     children: string | null,
   ): void {
-    const previous = records.get(node.path);
-    const leftRecord = recordAt(left);
-    const rightRecord = recordAt(right);
-    const childRecord = recordAt(children);
-    const contentRef =
-      node.type === "directory"
-        ? digest("directory", node.path, childRecord?.treeRef ?? EMPTY_REF)
-        : previous?.node === node
-          ? previous.contentRef
-          : node.type === "file"
-            ? digest("file", node.path, node.mode, node.size, node.sha256)
-            : digest("symlink", node.path, node.mode, node.target);
-    const row: LocalWorkspaceManifestRecord = {
+    const row = manifestRecord(
       node,
-      left,
-      right,
-      children,
-      contentRef,
-      treeRef: digest(
-        "siblings",
-        leftRecord?.treeRef ?? EMPTY_REF,
-        contentRef,
-        rightRecord?.treeRef ?? EMPTY_REF,
-      ),
-    };
-    if (previous?.contentRef === contentRef) {
-      row.canonicalIdentity = previous.canonicalIdentity;
-      row.projectionIdentity = previous.projectionIdentity;
-    }
+      recordAt(left),
+      recordAt(right),
+      recordAt(children),
+      records.get(node.path),
+    );
     records.set(node.path, row);
     touched.set(node.path, row);
     removed.delete(node.path);

@@ -255,7 +255,9 @@ Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
 The paired-node file-transfer adapter also connects Skill discovery, resource reads,
 watching and dependency installation through `workspace.skills`. Its native worker
 launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
-`agent-workspace-runtime`, then appends the operation arguments. Use the same
+`agent-workspace-runtime`, then appends the operation arguments. Worker-thread
+callers use `resolveWorkspaceWorkerUrl` and `resolveWorkspaceWorkerExecArgv` from
+the same owner to keep the declared target separate from loader flags. Use the same
 OpenClaw version on Gateway and node.
 
 This adapter does not implement remote Skill source install/update/remove or
@@ -405,3 +407,11 @@ The lightweight `decisions` subpath exports
 `ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
+
+## Runtime request headers
+
+`openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`
+type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
+markers; preserve them through header merges and OpenAI SDK calls. Use the helper
+after the final merge when a direct HTTP client needs a string-only header map.
+This entrypoint loads no provider policy, transport host, or credential runtime.

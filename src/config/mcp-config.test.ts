@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { listConfiguredMcpServers, mcpConfigInternal } from "./mcp-config.js";
+import {
+  listConfiguredMcpServers,
+  mcpConfigInternal,
+  redactMcpServersForDisplay,
+} from "./mcp-config.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
@@ -102,6 +106,43 @@ async function withMcpServers(servers: Record<string, unknown>, fn: () => Promis
 }
 
 describe("config mcp config", () => {
+  it("mutates one detached config while preserving the source and commit-hook history", async () => {
+    const config = {
+      mcp: { servers: { docs: { command: "node", env: { MODE: "original" } } } },
+      agents: { entries: { main: { name: "Original" } } },
+    };
+    await withMcpConfigHome(config, async () => {
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const committed = vi.fn();
+      try {
+        const result = await mcpConfigInternal.update(
+          {
+            name: "docs",
+            update: (server) => {
+              (server.env as Record<string, string>).MODE = "updated";
+              return server;
+            },
+          },
+          committed,
+        );
+        expect(result.ok).toBe(true);
+        expect(clone).toHaveBeenCalledOnce();
+        expect(clone.mock.calls[0]?.[0]).toEqual(config);
+        expect(committed).toHaveBeenCalledWith({
+          name: "docs",
+          previous: { command: "node", env: { MODE: "original" } },
+          next: { command: "node", env: { MODE: "updated" } },
+        });
+        if (result.ok) {
+          result.config.agents!.entries!.main!.name = "Changed after commit";
+          expect(clone.mock.calls[0]?.[0]).toEqual(config);
+        }
+      } finally {
+        clone.mockRestore();
+      }
+    });
+  });
+
   it("writes and removes top-level mcp servers", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
@@ -169,7 +210,7 @@ describe("config mcp config", () => {
     });
   });
 
-  it("restores redacted MCP secrets on set instead of writing the sentinel", async () => {
+  it("redacts MCP secrets for display and restores them on set", async () => {
     const billing = {
       command: "uvx",
       args: [
@@ -185,20 +226,25 @@ describe("config mcp config", () => {
       env: { BILLING_TOKEN: "real-env-secret" },
     };
     await withMcpServers({ billing }, async () => {
+      const redacted = redactMcpServersForDisplay({ billing }).billing;
+      expect(redacted).toEqual({
+        command: "uvx",
+        args: [
+          "billing-mcp",
+          "--api-key",
+          REDACTED_SENTINEL,
+          `--token=${REDACTED_SENTINEL}`,
+          REDACTED_SENTINEL,
+          "--region",
+          "us-east-1",
+        ],
+        headers: { Authorization: REDACTED_SENTINEL },
+        env: { BILLING_TOKEN: REDACTED_SENTINEL },
+      });
+      expect(billing.headers.Authorization).toBe("Bearer real-token");
       const setResult = await setConfiguredMcpServer({
         name: "billing",
-        server: {
-          ...billing,
-          args: billing.args.map((arg, index) =>
-            index === 2 || index === 4
-              ? REDACTED_SENTINEL
-              : index === 3
-                ? `--token=${REDACTED_SENTINEL}`
-                : arg,
-          ),
-          headers: { Authorization: REDACTED_SENTINEL },
-          env: { BILLING_TOKEN: REDACTED_SENTINEL },
-        },
+        server: redacted,
       });
 
       expect(setResult.ok).toBe(true);

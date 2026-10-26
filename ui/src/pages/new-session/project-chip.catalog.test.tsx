@@ -1,13 +1,9 @@
-import { createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
 
 it("keeps project search live through catalog reads and retires invalidated rows", async () => {
   const fixture = createRepositoryFixture();
@@ -25,7 +21,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
     connectionEpoch: 1,
   });
   Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
-  vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  const popoverOpen = vi.spyOn(browser, "popoverOpen").mockReturnValue(false);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
   vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
   vi.spyOn(place, "browseAvailable").mockReturnValue(true);
@@ -34,42 +30,28 @@ it("keeps project search live through catalog reads and retires invalidated rows
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   onTestFinished(() => browser.disconnect());
   browser.synchronize();
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
   let nativeTerminal = false;
   const mountPicker = () =>
-    mountSolid(() => {
-      const [revision, setRevision] = createSignal(0);
-      changed.mockImplementation(() => setRevision((value) => value + 1));
-      const props = createMemo(() => {
-        revision();
-        return {
-          params: { ...options },
-          state: resolveProjectChip({
-            folder: "",
-            workspace: "/home/openclaw/.openclaw/workspace",
-            projectId: browser.projectId,
-            selectedRemoteProject: browser.remoteProject,
-            projects: browser.projects,
-            recents: [],
-            projectQuery: browser.projectQuery,
-          }),
-          nativeTerminal,
-        };
-      });
-      return <ProjectChip {...props()} />;
-    });
+    mountProjectChip(
+      fixture,
+      () => ({
+        folder: "",
+        workspace: "/home/openclaw/.openclaw/workspace",
+        projectId: browser.projectId,
+        selectedRemoteProject: browser.remoteProject,
+        projects: browser.projects,
+        recents: [],
+        projectQuery: browser.projectQuery,
+      }),
+      () => nativeTerminal,
+    );
   let view = mountPicker();
+  expect(view.container.querySelector('input[type="search"]')).toBeNull();
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   let input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const rows = () => Array.from(view.container.querySelectorAll('[data-value^="project:"]'));
   const type = (value: string) => {
@@ -79,6 +61,27 @@ it("keeps project search live through catalog reads and retires invalidated rows
   };
   input.focus();
   type("alpha");
+  popoverOpen.mockReturnValue(false);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("hidden"),
+  );
+  expect(view.container.querySelector('input[type="search"]')).toBe(input);
+  popoverOpen.mockReturnValue(true);
+  changed();
+  await waitForSolid(() =>
+    expect(
+      view.container
+        .querySelector(".new-session-page__project-popover")
+        ?.getAttribute("data-phase"),
+    ).toBe("open"),
+  );
+  expect(input.value).toBe("alpha");
+  input.focus();
   expect(rows()).toHaveLength(0);
   expect(request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
   const alpha = {
@@ -128,6 +131,9 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   view.unmount();
   view = mountPicker();
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   input.focus();
   await waitForSolid(() => expect(rows()[0]?.textContent).toContain("Alpha project"));

@@ -504,12 +504,18 @@ describe("memory embedding policy", () => {
       "input array max 64",
       // Zhipu embedding-3 rejects batches over 64 items with a Chinese message (#136261).
       'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
+      // Mistral rejects the aggregate token count of a batch and asks for more batches (#183556).
+      'openai-compatible embeddings failed: HTTP 400: {"object":"error","message":"Too many tokens overall, split into more batches.","type":"invalid_request_prompt","code":"3210"}',
+      "Too many tokens overall, split into more batches.",
     ]) {
       expect(await probeBatchSplits(message)).toBe(true);
     }
 
     for (const message of [
       "embedding input exceeds maximum token length 4096",
+      // A single input over the per-input token limit cannot be helped by splitting.
+      "Too many tokens in input, max 8192 per input",
+      "Too many tokens per day",
       "embeddings max input length is unknown",
       "Embeddings API input limit exceeded",
       'HTTP 400: {"code":"InvalidParameter","param":"input","message":"input must be a string"}',

@@ -5,10 +5,10 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];

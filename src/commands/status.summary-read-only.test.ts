@@ -39,6 +39,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { formatStatusSummary } from "../tui/tui-status-summary.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
@@ -343,16 +344,13 @@ describe("getStatusSummary read-only session access", () => {
             anthropic: {
               baseUrl: "https://api.anthropic.com",
               models: [
-                {
-                  id: "claude-opus-5",
+                createTestModelDefinition("claude-opus-5", {
                   name: "Claude Opus 5",
                   reasoning: true,
-                  input: ["text" as const],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 1_000_000,
                   contextTokens: 272_000,
                   maxTokens: 8_192,
-                },
+                }),
               ],
             },
           },

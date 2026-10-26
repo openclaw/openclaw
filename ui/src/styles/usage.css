@@ -99,8 +99,6 @@
 }
 
 .provider-usage-card__id,
-.provider-usage-reset,
-.provider-usage-summary,
 .usage-creators-table thead {
   color: var(--muted);
   font-size: 11px;
@@ -129,7 +127,14 @@
   background: var(--bg);
 }
 
-.usage-toolbar {
+.usage-toolbar,
+.daily-chart-header,
+.sessions-card-header,
+.sessions-card-meta,
+.timeseries-header-row,
+.context-breakdown-header,
+.session-detail-header,
+.session-logs-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -168,20 +173,12 @@
   height: 26px;
 }
 
-.usage-view-options {
+.usage-view-options,
+.usage-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-
-.usage-loading-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentcolor;
-  border-right-color: transparent;
-  border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.8s linear infinite;
 }
 
 .usage-loading-card {
@@ -207,13 +204,6 @@
 
 .usage-skeleton-block--tall {
   min-height: 128px;
-}
-
-.usage-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
 
 .usage-date-range,
@@ -272,14 +262,11 @@
 .usage-query-hint,
 .sessions-card-count,
 .session-bar-meta,
-.usage-mosaic-sub,
 .context-weight-desc,
 .timeseries-summary,
 .session-log-meta,
 .session-logs-header-count,
-.usage-daypart-label,
 .usage-hour-labels,
-.usage-hour-legend,
 .context-breakdown-more,
 .usage-lineage-note,
 .session-detail-indicator,
@@ -478,13 +465,6 @@
 }
 
 /* Active day, hour and session filters read as removable chips above the totals. */
-.active-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -626,7 +606,6 @@
 .usage-summary-grid,
 .session-summary-grid,
 .usage-insights-grid,
-.usage-mosaic-grid,
 .context-breakdown-grid,
 .session-logs-list {
   display: grid;
@@ -702,8 +681,7 @@
 .usage-summary-sub,
 .session-summary-meta,
 .usage-list-sub,
-.usage-error-sub,
-.cost-window-range-label {
+.usage-section-meta {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -968,13 +946,6 @@
   font-size: 13px;
 }
 
-.usage-list-label {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .usage-list-bar {
   grid-column: 1 / -1;
   height: 4px;
@@ -1050,20 +1021,6 @@
 .usage-mosaic > * {
   padding: 16px;
   background: var(--card);
-}
-
-.daily-chart-header,
-.sessions-card-header,
-.sessions-card-meta,
-.timeseries-header-row,
-.context-breakdown-header,
-.session-detail-header,
-.session-logs-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 .usage-mosaic-total,
@@ -1220,12 +1177,6 @@
 .usage-trend-section .cost-breakdown {
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.usage-section-meta {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .usage-summary-strip--windows {
@@ -1473,13 +1424,15 @@
   color: var(--muted);
 }
 
-.daily-chart-tip i {
+.daily-chart-tip i,
+.daily-chart-legend__key {
   width: 8px;
   height: 8px;
   border-radius: 2px;
 }
 
-.daily-chart-tip b {
+.daily-chart-tip b,
+.daily-chart-legend b {
   color: var(--text);
   font-family: var(--mono);
   font-weight: 500;
@@ -2037,16 +1990,4 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.daily-chart-legend b {
-  color: var(--text);
-  font-family: var(--mono);
-  font-weight: 500;
-}
-
-.daily-chart-legend__key {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
 }

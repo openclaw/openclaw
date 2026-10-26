@@ -48,7 +48,6 @@ const codexAppServerServiceTierSchema = z
   .optional();
 const codexAppServerCyberFailoverSchema = z.strictObject({
   mode: z.enum(["auto", "off"]).optional(),
-  model: z.string().trim().min(1).optional(),
   cooloffMs: z.number().positive().optional(),
 });
 const codexAppServerExperimentalSchema = z.strictObject({

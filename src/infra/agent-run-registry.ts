@@ -105,6 +105,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.localModelWait = undefined;
   context.eventState = { seq: 0 };
   context.modelCallSequence = { value: 0 };
+  context.acceptedUserReply = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -381,6 +382,7 @@ export function claimAgentRunDelegatedAuthority(
     releaseAgentRunContext(runId, claimId);
     throw new Error("agent run delegated authority lost its lifecycle during admission");
   }
+  context.acceptedUserReply = undefined;
   context.delegatedAuthority = authority;
   context.assertSourceCurrent = assertSourceCurrent;
   return authority;
@@ -603,6 +605,31 @@ export function resolveProjectedAgentRunProgressState(
     params,
     params.index ?? buildProjectedAgentRunIndex(),
   );
+}
+
+// Both the snapshot and its prepared queries are weak: cold rows never pin old run indexes.
+const preparedProgressStates = new WeakMap<
+  ProjectedAgentRunIndex,
+  WeakMap<object, ProjectedAgentRunState | null>
+>();
+
+/** Bind an immutable query once; each owner-published run index supplies its progress fact. */
+export function prepareProjectedAgentRunProgressState(
+  query: Readonly<Parameters<typeof resolveAgentRunProjectionProgressState>[0]>,
+) {
+  return (index: ProjectedAgentRunIndex): ProjectedAgentRunState | undefined => {
+    let facts = preparedProgressStates.get(index);
+    if (!facts) {
+      facts = new WeakMap();
+      preparedProgressStates.set(index, facts);
+    }
+    let progress = facts.get(query);
+    if (progress === undefined) {
+      progress = resolveAgentRunProjectionProgressState(query, index) ?? null;
+      facts.set(query, progress);
+    }
+    return progress ?? undefined;
+  };
 }
 
 /** Clears context state for a run that has ended or been discarded. */

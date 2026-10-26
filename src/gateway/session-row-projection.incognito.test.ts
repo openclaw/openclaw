@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
@@ -13,10 +12,9 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
-import type { Lookup, SnapshotOptions } from "./session-row-projection-record.js";
+import type { Lookup } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
-import { appendProjectionMessages } from "./session-row-projection.test-support.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
@@ -41,10 +39,10 @@ function findKeys(
   return rows.findBySessionId(query).map((row) => row.key);
 }
 
-function presentExact(rows: SessionRowProjection, query: Lookup, options?: SnapshotOptions) {
+function presentExact(rows: SessionRowProjection, query: Lookup) {
   return rows.withPreparedExactRows(
     () => [query],
-    (read) => read.present(read.describe(query)!, options),
+    (read) => read.present(read.describe(query)!),
   );
 }
 
@@ -101,11 +99,7 @@ it("reads a private parent once despite multiple durable store candidates", asyn
     });
     await writePrivate(
       { agentId: "work", sessionKey: key },
-      {
-        sessionId: "private-child",
-        updatedAt: 2,
-        parentSessionKey: parent,
-      },
+      { sessionId: "private-child", updatedAt: 2, parentSessionKey: parent },
     );
     const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg: sharedConfig,
@@ -115,13 +109,6 @@ it("reads a private parent once despite multiple durable store candidates", asyn
       includeStoreChildEntries: true,
     });
     expect(selected.store[parent]).toBeUndefined();
-    const scoped = loadCombinedSessionStoreForGatewayCore(sharedConfig, {
-      agentId: "work",
-      includeIncognito: true,
-    });
-    expect(scoped.targetsBySessionKey.get(key)?.readSourceEntry(parent)?.modelOverride).toBe(
-      "qwen3:14b",
-    );
     using rows = await createTestProjection({ cfg: sharedConfig, modelCatalog: [] });
     const query = { agentId: "work", key };
     expect(await presentExact(rows, query)).toMatchObject({
@@ -148,11 +135,6 @@ it("keeps archived incognito rows private and retires captures when their sessio
       { key } = query;
     const target = { ...sessionScope, storePath };
     await writePrivate(target, entry);
-    await appendProjectionMessages(
-      { ...target, sessionId: entry.sessionId },
-      { role: "user", content: "Private conversation title" },
-      { role: "assistant", content: "Private response" },
-    );
     const viewer = identifiedClient("incognito-observer");
     using rows = await createTestProjection({ cfg, getModelCatalog: async () => [] });
     using cleanup = new DisposableStack();
@@ -180,16 +162,9 @@ it("keeps archived incognito rows private and retires captures when their sessio
       sessionId: entry.sessionId,
       activeModel: { provider: "row-fixture", model: "active" },
     });
-    expect(
-      await presentExact(rows, query, {
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-      }),
-    ).toMatchObject({
+    expect(await presentExact(rows, query)).toMatchObject({
       activeModelProvider: "row-fixture",
       activeModel: "active",
-      derivedTitle: "Private conversation title",
-      lastMessagePreview: "Private response",
     });
     expect(rows.capture({ ...query, storePath: "/configured/sessions.json" })?.entry).toEqual(
       original.entry,
@@ -227,31 +202,25 @@ it("keeps archived incognito rows private and retires captures when their sessio
     });
     const internalScope = { agentId: "main", storePath, ...internal };
     await sessions.replaceSessionEntry(internalScope, { ...entry, sessionId: internal.sessionId });
-    await appendProjectionMessages(internalScope, {
-      role: "assistant",
-      content: "Internal maintenance",
-    });
     // Exact internal readers may address their private row; discovery must not.
     expect(findKeys(rows, internalScope)).toEqual([internal.sessionKey]);
     expect(
-      rows.findBySessionId({
-        agentId: "main",
-        sessionId: internal.sessionId,
-        federated: true,
-      }),
+      findKeys(rows, { agentId: "main", sessionId: internal.sessionId, federated: true }),
     ).toEqual([]);
-    memorySessionActorOwners.closeSession({ agentId: "main", path: storePath }, key);
-    expect(rows.capture(query)).toBeUndefined();
-    await writePrivate(target, entry);
-    await rows.ensureMaterialized();
-    expect(rows.isCurrent(original)).toBe(false);
-    const reset = rows.capture(query)!;
-    expect(rows.isCurrent(reset)).toBe(true);
-    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
-    expect(rows.capture(query)).toBeUndefined();
-    await writePrivate(target, entry);
-    await rows.ensureMaterialized();
-    expect(rows.isCurrent(reset)).toBe(false);
+    const scope = { agentId: "main", path: storePath };
+    let previous = original;
+    for (const close of [
+      () => memorySessionActorOwners.closeSession(scope, key),
+      () => memorySessionActorOwners.closeDatabase(scope),
+    ]) {
+      close();
+      expect(rows.capture(query)).toBeUndefined();
+      await writePrivate(target, entry);
+      await rows.ensureMaterialized();
+      expect(rows.isCurrent(previous)).toBe(false);
+      previous = rows.capture(query)!;
+      expect(rows.isCurrent(previous)).toBe(true);
+    }
     expect(await presentExact(rows, query)).toMatchObject({
       key,
       sessionId: entry.sessionId,

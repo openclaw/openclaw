@@ -36,7 +36,7 @@ export async function readSessionEntryList(
       ? undefined
       : await import("./session-accessor.sqlite-entry-list.read.js");
   const resolveScope = listing
-    ? (await import("./session-accessor.sqlite-scope.js")).resolveSqliteScope
+    ? (await import("./session-accessor.sqlite-read-scope.js")).resolveSqliteScope
     : undefined;
   const mainRecovery = scope.mainSessionRecovery
     ? await import("./restart-recovery-state.js")
@@ -60,9 +60,7 @@ export async function readSessionEntryList(
             getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
               .selectFrom("session_nodes")
               .select("session_key")
-              .where((eb) =>
-                eb(jsonExtractText(database.db, eb.ref("entry_json"), "archivedAt"), "is", null),
-              )
+              .where("archived_at", "is", null)
               .where((eb) =>
                 eb(
                   jsonPathValue(

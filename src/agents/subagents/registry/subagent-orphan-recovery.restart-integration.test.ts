@@ -50,7 +50,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { registerRecoveredTerminalTailTest } from "./subagent-orphan-recovery.live-tail.test-support.js";
+import { registerRecoveredTerminalTests } from "./subagent-orphan-recovery.live-tail.test-support.js";
 import {
   createRecoverySessions,
   rawChildFixture,
@@ -336,7 +336,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       expect(dispatchAgent).not.toHaveBeenCalled();
     },
   );
-  registerRecoveredTerminalTailTest(fixture);
+  registerRecoveredTerminalTests(fixture);
 
   it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
@@ -779,12 +779,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
             suppressChildSessionEffects: owner !== "original",
           }),
         );
-        expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(
-          owner === "original" ? 1 : 0,
-        );
+        const browserCleanup = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
+        expect(browserCleanup).toHaveBeenCalledTimes(owner === "original" ? 1 : 0);
         if (owner !== "original") {
           expect(child.read()).toEqual(before);
         } else {
+          expect(browserCleanup).toHaveBeenCalledBefore(vi.mocked(runSubagentAnnounceFlow));
           expect(child.read()).toMatchObject({ status: "interrupted" });
           expect((await readChildRun(childSessionKey))?.execution.interruptionReason).toBe(
             "gateway-restart",

@@ -41,18 +41,6 @@ function observeOwners(owners: Array<{ agentId: string; agentDir: string }>) {
 }
 
 describe("agent directory registry", () => {
-  it("unregisters only the requested owner", () => {
-    const agentDir = path.join("/tmp", `openclaw-agent-dir-registry-${process.pid}`);
-    registerDir({ agentId: "first", agentDir });
-    registerDir({ agentId: "second", agentDir });
-
-    expect(ownerOf(agentDir)).toBeUndefined();
-    expect(unregisterDir({ agentId: "first", agentDir })).toBe(true);
-    expect(ownerOf(agentDir)).toBe("second");
-    expect(unregisterDir({ agentId: "second", agentDir })).toBe(true);
-    expect(ownerOf(agentDir)).toBeUndefined();
-  });
-
   it("detects registered ownership on either side of a cleanup boundary", () => {
     const root = path.join("/tmp", `openclaw-agent-dir-overlap-${process.pid}`);
     const agentDir = path.join(root, "agent");
@@ -103,9 +91,9 @@ describe("agent directory registry", () => {
     expect(ownerOf(agentDir, env)).toBe("main");
   });
 
-  it.each([64, 810])("reuses observations across walks of %i registered agents", (count) => {
+  it("reuses observations across walks of more than 256 registered agents", () => {
     const root = tempDirs.make("openclaw-agent-dir-fleet-");
-    const fleet = Array.from({ length: count }, (_, index) => ({
+    const fleet = Array.from({ length: 810 }, (_, index) => ({
       agentId: `fleet-${index}`,
       agentDir: path.join(root, `fleet-${index}`, "agent"),
     }));

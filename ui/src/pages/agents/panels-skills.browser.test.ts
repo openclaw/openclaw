@@ -16,9 +16,13 @@ type Params = Parameters<typeof AgentSkills>[0] &
     "agentSkillsReport" | "agentSkillsRead" | "agentSkillsAgentId"
   >;
 function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {}): Params {
+  const fixture = createAgentViewTestProps();
   return {
+    ...fixture.agentSkills,
+    onConfigReload: fixture.onConfigReload,
+    onConfigSave: fixture.onConfigSave,
     readData() {
-      return { ...createAgentViewTestProps().readData(), ...this };
+      return { ...fixture.readData(), ...this };
     },
     agentId: "main",
     canPatchConfig: true,
@@ -31,25 +35,129 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     configSaving: false,
     configDirty: false,
     presentationRetired: Promise.withResolvers<void>().promise,
-    filter: "",
-    onFilterChange: () => undefined,
-    onRefresh: () => undefined,
-    onToggle: () => false,
-    onClear: () => undefined,
-    onDisableAll: () => false,
-    onConfigReload: async () => undefined,
-    onConfigSave: async () => undefined,
     ...overrides,
   };
 }
 
+function mountSkills(skills: SkillStatusEntry[], overrides: Partial<Params> = {}) {
+  const params = skillsParams(skills, overrides);
+  const view = mountSolid(AgentSkills, params);
+  const container = view.container;
+  const rows = () => [...container.querySelectorAll(".agent-skill-row")];
+  return {
+    ...view,
+    params,
+    rows,
+    expectRows: (expected: (Element | undefined)[]) =>
+      expected.forEach((row, index) => expect(rows()[index]).toBe(row)),
+    filter: () => container.querySelector("input[name=agent-skills-filter]"),
+    checked: () =>
+      Array.from(
+        container.querySelectorAll<HTMLInputElement>(".agent-skill-row input"),
+        (input) => input.checked,
+      ),
+    button: (name: string) =>
+      Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === name,
+      )!,
+    text: (present: string[], absent: string[] = []) =>
+      waitForSolid(() => {
+        for (const value of present) {
+          expect(container.textContent).toContain(value);
+        }
+        for (const value of absent) {
+          expect(container.textContent).not.toContain(value);
+        }
+      }),
+  };
+}
+
 describe("agents skills panel (browser)", () => {
+  it("retains cached skill rows and the search control when the initial read settles", async () => {
+    const pending = deferred<SkillStatusReport>();
+    const container = document.createElement("div");
+    const params = skillsParams(
+      [createSkill({ name: "Cached first" }), createSkill({ name: "Cached second" })],
+      { agentSkillsRead: { agentId: "main", result: pending.promise } },
+    );
+    mountSolid(AgentSkills, params, container);
+    await waitForSolid(() => {
+      expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
+      expect(container.textContent).toContain("Loading");
+    });
+    const rows = [...container.querySelectorAll(".agent-skill-row")];
+    const filter = container.querySelector("input[name=agent-skills-filter]");
+
+    pending.resolve(structuredClone(params.agentSkillsReport!));
+    await waitForSolid(() => expect(container.textContent).not.toContain("Loading"));
+    const currentRows = [...container.querySelectorAll(".agent-skill-row")];
+    expect(currentRows).toHaveLength(rows.length);
+    rows.forEach((row, index) => expect(currentRows[index]).toBe(row));
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+  });
+
+  it("retains skill rows and diagnostics when a refresh returns new snapshots", async () => {
+    const view = mountSkills([
+      createSkill({
+        name: "First skill",
+        disabled: true,
+        missing: {
+          bins: ["synthetic-tool"],
+          anyBins: ["claude", "codex", "opencode"],
+          env: [],
+          config: [],
+          os: [],
+        },
+      }),
+      createSkill({ name: "Second skill" }),
+    ]);
+    const { container, params } = view;
+    await waitForSolid(() => {
+      expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
+      expect(container.textContent).not.toContain("Loading");
+    });
+    const rows = view.rows();
+    expect(rows[0]!.textContent).toContain("bin:any of (claude, codex, opencode)");
+    const diagnostics = [...rows[0]!.querySelectorAll(".settings-row__desc")];
+    const filter = view.filter();
+    const refreshed = deferred<SkillStatusReport>();
+    view.update({
+      ...params,
+      agentSkillsRead: { agentId: "main", result: refreshed.promise },
+    });
+    await view.text(["Loading"]);
+    expect(view.filter()).toBe(filter);
+    view.expectRows(rows);
+
+    const next = structuredClone(params.agentSkillsReport!);
+    next.skills[0]!.description = "Updated description";
+    next.skills.reverse();
+    refreshed.resolve(next);
+    await view.text(["Updated description"]);
+    view.expectRows([rows[1], rows[0]]);
+    const currentDiagnostics = rows[0]!.querySelectorAll(".settings-row__desc");
+    expect(currentDiagnostics).toHaveLength(diagnostics.length);
+    diagnostics.forEach((diagnostic, index) => expect(currentDiagnostics[index]).toBe(diagnostic));
+    expect(view.filter()).toBe(filter);
+
+    const resolved = structuredClone(next);
+    resolved.skills[1]!.missing.bins = [];
+    resolved.skills[1]!.missing.anyBins = [];
+    resolved.skills[1]!.disabled = false;
+    resolved.skills[0]!.missing.bins = ["new-tool"];
+    const changed = deferred<SkillStatusReport>();
+    view.update({ ...params, agentSkillsRead: { agentId: "main", result: changed.promise } });
+    changed.resolve(resolved);
+    await waitForSolid(() => expect(rows[1]!.textContent).toContain("new-tool"));
+    expect(rows[0]!.textContent).not.toContain("synthetic-tool");
+    view.expectRows([rows[1], rows[0]]);
+  });
+
   it("shows inherited skills while resetting and restores the allowlist after rejection before retry", async () => {
     const first = deferred();
     const retry = deferred();
     const onClear = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-    const container = document.createElement("div");
-    const params = skillsParams(
+    const view = mountSkills(
       [
         createSkill({ name: "github", source: "openclaw-managed" }),
         createSkill({ name: "weather", source: "openclaw-managed" }),
@@ -62,17 +170,15 @@ describe("agents skills panel (browser)", () => {
         },
       },
     );
-    const view = mountSolid(AgentSkills, params, container);
-    const reset = () =>
-      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Reset")!;
-    const checked = () =>
-      Array.from(container.querySelectorAll<HTMLInputElement>(".agent-skill-row input")).map(
-        (input) => input.checked,
-      );
+    const { container, params, checked } = view;
     await waitForSolid(() => expect(checked()).toEqual([true, false, true]));
-    const filter = container.querySelector("input[name=agent-skills-filter]");
+    const learned = view.rows().find((row) => row.textContent?.includes("learned"))!;
+    expect(learned.querySelector("input")).toHaveProperty("disabled", true);
+    expect(learned.textContent).toContain("archive in Workshop to hide");
+    expect(container.textContent).toContain("2/3");
+    const filter = view.filter();
 
-    reset().click();
+    view.button("Reset").click();
     await waitForSolid(() => {
       expect(checked()).toEqual([true, true, false]);
       expect(container.textContent).toContain("Saving");
@@ -83,9 +189,9 @@ describe("agents skills panel (browser)", () => {
       expect(container.textContent).toContain("Reset was rejected.");
       expect(checked()).toEqual([true, false, true]);
     });
-    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+    expect(view.filter()).toBe(filter);
 
-    reset().click();
+    view.button("Reset").click();
     await waitForSolid(() => {
       expect(container.textContent).toContain("Saving");
       expect(container.textContent).not.toContain("Reset was rejected.");
@@ -102,88 +208,63 @@ describe("agents skills panel (browser)", () => {
     });
     expect(onClear).toHaveBeenNthCalledWith(1, "main");
     expect(onClear).toHaveBeenNthCalledWith(2, "main");
-    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+    expect(view.filter()).toBe(filter);
   });
 
-  it.each(["Refresh", "owner receipt"])(
-    "shows pending reads, keeps the cached report after failure, and retries through %s",
-    async (retrySource) => {
-      const initial = deferred<SkillStatusReport>();
-      const refreshed = deferred<SkillStatusReport>();
-      const retried = deferred<SkillStatusReport>();
-      const container = document.createElement("div");
-      const params = skillsParams([], {
-        agentSkillsReport: null,
-        agentSkillsAgentId: null,
-        agentSkillsRead: { agentId: "main", result: initial.promise },
-      });
-      const view = mountSolid(AgentSkills, params, container);
-      await waitForSolid(() => expect(container.textContent).toContain("Loading"));
-      const report: SkillStatusReport = {
-        workspaceDir: "/workspace/synthetic",
-        managedSkillsDir: "/skills/synthetic",
-        skills: [createSkill({ name: "Synthetic cached skill" })],
-      };
-      initial.resolve(report);
-      await waitForSolid(() => expect(container.textContent).toContain("Synthetic cached skill"));
+  it("shows pending reads, keeps the cached report after failure, and retries through Refresh", async () => {
+    const initial = deferred<SkillStatusReport>();
+    const refreshed = deferred<SkillStatusReport>();
+    const retried = deferred<SkillStatusReport>();
+    const view = mountSkills([], {
+      agentSkillsReport: null,
+      agentSkillsAgentId: null,
+      agentSkillsRead: { agentId: "main", result: initial.promise },
+    });
+    const { params } = view;
+    await view.text(["Loading"]);
+    const report: SkillStatusReport = {
+      workspaceDir: "/workspace/synthetic",
+      managedSkillsDir: "/skills/synthetic",
+      skills: [createSkill({ name: "Synthetic cached skill" })],
+    };
+    initial.resolve(report);
+    await view.text(["Synthetic cached skill"]);
 
-      const loaded = {
-        ...params,
-        agentSkillsReport: report,
-        agentSkillsAgentId: "main",
-        agentSkillsRead: { agentId: "main", result: refreshed.promise },
-      };
-      view.update(loaded);
-      await waitForSolid(() => {
-        expect(container.textContent).toContain("Synthetic cached skill");
-        expect(container.textContent).toContain("Loading");
+    const loaded = {
+      ...params,
+      agentSkillsReport: report,
+      agentSkillsAgentId: "main",
+      agentSkillsRead: { agentId: "main", result: refreshed.promise },
+    };
+    view.update(loaded);
+    await view.text(["Synthetic cached skill", "Loading"]);
+    refreshed.reject(new Error("Synthetic skills failure"));
+    const onRefresh = vi.fn(() => {
+      view.update({
+        ...loaded,
+        agentSkillsRead: { agentId: "main", result: retried.promise },
+        onRefresh,
       });
-      refreshed.reject(new Error("Synthetic skills failure"));
-      const onRefresh = vi.fn(() => {
-        view.update({
-          ...loaded,
-          agentSkillsRead: { agentId: "main", result: retried.promise },
-          onRefresh,
-        });
-      });
-      view.update({ ...loaded, onRefresh });
-      await waitForSolid(() => {
-        expect(container.textContent).toContain("Synthetic skills failure");
-        expect(container.textContent).toContain("Synthetic cached skill");
-      });
-      const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.includes("Refresh"),
-      );
-      if (retrySource === "Refresh") {
-        refresh?.click();
-      } else {
-        onRefresh();
-      }
-      expect(onRefresh).toHaveBeenCalledOnce();
-      await waitForSolid(() => {
-        expect(container.textContent).not.toContain("Synthetic skills failure");
-        expect(container.textContent).toContain("Loading");
-        expect(container.textContent).toContain("Synthetic cached skill");
-      });
-      retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
-      await waitForSolid(() => {
-        expect(container.textContent).toContain("Synthetic fresh skill");
-        expect(container.textContent).not.toContain("Synthetic skills failure");
-      });
-    },
-  );
+    });
+    view.update({ ...loaded, onRefresh });
+    await view.text(["Synthetic skills failure", "Synthetic cached skill"]);
+    view.button("Refresh").click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    await view.text(["Loading", "Synthetic cached skill"], ["Synthetic skills failure"]);
+    retried.resolve({ ...report, skills: [createSkill({ name: "Synthetic fresh skill" })] });
+    await view.text(["Synthetic fresh skill"], ["Synthetic skills failure"]);
+  });
 
   it.each(["agent", "connection"])(
     "renders a replacement %s scope while the retired read stays pending",
     async (replacement) => {
       const retired = deferred<SkillStatusReport>();
       const current = deferred<SkillStatusReport>();
-      const container = document.createElement("div");
-      const params = skillsParams([], {
+      const view = mountSkills([], {
         agentSkillsRead: { agentId: "main", result: retired.promise },
       });
-      const view = mountSolid(AgentSkills, params, container);
-      await waitForSolid(() => expect(container.textContent).toContain("Loading"));
+      const { params } = view;
+      await view.text(["Loading"]);
       const agentId = replacement === "agent" ? "other" : "main";
       view.update({
         ...params,
@@ -200,40 +281,58 @@ describe("agents skills panel (browser)", () => {
         managedSkillsDir: "/skills/synthetic",
         skills: [createSkill({ name: "Current scope skill" })],
       });
-      await waitForSolid(() => expect(container.textContent).toContain("Current scope skill"));
+      await view.text(["Current scope skill"]);
       retired.reject(new Error("Retired scope failure"));
-      await waitForSolid(() => {
-        expect(container.textContent).toContain("Current scope skill");
-        expect(container.textContent).not.toContain("Retired scope failure");
-      });
+      await view.text(["Current scope skill"], ["Retired scope failure"]);
     },
   );
 
-  it("keeps cached skills when a reload returns no report", async () => {
-    const pending = deferred<SkillStatusReport | undefined>();
-    const container = document.createElement("div");
-    mountSolid(
-      AgentSkills,
-      skillsParams([createSkill({ name: "Synthetic cached skill" })], {
+  it.each(["cached", "uncached"])(
+    "settles an initially %s read when no report is returned",
+    async (cacheState) => {
+      const pending = deferred<SkillStatusReport | undefined>();
+      const container = document.createElement("div");
+      const cached = cacheState === "cached";
+      const params = skillsParams([createSkill({ name: "Synthetic cached skill" })], {
+        ...(!cached ? { agentSkillsReport: null, agentSkillsAgentId: null } : {}),
         agentSkillsRead: { agentId: "main", result: pending.promise },
-      }),
-      container,
-    );
-    await waitForSolid(() => expect(container.textContent).toContain("Loading"));
-    pending.resolve(undefined);
-    await waitForSolid(() => {
-      expect(container.textContent).toContain("Synthetic cached skill");
-      expect(container.textContent).not.toContain("Loading");
-    });
-  });
+      });
+      mountSolid(AgentSkills, params, container);
+      const button = (label: string) =>
+        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+          (element) => element.textContent === label,
+        );
+      await waitForSolid(() => {
+        expect(button("Loading…")?.disabled).toBe(true);
+        expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
+        expect(container.textContent).not.toContain("Load skills for this agent");
+      });
+      const rows = [...container.querySelectorAll(".agent-skill-row")];
+      const filter = container.querySelector("input[name=agent-skills-filter]");
+
+      pending.resolve(undefined);
+      await waitForSolid(() => {
+        expect(button("Loading…")).toBeUndefined();
+        expect(button("Refresh")?.disabled).toBe(false);
+        expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
+        if (cached) {
+          expect(container.textContent).toContain("Synthetic cached skill");
+        } else {
+          expect(container.textContent).toContain("Load skills for this agent");
+        }
+      });
+      const currentRows = [...container.querySelectorAll(".agent-skill-row")];
+      rows.forEach((row, index) => expect(currentRows[index]).toBe(row));
+      expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+    },
+  );
 
   it("shows matches from default-collapsed groups while filtering", async () => {
-    const container = document.createElement("div");
-    const params = skillsParams([
+    const view = mountSkills([
       createSkill({ name: "Unique Built In Match", source: "openclaw-bundled", bundled: true }),
       createSkill({ name: "Installed Distractor", source: "openclaw-managed" }),
     ]);
-    const view = mountSolid(AgentSkills, params, container);
+    const { container, params } = view;
     await waitForSolid(() =>
       expect(container.querySelector<HTMLDetailsElement>(".agent-skills-group")?.open).toBe(false),
     );
@@ -241,7 +340,6 @@ describe("agents skills panel (browser)", () => {
     view.update({ ...params, filter: "Unique Built In Match" });
     await waitForSolid(() => expect(container.textContent).toContain("1 shown"));
     const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
-    expect(container.textContent).toContain("1 shown");
     expect(filteredGroup?.open).toBe(true);
     expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
       "Unique Built In Match",
@@ -250,17 +348,14 @@ describe("agents skills panel (browser)", () => {
 
   it("retires optimistic reset presentation when the selected agent changes", async () => {
     const completion = deferred();
-    const container = document.createElement("div");
-    const params = skillsParams([createSkill({ name: "github", source: "openclaw-managed" })], {
+    const view = mountSkills([createSkill({ name: "github", source: "openclaw-managed" })], {
       configForm: { agents: { entries: { main: { skills: [] }, research: { skills: [] } } } },
       onClear: () => completion.promise,
     });
-    const view = mountSolid(AgentSkills, params, container);
+    const { container, params } = view;
     const checked = () =>
       container.querySelector<HTMLInputElement>(".agent-skill-row input")?.checked;
-    Array.from(container.querySelectorAll("button"))
-      .find((button) => button.textContent === "Reset")!
-      .click();
+    view.button("Reset").click();
     await waitForSolid(() => expect(checked()).toBe(true));
 
     view.update({ ...params, agentId: "research", agentSkillsAgentId: "research" });
@@ -276,36 +371,10 @@ describe("agents skills panel (browser)", () => {
     });
   });
 
-  it("keeps learned Workshop skills on under an allowlist", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      AgentSkills,
-      skillsParams(
-        [
-          createSkill({ name: "github", source: "openclaw-managed" }),
-          createSkill({ name: "budget", source: "openclaw-workshop" }),
-        ],
-        { configForm: { agents: { entries: { main: { skills: ["github"] } } } } },
-      ),
-      container,
-    );
-    await waitForSolid(() => expect(container.textContent).toContain("2/2"));
-
-    const learnedRow = Array.from(container.querySelectorAll(".agent-skill-row")).find((row) =>
-      row.textContent?.includes("budget"),
-    );
-    const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    expect(toggle?.checked).toBe(true);
-    expect(toggle?.disabled).toBe(true);
-    expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
-    expect(container.textContent).toContain("2/2");
-  });
-
   it.each(["inherited", "explicit without patch access"])(
     "gates clearing a %s allowlist separately from staged edits",
     async (mode) => {
       const inherited = mode === "inherited";
-      const container = document.createElement("div");
       const skills = inherited
         ? [
             createSkill({ name: "github", source: "openclaw-managed" }),
@@ -318,62 +387,25 @@ describe("agents skills panel (browser)", () => {
             }),
           ]
         : [];
-      mountSolid(
-        AgentSkills,
-        skillsParams(skills, {
-          canPatchConfig: inherited,
-          configForm: {
-            agents: inherited
-              ? { defaults: { skills: ["github"] }, entries: { main: {} } }
-              : { entries: { main: { skills: ["coding-agent"] } } },
-          },
-        }),
-        container,
-      );
-      await waitForSolid(() => expect(container.textContent).toContain("shown"));
+      const view = mountSkills(skills, {
+        canPatchConfig: inherited,
+        configForm: {
+          agents: inherited
+            ? { defaults: { skills: ["github"] }, entries: { main: {} } }
+            : { entries: { main: { skills: ["coding-agent"] } } },
+        },
+      });
+      const { container } = view;
+      await view.text(["shown"]);
       if (inherited) {
         expect(container.querySelector(".callout.info")?.textContent).toContain(
           "inherits the default skill allowlist",
         );
-        expect(
-          Array.from(
-            container.querySelectorAll<HTMLInputElement>(
-              ".agent-skill-row input.settings-toggle__input",
-            ),
-          ).map((toggle) => toggle.checked),
-        ).toEqual([true, false]);
+        expect(view.checked()).toEqual([true, false]);
       }
       const buttons = container.querySelectorAll<HTMLButtonElement>("button");
       expect(buttons[0]?.disabled).toBe(false);
       expect(buttons[1]?.disabled).toBe(true);
     },
   );
-
-  it("explains an unsatisfied one-of binary requirement", async () => {
-    const container = document.createElement("div");
-    const requirements = {
-      bins: [],
-      anyBins: ["claude", "codex", "opencode"],
-      env: [],
-      config: [],
-      os: [],
-    };
-    const skill = createSkill({
-      name: "Coding Agent",
-      source: "openclaw-bundled",
-      bundled: true,
-      eligible: false,
-      modelVisible: false,
-      commandVisible: false,
-      requirements,
-      missing: requirements,
-      install: [{ id: "node-codex", kind: "node", label: "Install Codex CLI", bins: ["codex"] }],
-    });
-    mountSolid(AgentSkills, skillsParams([skill]), container);
-    await waitForSolid(() =>
-      expect(container.querySelector(".agent-skill-row")?.textContent).toContain(
-        "bin:any of (claude, codex, opencode)",
-      ),
-    );
-  });
 });

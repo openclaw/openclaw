@@ -19,10 +19,11 @@ import { NewSessionCapabilities } from "./capabilities.ts";
 import * as catalog from "./catalog-target.ts";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
-import { CreationComposer, retainCreatedComposer } from "./creation-composer.ts";
+import { retainCreatedComposer } from "./creation-composer-registry.ts";
+import { CreationComposer } from "./creation-composer.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { NewSessionDraftPersistence } from "./draft-persistence.ts";
+import { NewSessionDraftPersistence, type NewSessionDraftHandoff } from "./draft-persistence.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import {
   completeDraftSessionPlacement,
@@ -56,7 +57,6 @@ import {
 import { submitDraftInTerminal } from "./terminal-start.ts";
 
 registerNewSessionSetupEnglish();
-type SubmittedDraft = ReturnType<NewSessionDraftPersistence["captureSubmission"]>;
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -75,7 +75,7 @@ export class DraftSubmissionFlow {
     phase: "creating" | "accepted";
     message: ReturnType<typeof buildLocalUserMessage>;
   } | null = null;
-  private blockedSubmitGate: string | null = null;
+  private blockedSubmitAttempt = false;
   private rejectedPromptError: string | null = null;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
@@ -180,7 +180,8 @@ export class DraftSubmissionFlow {
     });
   }
 
-  resumeInterruptedSubmission() {
+  synchronizeSubmission() {
+    this.blockedSubmitAttempt = this.blockedSubmitAttempt && Boolean(this.submitBlock()?.reason);
     const startup = this.sessionStartup.resume();
     if (startup.kind === "resume") {
       void this.submit(startup);
@@ -259,18 +260,15 @@ export class DraftSubmissionFlow {
     this.callbacks.changed();
   }
 
-  /** A submit was attempted (Enter or Start click) while a gate blocked it. */
   noteBlockedSubmitAttempt() {
-    this.blockedSubmitGate = this.submitBlock()?.gate ?? null;
+    this.blockedSubmitAttempt = Boolean(this.submitBlock()?.reason);
     this.callbacks.changed();
   }
 
-  /** Attempt-bound reason that retires when its transient gate lifts. */
+  /** Follow the current gate after an attempt, including successive readiness gates. */
   blockedSubmitNotice(): string | undefined {
-    const block = this.blockedSubmitGate ? this.submitBlock() : undefined;
-    return block?.gate === this.blockedSubmitGate && !PAGE_RENDERED_GATES.has(block.gate)
-      ? block.reason
-      : undefined;
+    const block = this.blockedSubmitAttempt ? this.submitBlock() : undefined;
+    return block && !PAGE_RENDERED_GATES.has(block.gate) ? block.reason : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
@@ -361,8 +359,8 @@ export class DraftSubmissionFlow {
     this.startedSession.clearSubmission();
     this.rejectedPromptError = null;
     this.sessionStartup.clear();
+    this.blockedSubmitAttempt = false;
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
-    this.blockedSubmitGate = null;
     this.invalidate();
     this.submissionOutcomeUnknown = preservePendingPlacement
       ? (this.submissionOutcomeUnknown ?? "placement-interrupted")
@@ -415,6 +413,7 @@ export class DraftSubmissionFlow {
       this.noteBlockedSubmitAttempt();
       return;
     }
+    this.blockedSubmitAttempt = false;
     if (
       !uploadsEnabled(context.config) &&
       (this.attachmentDraft.attachments.length ||
@@ -425,7 +424,6 @@ export class DraftSubmissionFlow {
       this.callbacks.changed();
       return;
     }
-    this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
@@ -504,6 +502,7 @@ export class DraftSubmissionFlow {
           message: input.message,
           mentions: input.mentions,
           displayName: preparedTitle,
+          ...(preparedTitle ? { displayNameGenerated: true } : {}),
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)
@@ -697,7 +696,7 @@ export class DraftSubmissionFlow {
       flow: this,
       closeTransientUi: this.callbacks.closeTransientUi,
       capture: (client) => {
-        this.blockedSubmitGate = null;
+        this.blockedSubmitAttempt = false;
         this.error = null;
         const requestSignal = this.captureSubmitRequest();
         const submitted = this.draftPersistence.captureSubmission();
@@ -718,7 +717,7 @@ export class DraftSubmissionFlow {
     });
   }
 
-  private clearSubmittedDraft(releasePayloads: boolean, draft: SubmittedDraft, keepPending = true) {
+  private clearSubmittedDraft(release: boolean, draft: NewSessionDraftHandoff, keepPending = true) {
     return this.draftPersistence.clearSubmittedDraft(draft, () => {
       // Acceptance consumes only the captured mutation, not a newer route's input.
       if (!keepPending) {
@@ -729,7 +728,7 @@ export class DraftSubmissionFlow {
       this.updateMessage("");
       this.mentionsValue = [];
       this.draftPersistence.noteDraftReplaced();
-      this.attachmentDraft.clearAfterSubmit(releasePayloads);
+      this.attachmentDraft.clearAfterSubmit(release);
       this.sessionStartup.clear();
     });
   }

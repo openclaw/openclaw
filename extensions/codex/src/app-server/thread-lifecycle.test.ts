@@ -53,10 +53,13 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-fingerprints.js";
 import {
+  createAppServerOptions as createLifecycleAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createLifecycleRequest,
   createThreadRequestAppServerOptions as createAppServerOptions,
   createThreadRequestAttemptParams as createAttemptParams,
+  DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
+  nativeQuestionConfigFixture,
   startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -372,18 +375,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
 >[0]["appServer"] {
   return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    requestTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
+    ...createLifecycleAppServerOptions(),
     connectionClass: "local-loopback",
   };
 }
@@ -482,13 +474,7 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
 }
 
 function createSupervisedCommitRequest() {
-  return vi.fn(async (method: string, _requestParams?: unknown) => {
-    if (method === "config/read") {
-      return { config: {}, origins: {}, layers: [] };
-    }
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
+  return createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
     if (method === "thread/read") {
       return { thread: sourceThread({ threadId: sourceThreadId }) };
     }
@@ -764,17 +750,9 @@ describe("Codex app-server native code mode config", () => {
         },
       );
       expect(request.config).toEqual({
+        ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
         project_doc_max_bytes: lightweight ? 0 : 131_072,
         ...(lightweight ? { "features.hooks": true } : { "features.multi_agent": false }),
-        "features.code_mode": true,
-        "features.code_mode_only": false,
-        "features.goals": false,
-        "tools.update_plan.enabled": false,
-        "features.shell_tool": true,
-        "features.apply_patch_streaming_events": true,
-        suppress_unstable_features_warning: true,
-        "features.standalone_web_search": false,
-        web_search: "cached",
       });
     },
   );
@@ -932,18 +910,7 @@ describe("Codex app-server turn params", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
-        config: {
-          project_doc_max_bytes: 131_072,
-          "features.code_mode": true,
-          "features.code_mode_only": false,
-          "features.goals": false,
-          "tools.update_plan.enabled": false,
-          "features.shell_tool": true,
-          "features.apply_patch_streaming_events": true,
-          suppress_unstable_features_warning: true,
-          "features.standalone_web_search": false,
-          web_search: "cached",
-        },
+        config: DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
         sandbox: "danger-full-access",
         serviceTier: "flex",
         personality: "none",
@@ -1564,7 +1531,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
     }
   });
 
-  it("materializes a model-locked canonical branch with frozen agent instructions", async () => {
+  it.each([undefined, true])("keeps model lock and questions (%s)", async (nativeQuestions) => {
+    const questionKey = "tools.experimental_request_user_input.enabled";
+    const expectedQuestionSetting = nativeQuestions ? undefined : false;
     const lastTurnId = "turn-terminal";
     const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
     const attempt = createThreadLifecycleParams();
@@ -1603,7 +1572,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     const request = vi.fn(async (method: string, requestParams: unknown) => {
       if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
+        return nativeQuestionConfigFixture(nativeQuestions);
       }
       if (method === "configRequirements/read") {
         return { requirements: null };
@@ -1644,6 +1613,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       params: attempt,
       cwd: workspaceDir,
       dynamicTools,
+      askUserAvailable: true,
       developerInstructions: agentWorkspaceDeveloperInstructions,
       agentWorkspaceDeveloperInstructions,
       environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
@@ -1674,14 +1644,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
       lastTurnId,
       excludeTurns: true,
       developerInstructions: agentWorkspaceDeveloperInstructions,
-      config: {
-        project_doc_max_bytes: 131_072,
-        allow_login_shell: false,
-        shell_environment_policy: {
-          experimental_use_profile: false,
-          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
-        },
-      },
     });
     expect(forkParams).not.toHaveProperty("model");
     expect(forkParams).not.toHaveProperty("modelProvider");
@@ -1696,16 +1658,20 @@ describe("Codex app-server supervised branch lifecycle", () => {
       developerInstructions: agentWorkspaceDeveloperInstructions,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
-      config: {
+    });
+    for (const config of [forkParams.config, startParams.config] as Array<
+      Record<string, unknown>
+    >) {
+      expect(config).toMatchObject({
         project_doc_max_bytes: 131_072,
         allow_login_shell: false,
         shell_environment_policy: {
           experimental_use_profile: false,
           set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
         },
-      },
-    });
-    expect(startParams.model).not.toBe(attempt.modelId);
+      });
+      expect(config[questionKey]).toBe(expectedQuestionSetting);
+    }
     expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
       threadId: finalThreadId,
       items: [
@@ -1722,12 +1688,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
         },
       ],
     });
-    expect(
-      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("Private reasoning");
-    expect(
-      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
-    ).not.toContain("secret-tool");
     expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
     expect(materialized).toMatchObject({
       threadId: finalThreadId,
@@ -1778,9 +1738,13 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("model");
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[4]?.[1]).toMatchObject({
+    const resumedParams = request.mock.calls[4]?.[1];
+    expect(resumedParams).toMatchObject({
       developerInstructions: agentWorkspaceDeveloperInstructions,
+      config: expect.any(Object),
     });
+    const resumedConfig = (resumedParams as { config: Record<string, unknown> }).config;
+    expect(resumedConfig[questionKey]).toBe(expectedQuestionSetting);
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
       preserveNativeModel: true,
@@ -1884,6 +1848,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
         | undefined;
       expect(threadRequest?.config).toMatchObject({
         project_doc_max_bytes: 0,
+        "features.tool_suggest": false,
+        "features.recommended_plugins": false,
         mcp_servers: {
           inherited: { enabled: false },
           "request-only": { command: "request-mcp", enabled: false },

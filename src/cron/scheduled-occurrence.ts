@@ -4,6 +4,9 @@
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ScheduledExecutionContextResult,
@@ -15,23 +18,28 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
     /** Throws when the parent incarnation or the admitted run is no longer current. */
     assertCurrent: () => void;
+    /**
+     * Set when a requester holds owner authority for this run. Throws once the
+     * requester stops passing its owner check, so owner-only tools refuse mid-run.
+     */
+    assertOwnerCurrent?: () => void;
   }>;
 
 /** Run-specific facts an executor supplies when its run is admitted. */
-export type ScheduledOccurrenceRun = {
+type ScheduledOccurrenceRun = {
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
   runSessionKey: string;
   toolsAllow?: readonly string[];
   /** Restored operator source authority, when the occurrence carries one. */
-  operatorAuthorityRestored: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type MintedScheduledExecution = Readonly<{
   result: ScheduledExecutionContextResult;
   /** Binds the context to the admitted run; the admission owner reads it through `current`. */
-  bind: (assertAdmitted: () => void) => void;
+  bind: (run: OperationalRunInstanceRef, assertAdmitted: () => void) => void;
   current: () => ScheduledExecutionContext | undefined;
   release: () => void;
 }>;
@@ -40,6 +48,17 @@ export type MintedScheduledExecution = Readonly<{
 export type ScheduledOccurrence = Readonly<{
   /** Set when the exact parent is removed or archived, or its bound worktree is gone. */
   pause?: CronParentUnavailable;
+  /** A child run's parent row, read once by the admission. */
+  childParent?: Readonly<{
+    /** Set when the parent row persists a workspace binding; it selects the child's workspace. */
+    binding?: Readonly<{ sessionKey: string; entry: SessionEntry }>;
+    /** Set when the parent row requires a sandbox. */
+    sandbox?: "required";
+    /** Fails once the parent is reset or removed, or the occurrence settles. */
+    assertCurrent: () => void;
+    /** Set with `binding`; aborts once the parent is reset or removed. */
+    signal?: AbortSignal;
+  }>;
   mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */
   release: () => void;

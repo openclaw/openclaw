@@ -3,7 +3,8 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadChatRoute, sessionRouteTargetFromLocation } from "./route-loader.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
+import { loadChatRoute, loadSessionPage, sessionRouteTargetFromLocation } from "./route-loader.ts";
 import {
   createSessionRouteContext,
   createSessionRouteRow,
@@ -13,6 +14,27 @@ import {
 
 const shortName = "cached-conversation-12345678";
 const location = (pathname: string) => ({ pathname, search: "", hash: "" });
+
+it("mounts a literal dashboard before connect", async () => {
+  const { context, request } = createSessionRouteContext();
+  const dispatch = createDeferred();
+  context.gateway.snapshot.phase = "connecting";
+  Object.assign(context.gateway.snapshot.client!, { initialConnectSent: dispatch.promise });
+  const loading = loadSessionPage(
+    context,
+    "chat",
+    createRouteLoaderOptions(
+      location("/chat/roboclaw/dashboard/12345678-90ab-cdef-1234-567890abcdef"),
+    ),
+  );
+  await expect(loading).resolves.toMatchObject({
+    kind: "session",
+    sessionKey: "agent:roboclaw:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+  });
+  expect(request).not.toHaveBeenCalled();
+  expect(context.gateway.snapshot.phase).toBe("connecting");
+  dispatch.resolve();
+});
 
 function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "workspace") {
   const fixture = createSessionRouteContext();

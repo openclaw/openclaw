@@ -70,7 +70,12 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const model = opts.model as string | undefined;
           const count = parseOptionalPositiveInteger(opts.count, "--count");
           const size = opts.size as string | undefined;
-          const aspectRatio = opts.aspectRatio as string | undefined;
+          const aspectRatio = normalizeOptionalString(opts.aspectRatio);
+          const { parseAspectRatioValue } =
+            await import("../../media-generation/runtime-shared.js");
+          if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
+            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+          }
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
             opts.outputFormat,

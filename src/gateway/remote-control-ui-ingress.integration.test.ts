@@ -120,8 +120,7 @@ describe("remote Control UI ingress production composition", () => {
     },
   };
   let http: ReturnType<typeof createGatewayHttpRequestHandler> | undefined;
-  const hostLifetime = new AbortController();
-  const serviceLifetime = new AbortController();
+  const lifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
   let listener: Awaited<
@@ -156,10 +155,9 @@ describe("remote Control UI ingress production composition", () => {
     const root = path.dirname(
       await state.writeText(
         "ui/index.html",
-        '<!doctype html><html><head><script type="module" src="./assets/app.js"></script></head><body>Remote UI fixture</body></html>',
+        "<!doctype html><html><head></head><body>Remote UI fixture</body></html>",
       ),
     );
-    await state.writeText("ui/assets/app.js", 'document.body.dataset.ready = "remote-ui";');
     await fs.writeFile(path.join(state.workspaceDir, "favicon.png"), PNG_BYTES);
     const assistantMedia = await state.writeText("media/ingress-chat.txt", "Ingress chat media\n");
     assistantMediaPath = `/claw/__openclaw__/assistant-media?source=${encodeURIComponent(assistantMedia)}`;
@@ -286,8 +284,8 @@ describe("remote Control UI ingress production composition", () => {
     });
     factory = createGatewayControlUiIngressFactory({
       pluginId: "synthetic-bundled-plugin",
-      signal: serviceLifetime.signal,
-      assertCurrent: () => serviceLifetime.signal.throwIfAborted(),
+      signal: lifetime.signal,
+      assertCurrent: () => lifetime.signal.throwIfAborted(),
       host: {
         controlUiBasePath: "/claw",
         resolveGatewayContext: () => requestContext as never,
@@ -303,7 +301,7 @@ describe("remote Control UI ingress production composition", () => {
         },
         handleUpgrade,
         handleSandboxRequest: createSandboxHostHttpRequestHandler(),
-        signal: hostLifetime.signal,
+        signal: lifetime.signal,
       },
     });
     ingress = await factory.open(openOptions);
@@ -311,8 +309,7 @@ describe("remote Control UI ingress production composition", () => {
 
   afterAll(async () => {
     await ingress?.close();
-    hostLifetime.abort();
-    serviceLifetime.abort();
+    lifetime.abort();
     await connectionWork.drain();
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());

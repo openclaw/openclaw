@@ -28,7 +28,9 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 
-type AgentsSetIdentityOptions = {
+const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
+
+export async function agentsSetIdentityCommand(opts: {
   agent?: string;
   workspace?: string;
   identityFile?: string;
@@ -38,26 +40,7 @@ type AgentsSetIdentityOptions = {
   avatar?: string;
   fromIdentity?: boolean;
   json?: boolean;
-};
-
-const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
-
-function resolveAgentIdByWorkspace(
-  cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
-  workspaceDir: string,
-): string[] {
-  const list = listAgentEntries(cfg);
-  const ids =
-    list.length > 0
-      ? list.map((entry) => normalizeAgentId(entry.id))
-      : [resolveDefaultAgentId(cfg)];
-  const normalizedTarget = normalizeWorkspacePath(workspaceDir);
-  return ids.filter(
-    (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
-  );
-}
-
-export async function agentsSetIdentityCommand(opts: AgentsSetIdentityOptions) {
+}) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;
@@ -74,6 +57,12 @@ export async function agentsSetIdentityCommand(opts: AgentsSetIdentityOptions) {
 
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
+  if (opts.identityFile !== undefined && !identityFileRaw) {
+    throwExpectedCliError("--identity-file must not be blank");
+  }
+  if (opts.workspace !== undefined && !workspaceRaw) {
+    throwExpectedCliError("--workspace must not be blank");
+  }
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
   const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
   if (normalizedAgent && !normalizedAgent.ok) {
@@ -101,7 +90,15 @@ export async function agentsSetIdentityCommand(opts: AgentsSetIdentityOptions) {
 
   if (!agentId) {
     const resolvedWorkspace = expectDefined(workspaceDir, "agent workspace");
-    const matches = resolveAgentIdByWorkspace(cfg, resolvedWorkspace);
+    const list = listAgentEntries(cfg);
+    const ids =
+      list.length > 0
+        ? list.map((entry) => normalizeAgentId(entry.id))
+        : [resolveDefaultAgentId(cfg)];
+    const normalizedTarget = normalizeWorkspacePath(resolvedWorkspace);
+    const matches = ids.filter(
+      (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
+    );
     if (matches.length === 0) {
       throwExpectedCliError(
         `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,

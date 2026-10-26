@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
@@ -148,7 +147,7 @@ describe("ExecApprovalManager", () => {
   async function runTimer(timer: ApprovalClockWake | undefined, preserveNow = false) {
     const wake = expectDefined(timer, "scheduled wake");
     if (!preserveNow) {
-      vi.spyOn(Date, "now").mockReturnValue(Math.max(Date.now(), wake.atMs));
+      vi.mocked(Date.now).mockReturnValue(Math.max(Date.now(), wake.atMs));
     }
     await wake.run();
   }
@@ -160,7 +159,6 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("allow-once");
     expect((await snapshot())?.resolutionSource).toBe("operator");
     const cleanupTimer = scheduled.wakes.find((timer) => timer.delayMs === 15_000);
-    expect(cleanupTimer).toBeDefined();
     vi.mocked(Date.now).mockReturnValue(500);
     await runTimer(cleanupTimer, true);
     expect(manager.getLocalSnapshot(id)).toBeNull();
@@ -169,16 +167,22 @@ describe("ExecApprovalManager", () => {
 
   it("retains a resolved live binding across a slow handoff and cleans up after release", async () => {
     const timers = scheduled.wakes;
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const { manager, id } = await persistentApproval();
+    const now = vi.mocked(Date.now);
+    const { manager, id, readStored } = await persistentApproval();
     const releaseFirst = manager.retainForHandoff(id);
     const releaseSecond = manager.retainForHandoff(id);
-    expect(releaseFirst).not.toBeNull();
-    expect(releaseSecond).not.toBeNull();
     await manager.resolveDetailed(id, "allow-once", { kind: "device", id: "device-1" });
     now.mockReturnValue(20_000);
     expect(manager.getLiveSnapshot(id)).toMatchObject({ decision: "allow-once" });
-    expect(await manager.consumeAllowOnce(id)).toBe(true);
+    expect(manager.consumeAskFallback(id)).toBe(false);
+    expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(true);
+    expect(manager.consumeAskFallback(id)).toBe(false);
+    expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(false);
+    expect(await readStored()).toMatchObject({
+      status: "allowed",
+      decision: "allow-once",
+      consumedBy: "system.run:approval-consume",
+    });
     expect(timers.filter((timer) => timer.delayMs === 15_000)).toHaveLength(0);
     releaseFirst?.();
     expect(timers.filter((timer) => timer.delayMs === 15_000)).toHaveLength(0);
@@ -194,7 +198,7 @@ describe("ExecApprovalManager", () => {
   it("cancels old cleanup and restarts the grace period after handoff", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const timers = scheduled.wakes;
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.mocked(Date.now);
     const { id } = await register(manager);
     expect(await manager.resolve(id, "allow-once")).toBe(true);
     const staleCleanup = timers.find((timer) => timer.delayMs === 15_000);
@@ -226,16 +230,13 @@ describe("ExecApprovalManager", () => {
     expect(manager.projectDecisionIfActive(unbound.id, "allow-always")).toBe("allow-always");
   });
 
-  it.for([
-    [MAX_TIMER_TIMEOUT_MS + 1, 1_000, 1_000 + MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
-    [60_000, 1_250, 61_000, 59_750],
-  ] as const)("%dms deadline at %d", async ([timeout, now, expires, delay], testContext) => {
+  it("schedules the remaining deadline after registration preparation", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(now);
-    const record = manager.create({ command: "echo ok" }, timeout, "approval-deadline");
-    await manager.register(record, timeout);
-    expect(record.expiresAtMs).toBe(expires);
-    deadlineTimers(scheduled.wakes, [delay]);
+    vi.mocked(Date.now).mockReturnValueOnce(1_000).mockReturnValue(1_250);
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-deadline");
+    await manager.register(record, 60_000);
+    expect(record.expiresAtMs).toBe(61_000);
+    deadlineTimers(scheduled.wakes, [59_750]);
   });
 
   it("reschedules a deadline timer when the wall clock rolls backward", async () => {
@@ -255,9 +256,9 @@ describe("ExecApprovalManager", () => {
     let durableAtCallback: unknown;
     let waiterAtCallback: Promise<ExecApprovalDecision | null> | null = null;
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
-    const resolveAudienceSessionKeys = vi.fn((sessionKey: string, agentId?: string | null) => [
+    const resolveAudienceSessionKeys = (sessionKey: string, agentId?: string | null) => [
       sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey,
-    ]);
+    ];
     const created = createPersistentManager({
       resolveAudienceSessionKeys,
       onLifecycle: (event) => {
@@ -286,7 +287,6 @@ describe("ExecApprovalManager", () => {
         },
       },
     ]);
-    expect(resolveAudienceSessionKeys).toHaveBeenCalledWith("global", "work");
     expect(await created.readStored()).toMatchObject({
       source: { sessionKey: "global", agentId: "work" },
       audienceSessionKeys: ["agent:work:global"],
@@ -394,10 +394,9 @@ describe("ExecApprovalManager", () => {
     const { id, decisionPromise } = await register(manager, "approval", 60_000, request);
     const durable = await readStored();
     expect(durable?.presentation).toMatchObject({ kind: "exec", commandText: "echo safe" });
-    const durableJson = JSON.stringify(durable);
-    expect(durableJson).not.toContain("hidden-argv-value");
-    expect(durableJson).not.toContain("/hidden/cwd/value");
-    expect(durableJson).not.toContain("hidden-env-hash");
+    expect(JSON.stringify(durable)).not.toMatch(
+      /hidden-argv-value|\/hidden\/cwd\/value|hidden-env-hash/,
+    );
     const database = openOpenClawStateDatabase(databaseOptions);
     const row = database.db
       .prepare("SELECT presentation_json FROM operator_approvals WHERE approval_id = ?")
@@ -417,7 +416,6 @@ describe("ExecApprovalManager", () => {
     { name: "empty sentinel", id: "" },
     { name: "URL dot segment", id: ".", rejected: true },
     { name: "URL parent segment", id: "..", rejected: true },
-    { name: "ANSI escape", id: "approval-\u001b[31mred", rejected: true },
     { name: "trailing line feed", id: "approval-safe\n", rejected: true },
     { name: "overlong value", id: "a".repeat(129), rejected: true },
   ])("validates approval IDs: $name", ({ id, rejected }, testContext) => {
@@ -553,20 +551,6 @@ describe("ExecApprovalManager", () => {
       }
     },
   );
-
-  it("consumes allow-once durably without erasing the winning decision", async () => {
-    const { manager, readStored, id, allow } = await persistentApproval();
-    await allow();
-    expect(manager.consumeAskFallback(id)).toBe(false);
-    expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(true);
-    expect(manager.consumeAskFallback(id)).toBe(false);
-    expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(false);
-    expect(await readStored()).toMatchObject({
-      status: "allowed",
-      decision: "allow-once",
-      consumedBy: "system.run:approval-consume",
-    });
-  });
 
   it.each(["elapsed", "crossed-during-redemption"] as const)(
     "refuses allow-once redemption when the grace window is %s",

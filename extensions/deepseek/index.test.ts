@@ -6,6 +6,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import deepseekPlugin from "./index.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
@@ -44,14 +45,7 @@ async function captureThinkingPayload() {
         stopReason: "toolUse",
         timestamp: 2,
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 3,
-      },
+      makeTextToolResult("call_1", "read", "ok", false, 3),
     ],
     tools: [
       {

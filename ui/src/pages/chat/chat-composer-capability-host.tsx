@@ -7,7 +7,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
-import "../../components/modal-dialog.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
@@ -25,10 +24,11 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
+import { showToast } from "../../lib/toast.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -39,6 +39,7 @@ import {
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 
 registerMcpEnglish();
 
@@ -73,9 +74,16 @@ export class ChatComposerCapabilityHost {
   private readonly skillCatalog = new ComposerSkillCatalog(() => this.publish());
   private readonly library = new ComposerLibrarySession(() => this.publish());
   private readonly patchTokens = new Map<string, symbol>();
-  private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
+  private effectiveTools: {
+    key: string;
+    settledRuns: number;
+    result: ToolsEffectiveResult;
+  } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string } | null = null;
+  private effectiveToolsRequest: { key: string; settledRuns: number } | null = null;
+  private runSessionKey: string | null = null;
+  private runActive = false;
+  private settledRuns = 0;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -115,19 +123,20 @@ export class ChatComposerCapabilityHost {
     const client = state.client;
     const sessionKey = state.sessionKey;
     const cacheKey = this.effectiveToolsKeys(context, state, agentId);
-    // The key does not change when a run discovers MCP tools, so an explicit open refetches.
+    const settledRuns = this.settledRuns;
+    const matches = (entry: { key: string; settledRuns: number } | null) =>
+      entry?.key === cacheKey && entry.settledRuns === settledRuns;
     if (
       !state.connected ||
       !client ||
       !agentId.trim() ||
       !sessionKey.trim() ||
-      this.effectiveToolsRequest?.key === cacheKey ||
-      (!refresh &&
-        (this.effectiveTools?.key === cacheKey || this.effectiveToolsErrorKey === cacheKey))
+      matches(this.effectiveToolsRequest) ||
+      (!refresh && (matches(this.effectiveTools) || this.effectiveToolsErrorKey === cacheKey))
     ) {
       return;
     }
-    const request = { key: cacheKey };
+    const request = { key: cacheKey, settledRuns };
     const connectionEpoch = state.connectionEpoch;
     this.effectiveToolsRequest = request;
     const isCurrent = () =>
@@ -148,7 +157,7 @@ export class ChatComposerCapabilityHost {
       })
       .then((result) => {
         if (isCurrent()) {
-          this.effectiveTools = { key: cacheKey, result };
+          this.effectiveTools = { key: cacheKey, settledRuns, result };
         }
       })
       .catch(() => {
@@ -164,6 +173,15 @@ export class ChatComposerCapabilityHost {
           }
         }
       });
+  }
+
+  private trackRunSettlement(state: ChatPageHost): void {
+    const runActive = hasDirectSessionRun(state);
+    if (this.runActive && !runActive && this.runSessionKey === state.sessionKey) {
+      this.settledRuns += 1;
+    }
+    this.runSessionKey = state.sessionKey;
+    this.runActive = runActive;
   }
 
   private async patch(
@@ -403,6 +421,7 @@ export class ChatComposerCapabilityHost {
       this.effectiveToolsErrorKey = null;
       this.effectiveToolsRequest = null;
     }
+    this.trackRunSettlement(state);
     const client = state.client;
     const connectionEpoch = state.connectionEpoch;
     const sessionKey = state.sessionKey;
@@ -484,7 +503,6 @@ export class ChatComposerCapabilityHost {
         loading: this.library.loading,
         busy: this.library.busy,
         error: this.library.error,
-        notice: this.library.notice,
         canWrite: canWriteLibrary,
         onReload: () => {
           if (current()) {
@@ -498,7 +516,11 @@ export class ChatComposerCapabilityHost {
         },
         onActivate: (action, skillId, revision) => {
           if (current() && canWriteLibrary) {
-            void this.library.activate(action, skillId, revision);
+            void this.library.activate(action, skillId, revision).then((message) => {
+              if (message && current()) {
+                showToast({ message });
+              }
+            });
           }
         },
       },
@@ -526,14 +548,14 @@ export class ChatComposerCapabilityHost {
           return;
         }
         if (
-          (view === "skills" || view.startsWith("library:")) &&
+          (view === "skills" || view === "libraries" || view.startsWith("library:")) &&
           !this.library.result &&
           !this.library.loading &&
           !this.library.error
         ) {
           void this.library.load();
         }
-        if (effectiveToolsAvailable && view.startsWith("tools:")) {
+        if (effectiveToolsAvailable && view === "connectors") {
           this.loadEffectiveTools(context, state, agentId);
         }
       },

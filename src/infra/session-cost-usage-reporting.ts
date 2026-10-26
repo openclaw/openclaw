@@ -34,7 +34,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   createUsageCostResolver,
@@ -55,8 +54,6 @@ import type {
   SessionUsageTimeSeries,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
-
-const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
 type SessionUsageDiagnosticParams = {
   sessionId?: string;
@@ -95,10 +92,13 @@ export async function discoverAllSessions(params: {
   agentId: string;
   startMs?: number;
   endMs?: number;
+  /** False skips transcript statistics; overview reads take freshness from the cache worker. */
+  statistics?: false;
 }): Promise<DiscoveredSession[]> {
   const result = await runUsageCostWorker(prepareUsageCostWorker(params), {
     kind: "inventory",
     minMtimeMs: params.startMs,
+    statistics: params.statistics,
   });
   if (result.kind !== "inventory") {
     throw new Error("Usage worker returned an invalid session inventory");
@@ -169,22 +169,17 @@ export async function loadSessionCostSummary(params: {
   if (inventory.files.length === 0) {
     return null;
   }
-  while (
-    (await refreshCostUsageCacheForAgent({
-      config: params.config,
-      agentId: params.agentId,
-      agentDir: prepared.agentDir,
-      databasePath: prepared.location.databasePath,
-      storePath: prepared.location.storePath,
-      env: prepared.location.env,
-      sessionFiles: [sessionFile],
-      sessionActor: prepared.sessionActor,
-    })) === "busy"
-  ) {
-    // Direct detail callers require the requested session, unlike background
-    // summary refreshes. Wait for the agent-wide writer to release, then retry.
-    await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-  }
+  await refreshCostUsageCacheForAgent({
+    config: params.config,
+    agentId: params.agentId,
+    agentDir: prepared.agentDir,
+    databasePath: prepared.location.databasePath,
+    storePath: prepared.location.storePath,
+    env: prepared.location.env,
+    sessionFiles: [sessionFile],
+    sessionActor: prepared.sessionActor,
+    waitForRefresh: true,
+  });
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,

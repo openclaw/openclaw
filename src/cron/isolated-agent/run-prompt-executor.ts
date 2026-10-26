@@ -77,6 +77,18 @@ const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
 
+// A CLI child in its parent's workspace runs native tools no tool check sees, so
+// its process also ends when the parent resets.
+function resolveCliChildAbortSignal(
+  runSignal: AbortSignal | undefined,
+  parentSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!parentSignal) {
+    return runSignal;
+  }
+  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
+}
+
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }
@@ -93,14 +105,7 @@ export function createCronPromptExecutor(
 ) {
   const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
-    params.modelFallbacksOverride ??
-    resolveCronFallbacksOverride({
-      cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      useSubagentFallbacks: params.useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    });
+    params.modelFallbacksOverride ?? resolveCronFallbacksOverride(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -200,17 +205,22 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const scheduledExecution = params.occurrence.mint({
+      cfg: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
+      runId,
+      runSessionKey: params.runSessionKey,
+      toolsAllow: params.agentPayload?.toolsAllow,
+      operatorAuthority: params.operatorAuthority,
+    });
     const cronAdmission = prepareCronRunAdmission({
-      scheduledExecution: params.occurrence.mint({
-        cfg: params.cfgWithAgentDefaults,
-        agentId: params.agentId,
-        runId,
-        runSessionKey: params.runSessionKey,
-        toolsAllow: params.agentPayload?.toolsAllow,
-        operatorAuthorityRestored: params.operatorAuthority !== undefined,
-      }),
+      scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
+      // A child running in its parent's workspace loses every effect once that parent resets.
+      ...(params.occurrence.childParent?.binding
+        ? { assertSourceCurrent: params.occurrence.childParent.assertCurrent }
+        : {}),
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -389,6 +399,7 @@ export function createCronPromptExecutor(
           agentId: params.agentId,
           sessionKey: params.runSessionKey,
           preparedSessionEntry: params.cronSession.sessionEntry,
+          inheritedSandbox: params.occurrence.childParent?.sandbox,
         });
         assertCronCandidateSandboxPlacement({
           ...sandboxPlacement,
@@ -441,6 +452,9 @@ export function createCronPromptExecutor(
             agentId: params.agentId,
             trigger,
             jobId: params.job.id,
+            // Embedded, Codex and CLI candidates share this one sender bit for the run;
+            // the CLI loopback reads the same decision from the run's context.
+            ...cronAdmission.scheduledSender,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
@@ -458,6 +472,9 @@ export function createCronPromptExecutor(
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
             extraSystemPrompt: params.deliverySystemPrompt,
+            extraSystemPromptTurnContext: params.deliverySystemPrompt
+              ? { start: 0, text: params.deliverySystemPrompt }
+              : undefined,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
@@ -493,7 +510,10 @@ export function createCronPromptExecutor(
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             sessionFile: params.runSessionKey,
-            abortSignal: params.abortSignal,
+            abortSignal: resolveCliChildAbortSignal(
+              params.abortSignal,
+              params.occurrence.childParent?.signal,
+            ),
           });
           try {
             const cliAbortSignal = deferredLifecycle.signal;
@@ -652,10 +672,12 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
+          cyberAccessProgram:
+            runOptions.cyberAccessProgram ?? params.cronSession.sessionEntry.cyberAccessProgram,
+          authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
+          authProfileIdSource: runOptions.authProfileId
+            ? "user"
+            : params.liveSelection.authProfileIdSource,
           ...inference?.runParams,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",

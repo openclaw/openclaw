@@ -16,11 +16,6 @@ const applyConfig = (config: OpenClawConfig, gatewayStart = false) =>
   applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config), { gatewayStart });
 
 afterEach(async () => {
-  if (vi.isFakeTimers()) {
-    await vi.runOnlyPendingTimersAsync();
-    vi.clearAllTimers();
-  }
-  vi.useRealTimers();
   // Startup drains this process-global state; isolate subsequent lane assertions.
   const { resetSessionSuspensionStateForTest } =
     await import("../agents/session-suspension.test-support.js");

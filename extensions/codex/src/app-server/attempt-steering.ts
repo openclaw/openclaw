@@ -8,6 +8,7 @@ import {
 import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
@@ -16,6 +17,7 @@ import {
 import type { CodexUserInput } from "./protocol.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+const CODEX_STEER_TERMINAL_DRAIN_MS = 1_000;
 type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
 export type CodexSteeringPreparation = Parameters<
   NonNullable<NativeSessionBindingAuthority["withPreparedCurrent"]>
@@ -97,6 +99,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "imageOrder"
   | "media"
   | "isInboundUserMessage"
+  | "isInboundUserReply"
   | "allowPendingUserInputAnswer"
   | "onQueueAccepted"
   | "onQueueSettled"
@@ -106,7 +109,7 @@ export type CodexSteeringQueueOptions = Pick<
 
 type CodexSteeringCommitItem = Pick<
   CodexSteeringQueueOptions,
-  "isInboundUserMessage" | "userTurnTranscriptRecorder"
+  "isInboundUserMessage" | "isInboundUserReply" | "userTurnTranscriptRecorder"
 >;
 
 /**
@@ -153,6 +156,14 @@ export function createCodexSteeringQueue(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let sealedError: Error | undefined;
   let closedError: Error | undefined;
+  let terminalDrain: ReturnType<typeof createDeferred<void>> | undefined;
+
+  const removeDispatchedBatch = (id: string) => {
+    dispatchedBatches.delete(id);
+    if (dispatchedBatches.size === 0) {
+      terminalDrain?.resolve();
+    }
+  };
 
   const assertActive = () => {
     const unavailableError = closedError ?? sealedError;
@@ -234,6 +245,7 @@ export function createCodexSteeringQueue(params: {
     for (const item of pendingMessages) {
       rejectItem(item, error);
     }
+    terminalDrain?.resolve();
   };
   const sealQueueAdmission = () => {
     if (sealedError || closedError) {
@@ -358,7 +370,7 @@ export function createCodexSteeringQueue(params: {
         timeoutMs: params.requestTimeoutMs,
         signal: params.signal,
         ...(withCurrent ? { withCurrent } : {}),
-        onIngressRejected: () => dispatchedBatches.delete(request.clientUserMessageId),
+        onIngressRejected: () => removeDispatchedBatch(request.clientUserMessageId),
         assertCurrent: () => {
           assertActive();
           // A later preparation or overload retry can revoke earlier items.
@@ -404,7 +416,7 @@ export function createCodexSteeringQueue(params: {
       }
     } catch (error) {
       if (clientUserMessageId) {
-        dispatchedBatches.delete(clientUserMessageId);
+        removeDispatchedBatch(clientUserMessageId);
       }
       if (skippedRevokedBatch) {
         return;
@@ -494,7 +506,7 @@ export function createCodexSteeringQueue(params: {
       if (!batch) {
         return false;
       }
-      dispatchedBatches.delete(clientUserMessageId);
+      removeDispatchedBatch(clientUserMessageId);
       clearTimeout(confirmationTimers.get(clientUserMessageId));
       confirmationTimers.delete(clientUserMessageId);
       for (const item of batch) {
@@ -504,6 +516,19 @@ export function createCodexSteeringQueue(params: {
     },
     getAcceptedMessages: () => acceptedMessages.slice(),
     sealAdmission: sealQueueAdmission,
+    drainBeforeCancel() {
+      sealQueueAdmission();
+      if (closedError || dispatchedBatches.size === 0) {
+        cancelQueue();
+        return undefined;
+      }
+      // Codex records pending input after tool completion, before its next model request.
+      // Give that receipt a bounded chance to arrive before interrupt drops the input.
+      terminalDrain ??= createDeferred<void>();
+      return raceWithTimeout(terminalDrain.promise, CODEX_STEER_TERMINAL_DRAIN_MS, () => {}, {
+        ref: false,
+      }).then(cancelQueue);
+    },
     cancel: cancelQueue,
   };
 }

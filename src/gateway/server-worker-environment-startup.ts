@@ -39,6 +39,7 @@ import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from 
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
+import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import {
   createWorkerPlacementRuntimeInstallReader,
   type WorkerPlacementRuntimeInstallReader,
@@ -70,7 +71,12 @@ export type GatewayWorkerEnvironmentRuntime = {
   nodeWorkerGatewayNamespace?: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   runtimeInstall?: WorkerPlacementRuntimeInstallReader;
-  bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
+  bindWorkerSessionDispatch?: (
+    dispatch: WorkerPlacementDispatchContract["dispatch"],
+    waitForInitialPlacement: ReturnType<
+      typeof coordinateWorkerPlacementDispatch
+    >["waitForInitialPlacement"],
+  ) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -374,6 +380,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
     currentBuild: currentWorkerBundleArtifact,
+    prefetch: async (node, signal, assertCurrent) => {
+      const artifact = await currentWorkerBundleArtifact();
+      assertCurrent();
+      await nodeWorkerBundleInstaller({
+        deviceId: node.nodeId,
+        artifact,
+        reason: "prefetch",
+        signal,
+        assertCurrent,
+      });
+    },
   };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,
@@ -389,6 +406,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     throw new Error("Worker session tools are unavailable");
   };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
+    throw new Error("Worker session dispatch is unavailable");
+  };
+  let waitForInitialPlacement: ReturnType<
+    typeof coordinateWorkerPlacementDispatch
+  >["waitForInitialPlacement"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
   const computers = createWorkerComputerService({
@@ -407,6 +429,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
   const workerEnvironmentService = createWorkerEnvironmentService({
+    resolveGatewayContext: params.resolveGatewayContext,
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
@@ -626,6 +649,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       placements: params.startup.placementStore,
       environments: workerEnvironmentService,
       dispatchChild: (...args) => dispatchChild(...args),
+      waitForInitialPlacement: (...args) => waitForInitialPlacement(...args),
       portals: {
         getService: () => params.getPortalRuntime()?.portalService,
         carrier: workerNodePortalCarrier,
@@ -650,8 +674,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       environments: workerEnvironmentService,
       installer: nodeWorkerBundleInstaller,
     }),
-    bindWorkerSessionDispatch: (dispatch) => {
+    bindWorkerSessionDispatch: (dispatch, wait) => {
       dispatchChild = dispatch;
+      waitForInitialPlacement = wait;
     },
     bindDeviceNodeControl: (transport) => {
       deviceRuntime.bindNodeTransport(transport);

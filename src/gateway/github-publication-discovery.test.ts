@@ -146,7 +146,6 @@ describe("GitHub publication discovery", () => {
     const { projection, rebind } = projectionFixture();
     owner = startGitHubPublicationDiscovery({ scheduler, projection });
     readGitHubPublicationFact(session);
-    expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
     rebind({});
     clearNativeGitHubTokenCache();

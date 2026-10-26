@@ -258,6 +258,15 @@ export function createCodexAppServerAgentHarness(
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
     },
+    readNativeSubagents: async (params) => {
+      const { readCodexNativeSubagents } =
+        await import("./src/app-server/native-subagent-roster.js");
+      assertOwnershipCurrent(params);
+      return await readCodexNativeSubagents(
+        { ...params, assertCurrent: () => assertOwnershipCurrent(params) },
+        { bindingStore: options.bindingStore },
+      );
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");
@@ -332,14 +341,20 @@ export function createCodexAppServerAgentHarness(
       } = await import("./src/app-server/cyber-failover.js");
       const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
       const pluginConfig = resolveAttemptPluginConfig(params.config);
-      // The attempt resolves its turn model from runtimeModelId, so escalation
-      // reroutes one turn without touching the session's stored selection.
+      // Retry only the Access setting; retain this runtime model and all other
+      // request settings without touching the session's stored selection.
       const attemptModel = readCodexRuntimeModelId(params.model, params.modelId);
       const runAttemptOnModel = (model: string, isRetry = false) =>
         runCodexAppServerAttempt(
           // The refused attempt already mirrored this prompt; a retry must not
           // write a second copy of it into the transcript.
-          isRetry ? { ...params, suppressNextUserMessagePersistence: true } : params,
+          isRetry
+            ? {
+                ...params,
+                cyberAccessProgram: "daybreak_blue",
+                suppressNextUserMessagePersistence: true,
+              }
+            : params,
           {
             bindingStore: options.bindingStore,
             pluginConfig,
@@ -349,6 +364,8 @@ export function createCodexAppServerAgentHarness(
           },
         );
 
+      const { resolveCodexCyberAccessProgram, CodexAccessProgramUnavailableError } =
+        await import("./src/app-server/access-program.js");
       const cyberFailover = resolveCodexCyberFailoverConfig(pluginConfig);
       // Authorization is per authenticated workspace, so every lookup and record
       // below is scoped to this attempt's agent and auth profile.
@@ -361,6 +378,7 @@ export function createCodexAppServerAgentHarness(
       const plan = planCodexCyberEscalation({
         config: cyberFailover,
         currentModel: attemptModel,
+        currentAccessProgram: resolveCodexCyberAccessProgram(params),
         replaySafe: refusal.replaySafe,
         workspace,
       });
@@ -371,7 +389,7 @@ export function createCodexAppServerAgentHarness(
           await emitCodexCyberNotice(params, {
             state: "unavailable",
             model: attemptModel,
-            fallbackModel: cyberFailover.model,
+            fallbackModel: attemptModel,
           });
         }
         return result;
@@ -380,12 +398,21 @@ export function createCodexAppServerAgentHarness(
       let escalated: Awaited<ReturnType<typeof runCodexAppServerAttempt>>;
       try {
         escalated = await runAttemptOnModel(plan.model, /*isRetry*/ true);
+      } catch (error) {
+        if (!(error instanceof CodexAccessProgramUnavailableError)) {
+          throw error;
+        }
+        await emitCodexCyberNotice(params, {
+          state: "unavailable",
+          model: attemptModel,
+          fallbackModel: plan.model,
+        });
+        return result;
       } finally {
         releaseProbe();
       }
-      // Catalog presence never proves entitlement, so the retry itself is the
-      // only evidence. Remember a denial for the workspace: each repeat costs
-      // the transport's full reconnect ladder.
+      // The request owner checks current account grants before turn/start.
+      // Remember a server denial without marking ordinary model access unhealthy.
       const outcome = readCodexCyberAttemptVerdict(escalated);
       if (outcome.unavailable) {
         recordCodexCyberTargetUnavailable({

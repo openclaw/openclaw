@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -55,9 +57,11 @@ function createBrowser(
     browser?.resetProjects(reset);
   });
   const hello = {
+    type: "hello-ok",
+    protocol: 4,
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
-  };
+  } satisfies GatewayHelloOk;
   const context = {
     gateway: {
       subscribe: () => () => undefined,
@@ -588,14 +592,17 @@ describe("DraftGatewayState", () => {
       });
       const fixture = createBrowser(request);
       fixture.hello.features.methods.push("system.info");
+      await readSystemInfo(fixture.context.gateway);
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
+      expect(calls(request, "system.info")).toBe(1);
       current = pending.promise;
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
       fixture.hello.auth.scopes = [scope];
+      fixture.context.gateway.snapshot.hello = { ...fixture.hello };
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");

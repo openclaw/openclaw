@@ -61,7 +61,6 @@ export type PlainTextToolCallStreamNormalizerOptions = {
     allowPromotion: boolean;
     message: unknown;
     preserveEmptyTextBlocks?: boolean;
-    reason: unknown;
   }): PlainTextToolCallMessageNormalization;
   /** Stop after the first normalized done event when the wrapped provider has completed. */
   stopAfterDone?: boolean;
@@ -202,23 +201,23 @@ function queuePendingEvent(pending: PendingState, record: Record<string, unknown
   if (!pending.entries) {
     return;
   }
-  const event = { ...record };
   pending.entryBytes = Math.min(
     MAX_PAYLOAD_BYTES + 1,
-    pending.entryBytes + pendingEventBytes(event),
+    pending.entryBytes + pendingEventBytes(record),
   );
   const previous = pending.entries.at(-1);
   if (
     typeof previous?.delta === "string" &&
-    typeof event.delta === "string" &&
-    previous.type === event.type &&
-    eventContentIndex(previous) === eventContentIndex(event)
+    typeof record.delta === "string" &&
+    previous.type === record.type &&
+    eventContentIndex(previous) === eventContentIndex(record)
   ) {
-    previous.delta += event.delta;
-    if (Object.hasOwn(event, "partial")) {
-      previous.partial = event.partial;
+    previous.delta += record.delta;
+    if (Object.hasOwn(record, "partial")) {
+      previous.partial = record.partial;
     }
   } else {
+    const event = { ...record };
     pending.entries.push(event);
     if (pending.kind === "candidate") {
       rememberPendingEntryOffsets(pending, [event], pending.buffer.length);
@@ -551,7 +550,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
       allowPromotion: false,
       message: value,
       preserveEmptyTextBlocks,
-      reason: "error",
     });
     return normalized?.kind === "scrubbed" ? normalized : undefined;
   };
@@ -1168,7 +1166,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
           allowPromotion: record.reason === "stop" || record.reason === "toolUse",
           message: record.message,
           preserveEmptyTextBlocks: preserveTerminalContentIndexes,
-          reason: record.reason,
         });
         const forcedProjection = forceScrubTerminal
           ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)

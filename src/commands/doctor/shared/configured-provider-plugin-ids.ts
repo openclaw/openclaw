@@ -80,7 +80,6 @@ export function collectConfiguredWebFetchPluginIds(
         })
       : []),
     ...resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-      contract: "webFetchProviders",
       env,
     }),
   ];

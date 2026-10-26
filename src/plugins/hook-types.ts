@@ -30,14 +30,12 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
 } from "./hook-gateway.types.js";
+import type { AsyncPluginHook } from "./hook-handler.types.js";
 import type {
+  PluginMessageHookHandlerMap,
+  PluginHookMessageContext,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
@@ -128,6 +126,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   before_compaction: { voidTimeoutMs: 30_000 },
   after_compaction: { voidTimeoutMs: 30_000 },
   before_reset: {},
+  before_channel_ingress: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
   inbound_claim: {},
   channel_pairing_requested: { voidTimeoutMs: 2_000 },
   message_received: {},
@@ -844,12 +843,7 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
-type AsyncPluginHook<Event, Context, Result = void> = (
-  event: Event,
-  ctx: Context,
-) => Promise<Result | void> | Result | void;
-
-export type PluginHookHandlerMap = {
+export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,
@@ -907,13 +901,6 @@ export type PluginHookHandlerMap = {
     PluginHookReplyPayloadSendingContext,
     PluginHookReplyPayloadSendingResult
   >;
-  message_received: AsyncPluginHook<PluginHookMessageReceivedEvent, PluginHookMessageContext>;
-  message_sending: AsyncPluginHook<
-    PluginHookMessageSendingEvent,
-    PluginHookMessageContext,
-    PluginHookMessageSendingResult
-  >;
-  message_sent: AsyncPluginHook<PluginHookMessageSentEvent, PluginHookMessageContext>;
   before_tool_call: AsyncPluginHook<
     PluginHookBeforeToolCallEvent,
     PluginHookToolContext,

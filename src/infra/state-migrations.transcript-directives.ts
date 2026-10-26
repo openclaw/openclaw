@@ -61,6 +61,7 @@ import {
   repairHistoricalTranscriptEventJson,
 } from "./state-migrations.transcript-directives-transform.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 const MIGRATION_META_KEY = "historical-transcript-directives-v1";
 // Version 2 added masked-provider repair. Unversioned cursors were written by version 1.
@@ -664,6 +665,7 @@ export async function migrateHistoricalTranscriptDirectives(
         warnings.push(
           `Skipped historical transcript directive migration preflight for ${target.path}: ${String(error)}`,
         );
+        recoverableWarningCount += Number(error instanceof Utf8InputError);
       }
     }
     if (targets.length > 0) {
@@ -702,6 +704,7 @@ export async function migrateHistoricalTranscriptDirectives(
             warnings.push(
               `Skipped historical transcript directive migration for ${target.path}: ${String(error)}`,
             );
+            recoverableWarningCount += Number(error instanceof Utf8InputError);
           }
         }
       });

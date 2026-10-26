@@ -7,6 +7,7 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 - Tests: `run-vitest.mjs`; follow [testing skill](../.agents/skills/openclaw-testing/SKILL.md) + [test-authoring skill](../.agents/skills/test-audit/SKILL.md).
 - Lint/typecheck: `run-oxlint.mjs` + `run-tsgo.mjs` own repo-local runtime behavior; use them in package scripts and CI steps.
 - Changed-file checks: `check-changed.mjs` owns execution; `changed-lanes.mjs` owns classification. Never copy path-scope rules into hooks/CI snippets.
+- Knip ownership for standalone commands and dynamically loaded children: follow [Before You PR](../CONTRIBUTING.md#before-you-pr).
 - PR preparation: `pr` / `pr-lib` own source acquisition, correction reviews, gate bindings. Changing them: read [PR preparation](../docs/reference/scripts/pr-preparation.md).
 - PR wrapper lifecycle: `pr` / `pr-lib` own supervision, locks, materialized dependencies. Changing/repairing them: read [PR wrapper tooling](../docs/reference/scripts/pr-tooling.md).
 - GitHub transport: `pr-lib` owns observations + protected dispatch. Changing API/Octopool behavior: read [PR GitHub transport](../docs/reference/scripts/github-transport.md).

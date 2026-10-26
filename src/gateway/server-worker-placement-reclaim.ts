@@ -55,19 +55,16 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         ),
       [{ sessionKey, agentId, preserveQualifiedAddress: true }],
     );
+    const lifetime = new DisposableStack();
     let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
-    let active = true;
     let unregister = () => {};
-    const release = () => {
-      if (!active) {
-        return;
-      }
-      active = false;
+    lifetime.defer(() => {
       retained?.release();
       unregister();
-    };
+    });
+    const release = () => lifetime.dispose();
     const assertActive = () => {
-      if (!active) {
+      if (lifetime.disposed) {
         throw new WorkerDispatchTargetChangedError(
           `Session ${sessionKey} changed before cloud worker stop. Retry.`,
         );

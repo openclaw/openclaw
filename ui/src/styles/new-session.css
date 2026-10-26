@@ -496,20 +496,6 @@ span.new-session-page__select {
   display: none;
 }
 
-/* Icon templates only carry paths; without an explicit stroke rule the SVGs
-   render as solid black fills (invisible-blob chips in dark mode). */
-.new-session-page__trigger-chevron svg,
-.new-session-page__target-icon svg,
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .new-session-page__trigger-chevron svg {
   width: 10px;
   height: 10px;
@@ -645,7 +631,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
@@ -1026,12 +1011,6 @@ span.new-session-page__select {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
 
-.new-session-page__start-submit--blocked {
-  cursor: var(--cursor-action);
-  filter: saturate(0.45);
-  opacity: 0.48;
-}
-
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 /* No inset of its own: the editor's breathing room is the composer surface's
@@ -1326,6 +1305,10 @@ span.new-session-page__select {
     order: 1;
   }
 
+  .new-session-page__blocked-submit {
+    order: 2;
+  }
+
   .new-session-page__composer .new-session-page__message {
     min-height: clamp(48px, 9svh, 80px);
     max-height: min(10lh, 34svh);
@@ -1393,7 +1376,7 @@ span.new-session-page__select {
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
-    color: var(--primary-foreground);
+    color: inherit;
   }
 
   .new-session-page .agent-chat__welcome-clawd {

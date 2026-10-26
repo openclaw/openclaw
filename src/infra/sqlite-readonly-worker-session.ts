@@ -332,13 +332,14 @@ export function createSqliteReadOnlyWorkerSession(
         }
       }
       return (pendingOperation = new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
-        const { timeoutMs, size } = host.readBudget(pathname);
         stderr = "";
         outputBytes = 0;
         const abort = () => retire(options.signal?.reason);
-        const timer = host.deadlineOwnedByCaller()
-          ? undefined
-          : setTimeout(() => retire(host.timeoutError(pathname, timeoutMs, size)), timeoutMs);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (!host.deadlineOwnedByCaller()) {
+          const { timeoutMs, size } = host.readBudget(pathname);
+          timer = setTimeout(() => retire(host.timeoutError(pathname, timeoutMs, size)), timeoutMs);
+        }
         const id = ++sequence;
         pending = {
           id,

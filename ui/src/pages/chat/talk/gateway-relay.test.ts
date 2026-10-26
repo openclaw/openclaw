@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   audioClock,
   listeners,
@@ -10,7 +11,6 @@ import {
   createdSources,
   getUserMedia,
   MockAudioContext,
-  createSession,
   defaultRelayResponse,
   createClient,
   createConsultClient,
@@ -29,8 +29,7 @@ import {
   requestCallsFor,
   installGatewayRelayTestFixture,
 } from "./gateway-relay.test-support.ts";
-import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
-import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import { createGatewayRelaySession } from "./session.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -46,12 +45,7 @@ function consultReply(method: string, reply: () => Promise<unknown>) {
   );
   return client;
 }
-const consultResult = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultResult = consultRunResult();
 const readyResultCall = [
   "talk.session.submitToolResult",
   {
@@ -210,12 +204,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.mocked(client).request.mockImplementation(async (method) =>
       method === "talk.session.close" ? await closed.promise : defaultRelayResponse(method),
     );
-    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
-      input: await prepareRealtimeTalkTestInput(),
-      callbacks: {},
-      client,
-      sessionKey: "main",
-    });
+    const transport = await createTransport({ client });
 
     await startTransport(transport);
 
@@ -286,14 +275,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
           resolveCatalog = resolve;
         }),
     );
-    const transport = new GatewayRelayRealtimeTalkTransport(
-      { ...createSession(), model: "gpt-live-1" },
-      {
-        input: await prepareRealtimeTalkTestInput(),
-        callbacks: {},
-        client,
-        sessionKey: "main",
-      },
+    const transport = await createTransport(
+      { client },
+      { ...createGatewayRelaySession(), model: "gpt-live-1" },
     );
     const startup = transport.start();
     expect(requestCallsFor(client, "talk.catalog")).toEqual([

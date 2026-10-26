@@ -360,7 +360,6 @@ export function detectStateIntegrityHealthIssues(
   params?: {
     configPath?: string;
     env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
   },
 ): StateIntegrityHealthIssue[] {
   const issues: StateIntegrityHealthIssue[] = [];
@@ -370,7 +369,7 @@ export function detectStateIntegrityHealthIssues(
     }
   };
   const env = params?.env ?? process.env;
-  const homedir = () => resolveRequiredHomeDir(env, params?.homedir ?? os.homedir);
+  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
   const dirCandidates = resolveSessionRuntimeDirectories(cfg, env, homedir);

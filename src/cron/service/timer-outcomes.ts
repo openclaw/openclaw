@@ -5,11 +5,9 @@ import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { computeNextRunAtMs } from "../schedule.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
-import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
+import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import {
   autoDisableCronJob,
   maybeAutoDisableCronJobAfterRunFailure,
@@ -25,6 +23,7 @@ import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
   isJobEnabled,
+  normalizeConsecutiveErrors,
   recordScheduleComputeError,
   resolveNextRunAtMsOrDisable,
   resolveCronRestartRetryAtMs,
@@ -35,7 +34,8 @@ import {
   resolveManualOneShotOccurrenceAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import { type CronJobRunResult, MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-constants.js";
+import type { CronJobRunResult } from "./timer-execution-timeout.js";
 import {
   applyTriggerEvaluationState,
   applyTriggerRunResult,
@@ -85,8 +85,8 @@ function assignNextRunAtMs(
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
   state: CronJobPolicyContext,
-  job: CronJob,
-  result: CronJobRunResult,
+  job: CronStoredJob,
+  result: CronJobRunResult & Pick<CronRunFinalizationOutcome, "errorReason">,
   opts: {
     // Manual force runs update outcome state but are out-of-band for cadence.
     scheduleMode?: "advance" | "preserve";
@@ -115,6 +115,7 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
@@ -125,13 +126,14 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
+  if (result.status === "ok" && result.result && result.result.outcome !== "no_change") {
+    job.state.lastMeaningfulResult = { ...result.result, atMs: result.endedAt };
+  }
   job.state.lastError = result.interruptedByRestart ? STARTUP_INTERRUPTED_ERROR : result.error;
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
-    result.status === "error" && typeof result.error === "string"
-      ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
-      : undefined;
+    result.status === "error" && typeof result.error === "string" ? result.errorReason : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
       {
@@ -177,12 +179,10 @@ export function applyJobResult(
     result.status === "error" &&
     !result.interruptedByRestart &&
     result.errorClassification?.kind !== "aborted";
-  const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
+  const previousConsecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
   const computeNaturalNext = (restartInterval: boolean) => {
     try {
-      return restartInterval && job.schedule.kind === "every"
-        ? computeNextRunAtMs(job.schedule, result.endedAt)
-        : computeJobNextRunAtMs(job, result.endedAt);
+      return computeJobNextRunAtMs(job, result.endedAt, { preserveEveryAnchor: restartInterval });
     } catch (err) {
       recordScheduleComputeError({
         state,
@@ -327,10 +327,9 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      isPluginCommandCronJob(job)
+      (isPluginCommandCronJob(job) || job.operatorSource)
     ) {
-      // The bound plugin instance is gone for good: retire on this first refusal instead of
-      // erroring until generic auto-disable, whose re-enable advice could never help.
+      // A retired plugin or unusable continuation source cannot recover through retries.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
@@ -560,7 +559,9 @@ export function applyJobResult(
       );
       job.state.pacedNextRunAtMs = nextRunAtMs;
     } else if (isJobEnabled(job)) {
-      const naturalNext = computeNaturalNext(previousConsecutiveErrors > 0);
+      const naturalNext = computeNaturalNext(
+        previousConsecutiveErrors > 0 || previousRunInterruptedByRestart,
+      );
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
