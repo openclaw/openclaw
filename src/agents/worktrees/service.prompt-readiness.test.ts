@@ -12,7 +12,10 @@ import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 // Native cloning is the only substituted boundary; Git and publication use their real owners.
-vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
+vi.mock("./filesystem-backend.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./filesystem-backend.js")>()),
+  detectWorktreeFilesystemBackend: vi.fn(),
+}));
 
 const initializeRepository = useManagedWorktreeTestRepository();
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
