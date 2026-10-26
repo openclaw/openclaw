@@ -119,7 +119,17 @@ it.runIf(process.platform !== "win32").each([
       import net from "node:net";
       import { spawn } from "node:child_process";
       import { once } from "node:events";
+      import { createInterface } from "node:readline";
       import assert from "node:assert/strict";
+      const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
+      const marker = name => path.join(root, name);
+      const waitUntil = async predicate => {
+        while (!predicate()) await new Promise(resolve => setTimeout(resolve, 10));
+      };
+      const holdClaim = async () => {
+        fs.writeFileSync(marker("claim-check-pending"), "claim check reached");
+        await waitUntil(() => fs.existsSync(marker("claim-check-release")));
+      };
       const { registerSealedRuntime } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.sealedRegistry).href)});
       registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(coordinator)} });
     `;
@@ -136,24 +146,15 @@ it.runIf(process.platform !== "win32").each([
       const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
       export async function assertForegroundUpdateOrigin(...args) {
         await handoff.assertForegroundUpdateOrigin(...args);
-        if (${JSON.stringify(mode)} === "lost-claim") {
-          fs.writeFileSync(${JSON.stringify(path.join(root, "claim-check-pending"))}, "initial observation joined");
-          while (!fs.existsSync(${JSON.stringify(path.join(root, "claim-check-release"))}))
-            await new Promise(resolve => setTimeout(resolve, 10));
-        }
+        if (mode === "lost-claim") await holdClaim();
       }
-      if (${JSON.stringify(mode)} === "lost-terminal-claim" && process.execArgv.includes("--input-type=module")) {
-        fs.writeFileSync(${JSON.stringify(path.join(root, "claim-check-pending"))}, "terminal module imported");
-        while (!fs.existsSync(${JSON.stringify(path.join(root, "claim-check-release"))}))
-          await new Promise(resolve => setTimeout(resolve, 10));
-      }
+      if (mode === "lost-terminal-claim" && process.execArgv.includes("--input-type=module")) await holdClaim();
     `,
   );
   await fs.writeFile(
     fixturePath,
     `${bootstrap}
       try {
-      const root = ${JSON.stringify(root)}, mode = ${JSON.stringify(mode)};
       const unchanged = mode === "no-op" || mode === "lost-terminal-claim";
       const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
       const { readGatewayOwnerLease } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.gatewayOwnerLease).href)});
@@ -251,25 +252,20 @@ it.runIf(process.platform !== "win32").each([
         Object.assign(meta.meta, { root, runId: run.runId, foregroundOrigin: origin, completionOwner: "gateway-restart" });
         fs.writeFileSync(params.metaPath, JSON.stringify(meta));
         fs.writeFileSync(paramsPath, JSON.stringify(params));
-        let notices = 0, output = "", pending = "", blocker;
+        let notices = 0, output = "", blocker;
         const helper = spawn(process.execPath, [scriptPath, paramsPath], { env: { ...process.env,
           OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META: params.metaPath, OPENCLAW_UPDATE_RUN_ID: run.runId,
           OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, stdio: ["pipe", "pipe", "pipe"] });
-        let helperErrors = "";
-        helper.stderr.on("data", bytes => helperErrors += bytes);
+        helper.stderr.pipe(process.stderr, { end: false });
         const joined = once(helper, "close");
-        helper.stdout.on("data", bytes => {
-          output += bytes;
-          pending += bytes;
-          for (let newline; (newline = pending.indexOf("\\n")) >= 0;) {
-            const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        helper.stdout.on("data", bytes => output += bytes);
+        createInterface({ input: helper.stdout }).on("line", line => {
           if (line === "OPENCLAW_UPDATE_HANDOFF_READY") helper.stdin.write("transfer\\n");
           if (line === "before-park") {
             notices++;
             void (async () => {
               if (mode === "notice-refused-after-timeout") {
-                while (!fs.readFileSync(${JSON.stringify(prepared.logPath)}, "utf8").includes("pre-park notice timed out after 10 seconds"))
-                  await new Promise(resolve => setTimeout(resolve, 10));
+                await waitUntil(() => fs.readFileSync(${JSON.stringify(prepared.logPath)}, "utf8").includes("pre-park notice timed out after 10 seconds"));
                 assert(server.listening && !fs.existsSync(activationPath));
               }
               await new Promise(resolve => server.close(resolve));
@@ -285,18 +281,15 @@ it.runIf(process.platform !== "win32").each([
               helper.stdin.write((mode.startsWith("notice-refused") ? "notice-failed" : "noticed") + "\\nclosed\\n");
             })().catch(error => { console.error(error); helper.stdin.write("notice-failed\\n"); });
           }
-          }
         });
         if (mode === "cancel") {
-          while (!fs.existsSync(path.join(root, "descendant")) && helper.exitCode === null && helper.signalCode === null)
-            await new Promise(resolve => setTimeout(resolve, 10));
+          await waitUntil(() => fs.existsSync(marker("descendant")) || helper.exitCode !== null || helper.signalCode !== null);
           helper.stdin.write("cancel\\n");
         }
         let replacement;
         if (mode === "lost-claim" || mode === "lost-terminal-claim") {
-          while (!fs.existsSync(path.join(root, "claim-check-pending")) && helper.exitCode === null && helper.signalCode === null)
-            await new Promise(resolve => setTimeout(resolve, 10));
-          assert(fs.existsSync(path.join(root, "claim-check-pending")), "claim check was not reached");
+          await waitUntil(() => fs.existsSync(marker("claim-check-pending")) || helper.exitCode !== null || helper.signalCode !== null);
+          assert(fs.existsSync(marker("claim-check-pending")), "claim check was not reached");
           const current = store.read(root); assert.equal(current.kind, "current");
           // Simulate external revocation in this fixture's private database; a read
           // snapshot intentionally cannot exercise the owner's release capability.
@@ -318,10 +311,19 @@ it.runIf(process.platform !== "win32").each([
         if (blocker) await new Promise(resolve => blocker.close(resolve));
         await lock.release();
         const completedRun = getUpdateRun(run.runId);
-        console.log(JSON.stringify({ mode, helperCode, helperSignal, notices, stillServing, output,
-          staged: fs.existsSync(stagePath), activated: fs.existsSync(activationPath), run: completedRun?.status, runReason: completedRun?.reason,
-          descendant: fs.existsSync(path.join(root, "descendant")) ? Number(fs.readFileSync(path.join(root, "descendant"))) : undefined,
-          helperErrors, replacementOwner }));
+        assert.deepEqual({ helperCode, helperSignal, notices, stillServing,
+          staged: fs.existsSync(stagePath), activated: fs.existsSync(activationPath), run: completedRun?.status },
+          ${JSON.stringify({ helperCode, helperSignal: null, notices: untouched ? 0 : 1, stillServing: untouched, staged, activated, run })},
+          fs.readFileSync(${JSON.stringify(prepared.logPath)}, "utf8"));
+        if (notices) assert(output.includes(${JSON.stringify(`foreground-settled:${["success", "safe-recovery", "pending-sibling"].includes(mode) ? "respawn" : "stopped"}\n`)}));
+        if (mode.startsWith("pending-sibling")) assert.equal(completedRun?.reason, "gateway-readiness-unverified");
+        if (mode === "admission-busy" || mode === "finalize-admission-busy") {
+          assert.equal(completedRun?.reason, "update-ledger-busy");
+          assert(!output.includes("foreground-settled:respawn"));
+        }
+        if (mode === "lost-claim" || mode === "lost-terminal-claim") assert.equal(replacementOwner, "replacement-owner");
+        console.log(JSON.stringify({ descendant: fs.existsSync(marker("descendant"))
+          ? Number(fs.readFileSync(marker("descendant"))) : undefined }));
       }
       } catch (error) {
         console.error(error);
@@ -358,46 +360,11 @@ it.runIf(process.platform !== "win32").each([
   try {
     expect(await Promise.race([parentJoined, failed.promise]), stderr).toEqual([0, null]);
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
-      helperCode: number;
-      helperSignal: string | null;
-      notices: number;
-      stillServing: boolean;
-      output: string;
-      staged: boolean;
-      activated: boolean;
-      run: string;
-      runReason: string | null;
       descendant?: number;
-      replacementOwner?: string;
     };
-    const log = await fs.readFile(prepared.logPath, "utf8");
     await expect(fs.access(nativeProbePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(result, log).toMatchObject({
-      helperSignal: null,
-      helperCode,
-      activated,
-      notices: untouched ? 0 : 1,
-      stillServing: untouched,
-      staged,
-      run,
-    });
-    if (result.notices) {
-      expect(result.output, log).toContain(
-        `foreground-settled:${["success", "safe-recovery", "pending-sibling"].includes(mode) ? "respawn" : "stopped"}\n`,
-      );
-    }
-    if (mode.startsWith("pending-sibling")) {
-      expect(result.runReason, log).toBe("gateway-readiness-unverified");
-    }
-    if (mode === "admission-busy" || mode === "finalize-admission-busy") {
-      expect(result.runReason, log).toBe("update-ledger-busy");
-      expect(result.output, log).not.toContain("foreground-settled:respawn");
-    }
     if (result.descendant) {
       await expect.poll(() => isPidAlive(result.descendant!)).toBe(false);
-    }
-    if (mode === "lost-claim" || mode === "lost-terminal-claim") {
-      expect(result.replacementOwner, log).toBe("replacement-owner");
     }
   } finally {
     await cleanup();

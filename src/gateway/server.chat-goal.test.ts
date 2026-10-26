@@ -48,6 +48,7 @@ import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-conti
 import { registerGoalReplacementCases } from "./server.chat-goal-replacement.test-support.js";
 import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
+  goalAgentResult,
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
   installReplyDispatchHook,
@@ -55,6 +56,7 @@ import {
   registerGoalChatRestartSettlementCase,
   registerGoalChatOperationCollisionCases,
 } from "./server.chat-goal.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -83,13 +85,7 @@ const sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
   connId: "goal-chat-ui",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-  },
+  connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
 };
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let context: GatewayRequestContext;
@@ -129,18 +125,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve(undefined);
     await modelRelease;
-    return {
-      payloads: [{ text: "Goal work continued." }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: params.sessionId,
-          provider: "test",
-          model: "test",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    };
+    return goalAgentResult(params.sessionId, "Goal work continued.");
   });
 });
 
@@ -233,7 +218,7 @@ async function withHeldModel(run: () => Promise<void>) {
 function profileClient(profileId: string): GatewayClient {
   return {
     ...client,
-    authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
+    authenticatedUserProfile: gatewayProfile(profileId),
   };
 }
 

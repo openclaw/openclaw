@@ -171,24 +171,9 @@ describe("Discord admission through Gateway policy publication", () => {
       channel_id: channelId,
       guild_id: guildId,
       content: "hello",
-      author: {
-        id: userId,
-        username: "synthetic",
-        discriminator: "0",
-        avatar: null,
-        global_name: null,
-      },
-      attachments: [],
-      embeds: [],
-      mentions: [],
-      mention_roles: [],
-      components: [],
-      mention_everyone: false,
+      author: { id: userId, username: "synthetic", discriminator: "0" },
       timestamp: "2026-09-06T00:00:00.000Z",
-      edited_timestamp: null,
       type: 0,
-      tts: false,
-      pinned: false,
     });
     const handler = discord.createDiscordMessageHandler(
       createHandlerOptions(discord.createNoopThreadBindingManager("default")),
@@ -278,16 +263,14 @@ describe("Discord admission through Gateway policy publication", () => {
       expect(admitted()).toEqual(["newly-allowed"]);
       channelId = "457";
       channelLookupStarted = false;
-      let releaseChannelLookup!: () => void;
-      pendingChannelLookup = new Promise<void>((resolve) => {
-        releaseChannelLookup = resolve;
-      });
+      const lookup = createDeferred();
+      pendingChannelLookup = lookup.promise;
       const pendingMessage = send("pending-revocation");
       try {
         await waitForFast(() => expect(channelLookupStarted).toBe(true));
         await apply(cfg);
       } finally {
-        releaseChannelLookup();
+        lookup.resolve();
         await pendingMessage;
       }
       await waitForIngress();

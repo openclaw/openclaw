@@ -763,27 +763,17 @@ describe("signal transport compatibility", () => {
     ]);
   });
 
-  it("defers legacy managed ports outside the canonical range", async () => {
-    const cfg = signalConfig({
-      apiMode: "native",
-      autoStart: true,
-      httpPort: 70_000,
-    });
-    const result = await migrateLegacySignalTransportConfig({ cfg });
-
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      "- channels.signal: legacy httpPort must be an integer between 1 and 65535; correct httpPort, then run openclaw doctor --fix.",
-    ]);
-  });
-
-  it("defers invalid ports used to derive external legacy endpoints", async () => {
-    const cfg = signalConfig({
-      apiMode: "container",
-      httpHost: "127.0.0.1",
-      httpPort: 70_000,
-    });
+  it.each([
+    [
+      "defers legacy managed ports outside the canonical range",
+      () => ({ apiMode: "native", autoStart: true, httpPort: 70_000 }),
+    ],
+    [
+      "defers invalid ports used to derive external legacy endpoints",
+      () => ({ apiMode: "container", httpHost: "127.0.0.1", httpPort: 70_000 }),
+    ],
+  ] as const)("%s", async (_, createEntry) => {
+    const cfg = signalConfig(createEntry());
     const result = await migrateLegacySignalTransportConfig({ cfg });
 
     expect(result.config).toBe(cfg);

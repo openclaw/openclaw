@@ -17,16 +17,21 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
-import { configPageForSection, omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
-import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
+import {
+  configPageForSection,
+  MEMORY_SETTINGS_KEYS,
+  omitCuratedOwnedConfigLeaves,
+} from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
+registerProfileEnglish();
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);

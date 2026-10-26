@@ -1,3 +1,4 @@
+import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
@@ -15,7 +16,14 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
+
+export const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
+  manifest.modelCatalog.providers.clawrouter.models.find(
+    (model) => model.id === "openai/gpt-6-luna",
+  )?.inference,
+);
 
 const PROVIDER_ID = "clawrouter";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
@@ -269,6 +277,14 @@ function buildRoutedModel(
     name: normalizeOptionalString(row?.displayName) ?? `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
+    // Reaching this point proves this credential grants a compatible chat route.
+    // Static typed-only support must not veto that independent grant.
+    inference: {
+      ...(provider.id === "openai" && id === "openai/gpt-6-luna" && api === "openai-responses"
+        ? decisionCapabilities
+        : {}),
+      chat: true,
+    },
     reasoning:
       supportedReasoningEfforts !== undefined ||
       /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
@@ -325,24 +341,6 @@ function buildRoutedModel(
   };
 }
 
-function buildDiscoveredModels(
-  rootUrl: string,
-  providers: CatalogProvider[],
-  resolveNativeModelFacts: ResolveNativeModelFacts,
-): ModelDefinitionConfig[] {
-  const models = new Map<string, ModelDefinitionConfig>();
-  for (const provider of providers) {
-    for (const model of provider.models) {
-      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
-      if (!routed || models.has(routed.id)) {
-        continue;
-      }
-      models.set(routed.id, routed);
-    }
-  }
-  return [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
 export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
@@ -361,15 +359,23 @@ export async function buildClawRouterProviderConfig(params: {
   const providers = rows
     .map(parseCatalogProvider)
     .filter((provider): provider is CatalogProvider => Boolean(provider));
+  const apiKey = params.apiKey;
+  const resolveNativeModelFacts = await loadBundledModelIdentityFactsResolver();
+  const models = new Map<string, ModelDefinitionConfig>();
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
+      if (!routed || models.has(routed.id)) {
+        continue;
+      }
+      models.set(routed.id, routed);
+    }
+  }
   return {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
-    apiKey: params.apiKey,
-    models: buildDiscoveredModels(
-      rootUrl,
-      providers,
-      await loadBundledModelIdentityFactsResolver(),
-    ),
+    apiKey,
+    models: [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 

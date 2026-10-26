@@ -6,6 +6,7 @@ import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -167,11 +168,11 @@ it("keeps the selected heartbeat generation alive through native retirement", as
       await Promise.all(ready);
       expect(fs.readFileSync(markerPath, "utf8")).toBe("selected");
       expect(heartbeat.inspect()).toBeGreaterThan(0);
-      heartbeat.stop();
+      await heartbeat.stop();
     }, release);
     expect(release).toHaveBeenCalledOnce();
   } finally {
-    heartbeat?.stop();
+    await heartbeat?.stop();
     await Promise.all(workers.map((worker) => worker.terminate()));
   }
 });
@@ -245,6 +246,79 @@ it.each(["reparented", "unchanged ppid"])(
     expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
     await vi.advanceTimersByTimeAsync(10_000);
     expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+  },
+);
+
+it.each(["resume", "replace", "stop"] as const)(
+  "keeps the main thread responsive during expired timer renewal: %s",
+  async (ending) => {
+    const { rootPath } = lockFixture("openclaw-owner-async-renewal-");
+    const held = new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]);
+    const { workers, ready, beats } = observeHeartbeatWorkers();
+    const lost = vi.fn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const heartbeat = startGatewayStateOwnerHeartbeat(held, lost);
+    const opened = createDeferredCore();
+    const resume = createDeferredCore();
+    const open = fs.promises.open.bind(fs.promises);
+    const openSync = fs.openSync;
+    let synchronousOpens = 0;
+    try {
+      await Promise.all(ready);
+      await workers[0]!.terminate();
+      vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+        if (args[0] === rootPath) {
+          opened.resolve();
+          await resume.promise;
+        }
+        return open(...args);
+      });
+      vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+        if (pathname === rootPath) {
+          synchronousOpens++;
+        }
+        return openSync(pathname, flags, mode);
+      });
+      const stale = BigInt(Date.now() - 65_000);
+      Atomics.store(beats[0]!, 0, stale);
+      vi.advanceTimersByTime(60_000);
+      expect(synchronousOpens).toBe(0);
+      await opened.promise;
+      let responsive = false;
+      setTimeout(() => {
+        responsive = true;
+      }, 0);
+      vi.advanceTimersByTime(0);
+      expect(responsive).toBe(true);
+      expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      if (ending === "replace") {
+        fs.renameSync(rootPath, `${rootPath}.retired`);
+        fs.copyFileSync(`${rootPath}.retired`, rootPath);
+      } else if (ending === "stop") {
+        held.clear();
+        void heartbeat.stop();
+      }
+      resume.resolve();
+      if (ending === "resume") {
+        await vi.waitFor(() => expect(Atomics.load(beats[0]!, 0)).toBeGreaterThan(stale));
+        expect(lost).not.toHaveBeenCalled();
+      } else if (ending === "replace") {
+        await vi.waitFor(() => expect(lost).toHaveBeenCalledOnce());
+        expect(lost.mock.calls[0]?.[0]).toHaveProperty(
+          "message",
+          expect.stringContaining("removed or replaced"),
+        );
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      } else {
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0));
+        expect(lost).not.toHaveBeenCalled();
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      }
+    } finally {
+      resume.resolve();
+      await heartbeat.stop();
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
   },
 );
 
@@ -524,7 +598,7 @@ it("renews retained custody during synchronous work and never touches a successo
       if (namespace && "pidNsInode" in namespace) {
         expect(
           classifyGatewayLockProcessNamespace(
-            { ...namespace, pidNsInode: "foreign-observer" },
+            { processNamespace: { ...namespace, pidNsInode: "foreign-observer" } },
             file.lockPath,
           ),
         ).toBe("unknown");

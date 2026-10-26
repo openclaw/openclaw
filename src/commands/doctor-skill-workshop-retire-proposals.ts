@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { pathExists, root } from "../infra/fs-safe.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
@@ -388,8 +389,8 @@ async function undoUnfinishedApply(apply: UnfinishedApply): Promise<boolean> {
   await restoreWorkspaceSkillMutation(restoration);
   // An undone create leaves only empty directories; remove them so the name is usable again.
   if (apply.previousContent === null) {
-    const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true });
-    if (entries.every((entry) => entry.isDirectory())) {
+    const entries = await listDirectoryTreeStrict(skillDir);
+    if (entries.every(({ dirent }) => dirent.isDirectory())) {
       await fs.rm(skillDir, { recursive: true });
     }
   }

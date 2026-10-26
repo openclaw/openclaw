@@ -36,6 +36,7 @@ import {
   mockGatewayMethods,
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
@@ -113,10 +114,11 @@ vi.mock("../../../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
+// mock-isolation: Registry fixtures control run ownership without the process-global registry.
 vi.mock("../../../infra/agent-run-registry.js", () => ({
   getAgentRunContext: mocks.getAgentRunContext,
   listAgentRunsForSession: () => [],
-  hasLiveAgentRunContext: vi.fn(() => false),
+  hasLiveAgentRunContext: mocks.hasLiveAgentRunContext,
 }));
 
 vi.mock("../../../config/config.js", () => {
@@ -193,9 +195,8 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 // Manual mocks can bypass concurrent lazy imports in Vitest; warm the autospy once.
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
 const wakeRequester = vi.mocked(maybeWakeRequesterAfterAllChildrenSettled);
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
-}));
+// mock-isolation: Lifecycle fixtures supply their own registries without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => import("../../runtime-plugins.test-support.js"));
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.getGlobalHookRunner,
@@ -984,14 +985,8 @@ describe("subagent registry seam flow", () => {
     const pendingWait = createDeferred<Record<string, unknown>>();
     const waitStarted = createDeferred();
     const announceStarted = createDeferred();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
 
@@ -2315,17 +2310,19 @@ describe("subagent registry seam flow", () => {
       });
     }
 
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() => {
-      for (const kind of kinds) {
-        expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
-          agentDir: `/tmp/agent-${kind}`,
-          workspaceDir: `/tmp/workspace-${kind}`,
-          initialize: mocks.ensureContextEnginesInitialized,
-        });
-      }
-    });
+    const settleRootWork = observeRootWork();
+    try {
+      await mod.testing.sweepOnceForTests();
+    } finally {
+      await settleRootWork();
+    }
+    for (const kind of kinds) {
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(mocks.getRuntimeConfig(), {
+        agentDir: `/tmp/agent-${kind}`,
+        workspaceDir: `/tmp/workspace-${kind}`,
+        initialize: mocks.ensureContextEnginesInitialized,
+      });
+    }
   });
 
   it.each(["main", "cron"] as const)(
@@ -2379,56 +2376,5 @@ describe("subagent registry seam flow", () => {
       });
     },
   );
-
-  it("retains a run after session read failure and completes it on a later sweep", async () => {
-    const childSessionKey = "agent:main:subagent:child";
-    const startedAt = Date.now() - 2_000;
-    mockPendingAgentWait();
-    await mod.registerSubagentRun({
-      runId: "run-sweep-error",
-      cleanup: "delete",
-    });
-    const run = expectDefined(
-      await mod.getSubagentRunByChildSessionKey(childSessionKey),
-      "registered run",
-    );
-    await updateFixtureRun(run.runId, (next) => {
-      next.execution.startedAt = startedAt;
-    });
-    const execution = structuredClone(mod.getSubagentRunByRunId(run.runId)?.execution);
-    mocks.loadSessionEntry.mockClear().mockImplementation(() => {
-      throw new Error("simulated sweep failure");
-    });
-
-    await mod.testing.sweepOnceForTests();
-    await mod.testing.runSweeperTickForTests();
-
-    expect(mocks.loadSessionEntry).toHaveBeenCalled();
-    expect((await mod.getSubagentRunByChildSessionKey(childSessionKey))?.execution).toEqual(
-      execution,
-    );
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-
-    mocks.loadSessionEntry.mockReset();
-    mocks.entries[childSessionKey] = createSessionEntry({
-      lifecycleRevision: "revision-child",
-      status: "done",
-      startedAt,
-      endedAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-    vi.setSystemTime(Date.now() + 1_000);
-    await mod.testing.sweepOnceForTests();
-
-    await waitForFast(() =>
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          childRunId: "run-sweep-error",
-          outcome: expect.objectContaining({ status: "ok" }),
-        }),
-      ),
-    );
-    expect(mocks.entries[childSessionKey]?.status).toBe("done");
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

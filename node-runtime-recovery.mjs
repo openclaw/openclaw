@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
@@ -11,11 +12,8 @@ import {
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
 import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
-import {
-  detectCurrentSqliteCapabilities,
-  nodeRuntimeFailure,
-  SQLITE_CAPABILITY_PROBE,
-} from "./node-sqlite.mjs";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "./node-sqlite.mjs";
+import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
 
 export { consumeLauncherRootOptionToken };
 
@@ -44,6 +42,25 @@ const respawnSignals =
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
+
+/**
+ * Startup-only bootstrap cannot depend on dist or installed packages, so this
+ * mirrors formatErrorStackWithMessage
+ * (packages/normalization-core/src/error-coercion.ts): Bun can materialize
+ * `stack` during garbage collection with a bare header that drops the message.
+ */
+function formatRespawnErrorDetail(error) {
+  const name = typeof error.name === "string" && error.name ? error.name : "Error";
+  const message = typeof error.message === "string" ? error.message : "";
+  const stack = typeof error.stack === "string" ? error.stack : "";
+  if (!stack || !message || stack.includes(message)) {
+    return stack || message || name;
+  }
+  const header = `${name}: ${message}`;
+  const lineEnd = stack.indexOf("\n");
+  const firstLine = lineEnd < 0 ? stack : stack.slice(0, lineEnd);
+  return firstLine === name ? header + stack.slice(firstLine.length) : `${header}\n${stack}`;
+}
 
 /** Resolve true only after the replacement and its stdio close; the caller must return. */
 export const runRespawnedChild = ({ command, args, env }) => {
@@ -143,7 +160,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
     child.once("error", (error) => {
       failed = true;
       process.stderr.write(
-        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+        `[openclaw] Failed to respawn launcher: ${error instanceof Error ? formatRespawnErrorDetail(error) : String(error)}\n`,
       );
     });
     child.once("exit", () => {
@@ -401,31 +418,29 @@ export function isUsableNode(
       probeEnv[key] = value;
     }
   }
+  let script;
   try {
-    const result = spawnSync(
-      resolved,
-      [
-        "-e",
-        `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-      ],
-      {
-        encoding: "utf8",
-        env: probeEnv,
-        timeout: 5_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 65_536,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    script = createRuntimeProcessScriptFile("daemonRuntimeProbe");
+    const result = spawnSync(resolved, [fileURLToPath(script.url), "node"], {
+      encoding: "utf8",
+      env: probeEnv,
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 65_536,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const details = JSON.parse(result.stdout);
     return (
       result.status === 0 &&
-      !nodeRuntimeFailure(details.version, details.probe) &&
-      (!acceptVersion || acceptVersion(details.version))
+      !details.bunVersion &&
+      !nodeRuntimeFailure(details.nodeVersion, details.sqliteProbe) &&
+      (!acceptVersion || acceptVersion(details.nodeVersion))
     );
   } catch {
     return false;
+  } finally {
+    script?.dispose();
   }
 }
 

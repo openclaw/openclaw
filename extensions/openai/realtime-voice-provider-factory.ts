@@ -4,6 +4,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderResolveConfigContext,
+  RealtimeVoiceProviderConfiguredContext,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
@@ -130,6 +131,23 @@ export function buildOpenAIRealtimeVoiceProvider(
     logger?: Pick<PluginLogger, "debug" | "warn">;
   },
 ): RealtimeVoiceProviderPlugin {
+  const prepareBrowserSessionAuth = (params: RealtimeVoiceProviderConfiguredContext) => {
+    const { cfg, providerConfig, agentId } = params;
+    const config = normalizeProviderConfig(providerConfig);
+    if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+      return false;
+    }
+    const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+    const isGptLive = isOpenAIGptLiveModel(model);
+    const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+    if (isGptLive && !hasBroker) {
+      return false;
+    }
+    return {
+      authParams: { configuredApiKey: config.apiKey, cfg, agentId },
+      allowsSubscription: hasBroker && (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)),
+    };
+  };
   const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "OpenAI Realtime Voice",
@@ -265,19 +283,20 @@ export function buildOpenAIRealtimeVoiceProvider(
         const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
         return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
       }
+      const voice =
+        normalizeOpenAIRealtimeVoice(req.voice) ??
+        normalizeOpenAIRealtimeVoice(config.voice) ??
+        "alloy";
       if (req.clientControl) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");
         }
         const auth = await requireOpenAIRealtimePlatformAuth(authParams, context);
-        const voice =
-          normalizeOpenAIRealtimeVoice(req.voice) ??
-          normalizeOpenAIRealtimeVoice(config.voice) ??
-          "alloy";
         const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
           audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
           instructions: req.instructions,
           interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
+          inputTranscriptionModel: config.inputTranscriptionModel,
           model,
           noiseReduction: { type: "near_field" },
           prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
@@ -346,10 +365,6 @@ export function buildOpenAIRealtimeVoiceProvider(
           { type: "api-key", token: auth },
         );
       }
-      const voice =
-        normalizeOpenAIRealtimeVoice(req.voice) ??
-        normalizeOpenAIRealtimeVoice(config.voice) ??
-        "alloy";
       const tools = normalizeOpenAIRealtimeTools(req.tools, context.warn);
       const session: Record<string, unknown> & { model: string } = {
         type: "realtime",
@@ -362,17 +377,13 @@ export function buildOpenAIRealtimeVoiceProvider(
               type: "server_vad",
               create_response: true,
               interrupt_response: true,
-              ...(typeof (req.vadThreshold ?? config.vadThreshold) === "number"
-                ? { threshold: req.vadThreshold ?? config.vadThreshold }
-                : {}),
-              ...(typeof (req.prefixPaddingMs ?? config.prefixPaddingMs) === "number"
-                ? { prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs }
-                : {}),
-              ...(typeof (req.silenceDurationMs ?? config.silenceDurationMs) === "number"
-                ? { silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs }
-                : {}),
+              threshold: req.vadThreshold ?? config.vadThreshold,
+              prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs,
+              silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs,
             },
-            transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+            transcription: {
+              model: config.inputTranscriptionModel ?? OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+            },
           },
           output: { voice },
         },
@@ -452,24 +463,12 @@ export function buildOpenAIRealtimeVoiceProvider(
   const isBrowserSessionConfiguredAsync: NonNullable<
     InternalRealtimeVoiceProviderApi["isBrowserSessionConfiguredAsync"]
   > = async ({ cfg, providerConfig, agentId }) => {
-    const config = normalizeProviderConfig(providerConfig);
-    if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
-      return false;
-    }
-    const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-    const isGptLive = isOpenAIGptLiveModel(model);
-    const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
-    if (isGptLive && !hasBroker) {
-      return false;
-    }
+    const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
     return (
-      (await hasOpenAIRealtimePlatformAuthInputAsync(
-        { configuredApiKey: config.apiKey, cfg, agentId },
-        context,
-      )) ||
-      (hasBroker &&
-        (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
-        (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
+      prepared &&
+      ((await hasOpenAIRealtimePlatformAuthInputAsync(prepared.authParams, context)) ||
+        (prepared.allowsSubscription &&
+          (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context))))
     );
   };
   const projectGptLiveCapabilities = (model: string, supportsGatewayControl = false) => ({
@@ -481,24 +480,12 @@ export function buildOpenAIRealtimeVoiceProvider(
   const internalApi: InternalRealtimeVoiceProviderApi = {
     // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
-      const config = normalizeProviderConfig(providerConfig);
-      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
-        return false;
-      }
-      const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-      const isGptLive = isOpenAIGptLiveModel(model);
-      const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
-      if (isGptLive && !hasBroker) {
-        return false;
-      }
+      const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
       return (
-        hasOpenAIRealtimePlatformAuthInput(
-          { configuredApiKey: config.apiKey, cfg, agentId },
-          context,
-        ) ||
-        (hasBroker &&
-          (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
-          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
+        prepared &&
+        (hasOpenAIRealtimePlatformAuthInput(prepared.authParams, context) ||
+          (prepared.allowsSubscription &&
+            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
       );
     },
     isBrowserSessionConfiguredAsync,

@@ -8,8 +8,12 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
-import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
+import {
+  createPublicationRepositories,
+  createRequesterPublicationFixture,
+} from "./github-publication-requester.test-support.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -33,23 +37,7 @@ async function fixture(fork = false, linked = true) {
   await local.git("add", "original.txt");
   await local.git("commit", "-m", "Original contributor work");
   const originalHead = await local.git("rev-parse", "HEAD");
-  const baseRepo = {
-    id: 10,
-    full_name: "openclaw/openclaw",
-    private: false,
-    archived: false,
-    owner: { type: "Organization" },
-    permissions: { push: true },
-  };
-  const headRepo = fork
-    ? {
-        ...baseRepo,
-        id: 20,
-        full_name: "contributor/openclaw",
-        owner: { type: "User" },
-        permissions: { push: false },
-      }
-    : baseRepo;
+  const { baseRepo, headRepo } = createPublicationRepositories(fork);
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",
@@ -63,29 +51,31 @@ async function fixture(fork = false, linked = true) {
   };
   const scope = { agentId: "main", sessionKey: f.session.sessionKey };
   const entry = loadSessionEntryReadOnly(scope)!;
-  await upsertSessionEntryCore(scope, {
-    ...entry,
-    worktree: {
-      ...entry.worktree!,
-      githubPullRequest: {
-        url: pr.html_url,
-        host: "github.com",
-        number: 7,
-        base: {
-          repository: baseRepo.full_name,
-          repositoryId: 10,
-          branch: "main",
-          commit: baseHead,
-        },
-        head: {
-          repository: headRepo.full_name,
-          repositoryId: headRepo.id,
-          branch: pr.head.ref,
-          commit: originalHead,
-        },
-        preparedHeadCommit: originalHead,
-      },
+  const publicationSession = { ...scope, sessionId: f.session.sessionId };
+  const updateBinding = async (binding: SessionGitHubPullRequestBinding) => {
+    const current = loadSessionEntryReadOnly(scope)!;
+    await upsertSessionEntryCore(scope, {
+      ...current,
+      worktree: { ...current.worktree!, githubPullRequest: binding },
+    });
+  };
+  await updateBinding({
+    url: pr.html_url,
+    host: "github.com",
+    number: 7,
+    base: {
+      repository: baseRepo.full_name,
+      repositoryId: 10,
+      branch: "main",
+      commit: baseHead,
     },
+    head: {
+      repository: headRepo.full_name,
+      repositoryId: headRepo.id,
+      branch: pr.head.ref,
+      commit: originalHead,
+    },
+    preparedHeadCommit: originalHead,
   });
   await fs.writeFile(path.join(local.cwd, "continued.txt"), "Guest continuation\n");
   const transport = mocks.runCommand.getMockImplementation()!;
@@ -93,13 +83,11 @@ async function fixture(fork = false, linked = true) {
   const mutations: string[][] = [];
   const remoteCommits = new Set([originalHead]);
   let branchHead = originalHead;
-  let beforePush: (() => Promise<void>) | undefined;
   let afterPush: (() => Promise<void>) | undefined;
   let beforeRead: ((endpoint: string) => Promise<void>) | undefined;
   let losePushResponse = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv.includes("push")) {
-      await beforePush?.();
       pushes.push(argv);
       const refspec = argv.at(-1)!;
       const [commit, ref] = refspec.split(":");
@@ -190,12 +178,25 @@ async function fixture(fork = false, linked = true) {
     pushes,
     mutations,
     entry,
+    publicationSession,
     publish: (key: string) => f.coordinator.requestForSessionV2(f.request(key, f.guest)),
+    expectWrites(count: number) {
+      expect(pushes).toHaveLength(count);
+      expect(mutations).toEqual([]);
+    },
+    expectPublished(result: unknown, headCommit?: string) {
+      expect(result).toMatchObject({
+        status: "published",
+        url: pr.html_url,
+        ...(headCommit ? { headCommit } : {}),
+      });
+    },
+    changeBoundHead(commit: string) {
+      const binding = loadSessionEntryReadOnly(scope)!.worktree!.githubPullRequest!;
+      return updateBinding({ ...binding, head: { ...binding.head, commit } });
+    },
     onRead(callback: typeof beforeRead) {
       beforeRead = callback;
-    },
-    onPush(callback: typeof beforePush) {
-      beforePush = callback;
     },
     afterPush(callback: typeof afterPush) {
       afterPush = callback;
@@ -222,18 +223,11 @@ async function fixture(fork = false, linked = true) {
       branchHead = await local.git("rev-parse", "HEAD");
       pr.head.sha = branchHead;
       remoteCommits.add(branchHead);
-      const currentEntry = loadSessionEntryReadOnly(scope)!;
-      const binding = currentEntry.worktree!.githubPullRequest!;
-      await upsertSessionEntryCore(scope, {
-        ...currentEntry,
-        worktree: {
-          ...currentEntry.worktree!,
-          githubPullRequest: {
-            ...binding,
-            head: { ...binding.head, commit: branchHead },
-            preparedHeadCommit: branchHead,
-          },
-        },
+      const binding = loadSessionEntryReadOnly(scope)!.worktree!.githubPullRequest!;
+      await updateBinding({
+        ...binding,
+        head: { ...binding.head, commit: branchHead },
+        preparedHeadCommit: branchHead,
       });
       return branchHead;
     },
@@ -270,31 +264,17 @@ describe("shared publication to a prepared original PR", () => {
         url: f.pr.html_url,
         branch: "topic/original",
       });
-      expect(f.pushes).toHaveLength(2);
-      expect(f.mutations).toEqual([]);
+      f.expectWrites(2);
       expect(
-        await f.coordinator.latestPublishedShared(
-          { agentId: "main", sessionKey: f.session.sessionKey, sessionId: f.session.sessionId },
-          undefined,
-        ),
-      ).toMatchObject({ result: { status: "published", headCommit: f.pr.head.sha } });
-      const scope = { agentId: "main", sessionKey: f.session.sessionKey };
-      const entry = loadSessionEntryReadOnly(scope)!;
-      const binding = entry.worktree!.githubPullRequest!;
-      await upsertSessionEntryCore(scope, {
-        ...entry,
-        worktree: {
-          ...entry.worktree!,
-          githubPullRequest: { ...binding, head: { ...binding.head, commit: "f".repeat(40) } },
-        },
+        await f.coordinator.latestPublishedShared(f.publicationSession, undefined),
+      ).toMatchObject({
+        result: { status: "published", headCommit: f.pr.head.sha },
       });
+      await f.changeBoundHead("f".repeat(40));
       await expect(f.publish("pending-preparation")).rejects.toThrow("Finish preparing");
       expect(f.pushes).toHaveLength(2);
       expect(
-        await f.coordinator.latestPublishedShared(
-          { ...scope, sessionId: f.session.sessionId },
-          undefined,
-        ),
+        await f.coordinator.latestPublishedShared(f.publicationSession, undefined),
       ).toMatchObject({
         result: { status: "published", url: f.pr.html_url, headCommit: f.pr.head.sha },
       });
@@ -333,8 +313,7 @@ describe("shared publication to a prepared original PR", () => {
     } catch (error) {
       expect(String(error)).toMatch(/authoriz|authority|scope/);
     }
-    expect(f.pushes).toEqual([]);
-    expect(f.mutations).toEqual([]);
+    f.expectWrites(0);
     expect(await f.local.git("rev-parse", "HEAD")).toBe(f.originalHead);
   });
 
@@ -359,20 +338,14 @@ describe("shared publication to a prepared original PR", () => {
       headCommit: revertedHead,
     });
     expect(await f.local.git("rev-parse", "HEAD")).toBe(revertedHead);
-    expect(f.pushes).toHaveLength(1);
-    expect(f.mutations).toEqual([]);
+    f.expectWrites(1);
   });
 
   it("settles an accepted original-PR push after requester revocation without another write", async () => {
     const f = await fixture(true);
     f.afterPush(() => f.revoke());
-    expect(await f.publish("revoked-after-push")).toMatchObject({
-      status: "published",
-      url: f.pr.html_url,
-      headCommit: f.pr.head.sha,
-    });
-    expect(f.pushes).toHaveLength(1);
-    expect(f.mutations).toEqual([]);
+    f.expectPublished(await f.publish("revoked-after-push"), f.pr.head.sha);
+    f.expectWrites(1);
   });
 
   it.each(["push response", "PR observation"])(
@@ -413,11 +386,7 @@ describe("shared publication to a prepared original PR", () => {
         message: expect.stringContaining("Finish the turn"),
       });
       expect(f.pushes).toHaveLength(1);
-      const session = {
-        agentId: "main",
-        sessionKey: f.session.sessionKey,
-        sessionId: f.session.sessionId,
-      };
+      const session = f.publicationSession;
       expect(await f.coordinator.latestShared(session, "lost-response")).toMatchObject({
         result: { requestId: pending.requestId, status: "publishing" },
       });
@@ -434,8 +403,7 @@ describe("shared publication to a prepared original PR", () => {
           headCommit: f.pr.head.sha,
         },
       });
-      expect(f.pushes).toHaveLength(1);
-      expect(f.mutations).toEqual([]);
+      f.expectWrites(1);
     },
   );
   it("reconciles an accepted update without repushing after a remote branch rewind", async () => {
@@ -446,13 +414,8 @@ describe("shared publication to a prepared original PR", () => {
     });
     f.rewindRemoteBranch();
     f.pr.maintainer_can_modify = false;
-    expect(await f.publish("rewound-after-acceptance")).toMatchObject({
-      status: "published",
-      url: f.pr.html_url,
-      headCommit: f.pr.head.sha,
-    });
-    expect(f.pushes).toHaveLength(1);
-    expect(f.mutations).toEqual([]);
+    f.expectPublished(await f.publish("rewound-after-acceptance"), f.pr.head.sha);
+    f.expectWrites(1);
   });
 
   it.each([true, false])(
@@ -470,8 +433,7 @@ describe("shared publication to a prepared original PR", () => {
           ? { status: "published", url: f.pr.html_url, headCommit: accepted }
           : { status: "failed", code: "push_rejected" },
       );
-      expect(f.pushes).toHaveLength(1);
-      expect(f.mutations).toEqual([]);
+      f.expectWrites(1);
     },
   );
 
@@ -488,8 +450,7 @@ describe("shared publication to a prepared original PR", () => {
         }
       });
       await expect(f.publish("unavailable-after-push")).rejects.toThrow(/authoriz|authority/);
-      expect(f.pushes).toHaveLength(1);
-      expect(f.mutations).toEqual([]);
+      f.expectWrites(1);
     },
   );
 
@@ -499,12 +460,8 @@ describe("shared publication to a prepared original PR", () => {
     // The preparation owner is qualified separately; this consumer receives its completed binding.
     const accepted = await f.acceptNewerSource();
     await fs.writeFile(path.join(f.local.cwd, "continued.txt"), "Work after accepted refresh\n");
-    expect(await f.publish("after-refresh")).toMatchObject({
-      status: "published",
-      url: f.pr.html_url,
-    });
+    f.expectPublished(await f.publish("after-refresh"));
     expect(await f.local.git("merge-base", accepted, f.pr.head.sha)).toBe(accepted);
-    expect(f.pushes).toHaveLength(2);
-    expect(f.mutations).toEqual([]);
+    f.expectWrites(2);
   });
 });

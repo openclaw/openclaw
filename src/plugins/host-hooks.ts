@@ -144,6 +144,12 @@ export type PluginSessionActionContext = {
      * scope distinguishes the owner. Re-evaluated on every call.
      */
     isSharedGateway?: () => boolean;
+    /**
+     * Live check: throws once this caller's request authority has ended, for
+     * example when the connection closes or its grant is revoked. Pass it as
+     * the config writer's `writeOptions.assertCurrent` before persisting.
+     */
+    assertCurrent?: () => void;
   };
 };
 

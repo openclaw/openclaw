@@ -38,12 +38,9 @@ suite.define(() => {
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
       role: prompts[seq] ? "user" : "assistant",
-      content: [
-        {
-          type: "text",
-          text: prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
-        },
-      ],
+      content: textContent(
+        prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
+      ),
       timestamp: 1_800_000_000_000 + seq,
     });
     const gateway = await installMockGateway(page, {
@@ -414,10 +411,15 @@ suite.define(() => {
             ],
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.getByText("Initial streamed output.", { exact: false }).waitFor();
+          // The long live tail leaves earlier rows unmounted until reader navigation.
+          await thread.hover();
+          await page.mouse.wheel(0, -120);
           await page.getByText("Synthetic message 72.", { exact: true }).waitFor();
+          await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
           await waitForChatScrollIdle(page);
           await expect.poll(async () => (await position()).distance).toBeLessThanOrEqual(8);
-          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
 
           // Force a delayed media measurement in an overscan row above the viewport.
           await thread.evaluate((element) => {

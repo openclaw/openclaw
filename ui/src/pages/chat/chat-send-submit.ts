@@ -15,7 +15,7 @@ import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -49,7 +49,7 @@ import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,
   waitForPendingChatSettings,
-} from "./chat-send-queue-state.ts";
+} from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendAdmissionHoldReason,
@@ -580,7 +580,7 @@ export async function handleSendChat(
           normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
-    const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
+    const allowActiveRunSend = !intent && applyRunPolicy && followUpMode !== "queue";
     const refreshSessions = Boolean(intent) || isChatResetCommand(message);
     const sendState = pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
     const queuedText = trimHumanMentions(quotedMessage, effectiveMentions);

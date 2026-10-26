@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import {
   createShowWidgetTool,
-  hasRegisteredShowWidgetKinds,
   resolveCurrentChannelWidgetPresenter,
 } from "../canvas/widget-tool.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
@@ -26,6 +25,7 @@ import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
@@ -44,6 +44,7 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -51,6 +52,7 @@ import {
 } from "./tool-construction-preparation.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
+import { createChannelQuestionPromptDelivery } from "./tools/channel-question-prompt-delivery.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
 import { createHostedConversationTools } from "./tools/conversation-tools.js";
@@ -76,14 +78,12 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
-import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-send.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { hasSessionControlAuthority } from "./tools/sessions-operator-authority.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
@@ -155,6 +155,9 @@ export async function createOpenClawToolsWithPreparation(
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
+  captured.listingClientCaps ??= withLegacySessionCapabilityRead(() =>
+    resolveSessionToolListingClientCaps(captured),
+  );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -243,7 +246,8 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
-  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const inlineWidgetClientAvailable =
+    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -427,13 +431,18 @@ function* createOpenClawToolsSteps(
   // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
   const scheduledCaller =
     options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
-  const pinnedWidgetOnly =
+  const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
-    !inlineWidgetClientAvailable &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);
+  const pinnedWidgetOnly = pinnedWidgetAuthoringAdmitted && !inlineWidgetClientAvailable;
+  // The catalog follows the session's recorded caps; a recovered turn without that client still pins.
+  const pinWidgetWithoutInlineClient =
+    pinnedWidgetAuthoringAdmitted &&
+    inlineWidgetClientAvailable &&
+    options?.clientCaps?.includes("inline-widgets") !== true;
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -463,7 +472,6 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
-  const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -534,9 +542,7 @@ function* createOpenClawToolsSteps(
         })
       : []),
     includeMessageTool ? messageTool : null,
-    !isCoreCanvasHostEnabled(resolvedConfig) &&
-    !hasRegisteredShowWidgetKinds() &&
-    !currentChannelWidgetPresenter
+    !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({
           sessionId: options?.sessionId,
@@ -546,18 +552,17 @@ function* createOpenClawToolsSteps(
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,
+          pinWithoutInlineClient: pinWidgetWithoutInlineClient,
           presenters: widgetPresenters,
           presenterContext: widgetPresenterContext,
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
-    options?.githubPublicationAvailable === true ||
-    (options?.githubPublicationAvailable === false && githubActionsAvailable)
+    options?.githubPublicationAvailable !== undefined
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
-          actionsAvailable: githubActionsAvailable,
         })
       : null,
     transcriptsTool,

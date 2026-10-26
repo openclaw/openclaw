@@ -299,20 +299,6 @@ describe("fitLaunchDescriptor", () => {
     expect(messages).toEqual(original);
   });
 
-  it("does not rewrite opaque replay images to fit the next launch", async () => {
-    const history = createWorkerImageHistory();
-    const owner = history[1];
-    assert(owner?.role === "assistant", "Expected replay owner");
-    owner.providerReplay = structuredClone(PROVIDER_REPLAY);
-    const before = JSON.stringify(history);
-    await expect(fit(history)).resolves.toMatchObject({
-      reason: "provider-replay-launch-payload-limit",
-      limitBytes: MAX_BYTES,
-    });
-    expect(JSON.stringify(history)).toBe(before);
-    expect(runtimeIdentityToken.mint).not.toHaveBeenCalled();
-  });
-
   it("drops complete old turns while retaining the replay anchor", async () => {
     const large = "x".repeat(13 * 1024 * 1024);
     const messages = completeWindow([

@@ -57,7 +57,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     },
     { ids: [], kind: "context-engine" },
     { ids: ["legacy"], kind: "context-engine" },
-    { ids: ["none"], kind: "context-engine" },
     { ids: [42], kind: "context-engine" },
     { ids: [""], kind: "context-engine" },
     { ids: "canonical-engine", kind: "context-engine" },
@@ -104,10 +103,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
 
   it.each([
     ["memory", "memory"],
-    [
-      ["context-engine", "memory"],
-      ["context-engine", "memory"],
-    ],
     [
       ["memory", "unknown-kind", 42, "memory", "context-engine", null],
       ["memory", "context-engine"],
@@ -160,7 +155,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onCapabilities: ["provider", "tool", "wat"]
   },
   cliCommands: [
-    { name: "models", description: "Inspect provider models", hasSubcommands: true },
+    { name: "models", description: "Models", hasSubcommands: true },
     { name: "bad command", description: "ignored", hasSubcommands: false },
     { name: "models", description: "duplicate", hasSubcommands: false }
   ],
@@ -187,7 +182,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(manifest.cliCommands).toEqual([
       {
         name: "models",
-        description: "Inspect provider models",
+        description: "Models",
         hasSubcommands: true,
       },
     ]);

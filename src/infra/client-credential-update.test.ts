@@ -151,13 +151,13 @@ async function fixture(
   engine: "sqlite" | "postgres",
   native = false,
   sourceVersion: 25 | 26 | 27 | 28 = 25,
-  legacyStatistics = false,
+  initialState: "seeded" | "legacy-statistics" | "empty" = "seeded",
 ) {
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  if (legacyStatistics) {
+  if (initialState === "legacy-statistics") {
     // Empty SQLite database produced by ANALYZE sqlite_schema with ENABLE_STAT4.
     fs.writeFileSync(
       pathname,
@@ -226,7 +226,7 @@ async function fixture(
         source.close();
       }
     });
-  } else {
+  } else if (initialState !== "empty") {
     using db = openNodeSqliteDatabase(pathname);
     if (native) {
       db.exec(
@@ -477,9 +477,7 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 
 describe("client credential public update custody", () => {
   it("preserves a fresh installation through public capture, Doctor, and rollback", async () => {
-    const f = await fixture("sqlite");
-    await closeOpenClawStateDatabaseAsync();
-    fs.unlinkSync(f.pathname);
+    const f = await fixture("sqlite", false, 25, "empty");
     const captured = await capture(f, true);
     expect(captured.backup.sourceGenerations[resolveClientCredentialStorePath(f.env)]).toEqual(
       expect.any(String),
@@ -765,7 +763,7 @@ describe("client credential public update custody", () => {
   it.each([25, 28] as const)(
     "migrates legacy STAT4 credentials from v%s while retaining their original rollback image",
     async (version) => {
-      const f = await fixture("sqlite", false, version, true);
+      const f = await fixture("sqlite", false, version, "legacy-statistics");
       await migrate(f);
       const archives = fs
         .readdirSync(path.dirname(f.pathname))
@@ -792,7 +790,7 @@ describe("client credential public update custody", () => {
   it.skipIf(stat4Enabled).each([false, true])(
     "reuses a legacy STAT4 retry image only while credentials match (changed=%s)",
     async (changed) => {
-      const f = await fixture("sqlite", false, 28, true);
+      const f = await fixture("sqlite", false, 28, "legacy-statistics");
       const maintenance = await beginDoctorMaintenance({
         root: null,
         options: { repair: true, nonInteractive: true },

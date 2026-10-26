@@ -26,9 +26,12 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
-With `--json`, local action-input refusals also write one JSON error document to
+With `--json`, local action-input, state, and viewport validation refusals write one JSON error document to
 stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 `--json`, the diagnostic remains on stderr.
+
+Malformed request timeouts, invalid tab indexes, and Gateway request rejections
+also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
@@ -345,6 +348,8 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
 
+Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
+
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
@@ -366,6 +371,9 @@ If navigation or a closed page stops the batch, text output reports the action n
 `fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
 Malformed bytes are rejected before any browser action runs. Save the input as
 UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
+
+`fill --fields-file` requires a regular file or a symlink to one. Pipes and other
+special files are rejected before dispatch. Fields files have no size cap.
 
 ## State and storage
 

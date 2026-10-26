@@ -17,6 +17,7 @@ import {
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type {
   GetReplyOptions,
@@ -524,15 +525,14 @@ vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/sandbox/context.js", async () => {
-  const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
-    "../../agents/sandbox/context.js",
-  );
-  return {
-    ...original,
-    ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  prepareSandboxWorkspaceForSession: vi.fn(async () =>
+    mockState.sandboxWorkspace
+      ? { workspace: mockState.sandboxWorkspace, assertCurrent() {}, [Symbol.dispose]() {} }
+      : null,
+  ),
+}));
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
@@ -757,20 +757,7 @@ async function appendSourceReplyMirrorEntry(params: {
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
       ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: now,
     },
@@ -4749,20 +4736,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
     mockState.dispatchError = new Error("upstream unavailable");
 
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
+    const request = {
       idempotencyKey: "idem-user-transcript-error-replay",
       message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
+    };
+    await sendNewChatRequest({ ...request, expectBroadcast: false });
+    const dispatchCallsBeforeReplay = dispatchInboundMessageMock.mock.calls.length;
+    const { respond } = await sendNewChatRequest({ ...request, waitFor: "none" });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { runId: "idem-user-transcript-error-replay", status: "ok", messageSeq: 1 },
+      undefined,
+      { cached: true, runId: "idem-user-transcript-error-replay" },
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBeforeReplay);
 
     expect(readPersistedUserMessages()).toEqual([
       expect.objectContaining({

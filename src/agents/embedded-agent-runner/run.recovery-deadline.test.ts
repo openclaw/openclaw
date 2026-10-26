@@ -28,17 +28,14 @@ vi.mock("./compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: physicalCompaction,
 }));
 
-// Keep lane admission, attempt deadline production, overflow recovery, the native
-// compaction delegate, and both watchdogs real; only provider work is synthetic.
+// Only provider work is synthetic; deadlines, recovery and both watchdogs are real.
 describe("overflow recovery deadline ownership through the public runner", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let runEmbeddedAgent: TestRunEmbeddedAgent;
   let prepareTimeout: typeof import("./run/attempt-timeout-prepare.js").prepareEmbeddedAttemptTimeout;
   let engine: ContextEngine;
-  let restoreCompact: () => void;
   let delegate: ContextEngine["compact"];
   let queuedTasks: Promise<unknown>[];
-  let restoreQueue: (() => void) | undefined;
   let parent: AbortController;
   let releaseCompaction: ReturnType<typeof createDeferred<EmbeddedAgentCompactResult>>;
   let compactionStarted: ReturnType<
@@ -54,18 +51,11 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       await import("./run/attempt-timeout-prepare.js"));
     ({ delegateCompactionToRuntime: delegate } = await import("../../context-engine/delegate.js"));
     engine = await (await import("../../context-engine/registry.js")).resolveContextEngine();
-    const originalCompact = Object.getOwnPropertyDescriptor(engine, "compact");
-    if (!originalCompact) {
-      throw new Error("The shared runner fixture must own its compaction method");
-    }
-    restoreCompact = () => {
-      Object.defineProperty(engine, "compact", originalCompact);
-    };
   });
 
   beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
-    engine.compact = delegate;
+    vi.spyOn(engine, "compact").mockImplementation(delegate);
     engine.info.ownsCompaction = false;
     physicalCompaction.mockReset();
     parent = new AbortController();
@@ -75,20 +65,17 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     queuedTasks = [];
     const queue = await import("../../process/command-queue.js");
     const enqueue = queue.enqueueCommandInLane;
-    const observer = vi
-      .spyOn(queue, "enqueueCommandInLane")
-      .mockImplementation((lane, task, options) =>
-        enqueue(
-          lane,
-          () => {
-            const work = task();
-            queuedTasks.push(work);
-            return work;
-          },
-          options,
-        ),
-      );
-    restoreQueue = () => observer.mockRestore();
+    vi.spyOn(queue, "enqueueCommandInLane").mockImplementation((lane, task, options) =>
+      enqueue(
+        lane,
+        () => {
+          const work = task();
+          queuedTasks.push(work);
+          return work;
+        },
+        options,
+      ),
+    );
     physicalCompaction.mockImplementation(async (params) => {
       compactionStarted.resolve(params);
       return await releaseCompaction.promise;
@@ -134,8 +121,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     parent.abort(new Error("test cleanup"));
     releaseCompaction.resolve({ ok: false, compacted: false, reason: "test settled" });
     await Promise.allSettled(queuedTasks);
-    restoreQueue?.();
-    restoreCompact();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     runtimeConfig.clearRuntimeConfigSnapshot();
   });

@@ -129,6 +129,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         }
       }
       // The initial roster must be usable before reconnecting clients can issue lists.
+      // Load-bearing: exact preparations outrank the bulk drain, so an un-awaited drain can
+      // stay incomplete under traffic and every read re-prepares rows (#184368, reverted).
       await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");

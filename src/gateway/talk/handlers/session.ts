@@ -29,8 +29,8 @@ import { defineValidatedGatewayHandler } from "../../server-methods/validation.j
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
-import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "../client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
   acknowledgeTalkRealtimeRelayMark,

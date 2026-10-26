@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 import {
   continueFailed,
   createClient,
@@ -11,6 +13,10 @@ import {
   watchRelease,
 } from "../../scripts/frv.mjs";
 import {
+  INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS,
+  INSTALL_SMOKE_CALLER_DEPENDENTS,
+  INSTALL_SMOKE_JOB_NEEDS,
+  planReleaseChildRerun,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   releaseExecutionPlanSha256,
@@ -303,6 +309,73 @@ describe("FRV immutable plan eligibility", () => {
     ).rejects.toThrow(
       "plan is not-yet-sealed; rerun is unavailable until the immutable plan is sealed",
     );
+  });
+
+  it("waits for the immutable plan before recovering a terminal child", async () => {
+    const active = rootRun(1, null);
+    let reads = 0;
+    await withFastPolling(async () => {
+      await expect(
+        loadPlanForCommand(
+          {
+            command: "continue",
+            operationDeadline: Date.now() + 1_000,
+            repository: REPOSITORY,
+            runId: "77",
+            waitForSeal: true,
+          },
+          {
+            getRun: async () => structuredClone(active),
+            getAttemptJobs: async () => [
+              { ...job("normalCi"), conclusion: "failure" },
+              {
+                ...job("Seal release execution plan"),
+                conclusion: null,
+                status: "in_progress",
+              },
+            ],
+          },
+          async () => (++reads < 3 ? undefined : executionPlanArtifact()),
+        ),
+      ).resolves.toMatchObject({ plan: { parentRunId: "77" } });
+    });
+  });
+
+  it("does not accept a plan that appears after the seal wait deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-23T20:00:00.000Z"));
+    const active = rootRun(1, null);
+    let reads = 0;
+    try {
+      const loaded = loadPlanForCommand(
+        {
+          command: "continue",
+          operationDeadline: Date.now() + 1_000,
+          repository: REPOSITORY,
+          runId: "77",
+          waitForSeal: true,
+        },
+        {
+          getRun: async () => structuredClone(active),
+          getAttemptJobs: async () => [
+            {
+              ...job("Seal release execution plan"),
+              conclusion: null,
+              status: "in_progress",
+            },
+          ],
+        },
+        async () => (++reads === 1 ? undefined : executionPlanArtifact()),
+      );
+      const rejected = expect(loaded).rejects.toThrow(
+        "timed out waiting for the immutable plan seal",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejected;
+      expect(reads).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a newly uploaded plan retryable while GitHub propagates its artifact", async () => {
@@ -2094,6 +2167,113 @@ describe("FRV child rerun", () => {
     expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(21);
     expect(client.rerunFailed).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
+  });
+
+  it("pins the payload rerun graph to the install-smoke workflow and its Release Checks caller", () => {
+    const workflow = (file: string) =>
+      parseYaml(readFileSync(`.github/workflows/${file}`, "utf8")) as {
+        jobs: Record<
+          string,
+          {
+            name?: string;
+            needs?: string | string[];
+            steps?: { run?: string }[];
+            uses?: string;
+          }
+        >;
+      };
+    const needs = (entry: { needs?: string | string[] }) => [entry.needs ?? []].flat();
+    const installSmoke = Object.entries(workflow("install-smoke-reusable.yml").jobs);
+    expect(Object.fromEntries(installSmoke.map(([id, entry]) => [id, needs(entry)]))).toEqual(
+      INSTALL_SMOKE_JOB_NEEDS,
+    );
+    expect(
+      new Set(
+        installSmoke
+          .filter(([, entry]) =>
+            entry.steps?.some(
+              (step) =>
+                step.run?.includes("install-smoke-candidate-payload.mts verify") &&
+                step.run.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"'),
+            ),
+          )
+          .map(([id]) => id),
+      ),
+    ).toEqual(INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS);
+    const caller = Object.values(workflow("openclaw-release-checks.yml").jobs).filter((entry) =>
+      needs(entry).includes("install_smoke_release_checks"),
+    );
+    expect(
+      new Set(
+        caller.map((entry) =>
+          entry.uses?.endsWith("full-release-child-evidence.yml")
+            ? `${entry.name} / Seal child receipt`
+            : entry.name,
+        ),
+      ),
+    ).toEqual(INSTALL_SMOKE_CALLER_DEPENDENTS);
+  });
+
+  it.each([
+    ["a failed consumer", ["installer_smoke_update", "installer_smoke"], "producer"],
+    [
+      "a failed upstream image whose rerun re-executes a consumer",
+      ["installer_smoke_update_image", "root_dockerfile_image", "installer_smoke"],
+      "all-jobs",
+    ],
+    [
+      "a failed root image whose rerun reaches only the status aggregate",
+      ["root_dockerfile_image", "root_dockerfile_image_ready", "installer_smoke"],
+      "failed-jobs",
+    ],
+    [
+      "a failed Bun consumer that verifies the producer attempt",
+      ["bun_global_install_smoke"],
+      "failed-jobs",
+    ],
+  ])("plans the install-smoke rerun for %s", (_case, failed, mode) => {
+    const jobs = [
+      job(producer),
+      ...failed.map((name) => job(`install_smoke_release_checks / ${name}`, "failure")),
+      job("Verify release checks", "failure"),
+    ];
+    expect(planReleaseChildRerun({ childKey: "releaseChecks", jobs })).toMatchObject({ mode });
+  });
+
+  it("continue --failed reruns the whole child when payload consumers need upstream failures", async () => {
+    // Shape of release run 40055394364 attempt 1, whose failed-jobs rerun failed the
+    // installer_smoke_update payload tuple check.
+    const failed = [
+      "install_smoke_release_checks / installer_smoke_update_image",
+      "install_smoke_release_checks / root_dockerfile_image",
+      "install_smoke_release_checks / installer_smoke",
+      "Verify release checks",
+    ];
+    const scenario = rerunScenario({});
+    const client = {
+      ...scenario.client,
+      getAttemptJobs: async (_runId: string, attempt: number) => [
+        job(producer),
+        ...failed.map((name) => job(name, attempt === 1 ? "failure" : "success")),
+      ],
+      rerunFailed: vi.fn(),
+      rerunRun: vi.fn(async () => scenario.client.rerunFailed()),
+    };
+    await expect(
+      continueFailed(plan([scenario.selected]), "77", client, { dryRun: true }),
+    ).resolves.toMatchObject({
+      action: "would-rerun",
+      payloadReruns: [{ child: "normalCi", failed: failed.toSorted(), mode: "all-jobs" }],
+    });
+    const log = vi.fn();
+    await withFastPolling(() =>
+      expect(
+        continueFailed(plan([scenario.selected]), "77", client, { log }),
+      ).resolves.toMatchObject({ action: "reran-parent", finalRunId: "77" }),
+    );
+    expect(client.rerunRun).toHaveBeenCalledExactlyOnceWith("101");
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("rerunning all jobs"));
   });
 
   it.each([

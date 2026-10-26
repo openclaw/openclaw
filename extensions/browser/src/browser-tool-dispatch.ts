@@ -28,7 +28,7 @@ import {
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
 import { BROWSER_ACT_KIND_FACTS } from "./browser/act-kinds.js";
-import type { BrowserActionOk, BrowserBatchAbort } from "./browser/client-actions-types.js";
+import type { BrowserActionOk } from "./browser/client-actions-types.js";
 import {
   browserAct,
   browserArmDialog,
@@ -109,24 +109,6 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
   };
 }
 
-function formatTabsToolResult(result: {
-  running: boolean;
-  tabs: BrowserTab[];
-}): AgentToolResult<unknown> {
-  const formattedTabs = result.tabs.map(formatAgentTab);
-  const wrapped = wrapBrowserExternalJson({
-    kind: "tabs",
-    payload: { running: result.running, tabs: formattedTabs },
-    includeWarning: false,
-  });
-  return textResult(wrapped.wrappedText, {
-    ...wrapped.safeDetails,
-    running: result.running,
-    tabCount: formattedTabs.length,
-    tabs: formattedTabs,
-  });
-}
-
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
 function formatBrowserExternalToolResult(params: {
   kind: "act" | "download" | "tabs";
@@ -168,26 +150,6 @@ function actObservedNavigation(result: BrowserActResponse): boolean {
     result.aborted?.reason === "navigation" ||
     result.results?.some((entry) => entry.navigated === true) === true
   );
-}
-
-function formatActToolResult(
-  result: unknown,
-  aborted: BrowserBatchAbort | undefined,
-): AgentToolResult<unknown> {
-  const formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
-  if (!aborted) {
-    return formatted;
-  }
-  // Navigation aborts get fresh page state (or an unavailable hint) appended by
-  // finishActResult, so only the closed case tells the model to snapshot manually.
-  const note =
-    aborted.reason === "navigation"
-      ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
-      : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
-  return {
-    ...formatted,
-    content: [...formatted.content, { type: "text", text: note }],
-  };
 }
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -262,7 +224,19 @@ export async function executeBrowserTabAction(context: {
     const tabs = result.tabs.filter(
       (tab) => !context.boundTargetId || readStringValue(tab.targetId) === context.boundTargetId,
     );
-    return formatTabsToolResult({ running: result.running, tabs });
+    const running = result.running;
+    const formattedTabs = tabs.map(formatAgentTab);
+    const wrapped = wrapBrowserExternalJson({
+      kind: "tabs",
+      payload: { running, tabs: formattedTabs },
+      includeWarning: false,
+    });
+    return textResult(wrapped.wrappedText, {
+      ...wrapped.safeDetails,
+      running,
+      tabCount: formattedTabs.length,
+      tabs: formattedTabs,
+    });
   }
 
   async function executeConsoleAction(): Promise<AgentToolResult<unknown>> {
@@ -419,7 +393,19 @@ export async function executeBrowserTabAction(context: {
           ? sessionTabs.untrack
           : touchTab;
       await onTabResult(resolvedTargetId);
-      const formatted = formatActToolResult(result, aborted);
+      let formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
+      if (aborted) {
+        // Navigation aborts get fresh page state (or an unavailable hint) appended by
+        // finishActResult, so only the closed case tells the model to snapshot manually.
+        const note =
+          aborted.reason === "navigation"
+            ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
+            : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+        formatted = {
+          ...formatted,
+          content: [...formatted.content, { type: "text", text: note }],
+        };
+      }
       if (!actObservedNavigation(result)) {
         return formatted;
       }

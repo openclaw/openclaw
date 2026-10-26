@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   evaluateChannelHealth,
   resolveChannelHealthState,
@@ -22,99 +22,66 @@ function evaluateHealth(
   );
 }
 
-describe("evaluateChannelHealth", () => {
-  it.each([
-    [{ running: false, linked: false }, true, "unmanaged"],
-    [
-      { connected: false, lifecycle: "starting", lastStartAt: 95_000 },
-      true,
-      "startup-connect-grace",
-    ],
-    [{ lifecycle: "stopped" }, false, "not-running"],
-    [{ running: false, terminalDisconnect: true, linked: false }, false, "terminal-disconnect"],
-    [{ running: false, terminalDisconnect: false }, false, "not-running"],
-    [{ running: true, connected: true, terminalDisconnect: true }, true, "healthy"],
-    [
-      { running: false, linked: false, restartPending: true, ingressUnavailable: true },
-      false,
-      "ingress-unavailable",
-    ],
-    [
-      {
-        connected: false,
-        lastStartAt: 70_000,
-        busy: true,
-        activeRuns: 1,
-        lastRunActivityAt: 69_000,
-      },
-      false,
-      "disconnected",
-    ],
-  ] as const)("evaluates %j as %s/%s", (snapshot, healthy, reason) => {
-    expect(evaluateHealth(snapshot)).toEqual({ healthy, reason });
-  });
+const reconnect = (lastDisconnect: unknown, lastStartAt = 0) => ({
+  connected: false,
+  lifecycle: "recovering",
+  lastStartAt,
+  lastDisconnect,
+});
+const inheritedTransport = {
+  connected: true,
+  lastStartAt: 50_000,
+  lastTransportActivityAt: 10_000,
+};
+const oldRun = (connected: boolean) => ({
+  connected,
+  activeRuns: 1,
+  lastRunActivityAt: 30 * 60_000 - 1_000,
+  activeRunStartedAt: 4 * 60_000,
+});
+const unmanaged = {
+  running: false,
+  linked: false,
+  terminalDisconnect: true,
+  lifecycle: "blocked",
+  ingressUnavailable: true,
+};
 
-  it.each([
-    ["uses reconnect grace for a fresh typed disconnect", 0, { at: 95_000 }, true],
-    ["expires reconnect grace after 120 seconds", 0, { at: -20_001 }, false],
-    ["ignores a legacy string disconnect", 0, "socket closed", false],
-    ["ignores a malformed typed disconnect", 0, { at: Number.NaN }, false],
-    ["ignores a disconnect from the previous lifecycle", 80_000, { at: 79_000 }, false],
-    ["ignores a disconnect dated after the current clock", 0, { at: 101_000 }, false],
-  ] as const)("%s", (_name, lastStartAt, lastDisconnect, healthy) => {
-    expect(
-      evaluateHealth({
-        connected: false,
-        lifecycle: "recovering",
-        lastStartAt,
-        lastDisconnect,
-      }),
-    ).toEqual({ healthy, reason: healthy ? "reconnect-grace" : "disconnected" });
-  });
-
-  it.each([false, true])(
-    "evaluates an old run with a fresh heartbeat, connected=%s",
-    (connected) => {
-      const now = 30 * 60_000;
-      const evaluation = evaluateHealth(
-        {
-          connected,
-          activeRuns: 1,
-          lastRunActivityAt: now - 1_000,
-          activeRunStartedAt: now - 26 * 60_000,
-        },
-        { now },
-      );
-      expect(evaluation).toEqual({ healthy: connected, reason: connected ? "busy" : "stuck" });
+it.each<[Record<string, unknown>, boolean, string, { now?: number; channelId?: string }?]>([
+  [{ running: false, linked: false }, true, "unmanaged"],
+  [{ connected: false, lifecycle: "starting", lastStartAt: 95_000 }, true, "startup-connect-grace"],
+  [{ lifecycle: "stopped" }, false, "not-running"],
+  [{ running: false, terminalDisconnect: true, linked: false }, false, "terminal-disconnect"],
+  [{ running: true, connected: true, terminalDisconnect: true }, true, "healthy"],
+  [
+    { running: false, linked: false, restartPending: true, ingressUnavailable: true },
+    false,
+    "ingress-unavailable",
+  ],
+  [
+    {
+      connected: false,
+      lastStartAt: 70_000,
+      busy: true,
+      activeRuns: 1,
+      lastRunActivityAt: 69_000,
     },
-  );
-
-  it.each([
-    [75_000, true],
-    [140_000, false],
-  ] as const)("checks inherited transport at %s", (now, healthy) => {
-    expect(
-      evaluateHealth(
-        { connected: true, lastStartAt: 50_000, lastTransportActivityAt: 10_000 },
-        { now, channelId: "slack" },
-      ),
-    ).toEqual({ healthy, reason: healthy ? "healthy" : "stale-socket" });
-  });
-
-  it.each([{ enabled: false }, { configured: false }])(
-    "keeps disabled or unconfigured accounts unmanaged (%j)",
-    (unmanaged) => {
-      const evaluation = evaluateHealth({
-        running: false,
-        linked: false,
-        terminalDisconnect: true,
-        lifecycle: "blocked",
-        ingressUnavailable: true,
-        ...unmanaged,
-      });
-      expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
-    },
-  );
+    false,
+    "disconnected",
+  ],
+  [reconnect({ at: 95_000 }), true, "reconnect-grace"],
+  [reconnect({ at: -20_001 }), false, "disconnected"],
+  [reconnect("socket closed"), false, "disconnected"],
+  [reconnect({ at: Number.NaN }), false, "disconnected"],
+  [reconnect({ at: 79_000 }, 80_000), false, "disconnected"],
+  [oldRun(false), false, "stuck", { now: 30 * 60_000 }],
+  [oldRun(true), true, "busy", { now: 30 * 60_000 }],
+  [inheritedTransport, true, "healthy", { now: 75_000, channelId: "slack" }],
+  [inheritedTransport, false, "stale-socket", { now: 140_000, channelId: "slack" }],
+  [{ ...unmanaged, enabled: false }, true, "unmanaged"],
+  [{ ...unmanaged, configured: false }, true, "unmanaged"],
+])("evaluates %j as %s/%s with %j", (snapshot, healthy, reason, options) => {
+  expect(evaluateHealth(snapshot, options)).toEqual({ healthy, reason });
 });
 
 it("preserves authored terminal detail above the shared blocked projection", () => {

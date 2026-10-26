@@ -37,6 +37,7 @@ import {
   payload,
 } from "./port-command.integration.test-support.js";
 import * as tasks from "./port-command.worker.js";
+import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -206,7 +207,7 @@ it("captures prefixed destination names and preserves them when rolling back bef
     const run = tasks.runDatabasePortTask;
     vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
       if (args[0].operation === "preflight") {
-        return { version: 170000, encoding: "UTF8", privilegesChecked: false };
+        return;
       }
       if (args[0].operation === "migrate") {
         throw new Error(injected);
@@ -388,8 +389,8 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
             readBigInts: true,
           });
           migrationTime = db
-            .prepare("SELECT applied_at FROM workboard_schema_migrations WHERE id = 'schema-3'")
-            .get()?.applied_at;
+            .prepare("SELECT applied_at FROM workboard_schema_migrations WHERE id = ?")
+            .get(`schema-${metadata.version}`)?.applied_at;
         }
         return result;
       });
@@ -403,7 +404,8 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       expect(
         (
           await client.query(
-            `SELECT applied_at FROM "${engine.namespace}".workboard_schema_migrations WHERE id = 'schema-3'`,
+            `SELECT applied_at FROM "${engine.namespace}".workboard_schema_migrations WHERE id = $1`,
+            [`schema-${metadata.version}`],
           )
         ).rows,
       ).toEqual([{ applied_at: String(migrationTime) }]);

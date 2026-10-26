@@ -1,4 +1,4 @@
-import { copyFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page, Video } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -134,9 +134,9 @@ async function closeRecordedSurface(surface: ApprovalSurface, targetName: string
   if (!video || !surface.rawVideoDir) {
     return;
   }
-  const rawVideoPath = await video.path();
-  await copyFile(rawVideoPath, path.join(suite.artifactDir, targetName));
+  await video.saveAs(path.join(suite.artifactDir, targetName));
   // Remove raw footage only after the retained named copy succeeds.
+  await video.delete();
   await rm(surface.rawVideoDir, { force: true, recursive: true });
 }
 

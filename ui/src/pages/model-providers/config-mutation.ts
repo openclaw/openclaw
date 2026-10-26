@@ -90,34 +90,6 @@ const DEFAULT_MODELS_REPLACE_PATHS = [
   "agents.defaults.utilityModel.fallbacks",
 ];
 
-function buildDefaultsPatch(
-  params: Omit<DefaultModelSelection, "fallbacks"> &
-    ModelBehaviorConfig & {
-      fallbacks: readonly string[];
-    },
-) {
-  return {
-    agents: {
-      defaults: {
-        ...(params.primary
-          ? {
-              model:
-                params.fallbacks.length > 0
-                  ? { primary: params.primary, fallbacks: [...params.fallbacks] }
-                  : params.primary,
-            }
-          : {}),
-        utilityModel: modelSettingPatch(params.utilityModel),
-        ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
-        thinkingDefault:
-          params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
-        fastModeDefault:
-          params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
-      },
-    },
-  };
-}
-
 const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
   "auth",
   "billing",
@@ -201,6 +173,7 @@ export function runModelProviderDefaultsMutation(
   ) {
     return Promise.resolve(null);
   }
+  const params = owner.defaults;
   return runModelProviderConfigMutation(
     {
       runtimeConfig: context.runtimeConfig,
@@ -210,7 +183,26 @@ export function runModelProviderDefaultsMutation(
       setMessage: owner.setMessage,
     },
     {
-      raw: buildDefaultsPatch(owner.defaults),
+      raw: {
+        agents: {
+          defaults: {
+            ...(params.primary
+              ? {
+                  model:
+                    params.fallbacks.length > 0
+                      ? { primary: params.primary, fallbacks: [...params.fallbacks] }
+                      : params.primary,
+                }
+              : {}),
+            utilityModel: modelSettingPatch(params.utilityModel),
+            ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            thinkingDefault:
+              params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
+            fastModeDefault:
+              params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
+          },
+        },
+      },
       note: t("modelProviders.notes.defaultModel"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     },

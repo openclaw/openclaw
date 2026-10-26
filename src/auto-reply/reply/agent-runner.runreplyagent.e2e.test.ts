@@ -150,6 +150,38 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
   );
 }
 
+function discordSourceContext(messageId: string) {
+  return {
+    Provider: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: "channel:24680",
+    MessageSid: messageId,
+  } as const;
+}
+
+function fireworksCooldownFallback() {
+  return {
+    provider: "deepinfra",
+    model: "moonshotai/Kimi-K2.5",
+    attempts: [
+      {
+        provider: "fireworks",
+        model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        error: "Provider fireworks is in cooldown (all profiles unavailable)",
+        reason: "rate_limit" as const,
+      },
+    ],
+  };
+}
+
+function createMainSessionOperation() {
+  return createReplyOperation({
+    sessionKey: "main",
+    sessionId: "session",
+    resetTriggered: false,
+  });
+}
+
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session",
@@ -583,6 +615,24 @@ function attachSourceTurnRecorder(params: {
   });
 }
 
+function createRecordedSessionRun(
+  text: string,
+  params: NonNullable<Parameters<typeof createMinimalRun>[0]> &
+    Pick<
+      Parameters<typeof attachSourceTurnRecorder>[0],
+      "sessionEntry" | "sessionStore" | "storePath"
+    >,
+) {
+  const fixture = createMinimalRun(params);
+  attachSourceTurnRecorder({
+    ...params,
+    followupRun: fixture.followupRun,
+    sourceTurnId: fixture.sourceTurnId,
+    text,
+  });
+  return fixture;
+}
+
 function requireBuiltChannelSourceTurnId(
   params: Parameters<typeof buildChannelSourceTurnId>[0],
 ): string {
@@ -592,18 +642,9 @@ function requireBuiltChannelSourceTurnId(
 describe("runReplyAgent active steering", () => {
   it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const sourceContext = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "first-source-message",
-    };
+    const sourceContext = discordSourceContext("first-source-message");
     const { followupRun } = createMinimalRun({ sessionCtx: sourceContext });
-    const first = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const first = createMainSessionOperation();
     first.setPhase("running");
     const createController = async (
       operation: ReplyOperation,
@@ -763,11 +804,7 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
       bindActiveAuthority: false,
     });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     await active.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     await active.bindToolAuthorityRouteAsync(activeRoute);
     active.setPhase("running");
@@ -837,11 +874,7 @@ describe("runReplyAgent active steering", () => {
 
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.backendQueueMessageMock.mockReturnValueOnce(true);
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const taskTyping = createMockTypingController({ isActive: vi.fn(() => true) });
     bindReplyOperationTyping(active, taskTyping);
@@ -873,11 +906,7 @@ describe("runReplyAgent active steering", () => {
 
   it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -929,11 +958,7 @@ describe("runReplyAgent active steering", () => {
 
   it("replays a declined steer without dispatching its hook twice", async () => {
     using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -947,12 +972,7 @@ describe("runReplyAgent active steering", () => {
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "steer-fallback",
-      },
+      sessionCtx: discordSourceContext("steer-fallback"),
       runOverrides: { agentId: "main", messageProvider: "discord" },
     });
 
@@ -977,11 +997,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("falls back visibly when the active CLI backend cannot accept injection", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     active.attachBackend({ kind: "cli", cancel: vi.fn() });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
@@ -1002,11 +1018,7 @@ describe("runReplyAgent active steering", () => {
 
   it("durably records an adopted steer once with the active run id for transcript projection", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: {
@@ -1085,11 +1097,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("falls back once when the pre-resolved steer owner disappears before queue admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     active.attachBackend({
       kind: "embedded",
@@ -1186,11 +1194,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const finalizerError = new Error("dedupe finalizer failed");
     const events: string[] = [];
@@ -1252,11 +1256,7 @@ describe("runReplyAgent active steering", () => {
     });
     const onAdopted = vi.fn();
     const onBlockReply = vi.fn();
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const { run } = createMinimalRun({
       opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
@@ -1287,11 +1287,7 @@ describe("runReplyAgent active steering", () => {
 
   it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.backendQueueMessageMock.mockReturnValueOnce({
       queued: true,
@@ -1390,36 +1386,19 @@ describe("runReplyAgent active steering", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       };
     });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { followupRun, run } = createRecordedSessionRun("steering rejected before admission", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "rejected-steering-message",
-      },
+      sessionCtx: discordSourceContext("rejected-steering-message"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "steering rejected before admission",
     });
 
     try {
@@ -1562,11 +1541,7 @@ describe("runReplyAgent admission and cleanup", () => {
   });
 
   it("keeps queued typing alive and the drain dormant until the active owner clears", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     const { run, typing } = createMinimalRun({
       opts: {},
       isActive: true,
@@ -1674,14 +1649,7 @@ describe("runReplyAgent admission and cleanup", () => {
     ["rejected answer", { text: "answer block" }],
   ])("settles optional provider failure after %s block delivery", async (label, payload) => {
     const runState: ReplyOperationRunState = {};
-    const replyOperation =
-      label === "aborted answer"
-        ? createReplyOperation({
-            sessionKey: "main",
-            sessionId: "session",
-            resetTriggered: false,
-          })
-        : undefined;
+    const replyOperation = label === "aborted answer" ? createMainSessionOperation() : undefined;
     const deliveryStarted = createDeferred();
     let blockFlush: Promise<void> | undefined;
     const onBlockReply = vi.fn(async () => {
@@ -1785,11 +1753,7 @@ describe("runReplyAgent admission and cleanup", () => {
   });
 
   it("keeps user aborts silent after a delivered partial", async () => {
-    const replyOperation = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const replyOperation = createMainSessionOperation();
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "partial answer" });
@@ -2191,7 +2155,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         }
         return { payloads: [{ text: "visible final" }], meta: {} };
       });
-      const { followupRun, run, sourceTurnId } = createMinimalRun({
+      const { run, sourceTurnId } = createRecordedSessionRun("durable discord request", {
         sessionCtx: {
           Provider: "discord",
           OriginatingChannel: "discord",
@@ -2205,14 +2169,6 @@ describe("runReplyAgent pending final delivery capture", () => {
         sessionStore,
         sessionKey: "main",
         storePath,
-      });
-      attachSourceTurnRecorder({
-        followupRun,
-        sessionEntry,
-        sessionStore,
-        sourceTurnId,
-        storePath,
-        text: "durable discord request",
       });
       expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2275,21 +2231,13 @@ describe("runReplyAgent pending final delivery capture", () => {
       TransportThreadId: deliveryContext.threadId,
       SessionKey: sessionKey,
     } as const;
-    const interrupted = createMinimalRun({
+    const interrupted = createRecordedSessionRun("recover this private topic", {
       sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-1" },
       runOverrides: { messageProvider: "telegram" },
       sessionEntry,
       sessionStore,
       sessionKey,
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: interrupted.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: interrupted.sourceTurnId,
-      storePath,
-      text: "recover this private topic",
     });
 
     await expect(interrupted.run()).resolves.toEqual(
@@ -2299,21 +2247,13 @@ describe("runReplyAgent pending final delivery capture", () => {
     const completed = requireStoredSessionEntry(storePath, sessionKey);
     expect(completed.restartRecoveryDeliveryRunId).toBeUndefined();
     const nextStore = { [sessionKey]: completed };
-    const followup = createMinimalRun({
+    const followup = createRecordedSessionRun("accept the next private-topic message", {
       sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-2" },
       runOverrides: { messageProvider: "telegram" },
       sessionEntry: completed,
       sessionStore: nextStore,
       sessionKey,
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: followup.followupRun,
-      sessionEntry: completed,
-      sessionStore: nextStore,
-      sourceTurnId: followup.sourceTurnId,
-      storePath,
-      text: "accept the next private-topic message",
     });
 
     await expect(followup.run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
@@ -2347,26 +2287,13 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-unknown",
-      },
+    const { run, sourceTurnId } = createRecordedSessionRun("maybe send a terminal reply", {
+      sessionCtx: discordSourceContext("discord-message-unknown"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "maybe send a terminal reply",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2388,12 +2315,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   it("rejects channel recovery admission without a source-keyed user turn", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const { run } = createMinimalRun({
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-without-recorder",
-      },
+      sessionCtx: discordSourceContext("discord-message-without-recorder"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
@@ -2418,12 +2340,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       return { payloads: [{ text: "visible final" }], meta: {} };
     });
     const { run } = createMinimalRun({
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-without-source-id",
-      },
+      sessionCtx: discordSourceContext("discord-message-without-source-id"),
       sourceTurnId: "",
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
@@ -2525,27 +2442,14 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("drops a redelivered terminal channel source before hooks or model work", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-terminal-message",
-    } as const;
-    const first = createMinimalRun({
+    const sessionCtx = discordSourceContext("redelivered-terminal-message");
+    const first = createRecordedSessionRun("execute once", {
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: first.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: first.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     await first.run();
@@ -2555,7 +2459,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.runEmbeddedAgentMock.mockClear();
     const onAdopted = vi.fn();
     const completedStore = { main: completedEntry };
-    const duplicate = createMinimalRun({
+    const duplicate = createRecordedSessionRun("execute once", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
       sessionCtx,
       runOverrides: { messageProvider: "discord" },
@@ -2563,14 +2467,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore: completedStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: duplicate.followupRun,
-      sessionEntry: completedEntry,
-      sessionStore: completedStore,
-      sourceTurnId: duplicate.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     // Retire the completed turn's automatic maintenance before observing cold redelivery.
@@ -2605,12 +2501,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("drops a redelivered active channel source before hooks or queue work", async () => {
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-active-message",
-    } as const;
+    const sessionCtx = discordSourceContext("redelivered-active-message");
     const sourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       conversationId: "channel:24680",
@@ -2625,7 +2516,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       },
     });
     const onAdopted = vi.fn();
-    const duplicate = createMinimalRun({
+    const duplicate = createRecordedSessionRun("execute once", {
       isActive: true,
       shouldSteer: true,
       opts: { turnAdoptionLifecycle: { onAdopted } },
@@ -2635,14 +2526,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun: duplicate.followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId: duplicate.sourceTurnId,
-      storePath,
-      text: "execute once",
     });
 
     await expect(duplicate.run()).resolves.toBeUndefined();
@@ -2760,11 +2643,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
     });
-    const replyOperation = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const replyOperation = createMainSessionOperation();
     await using actor = createReplyRecoveryActorFixture({
       agentId: "main",
       sessionKey: "main",
@@ -2859,7 +2738,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       };
     });
 
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("durable discord request", {
       opts: {
         turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -2878,14 +2757,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "durable discord request",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -2917,7 +2788,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
       ).toBe(true);
     });
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run } = createRecordedSessionRun("durable slack request", {
       opts: {
         turnAdoptionLifecycle: { onAdopted },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -2934,14 +2805,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "durable slack request",
     });
 
     await run();
@@ -2982,7 +2845,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       return { handled: true, reply: { text: "hook reply" } };
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("hook-owned request", {
       opts: {
         turnAdoptionLifecycle: {
           onAdopted: async () => {
@@ -2990,25 +2853,12 @@ describe("runReplyAgent pending final delivery capture", () => {
           },
         },
       },
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-1",
-      },
+      sessionCtx: discordSourceContext("discord-message-1"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "hook-owned request",
     });
     expect(sourceTurnId).toBe(expectedSourceTurnId);
 
@@ -3052,30 +2902,17 @@ describe("runReplyAgent pending final delivery capture", () => {
       reply: { text: "private hook reply" },
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const { followupRun, run, sourceTurnId } = createMinimalRun({
+    const { run, sourceTurnId } = createRecordedSessionRun("private hook request", {
       opts: {
         sourceReplyDeliveryMode: "message_tool_only",
         [REPLY_OPERATION_RUN_STATE]: receipt,
       },
-      sessionCtx: {
-        Provider: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:24680",
-        MessageSid: "discord-message-silent-hook",
-      },
+      sessionCtx: discordSourceContext("discord-message-silent-hook"),
       runOverrides: { messageProvider: "discord" },
       sessionEntry,
       sessionStore,
       sessionKey: "main",
       storePath,
-    });
-    attachSourceTurnRecorder({
-      followupRun,
-      sessionEntry,
-      sessionStore,
-      sourceTurnId,
-      storePath,
-      text: "private hook request",
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
@@ -3110,26 +2947,13 @@ describe("runReplyAgent pending final delivery capture", () => {
         ).toBeUndefined();
         return result;
       });
-      const { followupRun, run, sourceTurnId } = createMinimalRun({
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:24680",
-          MessageSid: "discord-message-2",
-        },
+      const { run } = createRecordedSessionRun("model-owned request", {
+        sessionCtx: discordSourceContext("discord-message-2"),
         runOverrides: { messageProvider: "discord" },
         sessionEntry,
         sessionStore,
         sessionKey: "main",
         storePath,
-      });
-      attachSourceTurnRecorder({
-        followupRun,
-        sessionEntry,
-        sessionStore,
-        sourceTurnId,
-        storePath,
-        text: "model-owned request",
       });
 
       await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
@@ -3744,14 +3568,8 @@ describe("runReplyAgent typing", () => {
   });
 
   it("drains pending tool delivery before returning an empty terminal-run failure", async () => {
-    let markToolResultStarted = () => {};
-    const toolResultStarted = new Promise<void>((resolve) => {
-      markToolResultStarted = resolve;
-    });
-    let releaseToolResult = () => {};
-    const toolResultReleased = new Promise<void>((resolve) => {
-      releaseToolResult = resolve;
-    });
+    const { resolve: markToolResultStarted, promise: toolResultStarted } = createDeferred();
+    const { resolve: releaseToolResult, promise: toolResultReleased } = createDeferred();
     let toolResultDelivered = false;
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       void params.onToolResult?.({ text: "late tool result" });
@@ -4122,20 +3940,7 @@ describe("runReplyAgent typing", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        makeCompletedFallbackRunner({
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner(fireworksCooldownFallback()));
     try {
       const { run } = createMinimalRun({
         blockStreamingEnabled: true,
@@ -4166,20 +3971,7 @@ describe("runReplyAgent typing", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        makeCompletedFallbackRunner({
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner(fireworksCooldownFallback()));
     try {
       const { run } = createMinimalRun({
         sessionEntry,
@@ -4530,16 +4322,7 @@ describe("runReplyAgent typing", () => {
                 "moonshotai/Kimi-K2.5",
                 "rate_limit",
               ),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
+              ...fireworksCooldownFallback(),
             };
           }
           return {

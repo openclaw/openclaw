@@ -1,4 +1,4 @@
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearLiveCatalogCacheForTests,
@@ -7,6 +7,7 @@ import {
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { captureProviderRequestPayload } from "../test-support/provider-request-payload.test-support.js";
 import { buildCerebrasCatalogModels } from "./api.js";
 import plugin from "./index.js";
 import { applyCerebrasConfig, CEREBRAS_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -159,20 +160,7 @@ it.each([
   };
   const normalized =
     provider.normalizeResolvedModel?.({ provider: "cerebras", modelId: model.id, model }) ?? model;
-  let payload: unknown;
-  const result = await streamSimple(
-    normalized,
-    { messages: [] },
-    {
-      apiKey: "synthetic-unused-key",
-      sessionId: "synthetic-session",
-      cacheRetention: "long",
-      onPayload(value) {
-        payload = value;
-        throw new Error("captured before request");
-      },
-    },
-  ).result();
+  const { result, payload } = await captureProviderRequestPayload(normalized);
   expect(result.errorMessage).toBe("captured before request");
   expect(payload).toMatchObject({ prompt_cache_key: route.key });
   expect(payload).not.toHaveProperty("prompt_cache_retention");

@@ -6,7 +6,7 @@ import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
 } from "./compiled-cache.js";
-import { resolveMemoryWikiAgentConfig } from "./config.js";
+import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -14,10 +14,9 @@ import { ingestMemoryWikiSource } from "./ingest.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createCompiledSnapshot, createMemoryWikiTestHarness } from "./test-helpers.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
-type CompiledDashboards = Awaited<ReturnType<typeof loadMemoryWikiCompiledDashboards>>;
 
 vi.mock("./apply.js", () => ({
   applyMemoryWikiMutation: vi.fn(),
@@ -47,10 +46,10 @@ vi.mock("./obsidian.js", async (importOriginal) => ({
   runObsidianAction: vi.fn(),
 }));
 
+// mock-isolation: Observe query dispatch independently of vault indexing and reads.
 vi.mock("./query.js", () => ({
   getMemoryWikiPage: vi.fn(),
   searchMemoryWiki: vi.fn(),
-  WIKI_SEARCH_MODES: ["auto", "find-person", "route-question", "source-evidence", "raw-claim"],
 }));
 
 // mock-isolation: Control background synchronization without importing external sources.
@@ -64,7 +63,7 @@ vi.mock("./status.js", () => ({
 // mock-isolation: Observe initialization without mutating the vault.
 vi.mock("./vault.js", () => ({ initializeMemoryWikiVault: vi.fn() }));
 
-const { createPluginApi, createVault } = createMemoryWikiTestHarness();
+const { createPluginApi } = createMemoryWikiTestHarness();
 
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
   const call = respond.mock.calls[0];
@@ -100,26 +99,25 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.obsidian.daily", {}],
 ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
 
+const scopedAppConfig = { agents: { entries: { support: {}, marketing: {} } } };
 type GatewayOptions = Partial<Omit<Parameters<typeof registerMemoryWikiGatewayMethods>[0], "api">>;
-async function createGateway(
-  method: string,
-  options:
-    | GatewayOptions
-    | ((vault: Awaited<ReturnType<typeof createVault>>) => GatewayOptions) = {},
-  agentScoped = false,
-) {
-  const vault = await createVault({
-    prefix: "memory-wiki-gateway-",
-    config: agentScoped ? { vault: { scope: "agent" } } : undefined,
+async function createGateway(method: string, options: GatewayOptions = {}, agentScoped = false) {
+  const rootDir = path.resolve("/tmp/memory-wiki-gateway");
+  const config = resolveMemoryWikiConfig({
+    vault: {
+      path: rootDir,
+      ...(agentScoped ? { scope: "agent" } : {}),
+    },
   });
-  const { config, rootDir } = vault;
   const { api, registerGatewayMethod } = createPluginApi();
+  const resolveConfig = vi.fn<NonNullable<GatewayOptions["resolveConfig"]>>((agentId, appConfig) =>
+    resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
+  );
   registerMemoryWikiGatewayMethods({
     api,
-    getAppConfig: () => ({}),
-    resolveConfig: (agentId, appConfig) =>
-      resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
-    ...(typeof options === "function" ? options(vault) : options),
+    getAppConfig: () => (agentScoped ? scopedAppConfig : {}),
+    resolveConfig,
+    ...options,
   });
   const handler:
     | ((ctx: {
@@ -134,6 +132,7 @@ async function createGateway(
   return {
     rootDir,
     config,
+    resolveConfig,
     registerGatewayMethod,
     run: (params: Record<string, unknown> = {}) => handler({ params, respond }),
     respond,
@@ -160,23 +159,14 @@ const emptySync = {
   indexRefreshReason: "no-import-changes",
 } satisfies Awaited<ReturnType<typeof syncMemoryWikiImportedSources>>;
 
-const importInsights: CompiledDashboards["importInsights"] = {
-  sourceType: "chatgpt",
-  totalItems: 2,
-  totalClusters: 1,
-  clusters: [],
-  truncated: false,
-};
-
-const overview: CompiledDashboards["overview"] = {
-  totalItems: 1,
-  totalPages: 3,
-  pageCounts: { synthesis: 1, entity: 0, concept: 0, source: 1, report: 1 },
-  totalClaims: 4,
-  totalQuestions: 1,
-  totalContradictions: 1,
-  clusters: [],
-  truncated: false,
+const { dashboards } = createCompiledSnapshot();
+dashboards.importInsights.totalItems = 2;
+dashboards.overview.totalItems = 1;
+const importRuns: Awaited<ReturnType<typeof listMemoryWikiImportRuns>> = {
+  runs: [],
+  totalRuns: 0,
+  activeRuns: 0,
+  rolledBackRuns: 0,
 };
 
 describe("memory-wiki gateway methods", () => {
@@ -195,15 +185,8 @@ describe("memory-wiki gateway methods", () => {
     vi.mocked(ingestMemoryWikiSource).mockResolvedValue({
       pagePath: "sources/alpha-notes.md",
     } as never);
-    vi.mocked(listMemoryWikiImportRuns).mockResolvedValue({
-      runs: [],
-      totalRuns: 0,
-      activeRuns: 0,
-      rolledBackRuns: 0,
-    } as never);
-    vi.mocked(loadMemoryWikiCompiledDashboards).mockResolvedValue(
-      structuredClone({ importInsights, overview }),
-    );
+    vi.mocked(listMemoryWikiImportRuns).mockResolvedValue(structuredClone(importRuns));
+    vi.mocked(loadMemoryWikiCompiledDashboards).mockResolvedValue(structuredClone(dashboards));
     vi.mocked(normalizeMemoryWikiMutationInput).mockReturnValue(structuredClone(synthesisMutation));
     vi.mocked(applyMemoryWikiMutation).mockResolvedValue({
       operation: "create_synthesis",
@@ -215,27 +198,19 @@ describe("memory-wiki gateway methods", () => {
   it("registers Obsidian, ingest, and compile methods with their required scopes", async () => {
     const { registerGatewayMethod } = await createGateway("wiki.compile");
 
-    expect(
-      Object.fromEntries(
-        registerGatewayMethod.mock.calls
-          .filter(
-            ([method]) =>
-              typeof method === "string" &&
-              (method.startsWith("wiki.obsidian.") ||
-                method === "wiki.compile" ||
-                method === "wiki.ingest"),
-          )
-          .map(([method, , options]) => [method, options]),
-      ),
-    ).toEqual({
-      "wiki.obsidian.status": { scope: "operator.read" },
-      "wiki.obsidian.search": { scope: "operator.write" },
-      "wiki.obsidian.open": { scope: "operator.write" },
-      "wiki.obsidian.command": { scope: "operator.write" },
-      "wiki.obsidian.daily": { scope: "operator.write" },
-      "wiki.compile": { scope: "operator.write" },
-      "wiki.ingest": { scope: "operator.admin" },
-    });
+    for (const [method, scope] of [
+      ["wiki.obsidian.status", "operator.read"],
+      ["wiki.obsidian.search", "operator.write"],
+      ["wiki.obsidian.open", "operator.write"],
+      ["wiki.obsidian.command", "operator.write"],
+      ["wiki.obsidian.daily", "operator.write"],
+      ["wiki.compile", "operator.write"],
+      ["wiki.ingest", "operator.admin"],
+    ]) {
+      expect(registerGatewayMethod.mock.calls.filter(([name]) => name === method)).toEqual([
+        [method, expect.any(Function), { scope }],
+      ]);
+    }
   });
 
   it.each([
@@ -251,36 +226,18 @@ describe("memory-wiki gateway methods", () => {
   ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>)(
     "%s resolves its request agent exactly once",
     async (method, methodParams) => {
-      const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
-      const resolveConfig = vi.fn<NonNullable<GatewayOptions["resolveConfig"]>>();
-      const { run } = await createGateway(
-        method,
-        ({ config, rootDir }) => ({
-          getAppConfig: () => appConfig,
-          resolveConfig: resolveConfig.mockReturnValue({
-            ...config,
-            agentId: "marketing",
-            vault: { ...config.vault, path: path.join(rootDir, "marketing") },
-          }),
-        }),
-        true,
-      );
+      const { run, resolveConfig } = await createGateway(method, {}, true);
 
       await run({ ...methodParams, agentId: "marketing" });
 
       expect(resolveConfig).toHaveBeenCalledOnce();
-      expect(resolveConfig).toHaveBeenCalledWith("marketing", appConfig);
+      expect(resolveConfig).toHaveBeenCalledWith("marketing", scopedAppConfig);
     },
   );
 
   it("keeps only the Obsidian executable probe outside vault resolution", async () => {
-    const resolveConfig = vi.fn<NonNullable<GatewayOptions["resolveConfig"]>>();
-    const { run, registerGatewayMethod } = await createGateway(
-      "wiki.obsidian.status",
-      ({ config }) => ({
-        resolveConfig: resolveConfig.mockReturnValue(config),
-      }),
-    );
+    const { run, resolveConfig, registerGatewayMethod } =
+      await createGateway("wiki.obsidian.status");
 
     await run({ agentId: "marketing" });
 
@@ -293,12 +250,7 @@ describe("memory-wiki gateway methods", () => {
   });
 
   it("rejects official Obsidian CLI actions for agent-scoped vaults", async () => {
-    const appConfig = { agents: { entries: { support: {} } } };
-    const { run, respond } = await createGateway(
-      "wiki.obsidian.search",
-      { getAppConfig: () => appConfig },
-      true,
-    );
+    const { run, respond } = await createGateway("wiki.obsidian.search", {}, true);
 
     await run({ agentId: "support", query: "alpha" });
 
@@ -323,8 +275,7 @@ describe("memory-wiki gateway methods", () => {
   });
 
   it("resolves an agent-scoped vault once from each request and live app config", async () => {
-    const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
-    const getAppConfig = vi.fn(() => appConfig);
+    const getAppConfig = vi.fn(() => scopedAppConfig);
     const { rootDir, run, respond } = await createGateway("wiki.status", { getAppConfig }, true);
 
     await run({ agentId: "marketing" });
@@ -336,9 +287,11 @@ describe("memory-wiki gateway methods", () => {
     expect(getAppConfig).toHaveBeenCalledTimes(1);
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({
       config: resolvedConfig,
-      appConfig,
+      appConfig: scopedAppConfig,
     });
-    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(resolvedConfig, { appConfig });
+    expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(resolvedConfig, {
+      appConfig: scopedAppConfig,
+    });
     expect(readRespondPayload(respond)).toEqual({
       vaultScope: "agent",
       agentId: "marketing",
@@ -351,12 +304,7 @@ describe("memory-wiki gateway methods", () => {
     [{}, "agentId is required for memory-wiki when vault.scope=agent."],
     [{ agentId: "unknown" }, "Unknown memory-wiki agentId: unknown."],
   ])("fails closed for invalid agent-scoped requests", async (requestParams, message) => {
-    const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
-    const { run, respond } = await createGateway(
-      "wiki.status",
-      { getAppConfig: () => appConfig },
-      true,
-    );
+    const { run, respond } = await createGateway("wiki.status", {}, true);
 
     await run(requestParams);
 
@@ -364,35 +312,11 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
   });
 
-  it("returns recent import runs over the gateway", async () => {
+  it("returns import-run results and forwards the limit", async () => {
     const { config, run, respond } = await createGateway("wiki.importRuns");
-    const result: Awaited<ReturnType<typeof listMemoryWikiImportRuns>> = {
-      runs: [
-        {
-          runId: "chatgpt-abc123",
-          importType: "chatgpt",
-          appliedAt: "2026-04-10T10:00:00.000Z",
-          exportPath: "/tmp/chatgpt",
-          sourcePath: "/tmp/chatgpt/conversations.json",
-          conversationCount: 12,
-          createdCount: 4,
-          updatedCount: 2,
-          skippedCount: 6,
-          status: "applied",
-          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
-          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
-        },
-      ],
-      totalRuns: 1,
-      activeRuns: 1,
-      rolledBackRuns: 0,
-    };
-    vi.mocked(listMemoryWikiImportRuns).mockResolvedValue(structuredClone(result));
-
     await run({ limit: 5 });
-
     expect(listMemoryWikiImportRuns).toHaveBeenCalledWith(config, { limit: 5 });
-    expect(readRespondPayload(respond)).toEqual(result);
+    expect(readRespondPayload(respond)).toEqual(importRuns);
   });
 
   it.each(["wiki.importInsights", "wiki.overview"])(
@@ -408,7 +332,7 @@ describe("memory-wiki gateway methods", () => {
       expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: {} });
       expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
       expect(readRespondPayload(respond)).toEqual(
-        method === "wiki.importInsights" ? importInsights : overview,
+        method === "wiki.importInsights" ? dashboards.importInsights : dashboards.overview,
       );
       syncGate.resolve(emptySync);
       await syncGate.promise;
@@ -450,31 +374,15 @@ describe("memory-wiki gateway methods", () => {
   });
 
   it.each([
-    [
-      "local mode and corpus",
-      {},
-      {
-        query: "Teams Azure",
-        maxResults: 3,
-        corpus: "wiki",
-        backend: "local",
-        mode: "route-question",
-      },
-      ["Teams Azure", 3, "local", "wiki", "route-question"],
-    ],
-    [
-      "default agent for shared memory",
-      { agents: { entries: { main: {} } } },
-      { query: "sessions", corpus: "memory", backend: "shared" },
-      ["sessions", undefined, "shared", "memory", undefined],
-    ],
+    ["Teams Azure", 3, "local", "wiki", "route-question", {}],
+    ["sessions", undefined, "shared", "memory", undefined, { agents: { entries: { main: {} } } }],
   ] as const)(
     "forwards wiki.search %s",
-    async (_name, appConfig, params, [query, maxResults, searchBackend, searchCorpus, mode]) => {
+    async (query, maxResults, searchBackend, searchCorpus, mode, appConfig) => {
       const { config, run, respond } = await createGateway("wiki.search", {
         getAppConfig: () => appConfig,
       });
-      await run(params);
+      await run({ query, maxResults, backend: searchBackend, corpus: searchCorpus, mode });
       expect(searchMemoryWiki).toHaveBeenCalledWith({
         memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
         config,

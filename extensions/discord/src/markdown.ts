@@ -126,7 +126,8 @@ function normalizeDiscordBold(markdown: string): string {
     ...astLinkRanges,
     ...nativeTokenRanges,
   ]
-    .toSorted((left, right) => left.start - right.start)
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
+    .sort((left, right) => left.start - right.start)
     .map(({ start, end: rawEnd }) => {
       let end = rawEnd;
       while (/[.,!?;:'"]/u.test(markdown[end - 1] ?? "")) {
@@ -157,7 +158,8 @@ function normalizeDiscordBold(markdown: string): string {
       })),
     ),
     ...contentEdits,
-  ].toSorted((left, right) => left.start - right.start);
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private array.
+  ].sort((left, right) => left.start - right.start);
   const renderEdits = (selectedEdits: typeof edits) => {
     let cursor = 0;
     let rendered = "";

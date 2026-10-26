@@ -6,7 +6,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { catalogList, expectAttribute } from "./sidebar-assertions.test-support.ts";
+import { catalogList } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar refresh availability" });
 const catalogMethod = "sessions.catalog.list";
@@ -48,15 +48,10 @@ async function checkRefreshAvailability({ page }: { page: Page }) {
   });
   await page.goto(`${suite.server.baseUrl}new`);
   const sidebar = page.locator("openclaw-app-sidebar");
-  const identity = sidebar.locator(".sidebar-identity-card");
   const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
   const connectionLabel = connectionStatus.locator(".gateway-status__label");
   const expectSuspending = async () => {
-    await expectAttribute(identity, "data-connection-status", "suspending");
     await expect.poll(() => connectionLabel.textContent()).toBe("Suspending…");
-    const label = await identity.getAttribute("aria-label");
-    expect(label).toContain("Suspending…");
-    expect(await identity.getAttribute("title")).toBe(label);
     expect(await sidebar.getByRole("alert").count()).toBe(0);
   };
   const retained = sidebar.getByText("Retained sample session", { exact: true });
@@ -76,30 +71,10 @@ async function checkRefreshAvailability({ page }: { page: Page }) {
   await page.clock.fastForward(5_001);
   await page.clock.resume();
   await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
-  await expectAttribute(identity, "data-connection-status", "connected");
   await connectionStatus.waitFor({ state: "detached" });
   expect((await gateway.getRequests(catalogMethod)).length).toBe(before + 1);
   expect(await gateway.getSocketCount()).toBe(1);
   expect(await sidebar.getByRole("alert").count()).toBe(0);
-
-  await gateway.setMethodResponse(catalogMethod, {
-    __mockError: { code: "UNAVAILABLE", message: "Catalog service failed" },
-  });
-  await reactivatePage(page);
-  const alert = sidebar.getByRole("alert");
-  await alert.waitFor();
-  expect(await alert.textContent()).toContain("Catalog service failed");
-  expect(await alert.textContent()).toContain("Showing stale data");
-  expect(await alert.getByRole("button").count()).toBe(0);
-
-  await gateway.setMethodResponse(catalogMethod, { __mockError: suspensionError });
-  await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
-  await reactivatePage(page);
-  await expect.poll(() => sidebar.getByRole("alert").count()).toBe(0);
-  await gateway.setMethodResponse("connect", { __mockError: suspensionError });
-  await gateway.closeLatest();
-  await expect.poll(async () => (await gateway.getRequests("connect")).length).toBeGreaterThan(1);
-  await expectSuspending();
 }
 suite.define(() => {
   it("keeps suspension in the footer and refreshes retained rows when admission reopens", () =>

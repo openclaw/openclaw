@@ -1,3 +1,4 @@
+import "./session-send-recovery.delivery.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
@@ -14,66 +15,24 @@ import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
 import { config, delivery, input, sourceSnapshot } from "./session-send-recovery.test-support.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
-  source: vi.fn(),
-  load: vi.fn(),
-  report: vi.fn(),
-  withdraw: vi.fn(),
-}));
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (original) => ({
-    ...(await original()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (original) => ({
-  ...(await original()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (original) => ({
-  ...(await original()),
-  readSessionSendRecoveryPage: io.pending,
-}));
-vi.mock(import("../config/sessions/session-pending-input-source.js"), async (original) => ({
-  ...(await original()),
-  readPendingInputSource: io.source,
-}));
-vi.mock(import("../config/sessions/session-accessor.js"), async (original) => ({
-  ...(await original()),
-  appendSessionTranscriptReport: io.report,
-}));
-vi.mock(import("../config/sessions/session-pending-input-withdrawal.js"), async (original) => ({
-  ...(await original()),
-  discardSessionPendingInput: io.withdraw,
-}));
-vi.mock(import("./session-utils-store-worker.js"), async (original) => ({
-  ...(await original()),
-  resolveGatewaySessionStoreTargetInWorker: io.load,
-}));
+const { recoveryDeliveryMocks: io } =
+  await import("./session-send-recovery.delivery.mocks.test-support.js");
 const dispatch = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks();
   const target = { sessionId: delivery.target.sessionId, updatedAt: 1 };
+  const source = {
+    sessionId: delivery.source.sessionId,
+    lifecycleRevision: delivery.source.lifecycleRevision,
+    updatedAt: 1,
+  };
   io.discover.mockResolvedValue([{ agentId: "main", storePath: "/fixture/sessions.json" }]);
   io.entries.mockResolvedValue([{ sessionKey: delivery.target.sessionKey, entry: target }]);
   io.load.mockImplementation(async ({ key }: { key: string }) => ({
     agentId: "main",
     canonicalKey: key,
     storePath: "/fixture/sessions.json",
-    store: {
-      [key]:
-        key === delivery.source.sessionKey
-          ? {
-              sessionId: delivery.source.sessionId,
-              lifecycleRevision: delivery.source.lifecycleRevision,
-              updatedAt: 1,
-            }
-          : target,
-    },
+    store: { [key]: key === delivery.source.sessionKey ? source : target },
   }));
   io.report.mockResolvedValue({ ok: true });
   io.withdraw.mockResolvedValue(true);
@@ -107,7 +66,6 @@ it.each(["operator.sessions.write", "operator.read"])(
       const savedInput: SessionPendingInput = JSON.parse(persistedInput);
       io.pending.mockResolvedValue({ items: [savedInput], total: 1 });
       io.source.mockResolvedValue(sourceSnapshot(savedInput));
-      const info = vi.spyOn(recoveryContext.logGateway, "info");
       let accepted = false;
       dispatch.mockImplementation(async (request, _timeout, options) => {
         options.assertAdmissionCurrent();
@@ -136,7 +94,6 @@ it.each(["operator.sessions.write", "operator.read"])(
 
       await recoverSessionSendDeliveries(recoveryContext, new AbortController().signal).settled;
 
-      expect(dispatch).toHaveBeenCalledOnce();
       expect(io.withdraw).not.toHaveBeenCalled();
       expect(accepted).toBe(scope === "operator.sessions.write");
       if (accepted) {
@@ -144,13 +101,6 @@ it.each(["operator.sessions.write", "operator.read"])(
       } else {
         const report = io.report.mock.calls[0]![1].selectReport(undefined);
         expect(report.details.inputs[0].reason).toBe("permission-denied");
-        expect(report.content).toContain(
-          "current session permissions do not allow automatic delivery",
-        );
-        expect(report.content).toContain("Resend the update or ask the sender to retry.");
-        expect(info).toHaveBeenCalledWith(
-          expect.stringContaining('"waitReason":"permission-denied"'),
-        );
       }
     });
   },

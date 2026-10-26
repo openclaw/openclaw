@@ -37,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -55,6 +56,7 @@ import {
 } from "./session-source-authority.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as reconcile from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const { getSessionEntryPatchDelivery, observeCommitAdmission } =
@@ -75,6 +77,40 @@ function releasableSource(release: () => void | Promise<void>) {
   });
 }
 
+it("prepares callback patches from complete current owner facts without another entry reply", async () => {
+  await withFixture(async (f) => {
+    const prompt = "synthetic retained instructions ".repeat(1024);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    const result = await patchSessionEntryCore(f.scope, (entry) => {
+      expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+      return { label: "prepared from published facts" };
+    });
+    expect(result).toMatchObject({
+      label: "prepared from published facts",
+      skillsSnapshot: { prompt },
+    });
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+    expect(f.read()).toEqual(result);
+  });
+});
+
+it("patches a replaced entry whose retained fields have a different insertion order", async () => {
+  await withFixture(async (f) => {
+    const identity = { sessionId: f.scope.sessionId };
+    const writer = { ...identity, activeWriterRunId: "current-writer" };
+    await replaceSessionEntry(f.scope, { ...identity, updatedAt: 1 });
+    await replaceSessionEntry(f.scope, { ...writer, updatedAt: 1, totalTokens: 0 });
+    const result = await patchSessionEntryCore(f.scope, () => ({ totalTokens: 13_357 }));
+    expect(result).toMatchObject({ ...writer, totalTokens: 13_357, delivery: { kind: "none" } });
+    expect(f.read()).toEqual(result);
+  });
+});
+
 it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
   await withFixture(async (f) => {
     const initial = f.read()!;
@@ -86,6 +122,13 @@ it("ends an absent live-switch selection without committing and keeps newer flag
       prepareIf: { kind: "live-model-switch-pending" as const },
       onCommitted,
     };
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    sessionChanges.invalidate({
+      sessionKey: f.scope.sessionKey,
+      storePath: f.database.path,
+      factsInvalidated: true,
+    });
     delivery.afterPrepare = () => {
       delivery.afterPrepare = undefined;
       replaceSessionEntrySync(f.scope, newer);
@@ -97,6 +140,8 @@ it("ends an absent live-switch selection without committing and keeps newer flag
     expect(onCommitted).not.toHaveBeenCalled();
     expect(f.read()).toMatchObject(newer);
 
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
     delivery.beforeCommit = () => {
       delivery.beforeCommit = undefined;
       replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
@@ -105,6 +150,7 @@ it("ends an absent live-switch selection without committing and keeps newer flag
       SqliteSessionMutationConflictError,
     );
     expect(update).toHaveBeenCalledOnce();
+    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
     expect(onCommitted).not.toHaveBeenCalled();
     expect(f.read()).toMatchObject({
       liveModelSwitchPending: true,
@@ -225,12 +271,8 @@ it.each([false, true])(
     await withFixture(async (f) => {
       const options = { agentId: f.database.agentId, path: f.database.path };
       const scope = { ...f.scope, sessionId: "original" };
-      const event = (id: string, parentId: string | null) => ({
-        type: "message",
-        id,
-        parentId,
-        message: { role: "user", content: id },
-      });
+      const event = (id: string, parentId: string | null) =>
+        messageEvent(id, parentId, { role: "user", content: id });
       runOpenClawAgentWriteTransaction(
         (database) => appendTranscriptEventsInTransaction(database, scope, [event("root", null)]),
         options,

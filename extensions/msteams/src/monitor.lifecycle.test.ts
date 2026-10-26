@@ -301,10 +301,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   });
 
   it("acks file-consent invokes before upload work settles", async () => {
-    let releaseUpload: (() => void) | undefined;
-    const uploadWork = new Promise<void>((resolve) => {
-      releaseUpload = resolve;
-    });
+    const { promise: uploadWork, resolve: releaseUpload } = Promise.withResolvers<void>();
     runMSTeamsFileConsentInvokeHandler.mockReturnValueOnce(uploadWork);
 
     await startMonitor();
@@ -330,10 +327,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!ingress) {
       throw new Error("expected Teams ingress");
     }
-    let releaseAppend: (() => void) | undefined;
-    const appendWork = new Promise<void>((resolve) => {
-      releaseAppend = resolve;
-    });
+    const { promise: appendWork, resolve: releaseAppend } = Promise.withResolvers<void>();
     gateIngressAcceptThenDispatch(ingress, appendWork);
 
     const responseWork = cardActionHandler({

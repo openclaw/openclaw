@@ -304,24 +304,27 @@ class ProviderAdapterEmbeddings implements Embeddings {
     embedding: EmbeddingConfig,
     timeoutMs?: number,
   ): Promise<number[]> {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
+    const deadlineAtMs = timeoutMs ? Date.now() + resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
     const fingerprint = embeddingConfigFingerprint(embedding);
     this.invalidate(fingerprint);
     const entry = this.getProvider(normalizeAgentId(agentId), embedding);
     entry.activeUses += 1;
     try {
       const provider = await entry.promise;
-      if (!timeoutMs) {
+      if (deadlineAtMs === undefined) {
         return await provider.embed(text, { inputType: "query" });
+      }
+      // Shared initialization may finish after recall returns; never dispatch that expired query.
+      const remainingTimeoutMs = deadlineAtMs - Date.now();
+      if (remainingTimeoutMs <= 0) {
+        throw new Error("memory-lancedb embedding timed out");
       }
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         timer = setTimeout(
           () => controller.abort(new Error("memory-lancedb embedding timed out")),
-          resolveTimerTimeoutMs(timeoutMs, 1),
+          remainingTimeoutMs,
         );
         timer.unref?.();
         return await provider.embed(text, { signal: controller.signal, inputType: "query" });

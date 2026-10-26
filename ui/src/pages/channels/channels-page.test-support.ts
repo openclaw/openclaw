@@ -6,8 +6,11 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { emptyPairingSnapshot } from "./pairing.test-support.ts";
+import { channelSnapshot as makeSnapshot } from "./view.test-support.ts";
 
 export async function choosePairingFilter(page: HTMLElement, index: number, value: string) {
   const settle = async () => {
@@ -30,15 +33,7 @@ export async function choosePairingFilter(page: HTMLElement, index: number, valu
 
 export const channelSnapshot = (
   overrides: Partial<ChannelsStatusSnapshot> = {},
-): ChannelsStatusSnapshot => ({
-  ts: 0,
-  channelOrder: [],
-  channelLabels: {},
-  channels: {},
-  channelAccounts: {},
-  channelDefaultAccountId: {},
-  ...overrides,
-});
+): ChannelsStatusSnapshot => makeSnapshot({}, { ts: 0, ...overrides });
 
 export function channelStatus(id: string, label: string, configured = false, description?: string) {
   return channelSnapshot({
@@ -110,36 +105,21 @@ export function createGateway(
   scopes?: string[],
   responses: Record<string, () => unknown> = {},
 ): TestGateway {
+  const defaults: Record<string, () => unknown> = {
+    "channels.pairing.list": emptyPairingSnapshot,
+    "channels.status": channelSnapshot,
+    "plugins.list": () => ({ plugins: [], diagnostics: [], mutationAllowed: true }),
+  };
   const client = {
-    request: vi.fn(async (method: string) => {
-      if (responses[method]) {
-        return responses[method]();
-      }
-      return method === "channels.pairing.list"
-        ? {
-            accounts: [],
-            requests: [],
-            commandOwnerConfigured: true,
-            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-          }
-        : method === "channels.status"
-          ? channelSnapshot()
-          : method === "plugins.list"
-            ? { plugins: [], diagnostics: [], mutationAllowed: true }
-            : {};
-    }),
+    request: vi.fn(async (method: string) =>
+      (responses[method] ?? defaults[method] ?? (() => ({})))(),
+    ),
   } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const fixture = createApplicationGateway(snapshot);
   const gateway = Object.assign(fixture.gateway, {
     emit(patch: Partial<ApplicationGatewaySnapshot>) {
@@ -191,8 +171,6 @@ export function profileButton(page: HTMLElement, label: string): HTMLButtonEleme
   const button = Array.from(page.querySelectorAll("button")).find(
     (entry) => entry.textContent?.trim() === label,
   );
-  if (!button) {
-    throw new Error(`Missing action: ${label}`);
-  }
-  return button;
+  expect(button, `Missing action: ${label}`).toBeDefined();
+  return button!;
 }

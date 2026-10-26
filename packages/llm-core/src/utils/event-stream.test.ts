@@ -6,10 +6,10 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../../../src/test-utils/node-process.js";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 import { eventStreamRetentionEntrypoint } from "../retention-runtime.test-support.js";
 import { EventStream, getEventStreamCompletion } from "./event-stream.js";
-import { collect } from "./stream.test-support.js";
 
 const createNumberStream = () =>
   new EventStream<number>(

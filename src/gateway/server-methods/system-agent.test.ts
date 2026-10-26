@@ -19,9 +19,9 @@ import { SystemAgentInferenceUnavailableError } from "../../system-agent/inferen
 import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { WizardSession } from "../../wizard/session.js";
 import * as setupAdmission from "./setup-admission.js";
 import { activateGatewaySetupInference } from "./system-agent-execution.js";
+import { makeContext as makeWizardContext } from "./system-agent-setup.test-support.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
@@ -37,7 +37,6 @@ import {
   useSystemAgentGatewayTestFixture,
   verifiedConfig,
 } from "./system-agent.test-support.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const {
   systemAgentTempDirs,
@@ -46,18 +45,6 @@ const {
   makeVerifiedEngine,
   seededSession,
 } = useSystemAgentGatewayTestFixture();
-
-function makeWizardContext() {
-  const wizardSessions = new Map<string, WizardSession>();
-  return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
-  };
-}
 
 const waitOneTask = () =>
   new Promise<void>((resolve) => {

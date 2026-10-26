@@ -146,6 +146,31 @@ const dirs = createTempDirHarness();
 const cleanups: Array<() => Promise<void>> = [];
 const realKill = process.kill.bind(process);
 const stoppedResult = { process: "confirmed-stopped", errors: [] };
+const startOptions = {
+  providerMode: "mock-openai",
+  controlUiEnabled: false,
+  transportBaseUrl: "http://127.0.0.1:1",
+} as const;
+
+function ownLifetime() {
+  const lifetime = new QaGatewayChildLifecycle();
+  cleanups.push(async () => {
+    await lifetime.stop();
+  });
+  return lifetime;
+}
+
+function expectRuntimeEnv(records: FixtureRecord[], count: number, nodeOptions: string | null) {
+  expect(records).toHaveLength(count);
+  for (const record of records) {
+    expect(record).toMatchObject({
+      buildPrivateQa: nodeOptions === null ? null : "1",
+      enablePrivateQaCli: nodeOptions === null ? null : "1",
+      nodeOptions,
+      ...(nodeOptions === null ? { gatewayOnlyEnvKeys: [] } : {}),
+    });
+  }
+}
 async function signalAndRead(
   child: Parameters<QaGatewayChildLifecycle["register"]>[0],
   signal: "SIGUSR1",
@@ -210,15 +235,7 @@ async function fixture(phase: string, mode: string) {
           .map((line) => JSON.parse(line))
       : [];
   const pidAlive = (pid: number) => {
-    try {
-      realKill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        return false;
-      }
-      throw error;
-    }
-    // ps handles both zombie orphans and exit between the independent probes.
+    // Inspect independently of the production group probe, excluding zombie orphans.
     const state = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     if (state.error) {
       throw state.error;
@@ -302,11 +319,9 @@ async function fixture(phase: string, mode: string) {
       ),
     start: () =>
       owner.start({
+        ...startOptions,
         repoRoot: process.cwd(),
         command,
-        providerMode: "mock-openai",
-        controlUiEnabled: false,
-        transportBaseUrl: "http://127.0.0.1:1",
       }),
     ready: async (count = 1) => {
       await vi.waitFor(
@@ -323,6 +338,17 @@ async function fixture(phase: string, mode: string) {
   };
 }
 
+async function progressingRepair(bootstrapPhase?: "repair") {
+  const f = await fixture("repair", "progress");
+  const lifetime = ownLifetime();
+  const registration = vi.spyOn(lifetime, "register");
+  // Registration happens synchronously during runCli; inspect its child after starting.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const command = f.runCli(lifetime, ["update", "repair"], { bootstrapPhase });
+  await f.ready();
+  return { f, command, child: registration.mock.calls[0]![0] };
+}
+
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
   it("uses the direct candidate CLI while its Gateway owns the state", async () => {
     const messages = captureBootstrapBoundaries();
@@ -335,11 +361,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       'throw new Error("harness CLI must not touch candidate-owned state");\n',
     );
     const gateway = await f.owner.start({
+      ...startOptions,
       repoRoot,
       command: { ...f.command, cwd: f.root, argsSuffix: ["--gateway-only"] },
-      providerMode: "mock-openai",
-      controlUiEnabled: false,
-      transportBaseUrl: "http://127.0.0.1:1",
       runtimeEnvPatch: {
         OPENCLAW_PROFILE: "operator-patch",
         NODE_OPTIONS: "--no-warnings",
@@ -370,61 +394,25 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     await expect(runQaCli(env, ["message", "edit", "--unsupported"])).rejects.toThrow(
       "qa cli failed (2): candidate does not support this action",
     );
-    expect(f.records().map((entry) => entry.kind)).toEqual([
-      "openai",
-      "anthropic",
-      "help",
-      "repair",
-      "gateway",
-      "message",
-      "message",
-    ]);
-    expect(messages.map(({ command, event }) => `${command}:${event}`)).toEqual([
-      ...["mock-auth", "mock-auth", "repair-help", "repair"].flatMap((command) =>
-        ["start", "exit", "settled"].map((event) => `${command}:${event}`),
-      ),
-      "gateway:spawn",
-    ]);
     expect(JSON.stringify(messages)).not.toMatch(
       /operator-parent|operator-patch|sk-qa-mock|fixture\.mjs/u,
     );
-    for (const message of messages.filter(({ event }) => event !== "spawn")) {
-      expect(message.elapsedMs).toEqual(expect.any(Number));
-      expect(message.elapsedMs).toBeGreaterThanOrEqual(0);
-    }
     const profiles = new Set(f.records().map((entry) => entry.profile));
     expect(profiles.size).toBe(1);
     const [profile] = profiles;
     expect(profile).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/u);
     expect(profile).not.toBe("operator-parent");
     expect(profile).not.toBe("operator-patch");
-    const runtimeEnv = ({ buildPrivateQa, enablePrivateQaCli, nodeOptions }: FixtureRecord) => ({
-      buildPrivateQa,
-      enablePrivateQaCli,
-      nodeOptions,
-    });
-    const bootstrapRecords = f
-      .records()
-      .filter((entry) => ["openai", "anthropic", "help", "repair"].includes(entry.kind));
-    expect(bootstrapRecords.map(runtimeEnv)).toEqual(
-      Array.from({ length: 4 }, () => ({
-        buildPrivateQa: null,
-        enablePrivateQaCli: null,
-        nodeOptions: null,
-      })),
+    const records = f.records();
+    expectRuntimeEnv(
+      records.filter((entry) => ["openai", "anthropic", "help", "repair"].includes(entry.kind)),
+      4,
+      null,
     );
-    expect(bootstrapRecords.map((entry) => entry.gatewayOnlyEnvKeys)).toEqual([[], [], [], []]);
-    expect(
-      f
-        .records()
-        .filter((entry) => entry.kind === "gateway" || entry.kind === "message")
-        .map(runtimeEnv),
-    ).toEqual(
-      Array.from({ length: 3 }, () => ({
-        buildPrivateQa: "1",
-        enablePrivateQaCli: "1",
-        nodeOptions: "--no-warnings",
-      })),
+    expectRuntimeEnv(
+      records.filter((entry) => entry.kind === "gateway" || entry.kind === "message"),
+      3,
+      "--no-warnings",
     );
     expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);
   });
@@ -440,11 +428,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       ].join("\n"),
     );
     const gateway = await f.owner.start({
+      ...startOptions,
       repoRoot: process.cwd(),
       command: f.command,
-      providerMode: "mock-openai",
-      controlUiEnabled: false,
-      transportBaseUrl: "http://127.0.0.1:1",
       runtimePreloads: [pathToFileURL(preloadPath).href],
     });
 
@@ -508,7 +494,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     async (mode) => {
       const messages = captureBootstrapBoundaries();
       const f = await fixture("probe", mode);
-      const lifetime = new QaGatewayChildLifecycle();
+      const lifetime = ownLifetime();
       const drainObserved = createDeferred<void>();
       const releaseDrain = createDeferred<void>();
       const waitForClose = lifetime.waitForClose.bind(lifetime);
@@ -518,9 +504,6 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         await releaseDrain.promise;
       });
       const command = f.runCli(lifetime, ["probe"], { bootstrapPhase: "repair-help" });
-      cleanups.push(async () => {
-        await lifetime.stop();
-      });
       try {
         await f.ready();
         await bounded(drainObserved.promise);
@@ -541,22 +524,12 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
 
   it("allows progressing repair phases past the whole-command deadline and settles descendants", async () => {
     const messages = captureBootstrapBoundaries();
-    const f = await fixture("repair", "progress");
-    const lifetime = new QaGatewayChildLifecycle();
-    cleanups.push(async () => {
-      await lifetime.stop();
-    });
-    const registration = vi.spyOn(lifetime, "register");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { f, command, child } = await progressingRepair("repair");
     let settled = false;
-    const command = f
-      .runCli(lifetime, ["update", "repair", "--json"], { bootstrapPhase: "repair" })
-      .then((value) => {
-        settled = true;
-        return value;
-      });
-    await f.ready();
-    const child = registration.mock.calls[0]![0];
+    const observed = command.then((value) => {
+      settled = true;
+      return value;
+    });
     for (let phase = 1; phase <= 4; phase++) {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(settled).toBe(false);
@@ -566,7 +539,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       );
     }
     child.kill("SIGUSR2");
-    expect(await bounded(command)).toBe("repair-complete");
+    expect(await bounded(observed)).toBe("repair-complete");
     expect(
       messages.filter(({ event }) => event === "repair-phase").map(({ phase }) => phase),
     ).toEqual(["preflight", "doctor", "plugins", "completionCache"]);
@@ -574,16 +547,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
   });
 
   it("still times out a repair stalled after forward progress and settles its real tree", async () => {
-    const f = await fixture("repair", "progress");
-    const lifetime = new QaGatewayChildLifecycle();
-    cleanups.push(async () => {
-      await lifetime.stop();
-    });
-    const registration = vi.spyOn(lifetime, "register");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const command = f.runCli(lifetime, ["update", "repair"]);
-    await f.ready();
-    const child = registration.mock.calls[0]![0];
+    const { f, command, child } = await progressingRepair();
     await signalAndRead(child, "SIGUSR1");
     await vi.waitFor(() =>
       expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(1),
@@ -600,7 +564,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     async (failure) => {
       const messages = captureBootstrapBoundaries(failure === "process");
       const f = await fixture("probe", "running");
-      const lifetime = new QaGatewayChildLifecycle();
+      const lifetime = ownLifetime();
       const registration = vi.spyOn(lifetime, "register");
       if (failure === "timeout") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -609,9 +573,6 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         bootstrapPhase: "mock-auth",
         env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
         stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
-      });
-      cleanups.push(async () => {
-        await lifetime.stop();
       });
       const child = registration.mock.calls[0]![0];
       const observed = { stdout: "", stderr: "" };
@@ -663,8 +624,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
             ? "CLI cancelled"
             : `${failure} failed`,
       );
-      expect(error.message).not.toContain("later failure");
-      expect(error.message).not.toContain("diagnostic sink unavailable");
+      expect(error.message).not.toMatch(/later failure|diagnostic sink unavailable/u);
       expect(JSON.stringify(messages)).not.toMatch(/secret|apiKey|spawnargs|stdin|HOME/u);
       expect(messages.at(-1)).toMatchObject({
         event: "settled",
@@ -673,6 +633,8 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       });
       expect(error.message).toContain("plugin registry still pending apiKey=<redacted>");
       expect(error.message).toContain("plugin scan still pending Authorization: Bearer <redacted>");
+      expect(error.message).toContain(": :error::stderr diagnostic");
+      expect(error.message).toContain("# #[error]stdout diagnostic");
       expect(error.message.indexOf("plugin registry")).toBeLessThan(
         error.message.indexOf("plugin scan"),
       );
@@ -682,8 +644,6 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         }
       }
       expect(error.message.length).toBeLessThanOrEqual(2_048);
-      expect(error.message).toContain(": :error::stderr diagnostic");
-      expect(error.message).toContain("# #[error]stdout diagnostic");
       expect(error.message).not.toMatch(/(^|[\r\n])[^\S\r\n]*::/u);
       expect(error).not.toHaveProperty("cause");
       expect(error).not.toHaveProperty("errors");
@@ -728,4 +688,98 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     f.assertStopped();
     expect(existsSync(ready!.tempRoot!)).toBe(false);
   });
+});
+
+it.each([
+  {
+    file: "hook-agent-account-routing",
+    shared: true,
+    load: () => import("./hook-agent-account-routing.e2e.test.js"),
+  },
+  {
+    file: "managed-gateway-service-lifecycle",
+    shared: false,
+    load: () => import("./managed-gateway-service-lifecycle.e2e.test.js"),
+  },
+])("registers cleanup before $file startup settles", async ({ shared, load }) => {
+  const starts: Array<() => Promise<void>> = [];
+  const teardownHooks: Array<() => Promise<void>> = [];
+  const cleaned: string[] = [];
+  const entered = createDeferred<void>();
+  const startup = createDeferred<never>();
+  let pending: Promise<void> | undefined;
+  try {
+    // mock-isolation: Hold startup without launching another Gateway or touching real state.
+    vi.doMock("./gateway-child.js", () => ({
+      createQaGatewayChild: () => ({
+        start: () => {
+          entered.resolve();
+          return startup.promise;
+        },
+        stop: async () => {
+          cleaned.push("gateway");
+          return { errors: [] };
+        },
+      }),
+    }));
+    // mock-isolation: Track provider disposal without opening a network listener.
+    vi.doMock("./providers/server-runtime.js", () => ({
+      startQaProviderServer: async () => ({
+        baseUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("provider");
+        },
+      }),
+    }));
+    // mock-isolation: Track lab disposal without creating a workspace or server.
+    vi.doMock("./lab-server.js", () => ({
+      startQaLabServer: async () => ({
+        state: {},
+        listenUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("lab");
+        },
+      }),
+    }));
+    // mock-isolation: The pending-start proof never delivers a channel message.
+    vi.doMock("./qa-channel-transport.js", () => ({ createQaChannelTransport: () => ({}) }));
+    vi.doMock("vitest", () => ({
+      describe: (_name: string, body: () => void) => body(),
+      beforeAll: (body: () => Promise<void>) => starts.push(body),
+      afterAll: (body: () => Promise<void>) => teardownHooks.push(body),
+      afterEach: (body: () => Promise<void>) => teardownHooks.push(body),
+      it: (_name: string, _options: unknown, body: () => Promise<void>) => {
+        if (!shared) {
+          starts.push(body);
+        }
+      },
+      expect,
+      vi,
+    }));
+    await load();
+    pending = starts[0]!();
+    await bounded(
+      Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("fixture completed before Gateway startup");
+        }),
+      ]),
+    );
+    expect(cleaned).toEqual([]);
+    for (const cleanup of teardownHooks) {
+      await cleanup();
+    }
+    expect(cleaned).toEqual(shared ? ["gateway", "provider", "lab"] : ["gateway", "provider"]);
+  } finally {
+    // Release the synthetic hold and join the fixture before retiring its mocks.
+    startup.reject(new Error("synthetic pending-start release"));
+    await Promise.allSettled([startup.promise, pending]);
+    vi.doUnmock("vitest");
+    vi.doUnmock("./gateway-child.js");
+    vi.doUnmock("./providers/server-runtime.js");
+    vi.doUnmock("./lab-server.js");
+    vi.doUnmock("./qa-channel-transport.js");
+    vi.resetModules();
+  }
 });

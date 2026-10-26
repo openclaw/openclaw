@@ -84,7 +84,8 @@ export class ShellNavigationOwner {
     if (!context || !isRouteId(routeId)) {
       return;
     }
-    this.host.closeNavDrawer({ restoreFocus: true });
+    // The new draft owns focus after it mounts; a drawer return must not reclaim it.
+    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,

@@ -34,6 +34,29 @@ backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
 
+## Retired A2UI widgets
+
+A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
+removed. Use [`show_widget`](/tools/show-widget) with `kind: "html"` for
+interactive widget content. Calls that still request `kind: "a2ui"` fail
+validation with the next step: `A2UI widgets were removed; use kind "html"`.
+
+Doctor backs up the affected agent database before deleting stored A2UI widgets
+identified by `pluginKind: "canvas:a2ui"` or `registeredContentKind: "a2ui"`.
+It preserves other widgets and records a warning naming the deleted count,
+explaining that A2UI widgets were retired and can be recreated as HTML widgets.
+This repair does not convert their source into HTML.
+
+Other widgets using the retired registered-renderer API become inert HTML source
+previews after the same backup. Doctor preserves their original descriptor and
+manifest in the preview, keeps their layout and valid identity, and removes
+previous capabilities. Existing HTML, native plugin, and MCP widgets are unchanged.
+
+During `openclaw update`, the candidate's Doctor step owns this backed-up repair,
+including when the update was started by an older installed update driver.
+Stored A2UI rows do not prevent the update. Runtime readers accept only the
+current widget formats; they do not retain a compatibility renderer.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
@@ -99,6 +122,20 @@ setup image identities are not adopted as protected images.
 
 ### Heartbeat to ordinary automations
 
+If a state directory was moved before its default cron partition was recorded,
+interactive `openclaw doctor --fix` asks which retained partition to use before
+migrating heartbeat settings. The inventory includes each partition's jobs,
+scratch, receipts, and run history. Cron remains paused until a partition is chosen;
+other Gateway functionality remains available with a valid config.
+Updates also continue with a valid config while partition selection is deferred.
+Unsafe heartbeat sources still require repair before migration.
+
+Noninteractive updates and `openclaw doctor --fix --yes` do not guess. They keep
+the original retired heartbeat fields and report: run `openclaw doctor --fix`
+interactively to select the cron partition and migrate heartbeat settings.
+Retired heartbeat fields already make the config invalid, so that older config
+still requires interactive Doctor before the Gateway can start.
+
 `openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
 persisted monitors, and structured heartbeat tasks into ordinary editable
 automations. It preserves job identity, history, scratch revisions and explicit
@@ -154,6 +191,18 @@ not block admission: Doctor preserves the originals and reports them for review.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+
+### Memory flush model selection
+
+`openclaw doctor --fix` removes the retired
+`agents.defaults.compaction.memoryFlush.model` setting and records a warning
+naming its removal. Memory flushes use the active session model and its normal
+fallback chain. To keep memory extraction local, select a local session model
+and local fallbacks.
+
+Updates apply the same migration through the existing backed-up config write
+flow. Run Doctor before starting a Gateway with a configuration that still
+contains the retired setting.
 
 ### Provider configuration
 

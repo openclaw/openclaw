@@ -5,7 +5,7 @@ import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-terminatio
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { execRequestAbortSignal, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
@@ -31,7 +31,7 @@ import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
   resolveScheduledSessionReplyOptions,
-  settleSessionAutomationTurn,
+  settleSessionEventTurn,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
@@ -598,34 +598,28 @@ export function enqueueSessionEventForHost(
             ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
             onStarted: start,
             onTerminal: async (runId, outcome, deliveryEvidence) => {
-              if (outcome !== "completed") {
-                failure ??=
-                  deliveryEvidence?.meta?.error?.message ||
-                  deliveryEvidence?.payloads?.find(
-                    (payload) => payload.isError && payload.text?.trim(),
-                  )?.text ||
-                  `Session event execution ${outcome}`;
-              }
-              await prepareCurrent();
-              if (options.scheduledAutomation) {
-                const automationOutcome = await settleSessionAutomationTurn({
-                  automation: options.scheduledAutomation,
-                  runId,
-                  deliveryEvidence,
-                  cfg,
-                  scope: preparedBinding
-                    ? { agentId, sessionKey, storePath, ...preparedBinding }
-                    : undefined,
-                  assertCurrent,
-                  prepareCurrent,
-                  outcome,
-                });
-                summary = automationOutcome.summary ?? summary;
-                nextCheckMs = automationOutcome.nextCheckMs;
-                sourceDeliveryOutcome = automationOutcome.sourceDeliveryOutcome;
-                automationResult = automationOutcome.automationResult;
-                delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
-              }
+              const terminal = await settleSessionEventTurn({
+                automation: options.scheduledAutomation,
+                config: { ...cfg, session: { ...cfg.session, store: storePath } },
+                agentId,
+                sessionKey,
+                binding: preparedBinding ?? target,
+                runStartedAt: occurrence.ts,
+                signal,
+                assertCurrent: assertEffectCurrent,
+                onFailure: (error) => {
+                  failure ??= error;
+                },
+                runId,
+                deliveryEvidence,
+                prepareCurrent,
+                outcome,
+              });
+              summary = terminal.summary ?? summary;
+              nextCheckMs = terminal.nextCheckMs;
+              sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
+              automationResult = terminal.automationResult;
+              delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
             },
           },
           onQueuedFollowupReplyBatch: async (batch) => {

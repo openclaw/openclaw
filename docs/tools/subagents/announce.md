@@ -53,6 +53,12 @@ After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
 
+Completion and settle run IDs stay within the 256-character execution-identity
+admission limit, including nested completions. IDs that fit remain unchanged;
+longer IDs retain their routing prefix and continuation markers with a SHA-256
+digest of the full identity. Batch size and nesting therefore do not prevent
+completion admission when execution-identity collection is enabled.
+
 Completion inputs retain their own turn identity across compaction and runtime
 context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
@@ -93,7 +99,9 @@ the input owner marks optional may finish silently; it does not by itself satisf
 an outstanding user reply.
 OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
-through its permitted tools.
+through its permitted tools. When the requester has no current conversation or
+delivery target, the private completion guidance tells it to record its final
+reply in the session for the requester; no messaging send is needed.
 
 If the parent called `sessions_yield` while waiting for private children, the
 yield hands the conversation back to it. When those children settle, the parent
@@ -152,7 +160,10 @@ Announce context is normalized to a stable internal event block:
 
 The result is the child's complete visible final answer for the completed run,
 including ACP-backed runs and CLI fallback transcripts. A later turn in the same
-child session does not replace that run's answer. Once cleanup and requester obligations
+child session does not replace that run's answer. Native answers preserve the same
+text-block boundaries as terminal results. Already displayed replies retain their
+recorded display text, and media references remain available for parent review.
+Once cleanup and requester obligations
 have settled, the in-memory registry keeps a short task preview and lifecycle
 metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and
@@ -162,9 +173,13 @@ If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.
 
-OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. Completion findings have a strict shared 160,000-character cap,
-including escaping and framing. Small answers stay intact; larger answers keep
+OpenClaw keeps each child result's own characters inside its prompt-data block, so
+a requester can quote it exactly: markup, entities, ampersands and tabs arrive as
+the child wrote them. Only a `<` that would open or close a data block, an
+OpenClaw prompt-region marker or an OpenClaw `<<<…>>>` delimiter is escaped as
+`&lt;`. Task titles stay fully escaped. Several results keep a stable order, and
+completion findings have a strict shared 160,000-character cap, including
+escaping and framing. Small answers stay intact; larger answers keep
 their beginning and an explicit truncation marker pointing to `sessions_history`
 with the child session key. `sessions_history` truncates text fields to 4,000
 characters; this pointer does not provide lossless retrieval of an omitted tail.

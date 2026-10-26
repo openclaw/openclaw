@@ -98,7 +98,8 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
 }
 
 function replay(entries: readonly unknown[]): Projection {
-  let projection: Projection = new Map();
+  const projection: Projection = new Map();
+  let bytes = 0;
   for (const entry of entries) {
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
       continue;
@@ -114,7 +115,6 @@ function replay(entries: readonly unknown[]): Projection {
         "Code Mode session store contains an invalid transcript entry; repair the session before using store/load.",
       );
     }
-    const writes = new Map<string, StoredValue | null>();
     for (const [key, value] of Object.entries(data.set)) {
       const networkContent = data.networkContent[key];
       if (typeof networkContent !== "boolean") {
@@ -122,12 +122,23 @@ function replay(entries: readonly unknown[]): Projection {
           "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
         );
       }
-      writes.set(readKey(key), encode(value, networkContent));
+      const name = readKey(key);
+      const encoded = encode(value, networkContent);
+      bytes += encoded.bytes - (projection.get(name)?.bytes ?? 0);
+      projection.set(name, encoded);
     }
     for (const key of data.delete) {
-      writes.set(readKey(key), null);
+      const name = readKey(key);
+      bytes -= projection.get(name)?.bytes ?? 0;
+      projection.delete(name);
     }
-    projection = applyWrites(projection, writes);
+    // Replay owns this map. Preserve historical budget errors, but check the
+    // total only after the entry's deletes, just like a committed cell's writes.
+    if (bytes > MAX_TOTAL_BYTES) {
+      throw new RangeError(
+        "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      );
+    }
   }
   return projection;
 }

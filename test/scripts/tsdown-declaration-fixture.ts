@@ -14,6 +14,7 @@ import {
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
@@ -439,8 +440,8 @@ export function runUnifiedWriter(
 
 export function treeHashes(root: string) {
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, encoding: "utf8" })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.relativePath)
       .filter((name) => fs.statSync(path.join(root, name)).isFile())
       .toSorted()
       .map((name) => [

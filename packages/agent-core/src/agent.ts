@@ -69,33 +69,6 @@ type MutableAgentState = Omit<
   errorMessage?: string;
 };
 
-function createMutableAgentState(initialState?: AgentOptions["initialState"]): MutableAgentState {
-  let tools = initialState?.tools?.slice() ?? [];
-  let messages = initialState?.messages?.slice() ?? [];
-
-  return {
-    systemPrompt: initialState?.systemPrompt ?? "",
-    model: initialState?.model ?? DEFAULT_MODEL,
-    thinkingLevel: initialState?.thinkingLevel ?? "off",
-    get tools() {
-      return tools;
-    },
-    set tools(nextTools: AgentTool[]) {
-      tools = nextTools.slice();
-    },
-    get messages() {
-      return messages;
-    },
-    set messages(nextMessages: AgentMessage[]) {
-      messages = nextMessages.slice();
-    },
-    isStreaming: false,
-    streamingMessage: undefined,
-    pendingToolCalls: new Set<string>(),
-    errorMessage: undefined,
-  };
-}
-
 /** Options for constructing an {@link Agent}. */
 export interface AgentOptions {
   /** Initial transcript, tools, model, and prompt state. */
@@ -194,7 +167,31 @@ export class Agent {
   public toolExecution: ToolExecutionMode;
 
   constructor(options: AgentOptions = {}) {
-    this.mutableState = createMutableAgentState(options.initialState);
+    const initialState = options.initialState;
+    let tools = initialState?.tools?.slice() ?? [];
+    let messages = initialState?.messages?.slice() ?? [];
+
+    this.mutableState = {
+      systemPrompt: initialState?.systemPrompt ?? "",
+      model: initialState?.model ?? DEFAULT_MODEL,
+      thinkingLevel: initialState?.thinkingLevel ?? "off",
+      get tools() {
+        return tools;
+      },
+      set tools(nextTools: AgentTool[]) {
+        tools = nextTools.slice();
+      },
+      get messages() {
+        return messages;
+      },
+      set messages(nextMessages: AgentMessage[]) {
+        messages = nextMessages.slice();
+      },
+      isStreaming: false,
+      streamingMessage: undefined,
+      pendingToolCalls: new Set<string>(),
+      errorMessage: undefined,
+    };
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
     this.runtime = options.runtime;
@@ -348,7 +345,18 @@ export class Agent {
       );
     }
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    const messages = this.normalizePromptInput(input, images);
+    let messages: AgentMessage[];
+    if (Array.isArray(input)) {
+      messages = input;
+    } else if (typeof input !== "string") {
+      messages = [input];
+    } else {
+      const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
+      if (images && images.length > 0) {
+        content.push(...images);
+      }
+      messages = [{ role: "user", content, timestamp: Date.now() }];
+    }
     await this.runPromptMessages(messages);
   }
 
@@ -388,30 +396,27 @@ export class Agent {
     await this.runPromptMessages([]);
   }
 
-  private normalizePromptInput(
-    input: string | AgentMessage | AgentMessage[],
-    images?: ImageContent[],
-  ): AgentMessage[] {
-    if (Array.isArray(input)) {
-      return input;
-    }
-
-    if (typeof input !== "string") {
-      return [input];
-    }
-
-    const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
-    if (images && images.length > 0) {
-      content.push(...images);
-    }
-    return [{ role: "user", content, timestamp: Date.now() }];
-  }
-
   private async runPromptMessages(
     messages: AgentMessage[],
     options: { skipInitialSteeringPoll?: boolean } = {},
   ): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
+    if (this.activeRun) {
+      throw new Error("Agent is already processing.");
+    }
+
+    const abortController = new AbortController();
+    let resolvePromise = () => {};
+    const promise = new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    });
+    this.activeRun = { promise, resolve: resolvePromise, abortController };
+
+    this.mutableState.isStreaming = true;
+    this.mutableState.streamingMessage = undefined;
+    this.mutableState.errorMessage = undefined;
+
+    try {
+      const signal = abortController.signal;
       await runAgentLoop(
         messages,
         {
@@ -426,7 +431,29 @@ export class Agent {
         this.streamFn,
         this.runtime,
       );
-    });
+    } catch (error) {
+      if (this.runtime?.isLocalError?.(error)) {
+        throw error;
+      }
+      const aborted = abortController.signal.aborted;
+      const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
+      await this.processEvents({ type: "message_start", message: failureMessage });
+      await this.processEvents({ type: "message_end", message: failureMessage });
+      await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
+      const failureMessages: AgentMessage[] = [failureMessage];
+      if (aborted && !isTurnHandoffAbort(this.signal)) {
+        await appendInterruptedTurnMessage(failureMessages, (event) => this.processEvents(event));
+      }
+      await this.processEvents({ type: "agent_end", messages: failureMessages });
+    } finally {
+      this.steeringQueue.restore();
+      this.followUpQueue.restore();
+      this.mutableState.isStreaming = false;
+      this.mutableState.streamingMessage = undefined;
+      this.mutableState.pendingToolCalls = new Set<string>();
+      this.activeRun?.resolve();
+      this.activeRun = undefined;
+    }
   }
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
@@ -497,62 +524,12 @@ export class Agent {
     };
   }
 
-  private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {
-    if (this.activeRun) {
-      throw new Error("Agent is already processing.");
-    }
-
-    const abortController = new AbortController();
-    let resolvePromise = () => {};
-    const promise = new Promise<void>((resolve) => {
-      resolvePromise = resolve;
-    });
-    this.activeRun = { promise, resolve: resolvePromise, abortController };
-
-    this.mutableState.isStreaming = true;
-    this.mutableState.streamingMessage = undefined;
-    this.mutableState.errorMessage = undefined;
-
-    try {
-      await executor(abortController.signal);
-    } catch (error) {
-      if (this.runtime?.isLocalError?.(error)) {
-        throw error;
-      }
-      await this.handleRunFailure(error, abortController.signal.aborted);
-    } finally {
-      this.finishRun();
-    }
-  }
-
-  private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
-    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
-    await this.processEvents({ type: "message_start", message: failureMessage });
-    await this.processEvents({ type: "message_end", message: failureMessage });
-    await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
-    const messages: AgentMessage[] = [failureMessage];
-    if (aborted && !isTurnHandoffAbort(this.signal)) {
-      await appendInterruptedTurnMessage(messages, (event) => this.processEvents(event));
-    }
-    await this.processEvents({ type: "agent_end", messages });
-  }
-
-  private finishRun(): void {
-    this.steeringQueue.restore();
-    this.followUpQueue.restore();
-    this.mutableState.isStreaming = false;
-    this.mutableState.streamingMessage = undefined;
-    this.mutableState.pendingToolCalls = new Set<string>();
-    this.activeRun?.resolve();
-    this.activeRun = undefined;
-  }
-
   /**
    * Reduce internal state for a loop event, then await listeners.
    *
    * `agent_end` only means no further loop events will be emitted. The run is
    * considered idle later, after all awaited listeners for `agent_end` finish
-   * and `finishRun()` clears runtime-owned state.
+   * and run cleanup clears runtime-owned state.
    */
   private async processEvents(event: AgentEvent): Promise<void> {
     let publishedToolResult =

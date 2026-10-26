@@ -16,6 +16,7 @@ import {
   type TestSessionMenu,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "./session-pagination.ts";
@@ -362,23 +363,17 @@ describe("AppSidebar session accessibility", () => {
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = key;
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key,
-            kind: "direct",
-            label: key,
-            displayName: key,
-            derivedTitle: "Quarterly launch plan",
-            updatedAt: Date.now(),
-            unread: true,
-          },
-        ],
-      },
+      result: sessionListResult(2, [
+        {
+          key,
+          kind: "direct",
+          label: key,
+          displayName: key,
+          derivedTitle: "Quarterly launch plan",
+          updatedAt: Date.now(),
+          unread: true,
+        },
+      ]),
       agentId: "main",
     });
     await sidebar.updateComplete;
@@ -388,7 +383,7 @@ describe("AppSidebar session accessibility", () => {
     const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
     expectAttributes(list, { "aria-label": "Other" });
-    expect(tree?.parentElement).toBe(list);
+    expect(tree?.closest('[role="list"]')).toBe(list);
     expectAttributes(tree, { role: "listitem" });
     expectAttributes(row, { role: null, "aria-label": null });
     expectAttributes(sidebar.querySelector(".sidebar-recent-sessions"), { "aria-label": null });

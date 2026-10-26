@@ -8,11 +8,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH, NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
+import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 import { resolveRepositoryNodeRequirement } from "./repository-node-requirement.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const requireModule = createRequire(import.meta.url);
+const resolveBuiltNodeRequirement: typeof resolveRepositoryNodeRequirement = runInNewContext(
+  REPOSITORY_NODE_REQUIREMENT_SOURCE,
+  {},
+  { contextCodeGeneration: { strings: false, wasm: false } },
+);
 const downloadScript =
   '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\ncp "$(dirname "$0")/../release.tgz" "$2"\n';
 const write = (file: string, text: string, mode = 0o755) => {
@@ -178,6 +184,16 @@ it.each([
       npx: `#!/bin/sh\necho ${version}\n`,
     });
     const corepackBin = workerCorepack(f.root);
+    const outside = path.join(f.root, "outside");
+    fs.mkdirSync(outside, { mode: 0o755 });
+    write(path.join(outside, "keep.txt"), "outside copy", 0o644);
+    fs.chmodSync(outside, 0o755);
+    fs.chmodSync(path.join(outside, "keep.txt"), 0o644);
+    const source = path.join(f.root, "worker/lib/node_modules/corepack");
+    fs.mkdirSync(path.join(source, "readonly"), { mode: 0o555 });
+    fs.chmodSync(path.join(source, "readonly"), 0o555);
+    fs.symlinkSync(outside, path.join(source, "external-directory"), "dir");
+    fs.symlinkSync(path.join(outside, "keep.txt"), path.join(source, "external-file"), "file");
     f.env.PATH = corepackBin + path.delimiter + f.env.PATH;
     vi.stubEnv("PATH", corepackBin + path.delimiter + process.env.PATH);
     const { home } = f;
@@ -185,6 +201,14 @@ it.each([
     await prepare();
     // A commit refresh prepares the same HOME again; detected installs then re-enable Corepack.
     const setupPath = await prepare();
+    if (runner === "worker") {
+      expect(
+        fs.statSync(path.join(home, ".local/lib/openclaw-corepack/readonly")).mode & 0o777,
+      ).toBe(0o700);
+    }
+    expect(fs.statSync(path.join(source, "readonly")).mode & 0o777).toBe(0o555);
+    expect(fs.statSync(outside).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(path.join(outside, "keep.txt")).mode & 0o777).toBe(0o644);
     const shell = (command: string) => run("sh", ["-c", command], { PATH: setupPath, HOME: home });
     expect(shell("node --version")).toBe(`v${version}`);
     expect(
@@ -201,4 +225,5 @@ it.each([
   [{ "package.json": '{"engines":{"node":22}}' }, undefined],
 ])("resolves checkout declarations", (files, expected) => {
   expect(resolveRepositoryNodeRequirement(files)).toBe(expected);
+  expect(resolveBuiltNodeRequirement(files)).toBe(expected);
 });

@@ -210,8 +210,6 @@ export async function writeArchiveStreamToFile(params: {
     throw failure;
   } finally {
     settled = true;
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-    }
+    clearTimeout(idleTimer);
   }
 }

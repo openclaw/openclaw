@@ -44,6 +44,6 @@ export type SessionEntryReplacementCommitted = {
 
 export type SessionEntryReplacementCandidate = {
   kind: "session-entry-replacements";
-  result: SessionEntryReplacementCommitted;
+  result: Pick<SessionEntryReplacementCommitted, "maintenancePlans">;
   publication: SessionEntryReplacementPublication;
 };

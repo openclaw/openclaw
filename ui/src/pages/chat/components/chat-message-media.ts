@@ -66,11 +66,13 @@ export type ImageRenderOptions = {
   policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
+  messageSendId?: string;
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;
   /** Synchronous cancellation custody, independent of any rendering callback. */
   mediaOwner?: object;
+  mediaReadAllowed?: boolean;
   /** A local resource observer; never a pane or page redraw callback. */
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;

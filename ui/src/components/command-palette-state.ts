@@ -15,12 +15,11 @@ import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-sear
 import {
   createHumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+} from "../pages/chat/components/chat-composer-mention-menu-state.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
 import {
   getCommandPaletteModelItems,
-  getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
@@ -600,19 +599,14 @@ export class CommandPaletteState {
   }
 
   readonly handleGlobalKeydown = (event: Event) => {
-    if (
-      !(event instanceof KeyboardEvent) ||
-      !this.element.isConnected ||
-      event.defaultPrevented ||
-      this.composing ||
-      event.isComposing ||
-      event.keyCode === 229
-    ) {
+    if (!(event instanceof KeyboardEvent) || !this.element.isConnected || this.composing) {
       return;
     }
-    if (isCommandPaletteShortcut(event)) {
+    if (!event.defaultPrevented && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
     }
   };
 
@@ -702,14 +696,10 @@ export class CommandPaletteState {
       modelSearchError:
         this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
-      catalogItems: [
-        ...getStaticCommandPaletteCatalogItems(
-          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
-          this.context?.nativeDeviceSettings,
-        ),
-        ...this.catalogItems,
-        ...this.modelItems,
-      ],
+      canAdmin: hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+      nativeDeviceSettings: this.context?.nativeDeviceSettings ?? null,
+      catalogItems: this.catalogItems,
+      modelItems: this.modelItems,
       sessionSearchRead: this.sessionSearchRead,
       catalogSearchRead: this.catalogLoad,
       modelSearchRead: this.modelSearchRead,

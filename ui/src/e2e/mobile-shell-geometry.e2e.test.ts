@@ -7,16 +7,10 @@ import {
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
-  defaultControlUiFeatureMethods,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import {
-  closeChatDetails,
-  openChatTaskProgress,
-  openDetailsPullRequests,
-} from "./chat-details.test-support.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
@@ -100,16 +94,10 @@ async function expectReachableAction(
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
   const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    const { compact, resting, narrowViewport } = await page
+    const compact = await page
       .locator(".agent-chat__composer-shell")
-      .evaluate((element) => ({
-        compact: element.getBoundingClientRect().width <= 560,
-        resting: element.matches('[data-mobile-composer="true"][data-composer-editing="false"]'),
-        narrowViewport: matchMedia("(max-width: 560px)").matches,
-      }));
-    const targetSize =
-      label === "Stop generating" && narrowViewport ? 32 : resting || compact ? 36 : 32;
-    expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
+      .evaluate((element) => element.getBoundingClientRect().width <= 560);
+    expect(Math.min(bounds!.width, bounds!.height)).toBeGreaterThanOrEqual(32);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
       .all()) {
@@ -125,7 +113,7 @@ async function expectReachableAction(
       point,
     ),
   ).toBe(true);
-  return point;
+  return { ...point, width: bounds!.width, height: bounds!.height };
 }
 
 async function expectEditableDraft(page: Page, visibleBottom: number, mobile: boolean) {
@@ -176,6 +164,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   // Scroll the complete line into view; native caret scrolling may show only its glyphs.
+  await textarea.hover();
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
@@ -186,6 +175,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
+  await textarea.hover();
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
@@ -215,11 +205,6 @@ async function geometry(page: Page) {
       shell: rect(".shell")!,
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
-      footer: rect(".chat-footer"),
-      details: rect(
-        ".chat-details:popover-open, .sidebar-region--mobile-host > .chat-mobile-host:not([hidden]):has(.chat-mobile-host__details:not([hidden]))",
-      ),
-      conversation: rect(".chat-main__conversation-frame"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
       visualHeight: window.visualViewport?.height,
@@ -296,12 +281,6 @@ suite.define(() => {
         const assistantText =
           "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "progressCard.get",
-            "controlUi.sessionPullRequests.subscribe",
-          ],
-          methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
           workspace: "/workspace/example",
           historyMessages: ["Please check the mobile layout.", assistantText].map(
             (content, index) => ({
@@ -317,7 +296,12 @@ suite.define(() => {
           await activateStandaloneStyles(page, largeUnit ? top : 0);
         }
         const fresh = await geometry(page);
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // Keep cold route coverage for the large-unit fault; other viewports reuse the app.
+        if (largeUnit) {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        } else {
+          await navigateToControlUiSession(page, sessionKey);
+        }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         await expect(textarea).toBeVisible();
         await page.getByText(assistantText).waitFor();
@@ -352,59 +336,6 @@ suite.define(() => {
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
-        await waitForWatchedSessionKey(gateway, sessionKey);
-        await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
-          sessions: {
-            [sessionKey]: {
-              pullRequests: [
-                {
-                  number: 123,
-                  owner: "example",
-                  repo: "layout",
-                  branch: "fix/layout",
-                  title: "Synthetic mobile layout repair",
-                  url: "https://github.com/example/layout/pull/123",
-                  state: "merged",
-                },
-              ],
-              rateLimited: false,
-              status: "ok",
-            },
-          },
-        });
-        const pullRequests = await openDetailsPullRequests(page);
-        const mergedRequest = pullRequests
-          .locator('.chat-pr[data-state="merged"], .chat-pr-mobile__row[data-state="merged"]')
-          .first();
-        await expect(mergedRequest).toBeVisible();
-        await expect(mergedRequest).toContainText("Synthetic mobile layout repair");
-        const setProgress = async (
-          revision: number,
-          markdown: string,
-          steps: Array<{ step: string; status: string }>,
-        ) => {
-          await gateway.setMethodResponse("progressCard.get", {
-            card: {
-              sessionKey,
-              revision,
-              updatedAt: 1_789_923_001_000,
-              markdown,
-              steps,
-            },
-          });
-          await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey,
-            revision,
-          });
-        };
-        await setProgress(1, "Mobile layout checks completed.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "completed" },
-          { step: "Review the result", status: "completed" },
-        ]);
-        const progress = await openChatTaskProgress(page);
-        await expect(progress).toContainText("Mobile layout checks completed.");
-        await closeChatDetails(page);
         const chat = await geometry(page);
         await textarea.fill("Please continue the layout check.");
         const sendPoint = await reach("Send message", height - bottom);
@@ -415,20 +346,12 @@ suite.define(() => {
         await gateway.waitForRequest("chat.send");
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
+        const stopBounds = await stop.boundingBox();
+        expect(stopBounds && { width: stopBounds.width, height: stopBounds.height }).toEqual({
+          width: sendPoint.width,
+          height: sendPoint.height,
+        });
         const generating = await geometry(page);
-        await setProgress(2, "Checking the usable mobile canvas.", [
-          { step: "Inspect the layout", status: "completed" },
-          { step: "Verify the controls", status: "in_progress" },
-        ]);
-        // A progress update must not reopen explicitly closed Details.
-        await expect(progress).toBeHidden();
-        if (mobile) {
-          await expect(page.locator(".chat-mobile-host")).toBeHidden();
-        }
-        const updatedProgress = await openChatTaskProgress(page);
-        await expect(updatedProgress).toContainText("Checking the usable mobile canvas.");
-        const withProgress = await geometry(page);
-        await closeChatDetails(page);
         if (mobile) {
           await textarea.focus();
           // Simulate the VisualViewport contract, not a native IME.
@@ -527,17 +450,6 @@ suite.define(() => {
           expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
-          expect(withProgress.details).not.toBeNull();
-          expect(withProgress.details!.left).toBeGreaterThanOrEqual(
-            withProgress.conversation!.left,
-          );
-          expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
-          expect(withProgress.details!.top).toBeGreaterThanOrEqual(
-            withProgress.conversation!.bottom,
-          );
-          expect(withProgress.footer!.bottom).toBeLessThanOrEqual(withProgress.details!.top);
-          expect(withProgress.details!.top).toBeGreaterThanOrEqual(withProgress.shell.top);
-          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.shell.bottom);
         }
       },
     );

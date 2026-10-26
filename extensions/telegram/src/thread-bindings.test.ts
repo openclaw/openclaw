@@ -352,18 +352,13 @@ describe("telegram thread bindings", () => {
     await bind(options.accountId, "agent:main:subagent:stopped", {
       conversation: conversationFor(options.accountId, "stopped-thread"),
     });
-
     await stopped.stop();
-
     const replacement = await createManager(options);
     expect(replacement.getByConversationId("stopped-thread")).toBeUndefined();
-
     await bind(options.accountId, "agent:main:subagent:replacement", {
       conversation: conversationFor(options.accountId, "replacement-thread"),
     });
-
     await stopped.stop();
-
     expect(getTelegramThreadBindingManager("manager-lifecycle")).toBe(replacement);
     expect(replacement.getByConversationId("replacement-thread")?.targetSessionKey).toBe(
       "agent:main:subagent:replacement",
@@ -378,27 +373,20 @@ describe("telegram thread bindings", () => {
     const first = await bind(manager.accountId, "agent:main:subagent:first-row", {
       conversation: conversationFor(manager.accountId, "first-thread"),
     });
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await bind(manager.accountId, "agent:main:subagent:second-row", {
       conversation: conversationFor(manager.accountId, "second-thread"),
     });
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(register.mock.calls[0]?.[1].conversationId).toBe("second-thread");
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await manager.touchConversation("first-thread");
-    expect(register).toHaveBeenCalledTimes(1);
-    expect(register.mock.calls[0]?.[1].conversationId).toBe("first-thread");
-    expect(entries).not.toHaveBeenCalled();
-    register.mockClear();
     await getSessionBindingService().unbind({
       bindingId: first.bindingId,
       reason: "test-row-delete",
     });
     expect(remove).toHaveBeenCalledTimes(1);
-    expect(register).not.toHaveBeenCalled();
+    expect(register.mock.calls.map(([, row]) => row.conversationId)).toEqual([
+      "first-thread",
+      "second-thread",
+      "first-thread",
+    ]);
     expect(entries).not.toHaveBeenCalled();
     expect(manager.getByConversationId("second-thread")).toBeDefined();
     await manager.stop();

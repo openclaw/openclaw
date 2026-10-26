@@ -2,7 +2,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import {
   appearanceSettingsRouteTarget,
   APPEARANCE_SETTINGS_TARGET_IDS,
@@ -14,7 +14,7 @@ registerRouteSubtitlesEnglish();
 
 registerChatComposerEnglish();
 
-registerSessionOrganizationEnglish();
+registerSessionOrganizationSharedEnglish();
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -240,6 +240,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "profilePage.identity.chooseAvatar",
       "profilePage.identity.displayName",
       "profilePage.identity.linkedEmails",
+      "profilePage.identity.prAttribution",
+      "profilePage.identity.prAttributionDescription",
     ],
     aliases: "profile avatar image email",
     requiresIdentity: true,

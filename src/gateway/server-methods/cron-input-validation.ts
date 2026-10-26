@@ -30,6 +30,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
+  isCronOperatorSourceParent,
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
@@ -290,6 +291,16 @@ export async function captureCronCreatorSession(
     ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: sessionKey, agentId })
     : undefined;
   const creatorSession = loaded?.entry;
+  const sourceConversation =
+    hasConversationResult && loaded && creatorSession?.sessionId
+      ? {
+          sessionKey: loaded.canonicalKey,
+          sessionId: creatorSession.sessionId,
+          lifecycleRevision: creatorSession.lifecycleRevision,
+        }
+      : undefined;
+  // An authenticated operator turn records its device and grant for the job's
+  // parent, so every occurrence rechecks them instead of the creator profile.
   const operatorSource =
     callerScope &&
     loaded &&
@@ -297,7 +308,10 @@ export async function captureCronCreatorSession(
     operatorAuthority &&
     operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
     job.payload.kind === "agentTurn" &&
-    job.sessionTarget === `session:${loaded.canonicalKey}` &&
+    isCronOperatorSourceParent(
+      { sessionTarget: job.sessionTarget, sourceConversation },
+      loaded.canonicalKey,
+    ) &&
     caller.client?.internal?.agentRuntimeIdentity
       ? createRestartRecoveryOperatorSource({
           authority: operatorAuthority,
@@ -306,14 +320,6 @@ export async function captureCronCreatorSession(
           sessionKey: loaded.canonicalKey,
           sourceRunId: caller.client.internal.agentRuntimeIdentity.operationalRunInstance.runId,
         })
-      : undefined;
-  const sourceConversation =
-    hasConversationResult && loaded && creatorSession?.sessionId
-      ? {
-          sessionKey: loaded.canonicalKey,
-          sessionId: creatorSession.sessionId,
-          lifecycleRevision: creatorSession.lifecycleRevision,
-        }
       : undefined;
   // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
   const actor = callerScope

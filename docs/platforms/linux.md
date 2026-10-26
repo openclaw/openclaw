@@ -9,7 +9,7 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 
@@ -503,7 +503,7 @@ The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
 For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
 The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
 Mac and is render-only. These widget surfaces do not restore the former Linux
-Canvas bridge or its A2UI push commands.
+Canvas bridge.
 
 ## Install
 

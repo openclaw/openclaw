@@ -1,10 +1,7 @@
-import { once } from "node:events";
 import { readFile, realpath, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { teamsQuotedRawTable } from "./format.test-fixtures.js";
 import {
@@ -123,61 +120,48 @@ type TeamsSdkHttpTransport = {
   put: (destination: string, data?: unknown) => Promise<{ data: unknown }>;
 };
 
-async function withRealTeamsSdkHttp<T>(
-  run: (params: { api: TeamsApiClient; requests: CapturedRequest[] }) => Promise<T>,
-): Promise<T> {
+async function withRealTeamsSdkHttp(
+  run: (params: { api: TeamsApiClient; requests: CapturedRequest[] }) => Promise<void>,
+) {
   const requests: CapturedRequest[] = [];
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer | string) => {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    });
-    request.once("end", () => {
-      requests.push({
-        method: request.method ?? "",
-        path: request.url ?? "",
-        body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+  await withServer(
+    (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer | string) => {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: "sdk-http-message-1" }));
-    });
-  });
-
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-
-  try {
-    const port = (server.address() as AddressInfo).port;
-    const api = new TeamsApiClient(serviceUrl);
-    // OpenClaw's minimal SDK ambient declaration omits the real client's public HTTP transport.
-    const transport = (api as unknown as { http: TeamsSdkHttpTransport }).http;
-    for (const method of ["post", "put"] as const) {
-      vi.spyOn(transport, method).mockImplementation(async (destination, data) => {
-        const destinationUrl = new URL(destination);
-        const response = await fetch(
-          `http://127.0.0.1:${port}${destinationUrl.pathname}${destinationUrl.search}`,
-          {
-            method: method.toUpperCase(),
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(data),
-          },
-        );
-        return { data: await response.json() };
+      request.once("end", () => {
+        requests.push({
+          method: request.method ?? "",
+          path: request.url ?? "",
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "sdk-http-message-1" }));
       });
-    }
+    },
+    async (baseUrl) => {
+      const api = new TeamsApiClient(serviceUrl);
+      // OpenClaw's minimal SDK ambient declaration omits the real client's public HTTP transport.
+      const transport = (api as unknown as { http: TeamsSdkHttpTransport }).http;
+      for (const method of ["post", "put"] as const) {
+        vi.spyOn(transport, method).mockImplementation(async (destination, data) => {
+          const destinationUrl = new URL(destination);
+          const response = await fetch(
+            `${baseUrl}${destinationUrl.pathname}${destinationUrl.search}`,
+            {
+              method: method.toUpperCase(),
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(data),
+            },
+          );
+          return { data: await response.json() };
+        });
+      }
 
-    return await run({ api, requests });
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
-  }
+      await run({ api, requests });
+    },
+  );
 }
 
 function mockSharePointFileUpload(): void {

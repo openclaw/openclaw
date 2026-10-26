@@ -63,21 +63,18 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readScheduledToolOptions } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import {
-  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
-  resolveGatewayOwnerOnlyToolDenylist,
-} from "../security/dangerous-tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   captureGatewayToolResolutionAuthority,
+  resolveDefaultGatewayHttpDeny,
   resolveGatewayRequesterToolPolicies,
+  resolveGatewaySenderAuthority,
 } from "./tool-resolution-authority.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
@@ -163,6 +160,7 @@ export async function resolveGatewayScopedTools(
       }).sessionAgentId
     : sessionAgentId;
   const surface = params.surface ?? "http";
+  const { senderIsOwner, scheduledTools } = resolveGatewaySenderAuthority(params, surface);
   const stableSessionSurface = surface === "loopback" && params.admittedRunContext !== undefined;
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
@@ -244,7 +242,7 @@ export async function resolveGatewayScopedTools(
     prepareSandboxSessionTools({
       policy: preparedSandboxPolicy,
       senderIsOwner:
-        surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
+        surface === "loopback" && params.admittedRunContext ? senderIsOwner : undefined,
       authority: sessionControlAuthority,
     });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
@@ -255,34 +253,22 @@ export async function resolveGatewayScopedTools(
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const sessionPortalTarget =
-    surface === "loopback" && params.senderIsOwner === false && !sandboxed
+    surface === "loopback" && senderIsOwner === false && !sandboxed
       ? prepareSessionPortalToolTarget({
           sessionKey: params.sessionKey,
           agentId: sessionAgentId,
           sessionId: params.sessionId,
         })
       : undefined;
-  const defaultGatewayDeny =
-    surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-          // Config allow entries may use legacy tool names (e.g. "cron");
-          // normalize both sides so they still lift the matching default deny.
-          (name) =>
-            !gatewayToolsCfg?.allow?.some(
-              (allowed) => normalizeToolPolicyName(allowed) === normalizeToolPolicyName(name),
-            ),
-        )
-      : [];
+  const defaultGatewayDeny = resolveDefaultGatewayHttpDeny(surface, gatewayToolsCfg?.allow);
   const assignmentAdmitted =
     surface === "loopback" &&
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
-    ...resolveGatewayOwnerOnlyToolDenylist(
-      surface === "http" ? params.senderIsOwner === true : params.senderIsOwner,
-    ).filter((name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget)),
+    ...scheduledTools.ownerOnlyDeny(senderIsOwner, sessionPortalTarget !== undefined),
     // Attach grants also use loopback; session binding is not run authority.
-    ...(params.senderIsOwner !== true &&
+    ...(senderIsOwner !== true &&
     !assignmentAdmitted &&
     !(surface === "loopback" && hasSessionControlAuthority(sessionControlAuthority))
       ? ["sessions"]
@@ -372,7 +358,7 @@ export async function resolveGatewayScopedTools(
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    senderIsOwner: params.senderIsOwner,
+    senderIsOwner,
     gitContributorProfileId: params.gitContributorProfileId,
     config: params.cfg,
     sessionConfigSource: "runtime" as const,
@@ -394,6 +380,7 @@ export async function resolveGatewayScopedTools(
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
+    requesterIsSubagent: subagentPolicy !== undefined,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
       surface === "loopback" && params.messageActionTurnCapability
@@ -435,7 +422,7 @@ export async function resolveGatewayScopedTools(
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
-    ...readScheduledToolOptions(params.admittedRunContext, params.toolsAllow),
+    ...scheduledTools.toolOptions,
     sourceReplyOnly: params.sourceReplyOnly,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,

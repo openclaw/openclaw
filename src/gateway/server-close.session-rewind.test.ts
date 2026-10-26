@@ -1,17 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type {
   SessionsForkResult,
   SessionsRewindResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   replaceSessionEntrySync,
@@ -46,6 +41,20 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 import * as sessionObserverModel from "./session-observer-model.js";
 
 type DatabaseExecution = ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>;
+type Kernel = Awaited<ReturnType<typeof createGatewayCloseRace>>["kernel"];
+function createDispatch(
+  kernel: Kernel,
+  client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
+) {
+  const options = {
+    client,
+    context: kernel.gatewayRequestContext,
+    methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
+  };
+  return <T>(method: string, params: unknown) =>
+    dispatchGatewayRequestInProcess<T>(method, params, options);
+}
+
 const scope = {
   agentId: "main",
   sessionKey: "agent:main:dashboard:accepted-close-rewind",
@@ -60,17 +69,17 @@ async function seedTranscript(
     updatedAt: 1,
   });
   const messages = [
-    { id: "user-1", parentId: null, role: "user", content: "Retain this question." },
-    { id: "assistant-1", parentId: "user-1", role: "assistant", content: "Retained answer." },
-    { id: "user-2", parentId: "assistant-1", role: "user", content: "Edit this question." },
-  ];
+    ["user-1", null, "user", "Retain this question."],
+    ["assistant-1", "user-1", "assistant", "Retained answer."],
+    ["user-2", "assistant-1", "user", "Edit this question."],
+  ] as const;
   assert(
     replaceTranscriptEventsSync(scope, [
       createSessionTranscriptHeader({
         sessionId: scope.sessionId,
         cwd: fixture.state.workspaceDir,
       }),
-      ...messages.map(({ id, parentId, role, content }) => ({
+      ...messages.map(([id, parentId, role, content]) => ({
         type: "message",
         id,
         parentId,
@@ -87,14 +96,12 @@ it("persists an accepted fork and queued rewind across the close prelude before 
 }) => {
   const race = await createGatewayCloseRace("gateway-session-rewind-close", signal);
   const { fixture, kernel } = race;
-  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
-    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+  const waitForGate = createTestGate(signal);
   const rewindQueued = createDeferred();
   let forking: Promise<SessionsForkResult> | undefined;
   let rewinding: Promise<SessionsRewindResult> | undefined;
   try {
     const database = await seedTranscript(fixture);
-    let executions = 0;
     const wrapExecution = (owner: DatabaseExecution): DatabaseExecution => ({
       ...owner,
       get fileIdentity() {
@@ -110,7 +117,6 @@ it("persists an accepted fork and queued rewind across the close prelude before 
                   command.type === "session.messageCut.commit" ||
                   command.type === "database.domain.publish"
                 ) {
-                  executions++;
                   await race.block();
                 }
                 return await worker.execute(command, commandOptions);
@@ -127,17 +133,9 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
       (...args) => wrapExecution(capturePreparation(...args)),
     );
-    const dispatchOptions = {
-      client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
-      context: kernel.gatewayRequestContext,
-      methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-    };
+    const dispatch = createDispatch(kernel);
     const params = { sessionKey: scope.sessionKey, entryId: "user-2" };
-    forking = dispatchGatewayRequestInProcess<SessionsForkResult>(
-      "sessions.fork",
-      params,
-      dispatchOptions,
-    );
+    forking = dispatch<SessionsForkResult>("sessions.fork", params);
     await race.waitForEntry(forking, "Fork settled before its accepted persistence could be held");
     const mutate = sessionController.runSessionMutation;
     vi.spyOn(sessionController, "runSessionMutation").mockImplementation(
@@ -147,23 +145,21 @@ it("persists an accepted fork and queued rewind across the close prelude before 
         return pending;
       },
     );
-    rewinding = dispatchGatewayRequestInProcess<SessionsRewindResult>(
-      "sessions.rewind",
-      params,
-      dispatchOptions,
-    );
+    rewinding = dispatch<SessionsRewindResult>("sessions.rewind", params);
     await waitForGate(
       rewindQueued.promise,
       rewinding,
       "Rewind settled before entering the lifecycle queue",
     );
     await race.close(undefined, undefined, { reason: "session rewind close regression" });
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(race.closed).toBe(false);
-    expect(database.db.isOpen).toBe(true);
-    await expect(
-      dispatchGatewayRequestInProcess("sessions.rewind", params, dispatchOptions),
-    ).rejects.toThrow("Gateway request entry is closed");
+    expect([kernel.scheduler.signal.aborted, race.closed, database.db.isOpen]).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    await expect(dispatch("sessions.rewind", params)).rejects.toThrow(
+      "Gateway request entry is closed",
+    );
 
     const [fork, result] = (await race.finish(Promise.all([forking, rewinding])))!;
     expect(fork).toMatchObject({
@@ -171,7 +167,6 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       sessionKey: expect.any(String),
     });
     expect(result).toEqual({ editorText: "Edit this question." });
-    expect(executions).toBe(2);
     expect(database.db.isOpen).toBe(false);
     using reopened = new DatabaseSync(database.path, { readOnly: true });
     const activeEvents = reopened.prepare(
@@ -270,10 +265,12 @@ it("drains an accepted observer digest before closing its database", async ({ si
     await race.close(disposalEntered.signal, undefined, {
       reason: "session observer close regression",
     });
-    expect(kernel.scheduler.signal.aborted).toBe(true);
-    expect(kernel.connectionWork.signal.aborted).toBe(true);
-    expect(race.closed).toBe(false);
-    expect(agent.db.isOpen).toBe(true);
+    expect([
+      kernel.scheduler.signal.aborted,
+      kernel.connectionWork.signal.aborted,
+      race.closed,
+      agent.db.isOpen,
+    ]).toEqual([true, true, false, true]);
     await expect(
       observer.handleEventAsync({
         ...event,
@@ -283,9 +280,7 @@ it("drains an accepted observer digest before closing its database", async ({ si
     ).rejects.toThrow("Session observer is closed");
 
     const accepted = await race.finish(persisting);
-    expect(accepted).toBe(true);
-    expect(settledBeforeDatabaseClose).toBe(true);
-    expect(agent.db.isOpen).toBe(false);
+    expect([accepted, settledBeforeDatabaseClose, agent.db.isOpen]).toEqual([true, true, false]);
     const [row] = readClosedDatabase(
       agent.path,
       "SELECT json_extract(entry_json, '$.observerDigest') AS digest FROM session_nodes WHERE session_key = ?",
@@ -317,9 +312,7 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       ...fixture.config.agents,
       defaults: { ...fixture.config.agents?.defaults, model: "openai/gpt-5.5" },
     };
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
+    const { server, kernel } = await fixture.startServer();
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     const sessionId = "accepted-system-agent-turn";
     const history: Array<{ role: "user" | "assistant"; text: string }> = [];
@@ -359,13 +352,8 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
       }
       return workerScope.execute(command, executeOptions);
     });
-    const dispatchOptions = {
-      client,
-      context: kernel.gatewayRequestContext,
-      methodRegistry: kernel.getAttachedGatewayMethodRegistry(),
-    };
-    const chat = (message: string) =>
-      dispatchGatewayRequestInProcess("openclaw.chat", { sessionId, message }, dispatchOptions);
+    const dispatch = createDispatch(kernel, client);
+    const chat = (message: string) => dispatch("openclaw.chat", { sessionId, message });
     turning = chat("Accepted question");
     // Shutdown may revoke the reply; the accepted logbook still has to settle.
     void turning.catch(() => undefined);
@@ -415,10 +403,7 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
   let sql: ReturnType<typeof observeHostDataSql> | undefined;
   const settlementAuthority = new AbortController();
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
+    const { server, kernel } = await fixture.startServer();
     const target = {
       sessionKey: "agent:main:dashboard:restart-safe-terminal-close",
       storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: fixture.state.env }),

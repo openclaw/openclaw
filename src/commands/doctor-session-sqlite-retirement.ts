@@ -46,7 +46,7 @@ import {
   selectUnmanifestedRecovery,
 } from "./update-cleanup-unmanifested.js";
 
-export type RecoveryCleanupProgress = {
+type RecoveryCleanupProgress = {
   phase: "verifying" | "claiming" | "removing-capture" | "removing-unmanifested";
   path: string;
   index: number;

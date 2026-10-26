@@ -27,7 +27,7 @@ type PendingProfileOrder = {
   optimisticOrder: string[];
 };
 
-type ProfileActionsOptions = {
+export function createModelProviderProfileActions(options: {
   getAgentEpoch: () => number;
   getAgentId: () => string;
   getClient: () => GatewayBrowserClient | null;
@@ -48,9 +48,7 @@ type ProfileActionsOptions = {
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
   onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
-};
-
-export function createModelProviderProfileActions(options: ProfileActionsOptions) {
+}) {
   let logoutConfirmation: AbortController | null = null;
   let probeEpochs = new Map<string, number>();
   const pendingOrders = new Map<string, PendingProfileOrder>();

@@ -4,12 +4,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import { getSubagentRunsForChildSession } from "../agents/subagents/registry/subagent-registry-memory.js";
+import * as spawnRuntime from "../agents/subagents/spawn/subagent-spawn.runtime.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
+import * as repositoryPaths from "../agents/worktrees/repository-paths.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   loadSessionEntry,
@@ -21,6 +25,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
   captureSessionControllerSettlement,
@@ -29,16 +34,20 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { createWorktreeSpawnRepositoryFixture } from "./server.sessions.create-worktree-spawn.test-support.js";
 import {
   controlUiClient,
   settleWorkspaceRuns,
 } from "./server.sessions.create.projects.test-support.js";
+import * as worktreePreparation from "./session-worktree-preparation.js";
 import { agentDiscoveryMock, dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -355,6 +364,195 @@ test("worktree spawns inherit the managed parent when the default workspace is u
   expect(await fs.readFile(defaultWorkspace, "utf8")).toBe("unavailable workspace");
 });
 
+test.each(["startup", "source settlement"] as const)(
+  "cleans the committed native child when Stop interrupts %s",
+  async (failure) => {
+    const parent = await createDirectProjectParent();
+    const scope = { agentId: "main", storePath };
+    const originalKeys = await sessionAccess.listSessionEntryKeysReadOnly(scope);
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    const context = createDirectChatContext({
+      getRuntimeConfig,
+      trackExecution: async (run) => run(),
+    });
+    const methodRegistry = createRequestGatewayMethodRegistry();
+    const runtime = createGatewayInstanceRuntime({
+      getContext: () => context,
+      getMethodRegistry: () => methodRegistry,
+      isDispatchAvailable: () => true,
+    });
+    context.recoveryRuntime = runtime.recovery;
+    onTestFinished(() => runtime.close());
+    const invocation = new AbortController();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: parent.key,
+      expectedParentSessionId: parent.entry.sessionId,
+      config: getRuntimeConfig(),
+      countActiveRuns: () => 0,
+    });
+    let sourceSettled = false;
+    if (failure === "source settlement") {
+      const prepare = worktreePreparation.prepareSessionWorktreeCreation;
+      vi.spyOn(worktreePreparation, "prepareSessionWorktreeCreation").mockImplementation(
+        async (...args) => {
+          const prepared = await prepare(...args);
+          if (!prepared.ok || !prepared.value.withCommit) {
+            throw new Error("Expected the inherited project source commit owner");
+          }
+          const withCommit = prepared.value.withCommit;
+          return {
+            ...prepared,
+            value: {
+              ...prepared.value,
+              withCommit: async (commit) => {
+                await withCommit(commit);
+                sourceSettled = true;
+                invocation.abort(new Error("Stop after child commit"));
+                // Model source settlement failure after the real child write has completed.
+                throw new Error("Source settlement stopped after child commit");
+              },
+            },
+          };
+        },
+      );
+    }
+    const upsert = spawnRuntime.upsertSessionEntryCore;
+    let committedChildKey: string | undefined;
+    vi.spyOn(spawnRuntime, "upsertSessionEntryCore").mockImplementation(async (...args) => {
+      const entry = await upsert(...args);
+      committedChildKey = args[0].sessionKey;
+      expect(readEntry(committedChildKey)).toMatchObject({
+        sessionId: entry?.sessionId,
+        lifecycleRevision: entry?.lifecycleRevision,
+      });
+      if (failure === "startup") {
+        invocation.abort(new Error("Stop after child commit"));
+      }
+      return entry;
+    });
+    const result = await withPluginRuntimeGatewayContextResolver(
+      () => context,
+      () =>
+        tool.execute(
+          "post-commit-stop",
+          { task: "Read README.md", worktree: true },
+          invocation.signal,
+        ),
+    ).catch((error: unknown) => error);
+    expect(result).not.toMatchObject({ details: { status: "accepted" } });
+    expect(committedChildKey).toEqual(expect.any(String));
+    expect(sourceSettled).toBe(failure === "source settlement");
+    expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+    expect([...getSubagentRunsForChildSession(committedChildKey!)]).toEqual([]);
+    expect(await managedWorktrees.listRegistryRecords()).toEqual([]);
+  },
+);
+
+test.for(["invocation", "configured"] as const)(
+  "stops native worktree spawn from its %s signal while its inherited registered source is busy",
+  async (cancelSource, { signal }) => {
+    const parent = await createDirectProjectParent();
+    const scope = { agentId: "main", storePath };
+    const originalKeys = await sessionAccess.listSessionEntryKeysReadOnly(scope);
+    const originalCheckouts = (await git("worktree", "list", "--porcelain")).stdout;
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    const context = createDirectChatContext({
+      getRuntimeConfig,
+      trackExecution: async (run) => run(),
+    });
+    const invocation = new AbortController();
+    const configured = new AbortController();
+    const cancelled = cancelSource === "invocation" ? invocation : configured;
+    const tool = createSessionsSpawnTool({
+      signal: configured.signal,
+      agentSessionKey: parent.key,
+      expectedParentSessionId: parent.entry.sessionId,
+      config: getRuntimeConfig(),
+      countActiveRuns: () => 0,
+    });
+    const publishChild = vi.spyOn(spawnRuntime, "upsertSessionEntryCore");
+    const held = createDeferredCore<() => void>();
+    const release = createDeferredCore();
+    const holder = withProjectCheckoutLifecycle(repository, {}, async (lease) => {
+      held.resolve(lease.assertOwned);
+      await release.promise;
+    });
+    const operations: Promise<unknown>[] = [holder];
+    let continuedAfterStop = false;
+    try {
+      const assertHeld = await withinTest(
+        awaitGateBeforeSettlement(held.promise, holder, "Source holder did not acquire custody"),
+        signal,
+      );
+      const waiting = createDeferredCore();
+      const continued = createDeferredCore();
+      const acquire = leaseAcquisition.acquireOpenClawStateLease;
+      vi.spyOn(leaseAcquisition, "acquireOpenClawStateLease").mockImplementation((options) =>
+        acquire({
+          ...options,
+          acquire: async (...args) => {
+            const selectedSource = options.label.endsWith(`projects.checkout/${repository}`);
+            if (selectedSource && cancelled.signal.aborted) {
+              continued.resolve();
+            }
+            const outcome = await options.acquire(...args);
+            if (selectedSource && outcome.kind === "held") {
+              // Observe actual SQLite contention; do not replace acquisition or its cancellation.
+              waiting.resolve();
+            }
+            return outcome;
+          },
+        }),
+      );
+      let failure: unknown;
+      const spawning = withPluginRuntimeGatewayContextResolver(
+        () => context,
+        () =>
+          tool.execute(
+            "native-source-stop",
+            { task: "Read README.md", worktree: true, worktreeName: "stopped-child" },
+            invocation.signal,
+          ),
+      ).catch((error: unknown) => {
+        failure = error;
+        return undefined;
+      });
+      operations.push(spawning);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          waiting.promise,
+          spawning,
+          "Native child did not wait for its source",
+        ),
+        signal,
+      );
+      cancelled.abort(new Error("Stop native source wait"));
+      continuedAfterStop = await withinTest(
+        Promise.race([spawning.then(() => false), continued.promise.then(() => true)]),
+        signal,
+      );
+      assertHeld();
+      expect(publishChild).not.toHaveBeenCalled();
+      expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+      release.resolve();
+      const result = await withinTest(spawning, signal);
+      if (failure) {
+        expect(failure).toBeInstanceOf(Error);
+      } else {
+        expect(result?.details).toMatchObject({ status: "error" });
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled(operations);
+    }
+    expect(publishChild).not.toHaveBeenCalled();
+    expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
+    expect(await managedWorktrees.listRegistryRecords()).toEqual([]);
+    expect((await git("worktree", "list", "--porcelain")).stdout).toBe(originalCheckouts);
+    expect(continuedAfterStop, "Native child kept acquiring after Stop").toBe(false);
+  },
+);
+
 test("required project preparation isolates host filters without rejecting the registered source", async () => {
   await createManagedProjectParent(true);
   const marker = path.join(state.root, "host-filter-marker");
@@ -488,7 +686,7 @@ test.each(["empty metadata", "missing worktree target", "partial metadata"])(
       expect(stored).toMatchObject({ parentSessionKey: parentKey });
       expect(stored?.pendingWorktree).toBeUndefined();
       expect(await fs.readdir(metadata)).toEqual([]);
-      await expect(managedWorktrees.resolveRepositoryPaths(workspace)).rejects.toThrow(
+      await expect(repositoryPaths.resolveRepositoryPaths(workspace)).rejects.toThrow(
         "not a git checkout",
       );
       await expectCreationError(
@@ -754,7 +952,7 @@ test.each(["archive", "stale-child"] as const)(
       expect(readEntry(parentKey)?.archivedAt).toBeDefined();
     }
     mockDispatch();
-    const resolveRepository = vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths");
+    const resolveRepository = vi.spyOn(repositoryPaths, "resolveRepositoryPaths");
     const createWorktree = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     let replaced = false;
     const unsubscribe = onAgentEvent((event) => {

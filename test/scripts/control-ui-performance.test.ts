@@ -9,9 +9,9 @@ import {
   CONTROL_UI_PERFORMANCE_BUDGETS,
   collectControlUiPerformanceMetrics as collectMetrics,
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
-  extractControlUiStartupAssetPaths as extractStartupAssets,
   formatControlUiPerformanceReport as formatReport,
 } from "../../scripts/check-control-ui-performance.mts";
+import { extractControlUiStartupAssetPaths as extractStartupAssets } from "../../ui/config/control-ui-startup-assets.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -19,12 +19,14 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const performanceSources = [
   "scripts/check-control-ui-performance.mts",
+  "ui/config/control-ui-startup-assets.ts",
   "src/gateway/control-ui-route-preloads.ts",
   ...[
     "check-limits.mts",
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
   ].map((name) => `scripts/lib/${name}`),
@@ -219,6 +221,16 @@ describe("Control UI performance budgets", () => {
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
   });
 
+  it("counts identity bytes for each missing compression sidecar", () => {
+    const { distDir } = createStartupFixture();
+    fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
+    fs.unlinkSync(path.join(distDir, "assets/index-c.css.br"));
+    expect(collectMetrics(distDir).startup).toMatchObject({
+      js: { rawBytes: 100, gzipBytes: 100, brotliBytes: 30 },
+      css: { rawBytes: 50, gzipBytes: 15, brotliBytes: 50 },
+    });
+  });
+
   it("counts route boot preloads once without changing the initial-entry budget", () => {
     const { distDir, writeAsset, writeHtml } = createDistFixture();
     writeHtml(
@@ -304,33 +316,59 @@ describe("Control UI performance budgets", () => {
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
-  it("allows CSS consolidation but rejects total growth beyond build variance", () => {
+  it("bounds stylesheet growth at the fixed CSS ceilings", () => {
+    const { distDir, writeAsset } = createStartupFixture();
+    const base = collectMetrics(distDir);
+    const raw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
+    const gzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
+    for (let index = 0; index < 6; index++) {
+      writeAsset(
+        "css-" + index + ".css",
+        Math.floor(raw / 6) + (index < raw % 6 ? 1 : 0),
+        Math.floor(gzip / 6) + (index < gzip % 6 ? 1 : 0),
+      );
+    }
+    const accepted = collectMetrics(distDir);
+    expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
+    writeAsset("overflow.css", 1, 1);
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
+      expect.objectContaining({ metric: "total CSS gzip" }),
+      expect.objectContaining({ metric: "total CSS raw" }),
+    ]);
+  });
+
+  it("allows CSS consolidation but rejects total growth beyond fixed ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
     writeAsset("shared.css", 4_000, 2_000);
     writeAsset("route.css", 4_000, 2_000);
     const base = collectMetrics(distDir);
+    const budgets = {
+      ...CONTROL_UI_PERFORMANCE_BUDGETS,
+      totalCssGzipBytes: base.total.css.gzipBytes + 64,
+      totalCssRawBytes: base.total.css.rawBytes + 64,
+    };
     fs.unlinkSync(path.join(distDir, "assets/route.css"));
     writeAsset("shared.css", 8_000, 3_900);
     const consolidated = collectMetrics(distDir);
-    expect(evaluateBudgets(consolidated, undefined, null, 512, base)).toEqual([]);
-    expect(formatReport(consolidated, undefined, null, 512, base)).toContain(
-      "total CSS gzip vs base: 4015 B -> 3915 B (-100 B; growth up to 64 B allowed)",
+    expect(evaluateBudgets(consolidated, budgets, null, 512, base)).toEqual([]);
+    expect(formatReport(consolidated, budgets, null, 512, base)).toContain(
+      "total CSS gzip vs base: 4015 B -> 3915 B (-100 B; fixed ceiling 4079 B)",
     );
     writeAsset("shared.css", 8_000, 4_064);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([]);
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([]);
     writeAsset("shared.css", 8_000, 4_065);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
-      { metric: "total CSS gzip growth", actual: 65, limit: 64, unit: "bytes" },
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([
+      { metric: "total CSS gzip", actual: 4080, limit: 4079, unit: "bytes" },
     ]);
     writeAsset("shared.css", 8_064, 3_900);
     const rawAtLimit = collectMetrics(distDir);
-    expect(evaluateBudgets(rawAtLimit, undefined, null, 512, base)).toEqual([]);
-    expect(formatReport(rawAtLimit, undefined, null, 512, base)).toContain(
-      "total CSS raw vs base: 8050 B -> 8114 B (+64 B; growth up to 64 B allowed)",
+    expect(evaluateBudgets(rawAtLimit, budgets, null, 512, base)).toEqual([]);
+    expect(formatReport(rawAtLimit, budgets, null, 512, base)).toContain(
+      "total CSS raw vs base: 8050 B -> 8114 B (+64 B; fixed ceiling 8114 B)",
     );
     writeAsset("shared.css", 8_065, 3_900);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
-      { metric: "total CSS raw growth", actual: 65, limit: 64, unit: "bytes" },
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([
+      { metric: "total CSS raw", actual: 8115, limit: 8114, unit: "bytes" },
     ]);
   });
 
@@ -350,12 +388,13 @@ describe("Control UI performance budgets", () => {
 
   it("retains the ordinary chunk cap beside locale pairs", () => {
     const { distDir, writeAsset } = createStartupFixture();
-    writeAsset("lazy-b.js", 200, 215 * 1024 + 1, 55);
+    const cap = CONTROL_UI_PERFORMANCE_BUDGETS.largestJsGzipBytes;
+    writeAsset("lazy-b.js", 200, cap + 1, 55);
     writeAsset("ru-a.js", 200, 100_000, 100);
     writeAsset("locale-config-hints-ru-a.js", 200, 100_000, 100);
     const metrics = collectMetrics(distDir);
     expect(evaluateBudgets(metrics).map((entry) => entry.metric)).toEqual(["largest JS gzip"]);
-    expect(metrics.total.js.gzipBytes).toBe(420_201);
+    expect(metrics.total.js.gzipBytes).toBe(cap + 200_041);
     expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
     expect(formatReport(metrics)).toContain("locale catalog JS:");
   });
@@ -377,8 +416,7 @@ describe("Control UI performance budgets", () => {
   it.each<[string, number, number, number, number, string | null]>([
     ["startup growth below 1.5 KiB with offset", 47_615, 46_080, 48_465, 50_000, null],
     ["startup growth at 1.5 KiB with offset", 47_616, 46_080, 48_464, 50_000, "startup CSS"],
-    ["total growth at build variance", 46_080, 46_080, 52_000, 51_936, null],
-    ["total growth above build variance", 46_080, 46_080, 52_000, 51_935, "total CSS"],
+    ["total growth within fixed ceiling", 46_080, 46_080, 52_000, 51_935, null],
     ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
     ["startup newly above the hard cap", 51_201, 51_200, 50_000, 50_000, "startup CSS"],
     ["startup unchanged above the hard cap", 51_201, 51_201, 50_000, 50_000, null],

@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import {
   resolveSessionStoreIdentity,
@@ -79,12 +78,18 @@ type DeliveryLookup = {
   agentId: string;
   sessionKeys: string[];
   baseKeys: string[];
+  exactKeys: string[];
   storePaths: string[];
 };
 
 type DeliveryStoreRead = {
   get: (sessionKey: string) => SessionEntry | undefined;
-  normalizedIndex: () => Promise<Map<string, SessionEntry>>;
+  foldedSignalIndex: () => Promise<Map<string, SessionEntry>>;
+};
+
+type DeliveryExactRead = {
+  entries: SessionEntrySummary[];
+  source?: { agentId: string; path: string };
 };
 
 /** Resolves one batch through the session owner; only detached delivery facts leave the read scope. */
@@ -142,6 +147,12 @@ export async function extractDeliveryInfoBatch(
       agentId,
       sessionKeys: [sessionKey, canonicalKey],
       baseKeys: [baseSessionKey, canonicalBaseKey],
+      exactKeys: deliveryLookupExactKeys([
+        sessionKey,
+        canonicalKey,
+        baseSessionKey,
+        canonicalBaseKey,
+      ]),
       storePaths: [...storePaths],
     };
   }
@@ -162,12 +173,35 @@ export async function extractDeliveryInfoBatch(
       return [];
     }
   });
-  const exactReads = new Map<
+  const firstStoreBatches = new Map<
     string,
-    Promise<{ entries: SessionEntrySummary[]; source?: { agentId: string; path: string } }>
+    {
+      keySets: Set<string>;
+      keys: Set<string>;
+      read?: Promise<
+        | { entries: Map<string, SessionEntrySummary>; source: DeliveryExactRead["source"] }
+        | undefined
+      >;
+    }
   >();
-  const readExact = (storePath: string, lookup: DeliveryLookup) => {
-    const candidateKeys = deliveryLookupExactKeys([...lookup.sessionKeys, ...lookup.baseKeys]);
+  for (const { lookup } of lookups) {
+    if (lookup.sessionKeys.some(isIncognitoSessionKey)) {
+      continue;
+    }
+    const key = JSON.stringify([lookup.agentId, lookup.storePaths[0]]);
+    let batch = firstStoreBatches.get(key);
+    if (!batch) {
+      batch = { keySets: new Set(), keys: new Set() };
+      firstStoreBatches.set(key, batch);
+    }
+    batch.keySets.add(JSON.stringify(lookup.exactKeys));
+    for (const candidateKey of lookup.exactKeys) {
+      batch.keys.add(candidateKey);
+    }
+  }
+  const exactReads = new Map<string, Promise<DeliveryExactRead>>();
+  const readIndependent = (storePath: string, lookup: DeliveryLookup) => {
+    const candidateKeys = lookup.exactKeys;
     const cacheKey = JSON.stringify([lookup.agentId, storePath, candidateKeys]);
     let read = exactReads.get(cacheKey);
     if (!read) {
@@ -194,22 +228,57 @@ export async function extractDeliveryInfoBatch(
     }
     return read;
   };
-  const indexes = new Map<string, DeliveryStoreRead["normalizedIndex"]>();
+  const readExact = async (
+    storePath: string,
+    lookup: DeliveryLookup,
+  ): Promise<DeliveryExactRead> => {
+    const batch =
+      !lookup.sessionKeys.some(isIncognitoSessionKey) && storePath === lookup.storePaths[0]
+        ? firstStoreBatches.get(JSON.stringify([lookup.agentId, storePath]))
+        : undefined;
+    if (batch && batch.keySets.size > 1) {
+      batch.read ??= readSessionEntriesFromStoreInWorker({
+        agentId: lookup.agentId,
+        storePath,
+        sessionKeys: [...batch.keys],
+        projection: "list",
+        snapshotFields: [],
+      })
+        .then(({ entries, source }) => ({
+          entries: new Map(entries.map((row) => [row.sessionKey, row])),
+          source,
+        }))
+        // One unreadable target must not suppress healthy targets in the same store.
+        .catch(() => undefined);
+      const combined = await batch.read;
+      if (combined) {
+        return {
+          entries: lookup.exactKeys.flatMap((key) => {
+            const row = combined.entries.get(key);
+            return row ? [row] : [];
+          }),
+          source: combined.source,
+        };
+      }
+    }
+    return readIndependent(storePath, lookup);
+  };
+  const indexes = new Map<string, DeliveryStoreRead["foldedSignalIndex"]>();
   for (const { index, sessionKey, baseSessionKey, lookup } of lookups) {
     try {
       const selected = await loadDeliverySessionEntry(lookup, async (storePath) => {
         const read = await readExact(storePath, lookup);
         const source = read.source;
         const indexKey = source ? `${source.agentId}\u0000${source.path}` : storePath;
-        let normalizedIndex = indexes.get(indexKey);
-        if (!normalizedIndex) {
-          normalizedIndex = lazyDeliveryIndex(
+        let foldedSignalIndex = indexes.get(indexKey);
+        if (!foldedSignalIndex) {
+          foldedSignalIndex = lazyFoldedSignalIndex(
             source ? { storePath: source.path, agentId: source.agentId } : { storePath },
           );
-          indexes.set(indexKey, normalizedIndex);
+          indexes.set(indexKey, foldedSignalIndex);
         }
         const entries = new Map(read.entries.map(({ sessionKey: key, entry }) => [key, entry]));
-        return { get: (key) => entries.get(key), normalizedIndex };
+        return { get: (key) => entries.get(key), foldedSignalIndex };
       });
       let context = deliveryContextFromSession(selected.entry);
       if (!hasDeliveryTargetFields(context) && baseSessionKey !== sessionKey) {
@@ -241,13 +310,13 @@ function deliveryLookupExactKeys(keys: readonly string[]): string[] {
   ];
 }
 
-function lazyDeliveryIndex(scope: {
+function lazyFoldedSignalIndex(scope: {
   storePath: string;
   agentId?: string;
-}): DeliveryStoreRead["normalizedIndex"] {
+}): DeliveryStoreRead["foldedSignalIndex"] {
   let result: Promise<Map<string, SessionEntry>> | undefined;
   return () =>
-    (result ??= readSessionEntrySummariesInWorker(scope).then(buildFreshestSessionEntryIndex));
+    (result ??= readSessionEntrySummariesInWorker(scope).then(buildFoldedSignalSessionEntryIndex));
 }
 
 async function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly string[]) {
@@ -256,8 +325,8 @@ async function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly 
   let bestRoutable = false;
   let bestExact = false;
   // Preference order: routable delivery context first; then Matrix/tail-preserved
-  // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
-  // channels keep the previous freshest-routable alias behavior.
+  // exact keys over folded aliases; then freshness. Signal groups keep their
+  // freshest-routable folded-alias behavior.
   const acceptCandidate = (entry: SessionEntry | undefined, isExact = false) => {
     if (!entry) {
       return;
@@ -305,30 +374,29 @@ async function findSessionEntryInStore(store: DeliveryStoreRead, keys: readonly 
       foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(trimmedEntry));
       acceptCandidate(trimmedEntry);
     }
-    if (trimmed !== normalized || !foundRoutableCandidate) {
-      // Build the normalized index only after direct/exact probes fail; large session stores can
-      // stay on the cheap path when the queried key already has routable delivery context.
-      const normalizedIndex = await store.normalizedIndex();
-      const freshest = normalizedIndex.get(normalized);
-      if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
-        acceptCandidate(freshest);
-      }
-      for (const foldedLegacyKey of foldedLegacyKeys) {
-        const foldedFreshest = normalizedIndex.get(foldedLegacyKey);
-        if (isConfirmedLowercasedLegacyAlias(foldedFreshest, normalized)) {
-          acceptCandidate(foldedFreshest);
-        }
-      }
+    if (
+      !exactKeyWins &&
+      normalized.includes(":signal:group:") &&
+      (trimmed !== normalized || !foundRoutableCandidate)
+    ) {
+      // Admitted store keys are canonical. Only Signal's permissive case-folded group aliases
+      // can add candidates beyond the keyed reads; Matrix opaque ids never use this index.
+      const foldedIndex = await store.foldedSignalIndex();
+      acceptCandidate(foldedIndex.get(normalized.toLowerCase()));
     }
   }
   return bestEntry;
 }
 
-function buildFreshestSessionEntryIndex(
+function buildFoldedSignalSessionEntryIndex(
   entries: readonly SessionEntrySummary[],
 ): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  const indexEntry = (key: string, entry: SessionEntry) => {
+  for (const { sessionKey, entry } of entries) {
+    if (!sessionKey.includes(":signal:group:") || requiresFoldedSessionKeyAliasProof(sessionKey)) {
+      continue;
+    }
+    const key = sessionKey.toLowerCase();
     const existing = index.get(key);
     const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
     const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
@@ -339,17 +407,6 @@ function buildFreshestSessionEntryIndex(
     ) {
       index.set(key, entry);
     }
-  };
-  for (const { sessionKey: key, entry } of entries) {
-    const normalized = normalizeStoreSessionKey(key);
-    indexEntry(normalized, entry);
-    // Lowercase aliases are only indexed when case folding is not proof-sensitive; Matrix-style
-    // opaque ids must keep exact-case delivery evidence.
-    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
-    if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
-      continue;
-    }
-    indexEntry(foldedLegacyKey, entry);
   }
   return index;
 }

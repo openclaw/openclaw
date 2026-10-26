@@ -28,9 +28,11 @@ import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
+  createUiSessionRowMatcher,
 } from "../../lib/sessions/session-key.ts";
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
+import { cacheChatComposerSnapshot } from "./chat-composer-snapshot.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -355,6 +357,7 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
           ...host.sessionsResult,
           sessions: binding.sessions.projectRows(host.sessionsResult.sessions),
         };
+        applyCachedChatModelCatalog(host, binding);
       }
     })
     .catch(() => {
@@ -498,12 +501,18 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
     binding.catalogRequest = undefined;
   }
   if (binding.catalogResult === result && !host.chatModelsLoading && !host.chatModelCatalogError) {
+    if (fresh) {
+      cacheChatComposerSnapshot(host, result);
+    }
     return Boolean(fresh);
   }
   binding.catalogResult = result;
   const previousError = host.chatModelCatalogError;
   const previousLoading = host.chatModelsLoading;
   applyChatModelCatalog(host, result);
+  if (fresh) {
+    cacheChatComposerSnapshot(host, result);
+  }
   // A stale display receipt cannot settle this pane's newer failed or pending read.
   if (!fresh) {
     host.chatModelCatalogError = previousError;
@@ -616,6 +625,13 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
       host.sessions.state.agentId !== refreshedAgentId &&
       (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
         isPersistedSessionRow(history.sessionInfo));
+    const matchesSession = createUiSessionRowMatcher(host, refreshedSessionKey);
+    // Reconciliation already projected the observed row into this pane. A bounded
+    // roster can omit it; retain that projection without overriding roster metadata.
+    const retainObserved =
+      !scopedHistory &&
+      selectedChatSessionRow(host) &&
+      !presentation.result?.sessions.some((row) => matchesSession(row.key, row.agentId));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
@@ -632,8 +648,16 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
             (host.sessionsResultAgentId === refreshedAgentId &&
               host.sessionsResult !== previousSessionsResult),
         )
-      : presentation.result;
-    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : presentation.agentId;
+      : retainObserved
+        ? host.sessionsResult
+        : presentation.result;
+    host.sessionsResultAgentId =
+      scopedHistory || retainObserved ? refreshedAgentId : presentation.agentId;
+    // Catalog and history arrive independently; persist the selection once both owners know it.
+    const currentBinding = metadataBindings.get(host);
+    if (currentBinding) {
+      applyCachedChatModelCatalog(host, currentBinding);
+    }
     // Defaults-only admission cannot update descriptor flags or run state from stale history.
     if (admitted === "defaults-only") {
       return;

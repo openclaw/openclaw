@@ -849,12 +849,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
@@ -1065,12 +1060,7 @@ describe("active-memory plugin", () => {
   });
 
   it("joins concurrent identical recall attempts in one run", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
@@ -1141,12 +1131,7 @@ describe("active-memory plugin", () => {
   });
 
   it("evicts a rejected replacement after timeout cleanup settles", async () => {
-    let releaseCleanup: () => void = () => {
-      throw new Error("cleanup gate was not initialized");
-    };
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const { promise: cleanupGate, resolve: releaseCleanup } = createDeferred<void>();
     const pending: Array<ReturnType<typeof resolveActiveRecallForRun>> = [];
     const recall = (start: Parameters<typeof resolveActiveRecallForRun>[1]) => {
       const result = resolveActiveRecallForRun("run-rejected-replacement", start);
@@ -2299,17 +2284,14 @@ describe("active-memory plugin", () => {
       ],
     ];
     const expectMemoryResult = ({ toolName, details, text, expected }: MemoryResultCase) => {
-      const record = {
-        message: {
-          role: "toolResult",
-          toolName,
-          details,
-          content: (Array.isArray(text) ? text : [text]).map((value) => ({
-            type: "text",
-            text: value,
-          })),
-        },
-      };
+      const record = memoryToolRecord(
+        toolName,
+        details,
+        (Array.isArray(text) ? text : [text]).map((value) => ({
+          type: "text",
+          text: value,
+        })),
+      );
       const toolsAllow = toolName.startsWith("memory_")
         ? toolName === "memory_lookup_custom"
           ? [toolName]
@@ -2896,10 +2878,7 @@ describe("active-memory plugin", () => {
     seedSession(sessionKey, "s-terminal-unavailable-then-summary", 0);
     const verboseSummary =
       "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
-    let markDelayScheduled: (() => void) | undefined;
-    const delayScheduled = new Promise<void>((resolve) => {
-      markDelayScheduled = resolve;
-    });
+    const { promise: delayScheduled, resolve: markDelayScheduled } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         memoryToolRecord(

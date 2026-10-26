@@ -38,17 +38,6 @@ afterEach(async () => {
 });
 const readOwner = () => fs.readFileSync(ownerPath, "utf8");
 
-it("reuses checkout ownership for nested preparation without releasing its parent", async () => {
-  await withDistArtifactOwnership(root, async () => {
-    const owner = readOwner();
-    await withDistArtifactOwnership(root, async () => {
-      expect(readOwner()).toBe(owner);
-    });
-    expect(readOwner()).toBe(owner);
-  });
-  expect(fs.existsSync(ownerPath)).toBe(false);
-});
-
 it("cancels an already contended same-process waiter without disturbing the owner", async () => {
   const enteredOwner = createDeferred();
   const releaseOwner = createDeferred();

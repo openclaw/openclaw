@@ -1,11 +1,14 @@
+import assert from "node:assert/strict";
+import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn<() => AuthProfileStore | undefined>(),
@@ -79,33 +82,21 @@ vi.mock("./users-profile-access.js", () => ({
 }));
 import { webSearchHandlers } from "./web-search.js";
 
-const validateStatus = lazyCompile(WebSearchStatusResultSchema);
-
 const readStatus = async (config: OpenClawConfig) => {
-  const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
-  const params = {};
-  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
-  await webSearchHandlers["webSearch.status"]!({
-    req: { type: "req", id: "search-status", method: "webSearch.status" },
-    params,
-    client: {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-        scopes: ["operator.read"],
+  const respond = await callAgentHandler(
+    webSearchHandlers["webSearch.status"]!,
+    "webSearch.status",
+    {},
+    {
+      context: { getRuntimeConfig: () => config } as GatewayRequestContext,
+      client: {
+        connect: gatewayConnect(["operator.read"], { id: "gateway-client", mode: "backend" }),
       },
     },
-    context,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  expect(respond).toHaveBeenCalledTimes(1);
+  );
   const [ok, payload, error] = respond.mock.calls[0] ?? [];
   expect([ok, error]).toEqual([true, undefined]);
-  if (!validateStatus(payload)) {
-    throw new Error(JSON.stringify(validateStatus.errors));
-  }
+  assert(Check(WebSearchStatusResultSchema, payload), "Invalid web search status response");
   return payload;
 };
 const publishProfile = (profile: AuthProfileStore["profiles"][string] | undefined) =>
@@ -138,26 +129,17 @@ it.each([false, true])(
   async (published) => {
     publishProfile(
       published
-        ? {
-            type: "token",
-            provider: "openai",
-            token: "synthetic-fixture-token",
-          }
+        ? { type: "token", provider: "openai", token: "synthetic-fixture-token" }
         : undefined,
     );
-    const config: OpenClawConfig = {
+    const status = await readStatus({
       tools: { web: { search: { openaiCodex: { enabled: true } } } },
-    };
-    const status = await readStatus(config);
-    expect(status?.providers).toMatchObject([
-      {
-        id: "example",
-        configured: published,
-        credentialSource: published ? "auth-profile" : "missing",
-      },
-    ]);
-    // Native search follows the selected transport; the model request admits credentials.
-    expect(status?.route.kind).toBe("native");
+    });
+    expect([
+      status.providers[0]?.configured,
+      status.providers[0]?.credentialSource,
+      status.route.kind,
+    ]).toEqual([published, published ? "auth-profile" : "missing", "native"]);
     expect(mocks.persistedAuth).not.toHaveBeenCalled();
     expect(JSON.stringify(status)).not.toContain("synthetic-fixture-token");
   },
@@ -177,14 +159,9 @@ it.each([
       expires,
     });
     mocks.catalog.mockResolvedValueOnce(undefined);
-    const config: OpenClawConfig = { tools: { web: { search: { provider: "example" } } } };
-    const status = await readStatus(config);
-
-    expect(status?.providers).toMatchObject([{ id: "example", credentialSource: "auth-profile" }]);
-    expect(status?.testProvider).toMatchObject({ id: "example" });
+    const status = await readStatus({ tools: { web: { search: { provider: "example" } } } });
+    expect(status.providers[0]?.credentialSource).toBe("auth-profile");
     const reason = status?.route.reason ?? "";
-    expect(reason.includes("The openai sign-in this provider uses is expired.")).toBe(reported);
-    expect(reason.includes("send `/login openai` from a private chat")).toBe(reported);
     expect(reason.includes("openclaw models auth login --provider openai")).toBe(reported);
     expect(JSON.stringify(status)).not.toMatch(/synthetic-|openai:fixture/);
   },

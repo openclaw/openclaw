@@ -70,6 +70,7 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export { withSessionPendingInputRelocation };
+export { prepareForeignLiveSessionPendingInputEntries } from "./session-pending-input-live-read.js";
 export type { SessionPendingInput, SessionPendingInputPage };
 export type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 
@@ -95,16 +96,19 @@ export function readWithdrawnSessionPendingInputId(
   return owner && withdrawnOwners.has(owner) ? owner.inputId : undefined;
 }
 
-function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
+function ownerReceipt(
+  owner: SessionPendingInputOwner,
+  queuedReplay?: true,
+): SessionPendingInputReceipt {
   const message = parseSessionPendingInputMessage(owner.messageJson);
   owner.requesterOrigin ??= decodeRequesterOrigin(message["__openclaw"]?.requesterOrigin);
   const receipt: SessionPendingInputReceipt = {
     get state() {
-      return owner.consumed || owner.sources?.every((source) => source.consumed)
+      return !queuedReplay && (owner.consumed || owner.sources?.every((source) => source.consumed))
         ? "consumed"
         : "queued";
     },
-    inputId: owner.inputId,
+    inputId: queuedReplay ? owner.transcriptInputId : owner.inputId,
     message,
     run: (operation) => runWithSessionPendingInput(owner, operation),
     runAsync: (operation) =>
@@ -133,6 +137,23 @@ export function withSessionPendingInputPersistence<T>(
   return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
 }
 
+function finishPendingInputSources(
+  sources: readonly SessionPendingInputOwner[],
+  disposition: "cancelled" | "interrupted",
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.finish(disposition);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
+}
+
 /** Bind one collected message to its private admitted sources without creating another durable queue. */
 export function bindSessionPendingInputSources(
   receipts: readonly SessionPendingInputReceipt[],
@@ -145,7 +166,8 @@ export function bindSessionPendingInputSources(
           throw new Error("Collected input has already been consumed");
         }
         const owner = receiptOwners.get(receipt);
-        return owner ? (owner.sources ?? [owner]) : [];
+        // Committed replays already have a transcript entry and cannot be collected again.
+        return owner && !owner.consumed ? (owner.sources ?? [owner]) : [];
       }),
     ),
   ];
@@ -185,25 +207,16 @@ export function bindSessionPendingInputSources(
   const aggregateInputId = randomUUID();
   const aggregate = ownerReceipt({
     ...first,
+    // Source owners release their admission closures when settlement completes.
+    assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    authority: undefined,
     requesterOrigin: undefined,
     inputId: aggregateInputId,
     transcriptInputId: aggregateInputId,
     idempotencyKey,
     messageJson,
     sources,
-    finish: (disposition) => {
-      const failures: unknown[] = [];
-      for (const source of sources) {
-        try {
-          source.finish(disposition);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Failed to finish collected input custody");
-      }
-    },
+    finish: finishPendingInputSources.bind(undefined, sources),
   });
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
@@ -517,39 +530,32 @@ async function stagePreparedPendingInput(
         }
         await assertCurrent();
       }
-      retained = true;
-      const run = <T>(operation: () => T) => {
-        store.assertCurrent();
-        if (finished) {
-          throw new SessionPendingInputCustodyError("Pending input ownership ended");
-        }
-        options.assertCurrent();
-        return scope.sessionActor
-          ? runWithSessionActorStorage(scope.sessionActor, operation)
-          : operation();
-      };
-      return {
-        state: "queued",
-        ...recovery,
-        inputId: committed.messageId,
-        message: committed.message,
-        run,
-        assertLifetimeCurrent: () => {
+      owner = {
+        sessionActor: scope.sessionActor,
+        agentId: scope.agentId,
+        databaseAgentId: store.databaseAgentId,
+        inputId: randomUUID(),
+        transcriptInputId: committed.messageId,
+        sessionId: scope.sessionId,
+        sessionKey: store.sessionKey,
+        databasePath: store.path,
+        workerDatabasePath: store.workerDatabasePath,
+        idempotencyKey: identity.idempotencyKey,
+        lifecycleGeneration,
+        messageJson: JSON.stringify(committed.message),
+        config: options.config,
+        assertCurrent: () => {
           store.assertCurrent();
-          (options.authority?.assertLifetimeCurrent ?? options.assertCurrent)();
+          options.assertCurrent();
         },
-        runAsync: <T>(operation: () => T): Promise<Awaited<T>> =>
-          withCurrentPendingInputAuthority(
-            options.authority ? [options.authority] : [],
-            () => {
-              store.assertCurrent();
-              options.authority?.assertLifetimeCurrent();
-            },
-            () => run(operation),
-          ),
+        authority: options.authority,
+        consumed: true,
         finish,
-        ...completionMethods,
       };
+      registerSessionPendingInputOwner(owner);
+      retained = true;
+      // Replays have committed bytes but still need execution and completion custody.
+      return Object.assign(ownerReceipt(owner, true), completionMethods, recovery);
     }
     return await runWithSessionSourceScope(
       existing ? undefined : options.assertFreshInputCurrent,
@@ -683,16 +689,38 @@ export async function prepareSessionPendingInputDedupeRecovery(
 }
 
 /** Read one admitted source for explicit retry comparison; this never authorizes replay. */
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+  options: { includeSource: true },
+): Promise<
+  | { message: PersistedUserTurnMessage; source: "pending" | "transcript"; messageSeq?: number }
+  | undefined
+>;
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+): Promise<PersistedUserTurnMessage | undefined>;
 export async function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-): Promise<PersistedUserTurnMessage | undefined> {
+  options?: { includeSource: true },
+) {
   const source = await readPendingInputSource(scope, idempotencyKey, false);
   if (!source?.snapshot.current) {
     return undefined;
   }
   source.assertCurrent();
-  const { pending, committed } = source.snapshot;
+  const { pending, committed, committedMessageSeq } = source.snapshot;
   const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
-  return message && readMessageIdempotencyKey(message) === idempotencyKey ? message : undefined;
+  if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
+    return undefined;
+  }
+  return options?.includeSource
+    ? {
+        message,
+        source: pending ? ("pending" as const) : ("transcript" as const),
+        ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
+      }
+    : message;
 }

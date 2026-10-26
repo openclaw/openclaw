@@ -40,13 +40,15 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
-const mediaMessage = (id: string, content: string) => ({
-  type: "message",
-  id,
-  parentId: null,
-  message: { role: "assistant", content, MediaPaths: ["/media/a.png"], MediaTypes: ["image/png"] },
-});
+const mediaMessage = (id: string, content: string) =>
+  messageEvent(id, null, {
+    role: "assistant",
+    content,
+    MediaPaths: ["/media/a.png"],
+    MediaTypes: ["image/png"],
+  });
 
 it("captures the replacement's stored rows after media normalization and duplicate filtering", async () => {
   await withOpenClawTestState({ label: "replacement-snapshot" }, async (state) => {
@@ -97,13 +99,10 @@ it("canonicalizes assistant media at the generic transcript append owner", async
     });
 
     const generation = readTranscriptGenerationInTransaction(database, scope.sessionId);
-    const next = {
-      type: "message",
-      id: "event-2",
-      parentId: "event-1",
-      timestamp: 1001,
-      message: { role: "assistant", content: "next" },
-    };
+    const next = timedMessageEvent("event-2", "event-1", 1001, {
+      role: "assistant",
+      content: "next",
+    });
     using policy = observeSql(db, ["policy"], (sql) =>
       sql.includes('"session_key_contract"') ? "policy" : null,
     );

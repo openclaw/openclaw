@@ -8,6 +8,17 @@ vi.mock("./action-runtime.runtime.js", async (importOriginal) => ({
   handleSlackAction: vi.fn(),
 }));
 
+export function createDisabledSlackActions() {
+  return {
+    channels: false,
+    reactions: false,
+    messages: false,
+    pins: false,
+    memberInfo: false,
+    emojiList: false,
+  };
+}
+
 export function createInvokeSpy() {
   const invoke = vi.fn(
     async (_action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({

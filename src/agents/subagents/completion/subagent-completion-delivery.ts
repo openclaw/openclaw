@@ -62,7 +62,11 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
       },
       plan(current) {
         const now = Date.now();
-        const subagent = structuredClone(current);
+        // The registry freezes the source row; only delivery changes here.
+        const subagent = {
+          ...current,
+          delivery: current.delivery && { ...current.delivery },
+        };
         const delivery = ensureDeliveryState(subagent);
         const generation = delivery.generation ?? 1;
         const windowStartedAt = delivery.windowStartedAt ?? subagent.execution.endedAt ?? now;

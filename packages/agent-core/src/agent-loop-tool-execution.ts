@@ -5,7 +5,6 @@ import {
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
-import { createRejectedToolCallLauncher } from "./tool-batch-admission.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import {
   createErrorToolResult,
@@ -81,6 +80,7 @@ export async function prepareToolCallExecution(
   };
   const closeUpdates = () => {
     acceptingUpdates = false;
+    scopedExecutionContext.pendingInput = undefined;
     pendingInput = undefined;
     for (const release of inputSubscriptions) {
       release();
@@ -308,7 +308,28 @@ export async function launchParallelToolCalls(
   toolPlan: ToolPlanState,
 ): Promise<ParallelToolCallLaunches> {
   const ready = entries.flatMap((entry, index) => ("kind" in entry ? [{ entry, index }] : []));
-  const launchRejectedBefore = createRejectedToolCallLauncher(entries, batchLifecycle);
+  /**
+   * Rejected calls never start, so they launch as lifecycle commits when the
+   * launch cursor passes their assistant-order position. Admission then records
+   * them between the prepared calls that commit as their implementations start.
+   */
+  let next = 0;
+  const launchRejectedBefore = (end: number): ParallelToolCallLaunches["rejected"] => {
+    for (; next < end; next += 1) {
+      const entry = entries[next];
+      if (!entry || "kind" in entry || entry.errorKind !== "argument-validation") {
+        continue;
+      }
+      try {
+        batchLifecycle?.commitReadyCalls?.([
+          { toolCallId: entry.toolCall.id, args: entry.toolCall.arguments },
+        ]);
+      } catch (error) {
+        return { index: next, error };
+      }
+    }
+    return undefined;
+  };
   const result: ParallelToolCallLaunches = { started: [], completed: [] };
   const preparations: Promise<void>[] = [];
   const reject = (index: number, error: unknown) => {

@@ -88,7 +88,7 @@ function holdObservation(onRead: (count: number) => void = () => {}) {
     .spyOn(stateReads, "executeExistingOpenClawStateRead")
     .mockImplementation(async (...args) => {
       const result = await execute(...args);
-      if (args[1].type === "githubPublication.sharedObservation") {
+      if (args[1].type === "githubPublications.sharedObservation") {
         entered.resolve();
         onRead(held.mock.calls.length);
         await release.promise;
@@ -370,7 +370,7 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session, "accepted")).toEqual(expected);
     expect(
       reads.mock.calls.filter(
-        ([, command]) => command.type === "githubPublication.sharedObservation",
+        ([, command]) => command.type === "githubPublications.sharedObservation",
       ),
     ).toHaveLength(3);
     expect(observer).not.toHaveBeenCalled();
@@ -546,13 +546,15 @@ describe("shared worktree receipt observation", () => {
     await expect(coordinator.latestShared(session)).rejects.toThrow(/session.*changed/i);
   });
 
-  it.each(["binding", "digest", "publisher"])(
+  it.each(["binding", "table", "digest", "publisher"])(
     "surfaces unavailable or corrupt %s evidence, not discovery null",
     async (corruption) => {
       const coordinator = sharedPublicationCoordinator();
       insertSharedWorktreeReceipt("corrupt");
       const db = openOpenClawStateDatabase().db;
-      if (corruption === "binding") {
+      if (corruption === "table") {
+        db.exec("DROP TABLE github_publication_session_lifecycles");
+      } else if (corruption === "binding") {
         db.prepare("DELETE FROM github_publication_session_lifecycles WHERE request_id = ?").run(
           "corrupt",
         );
@@ -565,10 +567,16 @@ describe("shared worktree receipt observation", () => {
           "UPDATE github_publication_requests SET identity_login = '' WHERE request_id = ?",
         ).run("corrupt");
       }
-      await expect(coordinator.latestShared(session)).rejects.toThrow(/unavailable|corrupt/);
-      await expect(coordinator.sharedStatus(session, "corrupt")).rejects.toThrow(
-        /unavailable|corrupt/,
-      );
+      const error = corruption === "table" ? /binding.*unavailable/ : /unavailable|corrupt/;
+      await expect(coordinator.latestShared(session)).rejects.toThrow(error);
+      await expect(coordinator.sharedStatus(session, "corrupt")).rejects.toThrow(error);
+      if (corruption === "table") {
+        expect(
+          db
+            .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
+            .get("github_publication_session_lifecycles"),
+        ).toBeUndefined();
+      }
     },
   );
 
@@ -620,21 +628,6 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session, "old-000")).toBeNull();
   });
 
-  it("does not recreate a missing lifecycle table while reporting unavailable evidence", async () => {
-    const coordinator = sharedPublicationCoordinator();
-    insertSharedWorktreeReceipt("unbound");
-    const db = openOpenClawStateDatabase().db;
-    db.exec("DROP TABLE github_publication_session_lifecycles");
-    await expect(coordinator.latestShared(session)).rejects.toThrow(/binding.*unavailable/);
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE name = 'github_publication_session_lifecycles'",
-        )
-        .get(),
-    ).toBeUndefined();
-  });
-
   it("does not turn an unreadable existing database into discovery null", async () => {
     const coordinator = sharedPublicationCoordinator();
     const databasePath = openOpenClawStateDatabase().path;
@@ -648,18 +641,6 @@ describe("shared worktree receipt observation", () => {
 });
 
 describe("shared repository receipt observation", () => {
-  it("does not qualify an unavailable repository workspace until this session has a shared receipt", async () => {
-    const workspace = await sharedRepositoryWorkspace();
-    const coordinator = sharedPublicationCoordinator();
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE session_repository_workspaces SET session_key = ? WHERE workspace_id = ?")
-      .run("other-session", workspace.workspaceId);
-    expect(await coordinator.latestShared(session)).toBeNull();
-    expect(await coordinator.latestShared(session, "absent")).toBeNull();
-    insertRepositoryReceipt(workspace);
-    await expect(coordinator.latestShared(session)).rejects.toThrow(/owner.*unavailable/);
-  });
-
   it("reads durable effect facts after a new coordinator starts without confirmation, replay, or credential work", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const row = insertRepositoryReceipt(workspace);
@@ -774,7 +755,7 @@ describe("shared repository receipt observation", () => {
     await expectSessionIsolation(coordinator, row.request_id);
   });
 
-  it("excludes personal rows before decoding even when their stored digest is corrupt", async () => {
+  it("qualifies the workspace only for shared receipts and excludes corrupt personal rows", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     const row = insertRepositoryReceipt(workspace, {
@@ -793,6 +774,9 @@ describe("shared repository receipt observation", () => {
     expect(await coordinator.sharedStatus(session, row.request_id)).toBeUndefined();
     expect(await coordinator.latestShared(session)).toBeNull();
     expect(await coordinator.latestShared(session, row.idempotency_key)).toBeNull();
+    expect(await coordinator.latestShared(session, "absent")).toBeNull();
+    insertRepositoryReceipt(workspace, { request_id: "shared", idempotency_key: "shared" });
+    await expect(coordinator.latestShared(session)).rejects.toThrow(/owner.*unavailable/);
   });
 
   it("surfaces shared receipt corruption before filtering by branch", async () => {

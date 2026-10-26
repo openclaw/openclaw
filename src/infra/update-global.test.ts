@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -8,12 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import * as exec from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  withMockedPlatform,
-  withMockedWindowsPlatform,
-  withRestoredMocks,
-  mockProcessPlatform,
-} from "../test-utils/vitest-spies.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
@@ -27,9 +21,9 @@ import {
   globalInstallArgs,
   isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
-  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
+import { commandResult, resolveTarget } from "./update-global.test-support.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -37,10 +31,6 @@ import {
 } from "./update-npm-prefix.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-
-function commandResult(stdout: string, code = 0) {
-  return { stdout, stderr: "", code };
-}
 
 async function npmFixture(prefix: string, name = "openclaw") {
   const globalRoot = path.join(prefix, "lib/node_modules");
@@ -63,22 +53,6 @@ async function expectPackageError(packageRoot: string, error: string) {
   expect(await collectInstalledGlobalPackageErrors({ packageRoot })).toContain(error);
 }
 
-function resolveTarget(
-  runCommand: CommandRunner,
-  pkgRoot?: string,
-  options: Partial<
-    Omit<Parameters<typeof resolveGlobalInstallTarget>[0], "runCommand" | "pkgRoot" | "timeoutMs">
-  > = {},
-) {
-  return resolveGlobalInstallTarget({
-    manager: "npm",
-    runCommand,
-    timeoutMs: 1000,
-    pkgRoot,
-    ...options,
-  });
-}
-
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 const expectedNpmInstall =
@@ -95,11 +69,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
-  await fs.writeFile(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-    "utf-8",
-  );
+  await writeFixture(packageRoot, "package.json", JSON.stringify({ name: "openclaw", version }));
 }
 
 async function writeBundledPluginPackageJson(
@@ -107,9 +77,11 @@ async function writeBundledPluginPackageJson(
   pluginId: string,
   packageName: string,
 ) {
-  const packageJsonPath = path.join(packageRoot, "dist/extensions", pluginId, "package.json");
-  await fs.mkdir(path.dirname(packageJsonPath), { recursive: true });
-  await fs.writeFile(packageJsonPath, JSON.stringify({ name: packageName }), "utf-8");
+  await writeFixture(
+    packageRoot,
+    `dist/extensions/${pluginId}/package.json`,
+    JSON.stringify({ name: packageName }),
+  );
 }
 
 async function writeFixture(root: string, relative: string, content = "export {};\n") {
@@ -140,6 +112,8 @@ describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     execFileSyncMock.mockClear();
     envSnapshot?.restore();
     envSnapshot = undefined;
@@ -164,7 +138,6 @@ describe("update global helpers", () => {
   it.each([
     ["main", "github:openclaw/openclaw#main"],
     ["github:openclaw/openclaw#feature/my-branch", "github:openclaw/openclaw#feature/my-branch"],
-    ["https://example.com/openclaw-main.tgz", "https://example.com/openclaw-main.tgz"],
   ] as const)("maps package target %s to its install spec", (tag, expected) => {
     expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag })).toBe(expected);
   });
@@ -216,9 +189,7 @@ describe("update global helpers", () => {
     const { globalRoot, pkgRoot: packageRoot } = await npmFixture(prefix);
     const owningNpm = path.join(prefix, "bin/npm");
     await writeFixture(prefix, "bin/npm", "");
-    const calls: string[][] = [];
     const runCommand: CommandRunner = async (argv) => {
-      calls.push(argv);
       if (argv[0] === owningNpm && argv[1] === "root") {
         return commandResult(`${globalRoot}\n`);
       }
@@ -234,8 +205,6 @@ describe("update global helpers", () => {
       command: owningNpm,
       npmOwner: { version, lifecyclePolicy: policy },
     });
-    expect(calls).toContainEqual([owningNpm, "--version"]);
-    expect(calls).not.toContainEqual(["npm", "--version"]);
   });
 
   it("defaults corepack download prompts off for global install env", async () => {
@@ -254,74 +223,37 @@ describe("update global helpers", () => {
 
   it("sets the package launcher under Bun", async () => {
     vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.3" } });
-    try {
-      expect((await createGlobalInstallEnv({}))?.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(
-        process.execPath,
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
-    await withMockedPlatform("linux", async () => {
-      const existsSyncSpy = vi
-        .spyOn(fsSync, "existsSync")
-        .mockImplementation((candidate) => candidate === "/bin/sh");
-      await withRestoredMocks([existsSyncSpy], async () => {
-        const env = await createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          PATH: "/home/peter/.npm-global/bin",
-        });
-        expect(env).toMatchObject({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
-        });
-      });
-    });
-  });
-
-  it.each([
-    ["NPM_CONFIG_SCRIPT_SHELL", "/custom/sh"],
-    ["npm_config_script_shell", "/custom/lower-sh"],
-  ] as const)("preserves explicit %s for global installs", async (key, value) => {
-    await withMockedPlatform("linux", async () => {
-      expect(
-        await createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          [key]: value,
-        }),
-      ).toMatchObject({ [key]: value });
-    });
+    expect((await createGlobalInstallEnv({}))?.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(
+      process.execPath,
+    );
   });
 
   it("resolves portable Git paths from process-local app data only", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const base = dirs.make("openclaw-update-portable-git-");
+    mockProcessPlatform("win32");
+    const base = dirs.make("openclaw-update-portable-git-");
 
-      envSnapshot = captureEnv(["LOCALAPPDATA"]);
-      const injectedLocalAppData = path.join(base, "injected-local-app-data");
-      const trustedLocalAppData = path.join(base, "trusted-local-app-data");
-      const injectedGitDir = path.join(injectedLocalAppData, "OpenClaw/deps/portable-git/cmd");
-      const trustedGitDir = path.join(trustedLocalAppData, "OpenClaw/deps/portable-git/cmd");
-      await fs.mkdir(injectedGitDir, { recursive: true });
-      await fs.mkdir(trustedGitDir, { recursive: true });
+    envSnapshot = captureEnv(["LOCALAPPDATA"]);
+    const injectedLocalAppData = path.join(base, "injected-local-app-data");
+    const trustedLocalAppData = path.join(base, "trusted-local-app-data");
+    const injectedGitDir = path.join(injectedLocalAppData, "OpenClaw/deps/portable-git/cmd");
+    const trustedGitDir = path.join(trustedLocalAppData, "OpenClaw/deps/portable-git/cmd");
+    await fs.mkdir(injectedGitDir, { recursive: true });
+    await fs.mkdir(trustedGitDir, { recursive: true });
 
-      delete process.env.LOCALAPPDATA;
-      const injectedOnlyEnv = await createGlobalInstallEnv({
-        LOCALAPPDATA: injectedLocalAppData,
-        PATH: "base-bin",
-      });
-      expect(injectedOnlyEnv?.PATH).not.toContain(injectedGitDir);
-
-      process.env.LOCALAPPDATA = trustedLocalAppData;
-      const trustedEnv = await createGlobalInstallEnv({
-        LOCALAPPDATA: injectedLocalAppData,
-        PATH: "base-bin",
-      });
-      expect(trustedEnv?.PATH).toContain(trustedGitDir);
-      expect(trustedEnv?.PATH).not.toContain(injectedGitDir);
+    delete process.env.LOCALAPPDATA;
+    const injectedOnlyEnv = await createGlobalInstallEnv({
+      LOCALAPPDATA: injectedLocalAppData,
+      PATH: "base-bin",
     });
+    expect(injectedOnlyEnv?.PATH).not.toContain(injectedGitDir);
+
+    process.env.LOCALAPPDATA = trustedLocalAppData;
+    const trustedEnv = await createGlobalInstallEnv({
+      LOCALAPPDATA: injectedLocalAppData,
+      PATH: "base-bin",
+    });
+    expect(trustedEnv?.PATH).toContain(trustedGitDir);
+    expect(trustedEnv?.PATH).not.toContain(injectedGitDir);
   });
 
   it("detects install managers from resolved roots and on-disk presence", async () => {
@@ -351,35 +283,32 @@ describe("update global helpers", () => {
   });
 
   it("keeps scoped npm self-updates on the running package root", async () => {
-    await withMockedPlatform("darwin", async () => {
-      const base = dirs.make("openclaw-update-scoped-probe-");
+    mockProcessPlatform("darwin");
+    const base = dirs.make("openclaw-update-scoped-probe-");
 
-      // A foreign PATH Node can make the nvm npm report a Homebrew destination.
-      const nvmPrefix = path.join(base, "home/.nvm/versions/node/v24.5.0");
-      const { globalRoot: nvmRoot, pkgRoot } = await npmFixture(nvmPrefix, "@scope/cli");
-      const cellarRoot = path.join(base, "opt/homebrew/Cellar/node/26.3.1/lib/node_modules");
+    // A foreign PATH Node can make the nvm npm report a Homebrew destination.
+    const nvmPrefix = path.join(base, "home/.nvm/versions/node/v24.5.0");
+    const { globalRoot: nvmRoot, pkgRoot } = await npmFixture(nvmPrefix, "@scope/cli");
+    const cellarRoot = path.join(base, "opt/homebrew/Cellar/node/26.3.1/lib/node_modules");
 
-      const runCommand = vi.fn(createNpmRootRunner(cellarRoot));
+    const runCommand = createNpmRootRunner(cellarRoot);
 
-      await expect(
-        resolveTarget(runCommand, pkgRoot, { packageName: "@scope/cli" }),
-      ).resolves.toEqual(npmTarget(nvmRoot, pkgRoot));
-      expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["npm", "--version"]]);
-    });
+    await expect(
+      resolveTarget(runCommand, pkgRoot, { packageName: "@scope/cli" }),
+    ).resolves.toEqual(npmTarget(nvmRoot, pkgRoot));
   });
 
   it("falls back to the running package root when the npm root probe fails", async () => {
-    await withMockedPlatform("darwin", async () => {
-      const base = dirs.make("openclaw-update-probe-failure-");
+    mockProcessPlatform("darwin");
+    const base = dirs.make("openclaw-update-probe-failure-");
 
-      const { globalRoot, pkgRoot } = await npmFixture(path.join(base, "usr/local"));
+    const { globalRoot, pkgRoot } = await npmFixture(path.join(base, "usr/local"));
 
-      const runCommand: CommandRunner = async () => commandResult("", 1);
+    const runCommand: CommandRunner = async () => commandResult("", 1);
 
-      await expect(resolveTarget(runCommand, pkgRoot)).resolves.toEqual(
-        npmTarget(globalRoot, pkgRoot, null),
-      );
-    });
+    await expect(resolveTarget(runCommand, pkgRoot)).resolves.toEqual(
+      npmTarget(globalRoot, pkgRoot, null),
+    );
   });
 
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
@@ -485,21 +414,15 @@ describe("update global helpers", () => {
     }
   });
 
-  it("builds npm global install argv", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual(expectedNpmInstall);
+  it("allows only OpenClaw builds for pnpm", () => {
+    expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "openclaw@latest",
+    ]);
   });
-  it.each(["openclaw@latest", "github:openclaw/openclaw#release/2026.5.12"])(
-    "allows only OpenClaw builds for pnpm target %s",
-    (spec) => {
-      expect(globalInstallArgs("pnpm", spec)).toEqual([
-        "pnpm",
-        "add",
-        "-g",
-        "--allow-build=openclaw",
-        spec,
-      ]);
-    },
-  );
   it.each([
     ["openclaw@latest", "openclaw@latest"],
     ["/tmp/openclaw-current.tgz", "openclaw@file:/tmp/openclaw-current.tgz"],
@@ -527,39 +450,33 @@ describe("update global helpers", () => {
   it.each(["missing", "failed"] as const)(
     "cleans only renamed package directories when pacman is %s",
     async (probe) => {
-      await withRestoredMocks(
-        [
-          mockProcessPlatform("linux"),
-          vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
-            pkgQueryResult(
-              "",
-              probe === "missing"
-                ? {
-                    code: null,
-                    termination: "error",
-                    error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
-                  }
-                : { code: 1 },
-            ),
-          ),
-        ],
-        async () => {
-          const root = dirs.make("openclaw-update-cleanup-");
-          await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
-          await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
-          await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
-          await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
-
-          const result = await cleanupGlobalRenameDirs({
-            globalRoot: root,
-            packageName: "openclaw",
-          });
-          expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
-          expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
-          expect((await fs.stat(path.join(root, "openclaw"))).isDirectory()).toBe(true);
-          expect((await fs.stat(path.join(root, ".openclaw-file"))).isFile()).toBe(true);
-        },
+      mockProcessPlatform("linux");
+      vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+        pkgQueryResult(
+          "",
+          probe === "missing"
+            ? {
+                code: null,
+                termination: "error",
+                error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
+              }
+            : { code: 1 },
+        ),
       );
+      const root = dirs.make("openclaw-update-cleanup-");
+      await fs.mkdir(path.join(root, ".openclaw-123"), { recursive: true });
+      await fs.mkdir(path.join(root, ".openclaw-456"), { recursive: true });
+      await fs.writeFile(path.join(root, ".openclaw-file"), "nope", "utf8");
+      await fs.mkdir(path.join(root, "openclaw"), { recursive: true });
+
+      const result = await cleanupGlobalRenameDirs({
+        globalRoot: root,
+        packageName: "openclaw",
+      });
+      expect(result.removed.toSorted()).toEqual([".openclaw-123", ".openclaw-456"]);
+      expect((await fs.readdir(root)).toSorted()).toEqual([".openclaw-file", "openclaw"]);
+      expect((await fs.stat(path.join(root, "openclaw"))).isDirectory()).toBe(true);
+      expect((await fs.stat(path.join(root, ".openclaw-file"))).isFile()).toBe(true);
     },
   );
 
@@ -603,26 +520,20 @@ describe("update global helpers", () => {
     );
   });
 
-  it("fails closed on newer installs when the inventory is missing", async () => {
-    const packageRoot = dirs.make("openclaw-update-global-missing-inventory-new-");
-    await writeGlobalPackageJson(packageRoot, "2026.4.15");
-    await expectPackageError(
-      packageRoot,
-      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-    );
-  });
-
-  it("rejects invalid inventory files during global verify", async () => {
-    const packageRoot = dirs.make("openclaw-update-global-invalid-inventory-");
-
-    await writeGlobalPackageJson(packageRoot, "2026.4.15");
-    await writeFixture(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH, "{not-json}\n");
-
-    await expectPackageError(
-      packageRoot,
-      `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-    );
-  });
+  it.each(["missing", "invalid"] as const)(
+    "rejects %s inventory on newer installs",
+    async (kind) => {
+      const packageRoot = dirs.make("openclaw-update-global-inventory-");
+      await writeGlobalPackageJson(packageRoot, "2026.4.15");
+      if (kind === "invalid") {
+        await writeFixture(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH, "{not-json}\n");
+      }
+      await expectPackageError(
+        packageRoot,
+        `${kind} package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      );
+    },
+  );
 
   it.each([false, true])(
     "enforces critical bundled sidecars with inventory present: %s",

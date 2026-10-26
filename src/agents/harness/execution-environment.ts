@@ -648,6 +648,9 @@ export function resolvePluginHarnessToolPolicies(
       params.runtimePluginToolGrant !== undefined ||
       // A persisted delegation floor still requires this turn's live grant projection.
       Boolean(policy.delegatedToolPolicy) ||
+      // A child completion narrows this turn, not its requester's stored conversation.
+      (policy.requesterPolicySource === "completion-handoff" &&
+        toolPolicyRestrictsTools(policy.inheritedToolPolicy)) ||
       params.swarmCollector === true ||
       toolPolicyRestrictsTools(policy.senderPolicy) ||
       toolPolicyRestrictsTools(senderScopedGroupPolicy)

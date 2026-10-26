@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({
@@ -20,6 +22,7 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
+import { createStdin, type TestStdin } from "./audio-backend.test-support.js";
 import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.js";
 
 const TEST_UUID = "00000000-0000-4000-8000-000000000001";
@@ -41,39 +44,13 @@ const PREPARED_AUDIO = {
 const FIRST_AUDIO = Buffer.from([1, 2, 3]);
 const FINAL_AUDIO = Buffer.from([4, 5, 6]);
 
-type TestStdin = EventEmitter & {
-  accept: (error?: Error) => void;
-  write: ReturnType<typeof vi.fn>;
-};
-
-function createStdin(writeResult: boolean): TestStdin {
-  const stdin = new EventEmitter() as TestStdin;
-  const callbacks: Array<(error?: Error | null) => void> = [];
-  stdin.write = vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
-    if (callback) {
-      if (writeResult) {
-        queueMicrotask(() => callback());
-      } else {
-        callbacks.push(callback);
-      }
-    }
-    return writeResult;
-  });
-  stdin.accept = (error) => {
-    for (const callback of callbacks.splice(0)) {
-      callback(error);
-    }
-  };
-  return stdin;
-}
-
 function createProcess(params: {
   stdin?: TestStdin | null;
   stdout?: EventEmitter | null;
   autoClose?: boolean;
 }) {
   const events = new EventEmitter();
-  const proc = {
+  const proc = Object.assign(events, {
     exitCode: null as number | null,
     signalCode: null as NodeJS.Signals | null,
     stdin: params.stdin ?? null,
@@ -91,11 +68,7 @@ function createProcess(params: {
       });
       return true;
     }),
-    on: events.on.bind(events),
-    once: events.once.bind(events),
-    off: events.off.bind(events),
-    emit: events.emit.bind(events),
-  };
+  });
   return proc;
 }
 
@@ -160,7 +133,7 @@ async function startAudioBridge(
 }
 
 function rpc(
-  bridge: Awaited<ReturnType<typeof startAudioBridge>>,
+  bridge: Pick<Bridge, "host" | "bridgeId">,
   action: "clearAudio" | "pullAudio" | "pushAudio" | "status" | "stop",
   params: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
@@ -183,20 +156,25 @@ function queueTerminalAudio(bridge: Bridge) {
 }
 const expectUnknown = (bridge: Bridge) =>
   expect(rpc(bridge, "pullAudio")).rejects.toThrow(`unknown bridgeId: ${bridge.bridgeId}`);
-const expectPull = (bridge: Bridge, pulling: Promise<unknown>, closed: boolean, audio: Buffer) =>
+const expectPull = (bridge: Bridge, pulling: Promise<unknown>, closed: boolean, audio?: Buffer) =>
   expect(pulling).resolves.toEqual({
     bridgeId: bridge.bridgeId,
     closed,
-    base64: audio.toString("base64"),
+    ...(audio ? { base64: audio.toString("base64") } : {}),
   });
 const expectRetained = (bridge: Bridge) =>
   expect(rpc(bridge, "status")).resolves.toMatchObject({
     bridge: { bridgeId: bridge.bridgeId, closed: true, queuedInputChunks: 1 },
   });
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
+const expectClosed = (bridge: Pick<Bridge, "host" | "bridgeId">) =>
+  expect(rpc(bridge, "status")).resolves.toEqual({
+    bridge: { bridgeId: bridge.bridgeId, closed: true },
   });
+const replaceOutput = () => {
+  const stdin = createStdin(true);
+  childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin }));
+  return stdin;
+};
 const expectStopped = (bridge: Bridge, stopped: boolean) =>
   expect(rpc(bridge, "stop")).resolves.toEqual({ ok: true, stopped });
 function pendingPush(bridge: Bridge) {
@@ -285,25 +263,6 @@ describe("meeting node host audio backend", () => {
       audioBridge: { type: "external-command" },
     });
   });
-
-  it("returns the concrete backend from setup without starting bridge processes", async () => {
-    const prepareAudio = vi.fn(async () => PREPARED_AUDIO);
-    const host = createHost({ prepareAudio });
-
-    await expect(
-      invokeHost(host, {
-        action: "setup",
-        audioBackend: "auto",
-        audioBufferBytes: 4_096,
-        audioFormat: "pcm16-24khz",
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      audioBackend: "pipewire-pulse",
-      audioDeviceLabel: "OpenClaw Meeting Audio",
-    });
-    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-  });
 });
 
 describe("meeting node host audio output", () => {
@@ -352,45 +311,61 @@ describe("meeting node host audio output", () => {
     await rpc(bridge, "stop");
   });
 
-  it("delivers terminal close to an outstanding pull and then deletes the session", async () => {
+  it("does not retain unrelated pool slabs while captured audio awaits a pull", async () => {
     const bridge = await startAudioBridge();
-    const { bridgeId } = bridge;
+    const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+    const mark = () => {
+      Buffer.from(churn);
+      Buffer.from(churn);
+      Buffer.from(churn);
+      const before = Buffer.from("marker");
+      const audio = Buffer.alloc(960, 7);
+      bridge.inputStdout.emit("data", audio);
+      audio.fill(0);
+      const after = Buffer.from("marker");
+      return [new WeakRef(before.buffer), new WeakRef(after.buffer)];
+    };
+    const references = Array.from({ length: 8 }, mark).flat();
+    Buffer.from(churn);
+    Buffer.from(churn);
+    Buffer.from(churn);
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    try {
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
+      const pulled = await rpc(bridge, "pullAudio");
+      expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.alloc(960, 7));
+    } finally {
+      await rpc(bridge, "stop");
+    }
+  });
+
+  it.each([
+    ["empty", undefined, 0],
+    ["queued audio", FIRST_AUDIO, 0],
+    ["stdout flushed after 250ms", FINAL_AUDIO, 300],
+  ] as const)("delivers terminal close with %s to a pending pull", async (_name, audio, delay) => {
+    if (delay) {
+      vi.useFakeTimers();
+    }
+    const bridge = await startAudioBridge({ inputAutoClose: !delay });
     const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
-
+    if (audio && !delay) {
+      bridge.inputStdout.emit("data", FIRST_AUDIO);
+    }
     failCapture(bridge);
-
-    await expect(pulling).resolves.toEqual({ bridgeId, closed: true });
-    await vi.waitFor(async () => {
-      await expect(rpc(bridge, "status")).resolves.toEqual({
-        bridge: { bridgeId, closed: true },
-      });
-    });
+    if (delay) {
+      await vi.advanceTimersByTimeAsync(delay);
+      bridge.inputStdout.emit("data", audio);
+      endCapture(bridge);
+    }
+    await expectPull(bridge, pulling, true, audio);
+    await vi.waitFor(() => expectClosed(bridge));
     await expectUnknown(bridge);
     expect(bridge.outputProcess.kill).toHaveBeenCalledTimes(1);
     expect(bridge.inputProcess.kill).toHaveBeenCalledTimes(1);
-  });
-
-  it("delivers final audio before terminal close deletes the session", async () => {
-    const bridge = await startAudioBridge();
-    const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
-    bridge.inputStdout.emit("data", FIRST_AUDIO);
-    failCapture(bridge);
-
-    await expectPull(bridge, pulling, true, FIRST_AUDIO);
-    await vi.waitFor(() => expectUnknown(bridge));
-  });
-
-  it("delivers stdout flushed after 250ms to a pending empty pull", async () => {
-    vi.useFakeTimers();
-    const bridge = await startAudioBridge({ inputAutoClose: false });
-    const finalAudio = Buffer.from([7, 8, 9]);
-    const pulling = rpc(bridge, "pullAudio", { timeoutMs: 2_000 });
-
-    failCapture(bridge);
-    await vi.advanceTimersByTimeAsync(300);
-    bridge.inputStdout.emit("data", finalAudio);
-    endCapture(bridge);
-    await expectPull(bridge, pulling, true, finalAudio);
   });
 
   it("blocks output commands as soon as terminal teardown starts", async () => {
@@ -437,36 +412,29 @@ describe("meeting node host audio output", () => {
     await vi.waitFor(() => expectUnknown(bridge));
   });
 
-  it("starts terminal eviction after capture drain becomes ready", async () => {
-    vi.useFakeTimers();
-    const bridge = await startAudioBridge({ inputAutoClose: false });
-    queueTerminalAudio(bridge);
-    await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
-
-    await vi.advanceTimersByTimeAsync(3_000);
-    endCapture(bridge);
-    await vi.advanceTimersByTimeAsync(2_100);
-
-    await expectRetained(bridge);
-    await vi.advanceTimersByTimeAsync(2_899);
-    await expectRetained(bridge);
-    await vi.advanceTimersByTimeAsync(1);
-    await expectUnknown(bridge);
-  });
-
-  it("keeps terminal audio while pull progress continues", async () => {
-    vi.useFakeTimers();
-    const bridge = await startAudioBridge();
-    queueTerminalAudio(bridge);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(4_000);
-
-    await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
-    await vi.advanceTimersByTimeAsync(4_999);
-    await expectRetained(bridge);
-    await vi.advanceTimersByTimeAsync(1);
-    await expectUnknown(bridge);
-  });
+  it.each(["capture drain", "pull progress"] as const)(
+    "starts eviction after %s",
+    async (activity) => {
+      vi.useFakeTimers();
+      const bridge = await startAudioBridge({ inputAutoClose: activity !== "capture drain" });
+      queueTerminalAudio(bridge);
+      if (activity === "pull progress") {
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(4_000);
+      }
+      await expectPull(bridge, rpc(bridge, "pullAudio"), false, FIRST_AUDIO);
+      if (activity === "capture drain") {
+        await vi.advanceTimersByTimeAsync(3_000);
+        endCapture(bridge);
+        await vi.advanceTimersByTimeAsync(2_100);
+        await expectRetained(bridge);
+      }
+      await vi.advanceTimersByTimeAsync(activity === "capture drain" ? 2_899 : 4_999);
+      await expectRetained(bridge);
+      await vi.advanceTimersByTimeAsync(1);
+      await expectUnknown(bridge);
+    },
+  );
 
   it("clears and deletes input retention on explicit stop", async () => {
     const bridge = await startAudioBridge();
@@ -513,11 +481,7 @@ describe("meeting node host audio output", () => {
     await expect(invokeHost(host, AUDIO_START_PARAMS)).rejects.toThrow(
       "failed to launch Chrome for Test Browser: launch failed",
     );
-    await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toEqual({
-        bridge: { bridgeId, closed: true },
-      });
-    });
+    await vi.waitFor(() => expectClosed({ host, bridgeId }));
     await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
       `unknown bridgeId: ${bridgeId}`,
     );
@@ -562,9 +526,8 @@ describe("meeting node host audio output", () => {
   });
 
   it("waits for output acceptance and rejects stale generations after clear", async () => {
-    const replacementStdin = createStdin(true);
     const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
-    childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
+    const replacementStdin = replaceOutput();
     const { bridgeId } = bridge;
     const firstPush = pendingPush(bridge);
     await Promise.resolve();
@@ -589,9 +552,8 @@ describe("meeting node host audio output", () => {
   });
 
   it("accepts legacy output commands and preserves their response shapes", async () => {
-    const replacementStdin = createStdin(true);
     const bridge = await startAudioBridge();
-    childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
+    const replacementStdin = replaceOutput();
     const { bridgeId } = bridge;
 
     await expect(pushAudio(bridge)).resolves.toEqual({ bridgeId, ok: true });

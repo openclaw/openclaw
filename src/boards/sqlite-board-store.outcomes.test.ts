@@ -6,11 +6,8 @@ import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-re
 import { SqliteWorkerError, type SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { BoardValidationError } from "./board-layout.js";
-import {
-  boardFixture,
-  closeBoardDatabases,
-  htmlWidget,
-} from "./board-store.fixtures.test-support.js";
+import { boardFixture, htmlWidget } from "./board-store.fixtures.test-support.js";
+import { closeBoardDatabases } from "./board-store.test-support.js";
 import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
@@ -51,10 +48,7 @@ beforeEach(() => {
 });
 
 function fixture() {
-  const { storeOptions, sessionKey, database } = boardFixture(
-    tempDirs.make("board-publication-outcome-"),
-    "agent:main:original",
-  );
+  const { storeOptions, sessionKey, database } = boardFixture(tempDirs.make("board-outcome-"));
   const store = new SqliteBoardStore({
     ...storeOptions,
     resolveSession: (target) => ({ agentId: "main", path: database.path, ...target }),
@@ -66,7 +60,6 @@ function fixture() {
   function expectPublication(expected: SessionRowChange[]) {
     expect(changes).toEqual(expected);
     expect(boundary.execute).toHaveBeenCalledOnce();
-    expect(boundary.close).toHaveBeenCalledOnce();
   }
   return { store, params, change, expectPublication };
 }
@@ -79,8 +72,6 @@ function failureOutcome(kind: "native" | "transported" | "cleanup") {
       error,
     );
   }
-  // Broker retirement/settlement is owned by sqlite-worker-request-custody and
-  // sqlite-worker-broker-reply.cleanup tests. Here only the delivered error matters.
   return kind === "native"
     ? error
     : Object.assign(new Error(error.message), { name: error.name, code: error.code });

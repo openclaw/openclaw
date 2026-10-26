@@ -1,10 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { expectDefined } from "@openclaw/normalization-core";
-import type {
-  AudioTranscriptionRequest,
-  MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { AudioTranscriptionRequest } from "openclaw/plugin-sdk/media-understanding";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -12,12 +9,8 @@ import {
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
-const providers: MediaUnderstandingProvider[] = [];
-plugin.register(
-  createTestPluginApi({
-    registerMediaUnderstandingProvider: (provider) => providers.push(provider),
-  }),
-);
+const { api, mediaUnderstandingProviders: providers } = createCapturedPluginRegistration();
+plugin.register(api);
 const transcribeDeepgramAudio = expectDefined(
   providers.find((provider) => provider.id === "deepgram")?.transcribeAudio,
   "Deepgram audio transcription was not registered",

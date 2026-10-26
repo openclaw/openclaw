@@ -197,6 +197,7 @@ const checksLabels = {
 function ChecksContent(props: {
   checks: ReaderChecks;
   base: string;
+  provider: string;
   refreshState?: "idle" | "loading" | "error";
   sectionRef: (element: HTMLElement) => void;
 }) {
@@ -270,7 +271,22 @@ function ChecksContent(props: {
           }}
         </For>
       </ul>
-      <TruncationNote truncated={props.checks.truncated} label="linkReader.checksTruncated" />
+      <Show when={props.checks.truncated}>
+        <p class="lr-note">
+          {t("linkReader.checksTruncated")}
+          <Show when={source()}>
+            {(url) => (
+              <>
+                {" "}
+                <ReaderLink href={url()} data-link-reader-external="">
+                  {t("linkReader.checksSourceExternal", { provider: props.provider })}
+                  <Icon name="externalLink" />
+                </ReaderLink>
+              </>
+            )}
+          </Show>
+        </p>
+      </Show>
       <footer class="lr-checks-footer">
         <Show when={props.checks.commit}>
           {(commit) => (
@@ -525,6 +541,7 @@ export function LinkReaderContent(props: {
                 sectionRef={(element) => (elements.checks = element)}
                 checks={checks()}
                 base={props.detail.url}
+                provider={props.target.reader.label}
                 refreshState={props.sections?.checks}
               />
             )}

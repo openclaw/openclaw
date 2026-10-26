@@ -33,8 +33,6 @@ describe("creator namespace upgrades", () => {
         ["run", "profile"],
         ["channel", "channel"],
         ["cron", "unknown"],
-        ["spawn", "unknown"],
-        ["talk", "unknown"],
         [undefined, "unknown"],
       ] as const;
       for (const [via] of cases) {

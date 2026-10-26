@@ -37,11 +37,11 @@ import {
 } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
-import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
-import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import {
   clearPendingClearedSubmittedDraft,
   commitComposerDraft,
@@ -266,6 +266,14 @@ export function createChatComposerContext(
     }
   };
 
+  const settleSubmittedCommandMenus = () => {
+    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
+      return;
+    }
+    state.slashMenu.reset();
+    state.skillMenu.reset();
+  };
+
   const submitDraft = (
     draft: string,
     submissionAction?: Event,
@@ -285,8 +293,13 @@ export function createChatComposerContext(
       void goalComposer.submit(submissionAction);
       return;
     }
-    void props.onSend(followUpModeOverride, submissionAction);
+    const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
+    if (completion) {
+      void completion.then(settleSubmittedCommandMenus, () => undefined);
+    } else {
+      settleSubmittedCommandMenus();
+    }
   };
 
   const acceptPrediction = () => {
