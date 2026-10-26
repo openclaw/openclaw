@@ -1,29 +1,24 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { PaletteDraftHost } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, resetSubmissionMocks } from "./draft-submission-flow.test-support.ts";
 
-function roster(id: string, workspace: string): AgentsListResult {
+function roster(id: string): AgentsListResult {
   return {
     defaultId: id,
     mainKey: "main",
     scope: "per-sender",
-    agents: [{ id, workspace, workspaceGit: false, model: { primary: "openai/gpt-5.5" } }],
+    agents: [
+      { id, workspace: "/workspace-b", workspaceGit: false, model: { primary: "openai/gpt-5.5" } },
+    ],
     sessionPlacement: {},
   };
 }
 
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-  localStorage.clear();
-  sessionStorage.clear();
-  vi.restoreAllMocks();
-});
+afterEach(resetSubmissionMocks);
 
 it.each(["removed-agent", "refresh-failure"] as const)(
   "waits for current defaults and preserves %s intent in the create request",
@@ -45,8 +40,8 @@ it.each(["removed-agent", "refresh-failure"] as const)(
       },
     });
     const agents = createAgentCapability(context.gateway);
-    Object.assign(context, { agents });
     Object.assign(context, {
+      agents,
       agentIdentity: {
         subscribe: () => () => {},
         ensure: vi.fn(async () => {}),
@@ -60,52 +55,46 @@ it.each(["removed-agent", "refresh-failure"] as const)(
     });
     let read = agents.ensureList();
     const host = new PaletteDraftHost(context);
+    onTestFinished(() => {
+      host.remove();
+      agents.dispose();
+    });
     host.draft.open();
     await waitForSolid(() =>
       expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
     );
-    try {
-      host.draft.setMessage("Keep this draft while defaults refresh");
-      expect(host.draft.canSubmit).toBe(false);
-      expect(host.draft.disabledReason).toBe("Refreshing agent defaults…");
-      expect(host.draft.error).toBeNull();
+    const expectBlocked = async (disabledReason: string) => {
+      expect(host.draft).toMatchObject({ canSubmit: false, disabledReason, error: null });
       await host.draft.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       expect(host.draft.error).toBeNull();
+    };
+    host.draft.setMessage("Keep this draft while defaults refresh");
+    await expectBlocked("Refreshing agent defaults…");
 
-      const id = choice === "removed-agent" ? "replacement" : "main";
-      if (choice === "refresh-failure") {
-        fresh.reject(new Error("roster temporarily unavailable"));
-        await read;
-        await host.updateComplete;
-        expect(host.draft.canSubmit).toBe(false);
-        expect(host.draft.disabledReason).toBe(
-          "Could not refresh agent defaults. Reload to try again.",
-        );
-        expect(host.draft.error).toBeNull();
-        await host.draft.submit();
-        expect(context.sessions.createResult).not.toHaveBeenCalled();
-        read = agents.ensureList();
-        retry.resolve(roster(id, "/workspace-b"));
-      } else {
-        fresh.resolve(roster(id, "/workspace-b"));
-      }
+    const id = choice === "removed-agent" ? "replacement" : "main";
+    if (choice === "refresh-failure") {
+      fresh.reject(new Error("roster temporarily unavailable"));
       await read;
       await host.updateComplete;
-      await host.updateComplete;
-      expect(host.draft.message).toBe("Keep this draft while defaults refresh");
-      expect(host.draft.canSubmit).toBe(true);
-      await host.draft.submit();
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
-      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
-      expect(params).toMatchObject({
-        agentId: id,
-        message: "Keep this draft while defaults refresh",
-      });
-      expect(params).not.toHaveProperty("cwd");
-    } finally {
-      host.remove();
-      agents.dispose();
+      await expectBlocked("Could not refresh agent defaults. Reload to try again.");
+      read = agents.ensureList();
+      retry.resolve(roster(id));
+    } else {
+      fresh.resolve(roster(id));
     }
+    await read;
+    await host.updateComplete;
+    await host.updateComplete;
+    expect(host.draft.message).toBe("Keep this draft while defaults refresh");
+    expect(host.draft.canSubmit).toBe(true);
+    await host.draft.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+    expect(params).toMatchObject({
+      agentId: id,
+      message: "Keep this draft while defaults refresh",
+    });
+    expect(params).not.toHaveProperty("cwd");
   },
 );

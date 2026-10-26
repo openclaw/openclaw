@@ -1,16 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import {
+  createDraftFixture,
+  readyChatRoute,
+  resetSubmissionMocks,
+} from "./draft-submission-flow.test-support.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 function notificationFixture(surface: "web" | "native") {
   const fixture = createDraftFixture();
@@ -48,9 +46,7 @@ function notificationFixture(surface: "web" | "native") {
     key: "agent:main:dashboard:notification-onboarding",
     initialRun: { status: "idle" },
   });
-  vi.mocked(fixture.context.navigateAndWait).mockImplementation(async () => {
-    queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-  });
+  vi.mocked(fixture.context.navigateAndWait).mockImplementation(readyChatRoute);
   fixture.flow.setMessage("Start the first conversation");
   return { ...fixture, browserPermission, enable, permissionGestures, postMessage };
 }

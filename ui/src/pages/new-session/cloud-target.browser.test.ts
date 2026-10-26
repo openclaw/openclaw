@@ -1,7 +1,7 @@
 import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { mountCloudProfiles } from "./cloud-target.test-support.ts";
 
@@ -13,8 +13,6 @@ function mountSessionItem(item: Parameters<typeof SessionMenuItem>[0]["item"]) {
 
 const container = document.createElement("div");
 document.body.append(container);
-
-afterEach(cleanupSolid);
 
 const blockedProvider = "Default, Cloud worker provider: custom-worker, Capacity exhausted";
 

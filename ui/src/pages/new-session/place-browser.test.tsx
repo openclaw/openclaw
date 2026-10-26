@@ -53,6 +53,18 @@ it("keeps the focused folder input and retained rows through a failed refresh an
   const input = mounted.getByRole("combobox");
   input.focus();
   Object.defineProperty(mounted.getByRole("option"), "scrollIntoView", { value: vi.fn() });
+  const expectSettled = async (error: string | null) => {
+    await waitForSolid(() => {
+      if (error) {
+        expect(mounted.getByRole("alert").textContent).toBe(error);
+      } else {
+        expect(mounted.queryByRole("alert")).toBeNull();
+      }
+    });
+    expect(mounted.queryByRole("status")).toBeNull();
+    expect(mounted.getByRole("combobox")).toBe(input);
+    expect(document.activeElement).toBe(input);
+  };
 
   const refresh = createDeferred<FsListDirResult>();
   listDirectory.mockReturnValueOnce(refresh.promise);
@@ -68,35 +80,20 @@ it("keeps the focused folder input and retained rows through a failed refresh an
 
   refresh.reject(new Error("Unavailable"));
   await navigating;
-  await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
-  );
-  expect(mounted.queryByRole("status")).toBeNull();
-  expect(document.activeElement).toBe(input);
+  await expectSettled("Couldn't list that folder.");
 
   registerProject(true);
-  await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
-  expect(mounted.queryByRole("status")).toBeNull();
-  expect(document.activeElement).toBe(input);
+  await expectSettled(null);
   const concurrentRead = createDeferred<FsListDirResult>();
   listDirectory.mockReturnValueOnce(concurrentRead.promise);
   const browsingWhileRegistering = browser.navigate(workspace.path);
   await waitForSolid(() => expect(mounted.getByRole("status").textContent).toContain("Loading"));
   concurrentRead.reject(new Error("Unavailable"));
   await browsingWhileRegistering;
-  await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
-  );
-  expect(mounted.queryByRole("status")).toBeNull();
-  expect(document.activeElement).toBe(input);
+  await expectSettled("Couldn't list that folder.");
   registerProject(false, "Couldn't register project.");
-  await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toBe("Couldn't register project."),
-  );
+  await expectSettled("Couldn't register project.");
 
   await browser.navigate(workspace.path);
-  await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
-  expect(mounted.queryByRole("status")).toBeNull();
-  expect(mounted.getByRole("combobox")).toBe(input);
-  expect(document.activeElement).toBe(input);
+  await expectSettled(null);
 });

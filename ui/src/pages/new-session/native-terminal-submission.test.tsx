@@ -3,17 +3,12 @@ import { createMemo, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { TerminalGatewayClient } from "../../components/terminal/terminal-connection.ts";
 import { terminalOpenResult } from "../../components/terminal/terminal-panel.test-support.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, resetSubmissionMocks } from "./draft-submission-flow.test-support.ts";
 import { createSubmissionAction, type SubmissionPresentation } from "./submission-action.ts";
 
-afterEach(() => {
-  cleanupSolid();
-  vi.restoreAllMocks();
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(resetSubmissionMocks);
 
 it("releases retired native startup presentation before its owner receives the late PTY", async () => {
   const starting = Promise.withResolvers<ReturnType<typeof terminalOpenResult>>();
@@ -62,9 +57,7 @@ it("releases retired native startup presentation before its owner receives the l
       () => owner,
       revision,
       outcome,
-      (error) => {
-        flow.setError(String(error));
-      },
+      (error) => flow.setError(String(error)),
     );
     return <p role="status">{saving() ? "Starting native terminal" : "Ready"}</p>;
   });
@@ -82,15 +75,15 @@ it("releases retired native startup presentation before its owner receives the l
       { timeoutMs: 35_000 },
     ),
   );
-  await waitForSolid(() =>
-    expect(view.getByRole("status").textContent).toBe("Starting native terminal"),
-  );
+  const expectPresentation = (text: string) =>
+    waitForSolid(() => expect(view.getByRole("status").textContent).toBe(text));
+  await expectPresentation("Starting native terminal");
 
   flow.invalidate("gateway-changed");
   lifetime.resolve();
   lifetime = Promise.withResolvers<void>();
   changed();
-  await waitForSolid(() => expect(view.getByRole("status").textContent).toBe("Ready"));
+  await expectPresentation("Ready");
   expect(operationFinished).toBe(false);
   starting.resolve(terminalOpenResult("late-native-start"));
   await vi.waitFor(() =>

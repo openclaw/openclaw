@@ -4,9 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { placementControls } from "./placement.test-support.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 
@@ -61,7 +59,8 @@ it("retains project artwork while current labels and selection remain live", asy
       source: "registered" as const,
     },
   ];
-  const { state: place, browser, gateway } = createRepositoryFixture();
+  const fixture = createRepositoryFixture();
+  const { state: place, browser, changed } = fixture;
   let projectId = "";
   vi.spyOn(place, "folder", "get").mockReturnValue("");
   vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
@@ -80,22 +79,15 @@ it("retains project artwork while current labels and selection remain live", asy
     onPopoverHide: vi.fn(),
     onPopoverAfterHide: vi.fn(),
   });
-  const options = placementControls({ place, gateway, context: undefined });
-  const params = {
-    params: options,
-    state: resolveProjectChip({
-      folder: "",
-      workspace: "/fixture",
-      projectId: "",
-      selectedRemoteProject: null,
-      projects,
-      recents: [],
-      projectQuery: "Sample",
-    }),
-    nativeTerminal: false,
-  };
-  const [current, setCurrent] = createSignal(params);
-  const view = mountSolid(() => <ProjectChip {...current()} />);
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/fixture",
+    projectId: "",
+    selectedRemoteProject: null,
+    projects,
+    recents: [],
+    projectQuery: "Sample",
+  }));
   await waitForSolid(() =>
     expect(view.container.querySelector('[data-value="project:sample"]')).not.toBeNull(),
   );
@@ -104,13 +96,13 @@ it("retains project artwork while current labels and selection remain live", asy
   const observer = new MutationObserver(() => {});
   observer.observe(row, { childList: true, subtree: true });
   onTestFinished(() => observer.disconnect());
-  setCurrent({ ...params });
+  changed();
   flush();
   expect(observer.takeRecords()).toHaveLength(0);
   expect(row.querySelector(".session-menu__icon svg")).toBe(icon);
   projects[0]!.displayName = "Sample Project refreshed";
   projectId = "sample";
-  setCurrent({ ...params, params: { ...options } });
+  changed();
   flush();
   expect(view.container.querySelector('[data-value="project:sample"]')).toBe(row);
   expect(row.textContent).toContain("Sample Project refreshed");
