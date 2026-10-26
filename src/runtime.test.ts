@@ -55,16 +55,15 @@ it.each([false, true])("writes stdout (direct writer: %s)", (direct) => {
 
 describe("defaultRuntime terminal restoration", () => {
   const originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const streams = [
-    { stream: process.stdout, chunks: stdout },
-    { stream: process.stderr, chunks: stderr },
-  ].map(({ stream, chunks }) => ({
+  const streams = [process.stdout, process.stderr].map((stream) => ({
     stream,
-    chunks,
     isTTY: Object.getOwnPropertyDescriptor(stream, "isTTY"),
   }));
+  const output = (stream: NodeJS.WriteStream) =>
+    vi
+      .mocked(stream.write)
+      .mock.calls.map(([chunk]) => String(chunk))
+      .join("");
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -79,13 +78,9 @@ describe("defaultRuntime terminal restoration", () => {
   });
 
   beforeEach(() => {
-    for (const { stream, chunks } of streams) {
+    for (const { stream } of streams) {
       Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
-      chunks.length = 0;
-      vi.spyOn(stream, "write").mockImplementation((chunk) => {
-        chunks.push(String(chunk));
-        return true;
-      });
+      vi.spyOn(stream, "write").mockReturnValue(true);
     }
     vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("forced native exit");
@@ -101,12 +96,12 @@ describe("defaultRuntime terminal restoration", () => {
     }
     expect(() => defaultRuntime.exit(1)).toThrow(ExitError);
     if (json) {
-      expect(JSON.parse(stdout.join(""))).toEqual({ ok: false });
-      expect(stderr.join("")).toContain("\x1b[?25h");
+      expect(JSON.parse(output(process.stdout))).toEqual({ ok: false });
+      expect(output(process.stderr)).toContain("\x1b[?25h");
     } else {
-      expect(stdout.join("")).toContain("operator-visible output\n");
-      expect(stdout.join("")).toContain("\x1b[?25h");
-      expect(stderr).toEqual([]);
+      expect(output(process.stdout)).toContain("operator-visible output\n");
+      expect(output(process.stdout)).toContain("\x1b[?25h");
+      expect(process.stderr.write).not.toHaveBeenCalled();
     }
   });
 
@@ -118,6 +113,8 @@ describe("defaultRuntime terminal restoration", () => {
     expect(() => defaultRuntime.exit(1, { resetStream })).toThrow(ExitError);
 
     expect(resetWrite).toHaveBeenCalledWith(expect.stringContaining("\x1b[?25h"));
-    expect([stdout, stderr]).toEqual([[], []]);
+    for (const { stream } of streams) {
+      expect(stream.write).not.toHaveBeenCalled();
+    }
   });
 });

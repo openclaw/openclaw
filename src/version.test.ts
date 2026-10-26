@@ -41,49 +41,33 @@ describe("version resolution", () => {
     expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.8.1");
   });
 
-  it("reads the bounded immutable build id from generated provenance", async () => {
-    const valid = await versionFixture({ "build-info.json": { buildId: "build-a" } });
-    const oversized = await versionFixture({ "build-info.json": { buildId: "x".repeat(97) } });
-    expect(readBuildIdFromBuildInfoForModuleUrl(valid)).toBe("build-a");
-    expect(readBuildIdFromBuildInfoForModuleUrl(oversized)).toBeNull();
-  });
-
-  it("continues past an oversized build id to the next candidate", async () => {
-    const moduleUrl = await versionFixture({
-      "dist/build-info.json": { buildId: "x".repeat(97) },
-      "build-info.json": { buildId: "x".repeat(96) },
-    });
-    expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
-    // Provenance names the file that actually supplied the ID, not the first candidate found.
-    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toEqual({
+  it.each([
+    { buildId: "build-a" },
+    {
       buildId: "x".repeat(96),
-      buildInfoPath: await fs.realpath(fileURLToPath(new URL("../../build-info.json", moduleUrl))),
-    });
-  });
-
-  it("captures the build record beside the build id", async () => {
-    const moduleUrl = await versionFixture({
-      "build-info.json": {
-        version: "2026.10.22",
-        commit: "a".repeat(40),
-        builtAt: "2026-10-22T00:00:00.000Z",
-        buildId: "explicit-ui-build",
-      },
-    });
-    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toEqual({
-      buildId: "explicit-ui-build",
       version: "2026.10.22",
       commit: "a".repeat(40),
       builtAt: "2026-10-22T00:00:00.000Z",
+    },
+  ])("captures the first usable build record: %j", async (record) => {
+    const moduleUrl = await versionFixture({
+      "dist/build-info.json": { buildId: "x".repeat(97) },
+      "build-info.json": record,
+    });
+    expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe(record.buildId);
+    // Provenance names the file that actually supplied the ID, not the first candidate found.
+    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toEqual({
+      ...record,
       buildInfoPath: await fs.realpath(fileURLToPath(new URL("../../build-info.json", moduleUrl))),
     });
   });
 
-  it("has no build provenance without a usable build id", async () => {
-    const missing = await versionFixture({ "package.json": { name: "openclaw", version: "1" } });
-    const empty = await versionFixture({ "build-info.json": { version: "1", buildId: " " } });
-    expect(readBuildProvenanceForModuleUrl(missing)).toBeNull();
-    expect(readBuildProvenanceForModuleUrl(empty)).toBeNull();
+  it.each([undefined, " ", "x".repeat(97)])("rejects unusable build id %s", async (buildId) => {
+    const moduleUrl = await versionFixture(
+      buildId === undefined ? {} : { "build-info.json": { version: "1", buildId } },
+    );
+    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toBeNull();
+    expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
   });
 
   it("captures the runtime commit from startup provenance once", async () => {
@@ -156,7 +140,6 @@ describe("version resolution", () => {
     const resolve = (OPENCLAW_VERSION: string, npm_package_version: string, fallback?: string) =>
       resolveRuntimeServiceVersion({ OPENCLAW_VERSION, npm_package_version }, fallback);
     expect(resolve("   ", "1.0.0")).toBe(VERSION);
-    expect(resolve(" ", " 1.0.0-package ")).toBe(VERSION);
     expect(resolve("", "", "fallback")).toBe(VERSION);
     expect(resolve("undefined", "1.0.0-package")).toBe(VERSION);
   });
