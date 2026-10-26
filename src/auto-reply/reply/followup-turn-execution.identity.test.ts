@@ -8,8 +8,11 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { setPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { OpenClawPluginToolContext } from "../../plugins/tool-types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -23,6 +26,10 @@ import {
 import { createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
+
+const identityProbeConfig = {
+  plugins: { enabled: true, entries: { "identity-probe": { enabled: true } } },
+} satisfies OpenClawConfig;
 
 beforeEach(resetFollowupTurnTestState);
 
@@ -59,6 +66,20 @@ function registerIdentityProbe(params: {
     contracts: { tools: ["identity_probe"] },
   });
   builder.registry.plugins.push(record);
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: record.id, contracts: record.contracts }],
+  });
+  setPluginRuntimeLoadContext(builder.registry, {
+    rawConfig: identityProbeConfig,
+    config: identityProbeConfig,
+    activationSourceConfig: identityProbeConfig,
+    autoEnabledReasons: {},
+    workspaceDir: undefined,
+    env: process.env,
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+    metadataSnapshot,
+  });
   const api = builder.createApi(record, { config: {}, registrationMode: "full" });
   api.registerTool(
     {
@@ -143,16 +164,24 @@ async function executeIdentityTurn(params: {
   turn.queued.originatingTo = params.chatType === "direct" ? "user:42" : "group:ops";
   turn.queued.originatingChatId = params.chatId;
   turn.queued.originatingChatType = params.chatType;
+  turn.config = identityProbeConfig;
+  turn.queued.run.config = identityProbeConfig;
   turn.queued.run.messageProvider = "telegram";
   turn.queued.run.senderId = params.requesterId ?? "requester-42";
+  let runError: unknown;
   state.execute.mockImplementationOnce(async (turnParams: AgentTurnParams) => {
-    await params.run(turnParams);
-    return {
-      runId: turnParams.replyOperation.runId,
-      outcome: { kind: "rejected", payload: { text: "done" } },
-    };
+    try {
+      await params.run(turnParams);
+      return {
+        runId: turnParams.replyOperation.runId,
+        outcome: { kind: "rejected", payload: { text: "done" } },
+      };
+    } catch (error) {
+      runError = error;
+      throw error;
+    }
   });
-  return await executeFollowupTurnForTest({
+  const result = await executeFollowupTurnForTest({
     turn,
     defaults: {
       typing: createMockTypingController(),
@@ -162,6 +191,10 @@ async function executeIdentityTurn(params: {
     onToolResult: async () => {},
     onCompactionNoticePayload: async () => {},
   });
+  if (runError !== undefined) {
+    throw runError;
+  }
+  return result;
 }
 
 describe("queued follow-up V2 plugin identity", () => {
