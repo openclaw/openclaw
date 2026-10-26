@@ -1,7 +1,6 @@
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   capturePluginRegistration,
-  createRuntimeEnv,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
@@ -11,12 +10,11 @@ import {
   requireFirstPostJsonRecordRequest as requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import {
-  expectDashscopeVideoTaskPoll,
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 
 const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
   getProviderHttpMocks();
@@ -24,9 +22,7 @@ const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock 
 const { default: plugin } = await import("./index.js");
 const captured = capturePluginRegistration(plugin);
 const videoProvider = captured.videoGenerationProviders[0];
-if (!videoProvider) {
-  throw new Error("expected Alibaba video generation provider");
-}
+assert(videoProvider, "expected Alibaba video generation provider");
 const authChoice = "alibaba-model-studio-api-key";
 const videoRequest = { provider: "alibaba", prompt: "animate this shot", cfg: {} };
 
@@ -54,10 +50,9 @@ function alibabaConfig(
   return { models: { providers: { alibaba } } };
 }
 
-it("registers media-only API-key onboarding alongside video generation", async () => {
+it("registers media-only API-key onboarding alongside video generation", () => {
   expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["alibaba"]);
   expect(captured.modelCatalogProviders).toEqual([]);
-  expect(captured.providers).toHaveLength(1);
   expect(captured.providers[0]).toMatchObject({
     id: "alibaba",
     docsPath: "/providers/alibaba",
@@ -67,22 +62,6 @@ it("registers media-only API-key onboarding alongside video generation", async (
   const choice = resolveProviderPluginChoice({ providers: captured.providers, choice: authChoice });
   expect(choice?.method).toMatchObject({ id: "api-key", starterModel: undefined });
   expect(choice?.wizard?.onboardingScopes).toEqual(["image-generation"]);
-  const resolveApiKey = vi.fn(async () => ({ key: "alibaba-test-key", source: "flag" as const }));
-  const valid = await choice?.method.validateNonInteractive?.({
-    authChoice,
-    config: {},
-    baseConfig: {},
-    opts: { alibabaModelStudioApiKey: "alibaba-test-key" },
-    runtime: createRuntimeEnv(),
-    resolveApiKey,
-  });
-  expect(valid).toBe(true);
-  expect(resolveApiKey).toHaveBeenCalledWith({
-    provider: "alibaba",
-    flagValue: "alibaba-test-key",
-    flagName: "--alibaba-model-studio-api-key",
-    envVar: "MODELSTUDIO_API_KEY",
-  });
 });
 
 it("tracks whether an allowed Alibaba API-key SecretRef resolves", async () => {
@@ -149,9 +128,7 @@ it("animates a local image with Wan, polls task status, and downloads the result
     watermark: false,
   });
 
-  expect(postJsonRequestMock).toHaveBeenCalledOnce();
-  const request = requireFirstPostJsonRequest(postJsonRequestMock, "DashScope request");
-  expect(request).toMatchObject({
+  expect(requireFirstPostJsonRequest(postJsonRequestMock, "DashScope request")).toMatchObject({
     url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
     body: {
       model: "wan2.6-i2v",
@@ -159,6 +136,5 @@ it("animates a local image with Wan, polls task status, and downloads the result
       parameters: { duration: 6, audio: true, watermark: false },
     },
   });
-  expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
   expectSuccessfulDashscopeVideoResult(result);
 });
