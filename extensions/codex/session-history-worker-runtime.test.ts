@@ -1,24 +1,21 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import path from "node:path";
 import {
   createCodexSessionContextReader,
   SessionTranscriptReadFenceError,
   type CodexSessionContextReader,
   type CodexSessionContextSnapshot,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { projectCodexSettledHistoryInWorker as projectHistory } from "./session-history-worker-runtime.js";
-import { settledFixture } from "./src/app-server/session-history.test-support.js";
+import {
+  setupSessionHistoryFixtures,
+  settledFixture,
+} from "./src/app-server/session-history.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const { writeSqliteSession } = setupSessionHistoryFixtures();
 
 const sessionId = "actor-session";
 const sessionTarget = {
@@ -28,10 +25,6 @@ const sessionTarget = {
   storePath: "/synthetic/incognito.sqlite",
 };
 const { upstreamPrompt, settledMessages } = settledFixture();
-const messages: CodexSessionContextSnapshot["messages"] = [
-  { role: "user", content: "Earlier synthetic context.", timestamp: 1 },
-  ...settledMessages,
-];
 const foreignError = new Error("History capability belongs to another actor target");
 const owner = {
   assertCurrent(target: Parameters<CodexSessionContextReader>[0]) {
@@ -39,7 +32,10 @@ const owner = {
       throw foreignError;
     }
   },
-  read: vi.fn(async () => ({ header: { type: "session", id: sessionId }, messages })),
+  read: vi.fn(async () => ({
+    header: { type: "session", id: sessionId },
+    messages: settledMessages,
+  })),
   validate: vi.fn(async (_snapshot: CodexSessionContextSnapshot) => {}),
   retain: <T>(operation: () => Promise<T>) => operation(),
 };
@@ -89,35 +85,23 @@ it("preserves owner-ended errors for caller recovery", async () => {
 
 it("resolves marker-only history through unbound memory routing without host SQL", async () => {
   setRuntimeConfigSnapshot({});
-  onTestFinished(clearRuntimeConfigSnapshot);
-  const stateDir = tempDirs.make("codex-marker-actor-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const memoryTarget = {
-    ...target.sessionTarget,
-    env,
-    storePath: path.join(stateDir, "agents/main/agent/incognito-openclaw-agent.sqlite"),
-  };
-  onTestFinished(async () => {
-    await deleteSessionEntry(memoryTarget);
-  });
-  await upsertSessionEntry({
-    ...memoryTarget,
-    entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true },
-  });
+  const { marker, sessionTarget: memoryTarget } = await writeSqliteSession({ incognito: true });
   await appendSessionTranscriptMessagesByIdentity({
     ...memoryTarget,
-    messages: messages.map((message) => ({ message })),
+    messages: settledMessages.map((message) => ({ message })),
   });
   const sql = observeHostDataSql();
   onTestFinished(() => sql.restore());
   const result = await projectHistory({
     ...history,
-    sessionFile: `sqlite:main:${target.sessionId}:${memoryTarget.storePath}`,
+    sessionId: memoryTarget.sessionId,
+    sessionFile: marker,
   });
   expect(result).toMatchObject({
     status: "ok",
     value: [
-      { role: "user", content: [{ text: "Earlier synthetic context." }] },
+      { role: "user", content: [{ text: "sqlite prompt" }] },
+      { role: "assistant", content: [{ text: "sqlite answer" }] },
       { role: "user", content: [{ text: upstreamPrompt }] },
       { type: "function_call", call_id: "sent" },
       { type: "function_call_output", call_id: "sent" },
