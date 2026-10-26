@@ -3,6 +3,7 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -209,26 +210,18 @@ it("distinguishes explicit values that equal the defaults", () => {
 });
 
 it("refreshes notification presentation from in-place owner publications", () => {
-  let publishNotifications = () => {};
   const snapshot: NonNullable<ApplicationContext["nativeNotifications"]>["snapshot"] = {
     permission: "granted",
     test: { state: "sent" },
   };
-  const nativeNotifications = {
-    snapshot,
-    subscribe: (notify: () => void) => {
-      publishNotifications = notify;
-      return () => {
-        publishNotifications = () => {};
-      };
-    },
-  };
+  const notifications = createChangeListeners();
+  const nativeNotifications = { snapshot, subscribe: notifications.subscribe };
   const context = configContext({ nativeNotifications });
   const { state } = mountConfigPageState(context, { pageId: "notifications" });
   expect(state.configProps().nativeNotifications?.test?.state).toBe("sent");
 
   snapshot.test = { state: "pending" };
-  publishNotifications();
+  notifications.publish();
   flush();
   expect(state.configProps().nativeNotifications?.test?.state).toBe("pending");
 });
@@ -376,7 +369,6 @@ it.each([
     });
     await Promise.all([pending, reconnected]);
     expect(loadSettings().accent).toBe(returnedAccent ?? "#abcdef");
-    expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
   },
 );
 

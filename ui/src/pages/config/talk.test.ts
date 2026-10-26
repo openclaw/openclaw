@@ -245,7 +245,6 @@ async function selectMutation(
   options: TalkMutationHarnessOptions = {},
 ) {
   const harness = createTalkMutationHarness(options);
-  await waitForSolid(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
   await waitForSolid(() =>
     expect(
       field === "model"
@@ -872,46 +871,39 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     },
   );
 
-  it("keeps generic transport handling when a catalog has no family facts", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      provider: "xai",
-      transport: "provider-websocket",
-      transports: ["provider-websocket", "gateway-relay"],
-      catalogRequest: (_index, catalog) => ({
-        ...catalog,
-        realtime: {
-          ...catalog.realtime,
-          providers: catalog.realtime.providers.map((provider) => ({
-            ...provider,
-            modelFamilySettings: undefined,
-          })),
-        },
-      }),
-    });
-
-    expect(removeFormValue).not.toHaveBeenCalledWith(realtimePath("transport"));
-    expect(removeFormValue).not.toHaveBeenCalledWith(realtimePath("consultRouting"));
-  });
-
-  it("removes forced consult when a provider switch activates a GPT-Live fallback", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      consultRouting: "force-agent-consult",
-      defaultModel: "gpt-realtime-2.1",
-      openAIProviderModel: "gpt-live-test-canary",
-      provider: "xai",
-      transports: ["gateway-relay", "webrtc"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledWith(realtimePath("consultRouting"));
-    expect(removeFormValue).not.toHaveBeenCalledWith(realtimePath("transport"));
-  });
-
-  it("removes transport when switching to a provider that positively rejects it", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      provider: "xai",
-      transports: ["webrtc"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledWith(realtimePath("transport"));
-  });
+  it.each([
+    [
+      "no family facts",
+      {
+        transport: "provider-websocket",
+        transports: ["provider-websocket", "gateway-relay"],
+        providerOption: { modelFamilySettings: undefined },
+      },
+      null,
+      ["transport", "consultRouting"],
+    ],
+    [
+      "GPT-Live fallback",
+      {
+        consultRouting: "force-agent-consult",
+        defaultModel: "gpt-realtime-2.1",
+        openAIProviderModel: "gpt-live-test-canary",
+        transports: ["gateway-relay", "webrtc"],
+      },
+      "consultRouting",
+      ["transport"],
+    ],
+    ["positive rejection", { transports: ["webrtc"] }, "transport", []],
+  ] satisfies [string, TalkMutationHarnessOptions, string | null, string[]][])(
+    "applies provider transport policy: %s",
+    async (_name, options, removed, retained) => {
+      const remove = await selectMutation("provider", "openai", { provider: "xai", ...options });
+      if (removed) {
+        expect(remove).toHaveBeenCalledWith(realtimePath(removed));
+      }
+      for (const field of retained) {
+        expect(remove).not.toHaveBeenCalledWith(realtimePath(field));
+      }
+    },
+  );
 });

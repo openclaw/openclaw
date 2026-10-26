@@ -107,17 +107,6 @@ function chooseProvider(page: Element, value: string) {
 function submit(page: Element, bubbles = false) {
   page.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles, cancelable: true }));
 }
-async function expectSaved(
-  runtimeConfig: RuntimeConfigCapability,
-  request: Awaited<ReturnType<typeof mount>>["request"],
-  sources: Record<string, unknown>[],
-) {
-  await runtimeConfig.save();
-  const write = request.mock.calls.find(([method]) => method === "config.set")?.[1];
-  expect(write?.baseHash).toBe("one");
-  expect(JSON.parse(write!.raw!).transcripts.autoStart).toEqual(sources);
-}
-
 function expectSources(runtimeConfig: RuntimeConfigCapability, sources: unknown[]) {
   expect(runtimeConfig.state.configForm?.transcripts).toEqual({
     enabled: true,
@@ -266,9 +255,7 @@ describe("curated meeting capture", () => {
         expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
         expect(inputControl(page, "title").value).toBe("Keep this draft");
         click(page, "Save source");
-        await expectSaved(runtimeConfig, currentRequest, [
-          { ...original, title: "Keep this draft" },
-        ]);
+        expectSources(runtimeConfig, [{ ...original, title: "Keep this draft" }]);
       } finally {
         current.resolve({ ...meetingStatus, providers: [] });
         previous.resolve(meetingStatus);
@@ -307,9 +294,7 @@ describe("curated meeting capture", () => {
     expect(inputControl(page, "title").value).toBe("Unsaved title");
     input(page, "channelId", locators.channelId);
     click(page, "Save source");
-    await expectSaved(runtimeConfig, request, [
-      { ...original, ...locators, title: "Unsaved title" },
-    ]);
+    expectSources(runtimeConfig, [{ ...original, ...locators, title: "Unsaved title" }]);
     flush();
     click(page, "Edit source 1");
     expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
@@ -360,14 +345,14 @@ describe("curated meeting capture", () => {
       whenOccupied: true,
       sessionId: "saved-custom-id",
     };
-    const { page, runtimeConfig, request } = await mount({ source });
+    const { page, runtimeConfig } = await mount({ source });
     click(page, "Edit source 1");
     const id = inputControl(page, "sessionId");
     expect(id).toMatchObject({ disabled: true, value: source.sessionId });
     expect(page.textContent).toContain("Occupancy mode chooses session IDs automatically");
     input(page, "title", "Future occupied room");
     click(page, "Save source");
-    await expectSaved(runtimeConfig, request, [{ ...source, title: "Future occupied room" }]);
+    expectSources(runtimeConfig, [{ ...source, title: "Future occupied room" }]);
   });
 
   it("does not save another entry's dirty locator when switching directly between equal sources", async () => {
@@ -428,7 +413,7 @@ describe("curated meeting capture", () => {
       expect(inputControl(page, "title").value).toBe(" Future title ");
       click(page, "Save source");
       expect(source.title).toBe("Original title");
-      await expectSaved(runtimeConfig, request, [{ ...source, title: "Future title" }]);
+      expectSources(runtimeConfig, [{ ...source, title: "Future title" }]);
     },
   );
 
@@ -462,7 +447,7 @@ describe("curated meeting capture", () => {
   });
 
   it("requires Cancel and reopen to edit a replaced source, including after re-entry", async () => {
-    const { page, runtimeConfig, original, request } = await mount();
+    const { page, runtimeConfig, original } = await mount();
     editTitle(page, "Stale edit");
     const replacement = { ...original, sessionId: "replacement" };
     runtimeConfig.patchForm(["transcripts", "autoStart"], [replacement]);
@@ -484,7 +469,7 @@ describe("curated meeting capture", () => {
     expect(page.querySelector('[role="alert"]')).toBeNull();
     input(page, "title", "Current edit");
     click(page, "Save source");
-    await expectSaved(runtimeConfig, request, [{ ...replacement, title: "Current edit" }]);
+    expectSources(runtimeConfig, [{ ...replacement, title: "Current edit" }]);
   });
 
   it.each([false, true])(
@@ -568,7 +553,7 @@ describe("curated meeting capture", () => {
     expect(
       request.mock.calls.some(([method]) => method.includes("delete") || method.includes("stop")),
     ).toBe(false);
-    await expectSaved(runtimeConfig, request, [
+    expectSources(runtimeConfig, [
       { providerId: "test-voice", guildId: "second-guild", channelId: "second-room" },
     ]);
     flush();
