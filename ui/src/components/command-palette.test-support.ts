@@ -8,7 +8,7 @@ import { createWebPushCapability } from "../app/web-push.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import { invalidateCronInventory } from "../lib/cron/inventory.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {
@@ -93,7 +93,7 @@ export function createGateway(
     gateway,
     emit(this: void, event: string, payload: unknown = {}) {
       if (event === "cron" || event === "config.changed") {
-        invalidateCronCatalog(client);
+        invalidateCronInventory(client);
       }
       const invalidation = modelCatalogEventInvalidation({ event, payload });
       if (invalidation) {
@@ -103,7 +103,7 @@ export function createGateway(
     },
     setConnected(this: void, nextConnected: boolean) {
       if (!nextConnected) {
-        invalidateCronCatalog(client);
+        invalidateCronInventory(client);
         invalidateChatMetadataStore(client);
       }
       publish({

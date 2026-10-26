@@ -9,6 +9,7 @@ import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import { hasCronInventoryEvents, isCronInventoryInvalidation } from "../../lib/cron/inventory.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
@@ -16,6 +17,7 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -140,7 +142,11 @@ export function createAgentsPageState(
   const cron = createAgentCronPresenter({
     currentState: () => state.cron,
     readState: () => readData().cron,
-    canCall: (method, scope) => active && canCall(method, scope),
+    canCall: (method, scope) =>
+      active &&
+      state.agentsPanel === "cron" &&
+      document.visibilityState !== "hidden" &&
+      canCall(method, scope),
     publish,
   });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
@@ -632,6 +638,20 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
+      context.gateway.subscribeEvents((event) => {
+        if (hasCronInventoryEvents(context.gateway.snapshot)) {
+          if (isCronInventoryInvalidation(event, context.gateway.snapshot)) {
+            cron.onRefresh(false);
+          } else if (event.event === "cron") {
+            cron.onRuntime(event.payload);
+          }
+        }
+      }),
+      listen(document, "visibilitychange", () => {
+        if (document.visibilityState !== "hidden") {
+          cron.onRefresh(false);
+        }
+      }),
       // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;

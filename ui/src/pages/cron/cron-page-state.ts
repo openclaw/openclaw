@@ -26,6 +26,7 @@ import {
   toggleCronJob,
   updateCronJobsFilter,
 } from "../../lib/cron/index.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory.ts";
 import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -203,8 +204,16 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
       }),
       currentContext.gateway.subscribeEvents((event) => {
-        if (active && context() === currentContext && event.event === "cron") {
-          void refreshCron({ coalesce: true, event: event.payload });
+        if (
+          active &&
+          context() === currentContext &&
+          (event.event === "cron" ||
+            isCronInventoryInvalidation(event, currentContext.gateway.snapshot))
+        ) {
+          void refreshCron({
+            coalesce: true,
+            event: event.event === "cron" ? event.payload : undefined,
+          });
         }
       }),
     );
@@ -373,7 +382,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
   }
 
-  async function refreshCron(options: { coalesce?: boolean; event?: unknown } = {}) {
+  async function refreshCron(
+    options: { coalesce?: boolean; event?: unknown; refresh?: boolean } = {},
+  ) {
     const cronState = cron;
     if (!canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
@@ -383,7 +394,11 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     await Promise.all([
       presentation.read("status", (current) => loadCronStatus(current, options)),
       presentation.read("jobs", (current) =>
-        loadCronJobsPage(current, { tableFilters: true, event: options.event }),
+        loadCronJobsPage(current, {
+          tableFilters: true,
+          event: options.event,
+          refresh: options.refresh,
+        }),
       ),
     ]);
   }
@@ -612,7 +627,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onListTabChange: setListTab,
     onDetailTabChange: setDetailTab,
     onFormChange: patchForm,
-    onRefresh: () => void refreshCron(),
+    onRefresh: () => void refreshCron({ refresh: true }),
     onSubmit: () => submitForm(),
     onSubmitRunNow: () => submitForm(true),
     onSelectJob: selectJob,

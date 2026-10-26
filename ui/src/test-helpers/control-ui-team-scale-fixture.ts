@@ -384,6 +384,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       ),
     },
     ...(options.liveRun ? { inFlightRun: inFlightRun() } : {}),
+    featureEvents: ["cron.inventory.changed"],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.list",
