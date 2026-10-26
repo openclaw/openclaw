@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 
 const { readFileMock, rmMock, runExecMock } = vi.hoisted(() => ({
   readFileMock: vi.fn(async () => Buffer.from("jpeg")),
@@ -25,9 +25,7 @@ type RunExecOptions = { logOutput?: boolean; signal?: AbortSignal };
 
 function runExecSignal(callIndex: number): AbortSignal {
   const options = runExecMock.mock.calls[callIndex]?.[2] as RunExecOptions | undefined;
-  if (!options?.signal) {
-    throw new Error(`missing runExec signal for call ${callIndex}`);
-  }
+  assert(options?.signal, `missing runExec signal for call ${callIndex}`);
   return options.signal;
 }
 
@@ -79,25 +77,25 @@ it.each([0, 20_000])(
     const snapshot = handleLogbookSnapshot({});
     await vi.advanceTimersByTimeAsync(0);
     const captureSignal = runExecSignal(0);
-    expect(runExecMock).toHaveBeenCalledTimes(1);
+    const expectProgress = (calls: number, aborted = false) => {
+      expect(runExecMock).toHaveBeenCalledTimes(calls);
+      expect(captureSignal.aborted).toBe(aborted);
+    };
+    expectProgress(1);
     expect(timeoutSpy).toHaveBeenCalledWith(25_000);
-    expect(captureSignal.aborted).toBe(false);
     if (captureMs) {
       await vi.advanceTimersByTimeAsync(captureMs - 1);
       expect(runExecMock).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(runExecSignal(1)).toBe(captureSignal);
-      expect(captureSignal.aborted).toBe(false);
     }
     const calls = captureMs ? 2 : 1;
-    expect(runExecMock).toHaveBeenCalledTimes(calls);
+    expectProgress(calls);
     await vi.advanceTimersByTimeAsync(24_999 - captureMs);
-    expect(captureSignal.aborted).toBe(false);
-    expect(runExecMock).toHaveBeenCalledTimes(calls);
+    expectProgress(calls);
     await vi.advanceTimersByTimeAsync(1);
     await expect(snapshot).resolves.toEqual({ error: "snapshot command timed out" });
-    expect(captureSignal.aborted).toBe(true);
-    expect(runExecMock).toHaveBeenCalledTimes(calls);
+    expectProgress(calls, true);
     expect(readFileMock).not.toHaveBeenCalled();
     expect(rmMock).toHaveBeenCalledOnce();
   },

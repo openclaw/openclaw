@@ -67,17 +67,13 @@ describe("parseCardsJson", () => {
     appSites: { primary: "github.com" },
     ...overrides,
   });
-  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
+  const parse = (...cards: ReturnType<typeof card>[]) =>
+    parseCardsJson({ raw: JSON.stringify(cards), day: DAY });
   const overlap = (firstEnd: string, secondEnd = "11:00:00") =>
-    parse(
-      JSON.stringify([
-        card({ endTime: firstEnd }),
-        card({ startTime: "10:30:00", endTime: secondEnd, title: "Second" }),
-      ]),
-    );
+    parse(card({ endTime: firstEnd }), card({ startTime: "10:30:00", endTime: secondEnd }));
 
   it("maps unknown categories to other", () => {
-    expect(parse(JSON.stringify([card({ category: "quantum-vibes" })]))).toMatchObject({
+    expect(parse(card({ category: "quantum-vibes" }))).toMatchObject({
       ok: true,
       drafts: [{ category: "other" }],
     });
@@ -97,20 +93,17 @@ describe("parseCardsJson", () => {
   });
 
   it("reports actionable errors for the correction round-trip", () => {
-    expectError(parse(JSON.stringify([card({ startTime: "13:05 pm" })])), "startTime");
+    expectError(parse(card({ startTime: "13:05 pm" })), "startTime");
   });
 
   it("orders model cards before validating revision coverage", () => {
-    const result = parse(
-      JSON.stringify([card({ startTime: "10:30:00", endTime: "11:00:00" }), card()]),
-    );
+    const result = parse(card({ startTime: "10:30:00", endTime: "11:00:00" }), card());
     assert(result.ok);
     expect(
       validateCardCoverage({
         drafts: result.drafts,
-        requiredSpans: [{ startMs: dayMs("10:00:00"), endMs: dayMs("11:00:00") }],
-        windowStartMs: dayMs("10:00:00"),
-        windowEndMs: dayMs("11:00:00"),
+        requiredSpans: [span([0, 60])],
+        ...coverageWindow,
       }),
     ).toEqual({ ok: true });
   });
@@ -156,30 +149,17 @@ const span = ([start, end]: Span) => ({
   startMs: dayMs("10:00:00") + start * 60_000,
   endMs: dayMs("10:00:00") + end * 60_000,
 });
-it.each<[Span[], Span[], string | null]>([
-  [
-    [[30, 60]],
-    [
-      [0, 30],
-      [30, 60],
-    ],
-    "not covered",
-  ],
-  [[[-60, 60]], [[0, 60]], "outside the revision window"],
-  [
-    [
-      [0, 29],
-      [30.5, 60],
-    ],
-    [[0, 60]],
-    null,
-  ],
+const coverageWindow = { windowStartMs: dayMs("10:00:00"), windowEndMs: dayMs("11:00:00") };
+type Intervals = ReturnType<typeof span>[];
+it.each<[Intervals, Intervals, string | null]>([
+  [[span([30, 60])], [span([0, 30]), span([30, 60])], "not covered"],
+  [[span([-60, 60])], [span([0, 60])], "outside the revision window"],
+  [[span([0, 29]), span([30.5, 60])], [span([0, 60])], null],
 ])("validates card coverage: %j over %j", (drafts, required, error) => {
   const result = validateCardCoverage({
-    drafts: drafts.map(span),
-    requiredSpans: required.map(span),
-    windowStartMs: dayMs("10:00:00"),
-    windowEndMs: dayMs("11:00:00"),
+    drafts,
+    requiredSpans: required,
+    ...coverageWindow,
   });
   expect(result).toMatchObject(
     error ? { ok: false, error: expect.stringContaining(error) } : { ok: true },

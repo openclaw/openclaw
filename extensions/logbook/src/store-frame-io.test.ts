@@ -1,13 +1,11 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { dayKeyFor } from "./day.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
+import { useLogbookFixture } from "./test-fixtures.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -23,31 +21,14 @@ vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
   };
 });
 
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
-const stores: LogbookStore[] = [];
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all(stores.splice(0).map((store) => store.close()));
-    } finally {
-      vi.restoreAllMocks();
-      cleanup();
-    }
-  }),
-);
-
-async function open(dataDir: string) {
-  const store = await LogbookStore.open(dataDir, workerModuleUrl);
-  stores.push(store);
-  return store;
-}
+const { makeDir, open } = useLogbookFixture("logbook-frame-io-");
 
 function capture(store: LogbookStore, day: string, capturedAtMs: number, buffer: Buffer) {
   return store.captureFrame({ day, capturedAtMs, screenIndex: 0, buffer });
 }
 
 async function aliasedFrameRead() {
-  const directory = tempDirs.make("logbook-frame-read-");
+  const directory = makeDir();
   const dataDir = path.join(directory, "data");
   const aliasDir = path.join(directory, "alias");
   const owner = await open(dataDir);
@@ -136,7 +117,7 @@ it("bounds pending frame reads and keeps admitted reads alive through close", as
 });
 
 it("loads a sampled batch larger than the worker result limit without transporting image buffers", async () => {
-  const store = await open(tempDirs.make("logbook-large-images-"));
+  const store = await open(makeDir());
   const day = "2026-07-03";
   const bytes = Buffer.alloc(8 * 1024 * 1024, 0x61);
   const frameIds: number[] = [];
