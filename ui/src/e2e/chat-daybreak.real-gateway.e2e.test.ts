@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { zstdDecompressSync } from "node:zlib";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
@@ -17,6 +18,10 @@ import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import {
+  recordControlUiE2eFailureFacts,
+  type ControlUiE2eFailureFact,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -554,6 +559,73 @@ suite.define(() => {
           colorScheme: "dark",
         },
         async ({ page }) => {
+          const trace: Array<Record<string, ControlUiE2eFailureFact>> = [];
+          const rows: Array<Record<string, ControlUiE2eFailureFact>> = [];
+          proof[name + "-selection-trace"] = trace;
+          proof[name + "-selection-rows"] = rows;
+          let choice = 0;
+          let patch = 0;
+          const record = (event: Record<string, ControlUiE2eFailureFact>) => {
+            // Read polling must not evict the click and write that explain a failure.
+            const target = event.type === "row" ? rows : trace;
+            target.push({ at: Date.now(), choice, ...event });
+            if (target.length > 128) {
+              target.shift();
+            }
+          };
+          const accessValue = (value: unknown) =>
+            value === "standard" || value === "daybreak_blue" || value === "daybreak_red"
+              ? value
+              : null;
+          page.on("websocket", (socket) => {
+            const pending = new Map<string, number>();
+            socket.on("framesent", ({ payload }) => {
+              try {
+                const frame = asOptionalRecord(JSON.parse(String(payload)));
+                const params = asOptionalRecord(frame?.params);
+                if (
+                  frame?.type === "req" &&
+                  frame.method === "sessions.patch" &&
+                  params &&
+                  params.key === key &&
+                  typeof frame.id === "string" &&
+                  pending.size < 32
+                ) {
+                  pending.set(frame.id, ++patch);
+                  record({
+                    type: "patch-sent",
+                    patch,
+                    hasAccess: Object.hasOwn(params, "cyberAccessProgram"),
+                    access: accessValue(params.cyberAccessProgram),
+                  });
+                }
+              } catch {
+                // Ignore non-JSON frames without retaining wire data.
+              }
+            });
+            socket.on("framereceived", ({ payload }) => {
+              try {
+                const frame = asOptionalRecord(JSON.parse(String(payload)));
+                const id = frame?.type === "res" && typeof frame.id === "string" ? frame.id : null;
+                const request = id ? pending.get(id) : undefined;
+                if (request !== undefined && id) {
+                  pending.delete(id);
+                  const result = asOptionalRecord(frame?.payload);
+                  const entry = asOptionalRecord(result?.entry);
+                  record({
+                    type: "patch-result",
+                    patch: request,
+                    status: frame?.ok === true ? "ok" : "error",
+                    hasAccess: Object.hasOwn(entry ?? {}, "cyberAccessProgram"),
+                    access: accessValue(entry?.cyberAccessProgram),
+                    updatedAt: typeof entry?.updatedAt === "number" ? entry.updatedAt : null,
+                  });
+                }
+              } catch {
+                // Diagnostic parsing must not alter the scenario's outcome.
+              }
+            });
+          });
           await pairControlUiPage(page, runCli);
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
           await waitForControlUiGatewayReady(page);
@@ -584,18 +656,62 @@ suite.define(() => {
               agentId: "main",
               limit: 100,
             });
-            return result.sessions.find((entry) => entry.key === key)!;
+            const selected = result.sessions.find((entry) => entry.key === key)!;
+            record({
+              type: "row",
+              access: accessValue(selected?.cyberAccessProgram),
+              snapshotAt: selected?.snapshotAt ?? null,
+              updatedAt: selected?.updatedAt ?? null,
+              hasActiveRun: selected?.hasActiveRun ?? null,
+            });
+            return selected;
+          };
+          const recordSelection = async (stage: string) => {
+            try {
+              const state = await page.evaluate(() => {
+                const element = document.querySelector(".chat-controls__effort-picker");
+                return {
+                  selected: element
+                    ?.querySelector('[data-chat-access-option][aria-checked="true"]')
+                    ?.getAttribute("data-chat-access-option"),
+                  defaultDisabled: element?.querySelector<HTMLButtonElement>(
+                    "[data-chat-access-default]",
+                  )?.disabled,
+                };
+              });
+              record({
+                type: "selection",
+                stage,
+                selected: accessValue(state.selected),
+                defaultDisabled: state.defaultDisabled ?? null,
+              });
+            } catch {
+              record({ type: "selection", stage, unavailable: true });
+            }
           };
           const choose = async (value: string) => {
+            choice += 1;
+            record({ type: "choose", access: accessValue(value) });
             await open();
-            if (value) {
-              await select.locator(`[data-chat-access-option="${value}"]`).click();
-            } else {
-              await picker.locator("[data-chat-access-default]").click();
+            await recordSelection("before-click");
+            try {
+              if (value) {
+                await select.locator(`[data-chat-access-option="${value}"]`).click();
+              } else {
+                await picker.locator("[data-chat-access-default]").click();
+              }
+              await expect
+                .poll(async () => (await row()).cyberAccessProgram)
+                .toBe(value || undefined);
+            } catch (error) {
+              await recordSelection("failed");
+              recordControlUiE2eFailureFacts(page, {
+                daybreakViewport: name,
+                daybreakSelectionTrace: trace.filter((event) => event.choice === choice).slice(-16),
+                daybreakSelectionRows: rows.filter((event) => event.choice === choice).slice(-8),
+              });
+              throw error;
             }
-            await expect
-              .poll(async () => (await row()).cyberAccessProgram)
-              .toBe(value || undefined);
           };
           const send = async (text: string) =>
             evaluateControlUiContext(
