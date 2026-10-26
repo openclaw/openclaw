@@ -39,6 +39,33 @@ const SCP_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_PATH = "/synthetic/attachments/report with spaces.txt";
 const SUCCESS = createCommandResult();
 
+function sandboxConfig(state: OpenClawTestState): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {} },
+      defaults: {
+        skipBootstrap: true,
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceRoot: state.path("sandbox"),
+          workspaceAccess: "none",
+        },
+      },
+    },
+  };
+}
+
+function expectScpCommand(run: ReturnType<typeof mockSuccessfulScp>, source: string) {
+  const [argv, options] = run.mock.calls[0]!;
+  const download = argv.at(-1)!;
+  expect([argv, options]).toEqual([
+    ["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "--", source, download],
+    expect.objectContaining({ maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 } }),
+  ]);
+}
+
 function mockSuccessfulScp(body: string) {
   return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
     await fs.writeFile(argv.at(-1)!, body);
@@ -62,21 +89,7 @@ function remoteStageParams(state: OpenClawTestState, abortSignal?: AbortSignal) 
   return {
     ctx,
     sessionCtx,
-    cfg: {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {} },
-        defaults: {
-          skipBootstrap: true,
-          sandbox: {
-            mode: "all" as const,
-            scope: "agent" as const,
-            workspaceRoot: state.path("sandbox"),
-            workspaceAccess: "none" as const,
-          },
-        },
-      },
-    },
+    cfg: sandboxConfig(state),
     agentId: "main",
     sessionKey: "agent:main:scp-fixture",
     workspaceDir: state.workspaceDir,
@@ -105,21 +118,9 @@ async function installedOwnerStageParams(params: {
       'module.exports.resolveRemoteInboundAttachmentRoots = () => ["/installed/attachments"];\n',
   );
   const cfg: OpenClawConfig = {
+    ...sandboxConfig(params.state),
     channels: { imessage: { enabled: true } },
     ...(params.plugins ? { plugins: params.plugins } : {}),
-    agents: {
-      ownership: "explicit",
-      entries: { main: {} },
-      defaults: {
-        skipBootstrap: true,
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          workspaceRoot: params.state.path("sandbox"),
-          workspaceAccess: "none",
-        },
-      },
-    },
   };
   const ctx: RuntimeMsgContext = {
     Body: "synthetic attachment",
@@ -225,25 +226,30 @@ describe("stageSandboxMedia SCP", () => {
           if (mode === "stopped-document-only") {
             release();
           }
-          vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
-            const target = argv.at(-1)!;
-            const source = argv.at(-2)!;
-            await fs.writeFile(
-              target,
-              source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
-            );
-            return SUCCESS;
-          });
+          const runScp = vi
+            .spyOn(processExec, "runCommandWithTimeout")
+            .mockImplementation(async (argv) => {
+              const target = argv.at(-1)!;
+              const source = argv.at(-2)!;
+              await fs.writeFile(
+                target,
+                source.endsWith(".png") ? image : source.endsWith(".mp4") ? video : "cached input",
+              );
+              return SUCCESS;
+            });
           try {
             const result = await stageSandboxMedia(params);
+            expect(runScp).toHaveBeenCalledTimes(3);
+            expectScpCommand(runScp, `user@gateway-host:${REMOTE_PATH}`);
             const cached = result.staged.get(0)!;
+            const fact = params.ctx.media![0]!;
+            expect(fact).toMatchObject({ staged: true, contentType: "text/plain", url: cached });
             if (canTransfer) {
               expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(
                 true,
               );
               expect(await fs.readFile(cached, "utf8")).toBe("cached input");
             } else {
-              const fact = params.ctx.media![0]!;
               expect(fact.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
               expect(await fs.readFile(path.join(fact.workspaceDir!, cached), "utf8")).toBe(
                 "cached input",
@@ -251,6 +257,11 @@ describe("stageSandboxMedia SCP", () => {
             }
             expect(params.ctx.media?.[0]?.path).toBe(cached);
             expect(params.sessionCtx.media).toEqual(params.ctx.media);
+            for (const [argv] of runScp.mock.calls) {
+              await expect(fs.stat(path.dirname(argv.at(-1)!))).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+            }
             expect(existsSync(state.path("sandbox"))).toBe(!canTransfer);
             const root = params.ctx.media![0]!.workspaceDir!;
             const sandbox = canTransfer
@@ -293,81 +304,6 @@ describe("stageSandboxMedia SCP", () => {
       }
     },
   );
-
-  it("stages bytes and both contexts through the strict bounded SCP command", async () => {
-    await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
-      const params = remoteStageParams(state);
-      const runScp = mockSuccessfulScp("synthetic attachment bytes");
-
-      const result = await stageSandboxMedia(params);
-      const download = runScp.mock.calls.at(-1)![0].at(-1)!;
-
-      expect(runScp).toHaveBeenCalledExactlyOnceWith(
-        [
-          "scp",
-          "-o",
-          "BatchMode=yes",
-          "-o",
-          "StrictHostKeyChecking=yes",
-          "--",
-          `user@gateway-host:${REMOTE_PATH}`,
-          download,
-        ],
-        expect.objectContaining({
-          maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-        }),
-      );
-      const fact = params.ctx.media?.[0];
-      expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-      expect(fact?.path).toBe(result.staged.get(0));
-      expect(fact?.url).toBe(fact?.path);
-      expect(fact?.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
-      expect(params.sessionCtx.media).toEqual(params.ctx.media);
-      expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-        "synthetic attachment bytes",
-      );
-      await expect(fs.stat(path.dirname(download))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("stages a remote attachment whose roots resolve from a trusted installed channel plugin", async () => {
-    await withOpenClawTestState({ label: "scp-installed-owner" }, async (state) => {
-      const params = await installedOwnerStageParams({ state });
-      await withEmptyBundledPlugins(state, async () => {
-        publishInstalledOwnerSnapshot(params.cfg, params.pluginDir);
-        try {
-          const runScp = mockSuccessfulScp("installed channel bytes");
-
-          const result = await stageSandboxMedia(params);
-          const download = runScp.mock.calls.at(-1)![0].at(-1)!;
-
-          expect(runScp).toHaveBeenCalledExactlyOnceWith(
-            [
-              "scp",
-              "-o",
-              "BatchMode=yes",
-              "-o",
-              "StrictHostKeyChecking=yes",
-              "--",
-              `user@gateway-host:${INSTALLED_REMOTE_PATH}`,
-              download,
-            ],
-            expect.objectContaining({
-              maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
-            }),
-          );
-          expect(result.staged.size).toBe(1);
-          const fact = params.ctx.media?.[0];
-          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
-          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
-            "installed channel bytes",
-          );
-        } finally {
-          releaseInstalledOwnerSnapshot();
-        }
-      });
-    });
-  });
 
   it("skips a denied installed owner before its media contract executes", async () => {
     await withOpenClawTestState({ label: "scp-installed-owner-denied" }, async (state) => {
@@ -417,7 +353,13 @@ describe("stageSandboxMedia SCP", () => {
           const runScp = mockSuccessfulScp("first transfer");
 
           expect((await stageSandboxMedia(enabled)).staged.size).toBe(1);
-          expect(runScp).toHaveBeenCalledTimes(1);
+          expect(runScp).toHaveBeenCalledOnce();
+          expectScpCommand(runScp, `user@gateway-host:${INSTALLED_REMOTE_PATH}`);
+          const fact = enabled.ctx.media?.[0];
+          expect(fact).toMatchObject({ staged: true, contentType: "text/plain" });
+          expect(await fs.readFile(path.join(fact!.workspaceDir!, fact!.path!), "utf8")).toBe(
+            "first transfer",
+          );
 
           releaseInstalledOwnerSnapshot();
           const denied = await installedOwnerStageParams({
