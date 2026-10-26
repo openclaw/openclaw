@@ -428,6 +428,7 @@ const repositoryScriptEntries = [
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
   "scripts/perf/native-control-port-measure.ts!",
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",
+  "scripts/perf/placement-session-evidence-measure.ts!",
   "scripts/perf/plugin-registry-normalizer-measure.ts!",
   "scripts/perf/provider-auth-lookup-maps-measure.ts!",
   "scripts/perf/provider-request-preparation-measure.ts!",

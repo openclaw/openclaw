@@ -136,14 +136,14 @@ export function resolveSessionStoreKey(params: {
   storeAgentId?: string;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  const rawLower = raw.toLowerCase();
-  if (!raw || rawLower === "global" || rawLower === "unknown") {
-    return rawLower;
-  }
-
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
     return canonicalizeParsedSessionStoreKey(params.cfg, raw, parsed, params.storeAgentId);
+  }
+
+  const rawLower = raw.toLowerCase();
+  if (!raw || rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
   }
 
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
