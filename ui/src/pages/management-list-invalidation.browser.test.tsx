@@ -27,8 +27,6 @@ it("does not rebuild the large device inventory for unrelated config feedback", 
     paired: true,
     connected: true,
     platform: "linux",
-    caps: [],
-    commands: [],
   }));
   const [current, setCurrent] = createSignal(createDevicesViewProps({ nodes }));
   const view = mountSolid(() => <DevicesView {...current()} />);
@@ -56,7 +54,6 @@ it("does not rescan a large skill library for unrelated read errors while preser
       reads += 1;
       return "skill-" + index;
     },
-    name: "Skill " + index,
   }));
   const list = { ...libraryList(false), entries };
   const client = createTestGatewayClient(
