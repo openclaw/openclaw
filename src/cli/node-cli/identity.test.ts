@@ -1,4 +1,3 @@
-// Node identity CLI tests: read-only output of the node host device identity.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,58 +10,40 @@ import {
 } from "../../infra/device-identity.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { captureEnv } from "../../test-utils/env.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { registerNodeCli } from "./register.js";
 
 function runNodeIdentity(json = false, identity?: string) {
   const program = new Command().exitOverride();
   registerNodeCli(program);
-  return program.parseAsync(
-    [
-      "node",
-      "identity",
-      ...(json ? ["--json"] : []),
-      ...(identity ? ["--identity", identity] : []),
-    ],
-    { from: "user" },
-  );
+  const args = ["node", "identity", ...(json ? ["--json"] : [])];
+  if (identity) {
+    args.push("--identity", identity);
+  }
+  return program.parseAsync(args, { from: "user" });
 }
 
 describe("node identity command", () => {
   let stateDir: string;
-  let originalEnv: ReturnType<typeof captureEnv>;
   let stdout: string[];
-  let logSpy: ReturnType<typeof vi.spyOn>;
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-  let writeJsonSpy: ReturnType<typeof vi.spyOn>;
-  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
-    originalEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     stdout = [];
-    logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
-    writeStdoutSpy = vi
-      .spyOn(defaultRuntime, "writeStdout")
-      .mockImplementation((value) => stdout.push(value));
-    writeJsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
+    for (const method of ["log", "error", "exit"] as const) {
+      vi.spyOn(defaultRuntime, method).mockImplementation(() => {});
+    }
+    vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => stdout.push(value));
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
       defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
     });
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    originalEnv.restore();
-    logSpy.mockRestore();
-    errorSpy.mockRestore();
-    exitSpy.mockRestore();
-    writeJsonSpy.mockRestore();
-    writeStdoutSpy.mockRestore();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -72,12 +53,11 @@ describe("node identity command", () => {
       "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)";
     expect(failure).toBeInstanceOf(ExpectedCliError);
     expect(failure).toMatchObject({ message, humanOutput: message, machineOutput: message });
-    expect(errorSpy).not.toHaveBeenCalled();
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-    expect(writeStdoutSpy).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+    expectSilent();
+    expect(defaultRuntime.writeStdout).not.toHaveBeenCalled();
+    for (const file of ["client/credentials.sqlite", "state/openclaw.sqlite"]) {
+      expect(fs.existsSync(path.join(stateDir, file))).toBe(false);
+    }
   });
 
   it("writes deviceId and raw public key JSON to stdout", async () => {
@@ -85,43 +65,40 @@ describe("node identity command", () => {
     await closeOpenClawStateDatabaseAsync();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-    try {
-      await runNodeIdentity(true);
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
-    }
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-    expect(errorSpy).not.toHaveBeenCalled();
-    expect(writeStdoutSpy).toHaveBeenCalledOnce();
-    const parsed = JSON.parse(stdout.join("")) as {
-      deviceId: string;
-      publicKey: string;
-    };
-    expect(parsed).toEqual({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    });
+    await runNodeIdentity(true);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+    expectSilent();
+    expect(defaultRuntime.writeStdout).toHaveBeenCalledOnce();
+    expectIdentity(identity);
   });
 
   it("prints human-readable lines without --json", async () => {
     const identity = loadOrCreateDeviceIdentity();
     await runNodeIdentity();
-    expect(exitSpy).not.toHaveBeenCalled();
-    const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    const calls = vi.mocked(defaultRuntime.log).mock.calls;
+    const output = calls.map(([value]) => String(value)).join("\n");
     expect(output).toContain(identity.deviceId);
     expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
   });
   it("selects an existing native profile without creating the default identity", async () => {
     const identity = loadOrCreateDeviceIdentity({ identityKey: "node" });
     await runNodeIdentity(true, "node");
+    expectIdentity(identity);
+    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
+  });
+
+  function expectIdentity(identity: ReturnType<typeof loadOrCreateDeviceIdentity>) {
     expect(JSON.parse(stdout.join(""))).toEqual({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     });
-    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
-  });
+  }
+
+  function expectSilent() {
+    for (const method of ["error", "exit", "log"] as const) {
+      expect(defaultRuntime[method]).not.toHaveBeenCalled();
+    }
+  }
 });
