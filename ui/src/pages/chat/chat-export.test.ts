@@ -67,12 +67,13 @@ it("does not download partial history when an older page fails", async () => {
   expect(downloadTextFile).not.toHaveBeenCalled();
 });
 
-it.each(["session", "connection", "instance"])(
+it.each(["session", "connection", "instance", "presentation"])(
   "does not download after its %s changes",
   async (change) => {
     const pending = createDeferred<ChatHistoryResult>();
     const host = fixture(() => pending.promise);
-    const exporting = exportCurrentChat(host, () => true);
+    let presented = true;
+    const exporting = exportCurrentChat(host, () => presented);
     if (change === "session") {
       host.sessionKey = "agent:main:other";
     }
@@ -82,19 +83,11 @@ it.each(["session", "connection", "instance"])(
     if (change === "instance") {
       host.currentSessionId = "replacement";
     }
+    if (change === "presentation") {
+      presented = false;
+    }
     pending.resolve(page([message(3)]));
     await expect(exporting).rejects.toThrow();
     expect(downloadTextFile).not.toHaveBeenCalled();
   },
 );
-
-it("does not download from a retained pane after its presentation retires", async () => {
-  const pending = createDeferred<ChatHistoryResult>();
-  const host = fixture(() => pending.promise);
-  let presented = true;
-  const exporting = exportCurrentChat(host, () => presented);
-  presented = false;
-  pending.resolve(page([message(3)]));
-  await expect(exporting).rejects.toThrow();
-  expect(downloadTextFile).not.toHaveBeenCalled();
-});
