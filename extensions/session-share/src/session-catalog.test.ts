@@ -61,6 +61,7 @@ const transcript = (fields: Record<string, unknown>) => ({
   items: [{ type: "userMessage", text: "Question", ...fields }],
 });
 const makeNode = (nodeId: string) => ({ nodeId, connected: true, commands });
+const advance = (ms = 2) => vi.advanceTimersByTimeAsync(ms);
 const rows = (length: number, fields: Partial<SessionCatalogSession> = {}) =>
   Array.from({ length }, (_, index) => ({
     ...nativeSession,
@@ -103,7 +104,7 @@ async function catalogFixture() {
   const readList = async (query: CatalogQuery = {}) => {
     const listing = catalog.list(query);
     void listing.catch(() => {});
-    await vi.advanceTimersByTimeAsync(readDelayMs);
+    await advance(readDelayMs);
     return listing;
   };
   const begin = (query: CatalogQuery = {}) =>
@@ -114,12 +115,15 @@ async function catalogFixture() {
     catalog,
     list,
     invoke,
+    expectCallsAfter: async (ms: number, count: number) => {
+      await advance(ms);
+      expect(invoke).toHaveBeenCalledTimes(count);
+    },
     nodes: (...ids: string[]) => list.mockResolvedValue({ nodes: ids.map(makeNode) }),
     host: async (query: CatalogQuery = {}) => (await readList(query))[0],
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
-    expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) => {
-      expect((await readList(query))[0]?.sessions).toEqual(sessions);
-    },
+    expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) =>
+      expect((await readList(query))[0]?.sessions).toEqual(sessions),
     hold: () => {
       const gate = createDeferred<unknown>();
       invoke.mockImplementation(() => gate.promise);
@@ -154,7 +158,7 @@ async function catalogFixture() {
     },
     hydrate: async () => {
       await begin();
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
     },
     stop: async () => {
       scheduler.beginClose();
@@ -183,9 +187,9 @@ describe("session-share receiver catalog", () => {
     const gate = f.hold();
     const { done, onHost } = await f.watch();
     expect((await f.begin())[0]).toMatchObject({ sessions: [], pending: true });
-    await vi.advanceTimersByTimeAsync(2);
+    await advance();
     gate.reject(new Error("Source unavailable"));
-    await vi.advanceTimersByTimeAsync(2);
+    await advance();
     await done();
     expect(onHost).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -200,8 +204,7 @@ describe("session-share receiver catalog", () => {
   it.each(["runtime", "request snapshot"])(
     "propagates %s discovery failures and recovers",
     async (route) => {
-      const failure = new Error("paired node inventory is unavailable");
-      f.list.mockRejectedValueOnce(failure);
+      f.list.mockRejectedValueOnce(new Error("paired node inventory is unavailable"));
       await expect(
         f.readList(route === "request snapshot" ? { listNodes: f.list } : {}),
       ).rejects.toThrow("Cannot discover OpenClaw session sources. Refresh the catalog to retry.");
@@ -215,11 +218,7 @@ describe("session-share receiver catalog", () => {
   );
 
   it("bounds admission and refresh concurrency without interrupting work", async () => {
-    f.list.mockResolvedValue({
-      nodes: Array.from({ length: 40 }, (_, index) =>
-        makeNode(`node-${String(index).padStart(2, "0")}`),
-      ),
-    });
+    f.nodes(...Array.from({ length: 40 }, (_, index) => `node-${String(index).padStart(2, "0")}`));
     const gate = createDeferred<unknown>();
     let active = 0;
     let peak = 0;
@@ -233,24 +232,24 @@ describe("session-share receiver catalog", () => {
       }
     });
     try {
-      await vi.advanceTimersByTimeAsync(30_005);
+      await advance(30_005);
       expect(f.invoke).not.toHaveBeenCalled();
       await f.begin({ hostIds: ["node:node-39"] });
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
       expect(f.invoke.mock.calls.map(([request]) => request.nodeId)).toEqual(["node-39"]);
       await f.begin();
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
       expect({ calls: f.invoke.mock.calls.length, peak }).toEqual({ calls: 4, peak: 4 });
       const waiting = await f.begin({ hostIds: ["node:node-38"] });
       expect(waiting[0]?.error?.code).toBe("CATALOG_LOADING");
       gate.resolve({ sessions: [nativeSession] });
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
       expect({ calls: f.invoke.mock.calls.length, peak }).toEqual({ calls: 32, peak: 4 });
       await f.readList({ hostIds: ["node:node-38"] });
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
       await f.expectSessions([nativeSession], { hostIds: ["node:node-38"] });
       expect(f.invoke).toHaveBeenCalledTimes(34);
-      await vi.advanceTimersByTimeAsync(30_010);
+      await advance(30_010);
       const refreshed = f.invoke.mock.calls.slice(34).map(([request]) => request.nodeId);
       expect(refreshed).toHaveLength(32);
       expect(refreshed).not.toContain("node-39");
@@ -274,7 +273,7 @@ describe("session-share receiver catalog", () => {
     const sessions = rows(count);
     f.paginate(sessions, delay);
     expect((await f.begin())[0]?.pending).toBe(true);
-    await vi.advanceTimersByTimeAsync(delay ? 35_005 : 2);
+    await advance(delay ? 35_005 : 2);
     const first = (await f.host({ limitPerHost: 100 }))!;
     expect(first.sessions).toEqual(sessions.slice(0, 100));
     expect(first.error).toBeUndefined();
@@ -291,7 +290,7 @@ describe("session-share receiver catalog", () => {
     expect(f.invoke).toHaveBeenCalledTimes(calls * 6);
     if (!delay) {
       f.invoke.mockResolvedValue({ sessions: [] });
-      await vi.advanceTimersByTimeAsync(30_000);
+      await advance(30_000);
       await f.expectSessions([]);
       expect(f.invoke).toHaveBeenCalledTimes(calls * 6 + 2);
     }
@@ -315,16 +314,11 @@ describe("session-share receiver catalog", () => {
   it("backs off scheduled refresh failures across a wall-clock change", async () => {
     await f.hydrate();
     f.invoke.mockRejectedValue(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(30_005);
-    expect(f.invoke).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(30_005);
-    expect(f.invoke).toHaveBeenCalledTimes(3);
-    const wallNow = Date.now();
-    vi.setSystemTime(wallNow - 86_400_000);
-    await vi.advanceTimersByTimeAsync(59_000);
-    expect(f.invoke).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_005);
-    expect(f.invoke).toHaveBeenCalledTimes(4);
+    await f.expectCallsAfter(30_005, 2);
+    await f.expectCallsAfter(30_005, 3);
+    vi.setSystemTime(Date.now() - 86_400_000);
+    await f.expectCallsAfter(59_000, 3);
+    await f.expectCallsAfter(1_005, 4);
     f.invoke.mockResolvedValue({ sessions: [] });
     expect(await f.host()).toMatchObject({ sessions: [] });
     expect((await f.host())?.error).toBeUndefined();
@@ -334,16 +328,13 @@ describe("session-share receiver catalog", () => {
     await f.hydrate();
     const gate = createDeferred<unknown>();
     f.invoke.mockImplementationOnce(() => gate.promise);
-    await vi.advanceTimersByTimeAsync(30_002);
-    expect(f.invoke).toHaveBeenCalledTimes(2);
+    await f.expectCallsAfter(30_002, 2);
     const { done, onHost } = await f.watch();
     if (revision === "config") {
       f.configure({ gateway: { port: 12345 } });
     } else {
       f.list.mockResolvedValue({
-        nodes: [
-          { nodeId: "alpha", connected: revision !== "disconnect", connectedAtMs: 2, commands },
-        ],
+        nodes: [{ ...makeNode("alpha"), connected: revision !== "disconnect", connectedAtMs: 2 }],
       });
     }
     const host = (await f.begin())[0];
@@ -352,7 +343,7 @@ describe("session-share receiver catalog", () => {
     await done();
     expect(onHost).not.toHaveBeenCalled();
     if (revision !== "disconnect") {
-      await vi.advanceTimersByTimeAsync(2);
+      await advance();
       await f.expectSessions();
     } else {
       expect(host?.error?.code).toBe("NODE_OFFLINE");
@@ -365,7 +356,7 @@ describe("session-share receiver catalog", () => {
     const controller = new AbortController();
     const { done, onHost } = await f.watch(service ? {} : { signal: controller.signal });
     onHost.mockClear();
-    await vi.advanceTimersByTimeAsync(2);
+    await advance();
     let stopped = false;
     const stopping = service
       ? f.stop().then(() => {
@@ -434,10 +425,7 @@ describe("session-share receiver catalog", () => {
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const gate = createDeferred<void>();
     const invoke = f.invoke.getMockImplementation()!;
-    f.invoke.mockImplementation(async (request) => {
-      await gate.promise;
-      return invoke(request);
-    });
+    f.invoke.mockImplementation((request) => gate.promise.then(() => invoke(request)));
     await f.hydrate();
     clock = rejected ? 30_000 : mode === "fast" ? 999 : 1_200;
     diagnostics.enabled = mode !== "disabled before settlement";
@@ -457,7 +445,7 @@ describe("session-share receiver catalog", () => {
     } else {
       gate.resolve();
     }
-    await vi.advanceTimersByTimeAsync(1);
+    await advance(1);
     if (rejected) {
       expect(await f.host()).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
       expect(diagnostics.warn).toHaveBeenCalledExactlyOnceWith(
@@ -505,10 +493,10 @@ describe("session-share receiver catalog", () => {
   it("preserves eligible host order and separates offline and failed sources", async () => {
     f.list.mockResolvedValue({
       nodes: [
-        { nodeId: "partial", commands: [commands[0]!], connected: true },
-        { nodeId: "offline", displayName: "Bravo", commands, connected: false },
-        { nodeId: "broken", displayName: "Charlie", commands, connected: true },
-        { nodeId: "alpha", displayName: "Alpha", commands, connected: true },
+        { ...makeNode("partial"), commands: [commands[0]!] },
+        { ...makeNode("offline"), displayName: "Bravo", connected: false },
+        { ...makeNode("broken"), displayName: "Charlie" },
+        { ...makeNode("alpha"), displayName: "Alpha" },
       ],
     });
     f.invoke.mockImplementation(async ({ nodeId }) => {
@@ -532,8 +520,8 @@ describe("session-share receiver catalog", () => {
   });
 
   it.each([
-    { nodeId: "alpha", commands, connected: false },
-    { nodeId: "alpha", commands: [commands[0]!], connected: true },
+    { ...makeNode("alpha"), connected: false },
+    { ...makeNode("alpha"), commands: [commands[0]!] },
   ])("denies reads when the paired host is unavailable: %j", async (node) => {
     f.list.mockResolvedValue({ nodes: [node] });
     await expect(f.read()).rejects.toThrow("unavailable");
