@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -8,17 +8,16 @@ import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
 
-let container: HTMLDivElement | undefined;
-afterEach(() => {
-  cleanupSolid();
-  container?.remove();
-  container = undefined;
-});
+function containerFor(cssText: string) {
+  const container = document.body.appendChild(document.createElement("div"));
+  container.style.cssText = cssText;
+  onTestFinished(() => container.remove());
+  return container;
+}
 
 describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () => {
   it("truncates long progress receipts while keeping tool identity visible", async () => {
-    container = document.body.appendChild(document.createElement("div"));
-    container.style.width = "220px";
+    const container = containerFor("width: 220px");
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
     const options = { messageKey: "narrow", expanded: false, onToggleExpanded: vi.fn() };
     const cards = [
@@ -48,9 +47,8 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
   });
 
   it("mounts and rerenders during resize delivery without observer loop errors", async () => {
-    container = document.body.appendChild(document.createElement("div"));
+    const container = containerFor("width: 420px; height: 300px");
     container.className = "chat-thread";
-    container.style.cssText = "width: 420px; height: 300px";
     const errors: string[] = [];
     const recordError = (event: ErrorEvent) => {
       if (event.message.includes("ResizeObserver loop")) {

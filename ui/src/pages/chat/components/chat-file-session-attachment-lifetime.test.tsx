@@ -14,9 +14,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function startHeldTransfer(responseText: string, previewText: string) {
+async function startHeldTransfer() {
   const held = createDeferredCore<SessionFileDownload | null>();
-  const fetcher = vi.fn(async () => new Response(responseText));
+  const fetcher = vi.fn(async () => new Response("Synthetic file bytes"));
   vi.stubGlobal("fetch", fetcher);
   const attachments: ChatAttachment[] = [];
   const observation: { balance: number; signal?: AbortSignal } = { balance: 0 };
@@ -34,7 +34,7 @@ async function startHeldTransfer(responseText: string, previewText: string) {
   panel.attachmentChat = chat;
   panel.content = {
     kind: "markdown",
-    content: previewText,
+    content: "Synthetic file preview",
     fileDownload: {
       path: "notes.md",
       name: "notes.md",
@@ -61,16 +61,19 @@ async function startHeldTransfer(responseText: string, previewText: string) {
   });
   attach!.click();
   expect(observation.balance).toBe(1);
-  return { held, fetcher, attachments, chat, panel, container, observation };
+  const finish = () =>
+    held.resolve({
+      filename: "notes.md",
+      url: "/api/artifacts/download/synthetic-notes/synthetic-ticket",
+    });
+  return { held, finish, fetcher, attachments, chat, panel, container, observation };
 }
 
 it.each(["content", "destination"] as const)(
   "the native detail bridge retires a held transfer before %s publication",
   async (change) => {
-    const { held, fetcher, attachments, chat, panel, observation } = await startHeldTransfer(
-      "Retired bytes",
-      "Synthetic file preview",
-    );
+    const { held, finish, fetcher, attachments, chat, panel, observation } =
+      await startHeldTransfer();
     if (change === "content") {
       panel.content = { kind: "markdown", content: "Replacement preview" };
     } else {
@@ -79,10 +82,7 @@ it.each(["content", "destination"] as const)(
     expect(observation.signal?.aborted).toBe(true);
     expect(observation.balance).toBe(0);
     await panel.updateComplete;
-    held.resolve({
-      filename: "notes.md",
-      url: "/api/artifacts/download/synthetic-notes/synthetic-ticket",
-    });
+    finish();
     await held.promise;
     await Promise.resolve();
     expect(fetcher).not.toHaveBeenCalled();
@@ -92,10 +92,7 @@ it.each(["content", "destination"] as const)(
 );
 
 it("keeps a held native transfer when the detail panel is reparented within the same turn", async () => {
-  const { held, fetcher, attachments, panel, container, observation } = await startHeldTransfer(
-    "Moved panel bytes",
-    "Synthetic movable preview",
-  );
+  const { finish, fetcher, attachments, panel, container, observation } = await startHeldTransfer();
 
   const destination = document.createElement("section");
   container.append(destination);
@@ -104,10 +101,7 @@ it("keeps a held native transfer when the detail panel is reparented within the 
   expect(observation.signal?.aborted).toBe(false);
   expect(observation.balance).toBe(1);
 
-  held.resolve({
-    filename: "notes.md",
-    url: "/api/artifacts/download/synthetic-notes/synthetic-ticket",
-  });
+  finish();
   await waitForSolid(() => {
     expect(attachments).toHaveLength(1);
     expect(observation.balance).toBe(0);
