@@ -16,43 +16,29 @@ function receipt(secretKey: string, overrides: Partial<ReceiptBody> = {}) {
 }
 
 describe("audit", () => {
-  it("builds and verifies an encrypted audit chain", async () => {
+  it("encrypts an audit chain and detects mutation and anchored truncation", async () => {
     const store = new MemoryAuditStore(auditKey);
-    await store.appendEvent("proposal", { text: "secret message" }, 10);
+    await store.appendEvent(
+      "proposal",
+      { text: "secret message", verdict: { reason: "ALSO PRIVATE" } },
+      10,
+    );
     await store.appendEvent("guard_verdict", { reason: "looks safe" }, 11);
     await store.appendEvent("read", { ids: ["one"] }, 12);
     const entries = await store.entries();
-    expect(verifyChain(entries, { head: entries.at(-1)!.entryHash, length: 3 })).toBe(true);
+    const expected = { head: entries.at(-1)!.entryHash, length: 3 };
+    expect(verifyChain(entries, expected)).toBe(true);
     expect(entries.at(-1)!.event.type).toBe("read");
     expect(
       entries.slice(0, 2).map((entry) => decryptAuditText(entry, auditKey).event.payload),
     ).toMatchObject([{ text: "secret message" }, { reason: "looks safe" }]);
-  });
-
-  it("detects mutation and externally anchored truncation", async () => {
-    const store = new MemoryAuditStore(auditKey);
-    await store.appendEvent("one", { value: 1 }, 10);
-    await store.appendEvent("two", { value: 2 }, 11);
-    const entries = await store.entries();
-    const expected = { head: entries[1]!.entryHash, length: 2 };
     const mutated = { ...entries[0]!, event: { ...entries[0]!.event, type: "changed" } };
-    expect(verifyChain([mutated, entries[1]!], expected)).toBe(false);
+    expect(verifyChain([mutated, ...entries.slice(1)], expected)).toBe(false);
     expect(verifyChain(entries.slice(0, 1), expected)).toBe(false);
-  });
-
-  it("keeps plaintext out of the verifiable stored chain", async () => {
-    const store = new MemoryAuditStore(auditKey);
-    await store.appendEvent(
-      "inbox",
-      { text: "DO NOT LEAK ME", verdict: { reason: "ALSO PRIVATE" } },
-      10,
-    );
-    const entries = await store.entries();
     const serialized = JSON.stringify(entries);
-    expect(serialized).not.toContain("DO NOT LEAK ME");
+    expect(serialized).not.toContain("secret message");
     expect(serialized).not.toContain("ALSO PRIVATE");
     expect(serialized).toContain('"enc"');
-    expect(verifyChain(entries)).toBe(true);
   });
 
   it("serializes twenty concurrent appends into one valid chain", async () => {

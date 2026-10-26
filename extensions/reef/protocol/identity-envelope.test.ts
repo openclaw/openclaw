@@ -23,19 +23,18 @@ const now = 1_752_300_000;
 const id = "01JZ0000000000000000000000";
 const replyTo = "01JZ0000000000000000000001";
 const thread = "01JZ0000000000000000000002";
+const defaultBody = { text: "hello", replyTo, thread };
 
-function fixture(overrides: Partial<Parameters<typeof seal>[0]> = {}) {
-  const { signing } = generateIdentity();
-  const { encryption } = generateIdentity();
+function fixture() {
+  const { signing, encryption } = generateIdentity();
   const sealOptions = {
     id,
     from: "alice#1",
     to: "bob#1",
-    body: { text: "hello", replyTo, thread },
+    body: defaultBody,
     senderSigningSecretKey: signing.secretKey,
     recipientEncryptionPublicKey: encryption.publicKey,
     ts: now,
-    ...overrides,
   };
   const envelope = seal(sealOptions);
   const options = {
@@ -49,10 +48,8 @@ function fixture(overrides: Partial<Parameters<typeof seal>[0]> = {}) {
   return {
     sealOptions,
     envelope,
-    options,
     open: (changes: Partial<Parameters<typeof openClaimed>[0]> = {}) =>
       openClaimed({ ...options, ...changes }),
-    sealBody: (body: Parameters<typeof seal>[0]["body"]) => seal({ ...sealOptions, body }),
   };
 }
 
@@ -121,12 +118,14 @@ describe("envelope", () => {
   it("releases a failed envelope claim for retry", async () => {
     const { open } = fixture();
     await expect(open({ now: now - 301 })).rejects.toMatchObject({ code: "expired" });
-    await expect(open()).resolves.toEqual(claimed({ text: "hello", replyTo, thread }));
+    await expect(open()).resolves.toEqual(claimed(defaultBody));
   });
 
-  it("rejects free-form body identifiers when sealing", () => {
-    const { sealBody } = fixture();
-    expect(() => sealBody({ text: "hello", replyTo: "prior message" })).toThrow(MalformedError);
+  it.each([
+    ["free-form body identifiers", { text: "hello", replyTo: "prior message" }, MalformedError],
+    ["oversized plaintext", { text: "x".repeat(33 * 1024) }, ProtocolError],
+  ])("rejects %s when sealing", (_name, body, error) => {
+    expect(() => seal({ ...fixture().sealOptions, body })).toThrow(error);
   });
 
   it("verifies every signed field before acting on it", async () => {
@@ -147,19 +146,12 @@ describe("envelope", () => {
     }
   });
 
-  it("rejects an unpinned sender", async () => {
-    const { senderSigningPublicKey: _senderKey, ...options } = fixture().options;
-    await expect(openClaimed(options)).rejects.toMatchObject({ code: "not_pinned" });
-  });
-
-  it("rejects the wrong recipient", async () => {
-    const { open } = fixture();
-    await expect(open({ self: "carol#1" })).rejects.toMatchObject({ code: "wrong_recipient" });
-  });
-
-  it("rejects envelopes older than relay retention", async () => {
-    const { open } = fixture({ body: { text: "ancient" }, ts: now - 40 * 24 * 60 * 60 });
-    await expect(open()).rejects.toMatchObject({ code: "expired" });
+  it.each([
+    ["not_pinned", { senderSigningPublicKey: undefined }],
+    ["wrong_recipient", { self: "carol#1" }],
+    ["expired", { now: now + 40 * 24 * 60 * 60 }],
+  ])("rejects %s envelopes", async (code, options) => {
+    await expect(fixture().open(options)).rejects.toMatchObject({ code });
   });
 
   it("permanently binds an id to the first verified envelope hash", async () => {
@@ -174,7 +166,7 @@ describe("envelope", () => {
   });
 
   it("namespaces identical envelope ids by authenticated sender handle", async () => {
-    const { open, sealOptions } = fixture({ body: { text: "from alice" } });
+    const { open, sealOptions } = fixture();
     const carol = generateIdentity();
     const carolEnvelope = seal({
       ...sealOptions,
@@ -182,7 +174,7 @@ describe("envelope", () => {
       body: { text: "from carol" },
       senderSigningSecretKey: carol.signing.secretKey,
     });
-    await expect(open()).resolves.toEqual(claimed({ text: "from alice" }));
+    await expect(open()).resolves.toEqual(claimed(defaultBody));
     await expect(
       open({
         envelope: carolEnvelope,
@@ -200,11 +192,6 @@ describe("envelope", () => {
       status: "rejected",
       reason: { code: "replayed", message: "in flight" },
     });
-  });
-
-  it("enforces the plaintext cap", () => {
-    const { sealBody } = fixture();
-    expect(() => sealBody({ text: "x".repeat(33 * 1024) })).toThrow(ProtocolError);
   });
 
   it.each([
