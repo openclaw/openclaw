@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { flush } from "solid-js";
-import { afterEach, expect } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as dom from "./cloud-worker-snapshots-dom.test-support.ts";
 import { buildEnvironmentFixture } from "./cloud-worker-snapshots.test-support.ts";
@@ -49,7 +52,12 @@ export function setupSnapshotTests() {
       dispose();
     }
   });
-  dom.setupSnapshotsDomSuite();
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    await i18n.setLocale("en");
+  });
+  afterEach(() => vi.useRealTimers());
   return (...args: Parameters<typeof dom.mountPage>) => {
     const fixture = dom.mountPage(...args);
     disposers.push(fixture.dispose);
@@ -77,13 +85,8 @@ export function click(page: Element, label: string) {
 }
 
 export const configSnapshot = (config: Record<string, unknown>, hash: string) => ({
-  config,
-  sourceConfig: config,
-  raw: JSON.stringify(config),
-  hash,
+  ...sourceConfigSnapshot(config, hash),
   appliedConfigHash: hash,
-  valid: true,
-  issues: [],
 });
 
 export function configPatch(request: ReturnType<typeof dom.mountPage>["request"]) {
