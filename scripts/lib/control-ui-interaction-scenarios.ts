@@ -2380,7 +2380,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sidebar-toggle",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-session sidebar closes and reopens.",
-    prepare: prepareSidebarInventory,
+    prepare: async (page, gateway) => {
+      await prepareSidebarInventory(page, gateway);
+      await settleSidebarBackgroundWork(page);
+    },
     run: async (page) => {
       const mobile = (await page.locator(".shell--mobile-nav").count()) > 0;
       if (mobile) {
