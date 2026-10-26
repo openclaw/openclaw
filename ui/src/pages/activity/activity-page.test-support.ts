@@ -55,8 +55,8 @@ export function createActivityContext(
     get settingsAgentSelection(): never {
       throw new Error("Activity fixture does not provide settingsAgentSelection");
     },
-    get channels(): never {
-      throw new Error("Activity fixture does not provide channels");
+    get acquireChannels(): never {
+      throw new Error("Activity fixture does not provide acquireChannels");
     },
     get config(): never {
       throw new Error("Activity fixture does not provide config");

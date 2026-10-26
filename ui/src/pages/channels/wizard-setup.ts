@@ -6,7 +6,7 @@ import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
 export function createChannelSetup(deps: {
-  getContext: () => ApplicationContext;
+  getContext: () => Pick<ApplicationContext, "gateway" | "runtimeConfig">;
   channels: ChannelCapability;
   clearSelection: () => void;
   presentWizard: (pending: Promise<void>) => Promise<void>;
