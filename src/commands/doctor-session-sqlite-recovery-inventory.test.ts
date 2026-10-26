@@ -315,6 +315,50 @@ it.each(["disposal", "manifest-publication"] as const)(
   },
 );
 
+it.each(["survivor-ordered-first", "vanished-original-ordered-first"] as const)(
+  "settles a vanished retained original onto its byte-verified survivor (%s)",
+  async (ordering) => {
+    await withOpenClawTestState(
+      { label: `doctor-duplicate-missing-original-${ordering}` },
+      async (state) => {
+        const { archives, bytes, doctor, inventory } = createRetainedDuplicateArchives(state);
+        // Manifest order decides which duplicate the settlement would visit first;
+        // recovery must settle regardless of where the vanished original sits.
+        const before = inventory();
+        const ordered = [...before.references.keys()].filter((file) => archives.includes(file));
+        expect(ordered).toHaveLength(2);
+        const survivorPath = ordering === "survivor-ordered-first" ? ordered[0]! : ordered[1]!;
+        const missingPath = ordered.find((file) => file !== survivorPath)!;
+        // External partial cleanup removed one duplicate file while its retained
+        // receipts and a byte-identical surviving archive stay recorded.
+        fs.rmSync(missingPath);
+        const recovered = await doctor("recover");
+        expect(recovered.targets.flatMap((item) => item.issues.map(({ code }) => code))).toEqual([
+          "historical_duplicate_settled",
+        ]);
+        const after = inventory();
+        expect(after.references.has(missingPath)).toBe(false);
+        expect(after.references.get(survivorPath)?.length).toBeGreaterThan(1);
+        expect(after.report.artifacts.map(({ reason }) => reason)).not.toContain(
+          "unexpectedly-missing-artifact",
+        );
+        const persistedManifests = before.manifestPaths
+          .map((file) => migrationRun.readSessionSqliteMigrationManifest(file))
+          .filter((manifest) => manifest !== undefined);
+        expect(persistedManifests.length).toBeGreaterThan(0);
+        for (const manifest of persistedManifests) {
+          for (const target of manifest.targets) {
+            const receipts = [...target.plannedMoves, ...target.completedMoves];
+            expect(receipts.filter((move) => move.archivePath === missingPath)).toEqual([]);
+          }
+        }
+        expect(fs.readFileSync(survivorPath, "utf8")).toBe(bytes);
+        expect((await doctor("dry-run")).totals.issues).toBe(0);
+      },
+    );
+  },
+);
+
 it("protects a large historical index and all siblings within the inventory budget", () => {
   const { refs, artifacts } = recoveryGraph(10_000);
   const start = performance.now();
