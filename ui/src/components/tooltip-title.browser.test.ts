@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const title = "Edit configuration as text";
-function fixture(content = "", hint = title) {
-  const container = document.createElement("div");
-  container.innerHTML = `<button title="${hint}">${content}</button>`;
+const href = "https://github.com/openclaw/openclaw/pull/99816";
+const providerTag = "openclaw-link-reader-hovercard-provider";
+function fixture(content = "", hint = title, preview = false) {
+  const container = document.createElement(preview ? providerTag : "div");
+  container.innerHTML = preview
+    ? `<a href="${href}" title="${hint}">${content}</a>`
+    : `<button title="${hint}">${content}</button>`;
+  if (preview) {
+    installTestLinkReader(container);
+  }
   document.body.append(container);
   return { container, button: container.querySelector<HTMLElement>("button, a")! };
 }
@@ -37,12 +45,16 @@ suite("title tooltip accessible names", () => {
 
   it.each([
     ["pointer", "button"],
+    ["pointer", "ancestor"],
+    ["focus", "button"],
     ["focus", "ancestor"],
   ] as const)("keeps the text name after %s during %s fade-in", async (input, target) => {
     const { button, container } = fixture("Edit");
     const animated = target === "button" ? button : container;
     animated.style.opacity = "0";
     const namedButton = named("Edit");
+    expect(namedButton.elements()).toEqual([button]);
+    expect(button.checkVisibility({ checkOpacity: true })).toBe(false);
 
     if (input === "pointer") {
       await page.elementLocator(button).hover();
@@ -52,10 +64,13 @@ suite("title tooltip accessible names", () => {
     expect(button.title).toBe("");
     animated.style.opacity = "1";
     await nextFrame();
+    expect(button.checkVisibility({ checkOpacity: true })).toBe(true);
     expect(namedButton.elements()).toEqual([button]);
+    await namedButton.click();
   });
 
   it.each([
+    ["container", false],
     ["button", false],
     ["label", true],
   ] as const)("judges repeated titles with %s faded", async (fadedPart, expectedOpen) => {
@@ -86,14 +101,18 @@ suite("title tooltip accessible names", () => {
     hidden.setAttribute("aria-hidden", "true");
     const titleNamedButton = named(title);
     await titleNamedButton.hover();
+    expect(button.title).toBe("");
+    expect(titleNamedButton.elements()).toEqual([button]);
 
     for (const isHidden of [false, true]) {
       const name = isHidden ? title : "Edit";
       hidden.setAttribute("aria-hidden", String(isHidden));
       await expect.poll(() => named(name).elements()).toEqual([button]);
+      await named(name).click();
     }
 
     await release(button, title);
+    expect(titleNamedButton.elements()).toEqual([button]);
   });
 
   it.each([
@@ -101,14 +120,30 @@ suite("title tooltip accessible names", () => {
     ["style", "display:none"],
     ["style", "visibility:hidden"],
     ["aria-hidden", "true"],
+    ["preview", ""],
   ])("keeps the title name for text with %s=%s", async (attribute, value) => {
-    const { button: trigger } = fixture("<span>Decorative text</span>");
-    trigger.querySelector("span")!.setAttribute(attribute, value);
-    const locator = named(title);
+    const preview = attribute === "preview";
+    const { button: trigger, container } = fixture(
+      preview
+        ? '<svg aria-hidden="true" width="20" height="20"></svg>'
+        : "<span>Decorative text</span>",
+      title,
+      preview,
+    );
+    if (!preview) {
+      trigger.querySelector("span")!.setAttribute(attribute, value);
+    }
+    const locator = page.getByRole(preview ? "link" : "button", { name: title, exact: true });
+    expect(locator.elements()).toEqual([trigger]);
     await locator.hover();
     expect(trigger).toMatchObject({ title: "", ariaLabel: title });
+    expect(trigger.hasAttribute("aria-expanded")).toBe(false);
     expect(locator.elements()).toEqual([trigger]);
     await release(trigger, title);
+    expect(locator.elements()).toEqual([trigger]);
+    if (preview) {
+      expect(container.querySelector("a")?.href).toBe(href);
+    }
   });
 
   it("preserves an explicit name supplied while the tooltip owns a temporary name", async () => {

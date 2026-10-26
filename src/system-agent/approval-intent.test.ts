@@ -1,12 +1,14 @@
 // Approval-intent tests: closed-list fast path plus model-judged classification.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as simpleCompletion from "../agents/simple-completion-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifySystemAgentApprovalIntent as classifySystemAgentApprovalIntentImpl } from "./approval-intent.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 import * as verifiedInference from "./verified-inference.js";
@@ -14,8 +16,8 @@ import * as verifiedInference from "./verified-inference.js";
 const DEFAULT_MODEL = "openai/gpt-5.5@openai:p2";
 const CLI_MODEL = "claude-cli/claude-opus-4-8";
 
-async function createVerifiedInference(model = DEFAULT_MODEL) {
-  const config = {
+function verifiedInferenceConfig(model: string): OpenClawConfig {
+  return {
     agents: {
       defaults: {
         model,
@@ -24,22 +26,45 @@ async function createVerifiedInference(model = DEFAULT_MODEL) {
           : {}),
       },
     },
+    auth: {
+      order: { openai: ["openai:p1", "openai:p2"] },
+      profiles: {
+        "openai:p1": { provider: "openai", mode: "api_key" },
+        "openai:p2": { provider: "openai", mode: "api_key" },
+      },
+    },
   };
-  return createSystemAgentPluginMetadataTestSnapshot(config).run(
-    async () => (await createSystemAgentVerifiedInferenceTestFixture(config)).binding,
-    config,
+}
+
+async function createVerifiedInference(
+  model = "openai/gpt-5.5@openai:p2",
+  metadata = cliPluginMetadataSnapshot!,
+): Promise<SystemAgentVerifiedInferenceBinding> {
+  return metadata.run(
+    async () =>
+      (await createSystemAgentVerifiedInferenceTestFixture(verifiedInferenceConfig(model))).binding,
+    verifiedInferenceConfig(model),
   );
 }
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding;
 let restoreCliBackendFixture: (() => void) | undefined;
+let cliPluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 const classify = (binding = sharedVerifiedInference, message = "alright then", proposal?: string) =>
-  classifySystemAgentApprovalIntentImpl({ message, proposal, verifiedInference: binding });
+  cliPluginMetadataSnapshot!.run(() =>
+    classifySystemAgentApprovalIntentImpl({ message, proposal, verifiedInference: binding }),
+  );
 
 beforeAll(async () => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  sharedVerifiedInference = await createVerifiedInference();
+  const defaultSnapshot = createSystemAgentPluginMetadataTestSnapshot(
+    verifiedInferenceConfig(DEFAULT_MODEL),
+  );
+  sharedVerifiedInference = await createVerifiedInference(DEFAULT_MODEL, defaultSnapshot);
+  cliPluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
+    verifiedInferenceConfig(CLI_MODEL),
+  );
 });
 
 afterAll(() => restoreCliBackendFixture?.());
@@ -114,23 +139,31 @@ describe("classifySystemAgentApprovalIntent", () => {
     expect(deps.complete).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["no usable model", () => ({ error: "no model" })],
-    ["different auth owner", () => preparedModel(sharedVerifiedInference, "openai:p1")],
-    [
-      "rotated credential",
-      () => preparedModel(sharedVerifiedInference, "openai:p2", "different-p2-owner"),
-    ],
-  ] as const)("rejects preparation with %s before completion", async (_name, prepare) => {
+  it("fails closed to other on unexpected model output", async () => {
+    completionDeps("I think the user probably agrees");
+    await expect(classify(sharedVerifiedInference, "hmm alright I guess?")).resolves.toBe("other");
+  });
+
+  it("fails closed to other when no model is usable", async () => {
     const deps = completionDeps();
-    deps.acquire.mockResolvedValueOnce(prepare());
+    deps.acquire.mockResolvedValueOnce({ error: "no model" });
+    await expect(classify(sharedVerifiedInference)).resolves.toBe("other");
+  });
+
+  it("rejects a prepared auth owner that differs from the verified profile", async () => {
+    const deps = completionDeps();
+    deps.acquire.mockResolvedValueOnce(preparedModel(sharedVerifiedInference, "openai:p1"));
     await expect(classify()).resolves.toBe("other");
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
-  it("fails closed to other on unexpected model output", async () => {
-    completionDeps("I think the user probably agrees");
-    await expect(classify(sharedVerifiedInference, "hmm alright I guess?")).resolves.toBe("other");
+  it("rejects a same-profile credential rotation during preparation", async () => {
+    const deps = completionDeps();
+    deps.acquire.mockResolvedValueOnce(
+      preparedModel(sharedVerifiedInference, "openai:p2", "different-p2-owner"),
+    );
+    await expect(classify()).resolves.toBe("other");
+    expect(deps.complete).not.toHaveBeenCalled();
   });
 
   it("keeps ambiguous CLI approvals on the exact-text path", async () => {
@@ -139,5 +172,13 @@ describe("classifySystemAgentApprovalIntent", () => {
 
     await expect(classify(binding)).resolves.toBe("other");
     expect(deps.acquire).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verdict when the verified owner drifts during classification", async () => {
+    const binding = await createVerifiedInference(DEFAULT_MODEL);
+    const deps = completionDeps("approve", binding);
+    deps.resolveRoute.mockResolvedValueOnce(binding.execution).mockResolvedValueOnce(null);
+
+    await expect(classify(binding)).resolves.toBe("other");
   });
 });

@@ -100,6 +100,9 @@ it("preserves live hovercard content, focus, and translated actions across updat
     expect(create?.getAttribute("aria-label")).toContain(label);
     expect(create?.getAttribute("aria-label")).toContain("feature");
     expect(create?.title).toBe(create?.getAttribute("aria-label"));
+    expect(create?.getAttribute("href")).toBe(
+      "https://github.com/example/project/pull/new/feature",
+    );
   });
   const { find, parts, setRow } = view;
   view.setProps({});
