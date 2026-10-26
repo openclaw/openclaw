@@ -30,7 +30,7 @@ counts and CPU-profile evidence and label wall-time gains unmeasured.
 
 Final proof includes the PR's own three successful PostgreSQL shards, their
 durations compared with the recorded baseline runs, required static gates, two
-isolated Codex reviews, and pgprep's approval of the exact head. Shard durations
+isolated Codex reviews, and PostgreSQL owner review of the exact head. Shard durations
 are contextual CI observations, not controlled cross-host measurements.
 
 ## Commands
@@ -44,12 +44,12 @@ Node CPU profiles, with the existing database-conformance preload and a separate
 Vitest configuration rather than moving it to another suite.
 
 Keep Node at the campaign version, `NODE_DISABLE_COMPILE_CACHE=1`, and `HOME`,
-`TMPDIR`, Bun's transpiler cache, and the Vitest filesystem cache on the lane's
+`TMPDIR`, Bun's transpiler cache, and the Vitest filesystem cache in the test's
 internal scratch directory. CPU-heavy runs use the campaign proof semaphore.
 
 ## Baseline provenance
 
 Initial source: `6f8748ad889`.
 Successful PR CI runs: `40256840043`, `40256709284`, `40256387656`.
-Profiles and raw synthetic measurements are lane-local scratch; publish only
+Profiles and raw synthetic measurements are local scratch; publish only
 operation counts, durations, and source attribution.
