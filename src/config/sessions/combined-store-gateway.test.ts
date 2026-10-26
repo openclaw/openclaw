@@ -89,13 +89,13 @@ function config(
     session,
   };
 }
-function storeSeed(storePath?: string) {
+function storeSeed(storePath?: string, defaultAgentId?: string) {
   return (
     agentId: string,
     sessionKey: string,
     sessionId: string,
     fields: Partial<SessionEntry> = {},
-  ) => seed({ agentId, sessionKey, storePath }, sessionId, fields);
+  ) => seed({ agentId, sessionKey, storePath, defaultAgentId }, sessionId, fields);
 }
 const admissionOptions = (env: NodeJS.ProcessEnv) => ({
   preserveSentinelOwners: "physical" as const,
@@ -334,15 +334,14 @@ it("projects shared rows under their logical owner while retaining the physical 
   const title = "Shared physical global title";
   const preview = "Shared physical global preview";
   const cfg = config(["main", "ops", "worker"], { scope: "global", store: storePath });
+  const write = storeSeed(storePath);
   cfg.agents!.entries!.ops = { model: { primary: "openai/gpt-5.5" } };
   setRuntimeConfigSnapshot(cfg);
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
   for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
-    seed(
-      { agentId: sessionKey.startsWith("agent:") ? "worker" : "ops", sessionKey, storePath },
-      `session-${sessionKey}`,
-      { displayName: sessionKey === "global" ? title : undefined },
-    );
+    write(sessionKey.startsWith("agent:") ? "worker" : "ops", sessionKey, `session-${sessionKey}`, {
+      displayName: sessionKey === "global" ? title : undefined,
+    });
   }
   await persistSessionTranscriptTurn(
     { agentId: "ops", storePath, sessionKey: "global", sessionId: "session-global" },
@@ -420,6 +419,7 @@ it.for([false, true])(
       skip();
     }
     const storePath = state.statePath("shared.json");
+    const write = storeSeed(storePath, "main");
     const cfg = config(["main", "ops", "worker"], { store: storePath });
     if (alias) {
       const sqlitePath = state.statePath("shared.sqlite");
@@ -427,18 +427,12 @@ it.for([false, true])(
       await fs.symlink(sqlitePath, storePath);
     }
     for (const agentId of alias ? ["main"] : ["main", "ops"]) {
-      seed(
-        { agentId, defaultAgentId: "main", sessionKey: "global", storePath },
-        `global-${agentId}`,
-      );
+      write(agentId, "global", `global-${agentId}`);
       const combined = loadCombinedStore(cfg, { agentId });
       expectOwner(combined, "global", `global-${agentId}`, agentId);
     }
     if (alias) {
-      seed(
-        { agentId: "worker", defaultAgentId: "main", sessionKey: "unknown", storePath },
-        "worker",
-      );
+      write("worker", "unknown", "worker");
       for (const configuredAgentsOnly of [false, true, true]) {
         const combined = loadCombinedStore(cfg, { configuredAgentsOnly });
         expectOwner(combined, "global", "global-main", "main");
@@ -618,15 +612,14 @@ it.for(["main", "unknown", "global"])(
     const write = storeSeed(storePath);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     setCanonicalSqliteSessionMainKey(database, mainKey);
-    const qualifiedParent = `agent:ops:${mainKey}`;
-    for (const sessionKey of ["global", "unknown", qualifiedParent]) {
-      write("ops", sessionKey, `parent-${sessionKey}`, { updatedAt: Date.now() });
-    }
-    for (const [name, parentSessionKey, parentSessionId] of [
-      ["qualified", qualifiedParent, `parent-${qualifiedParent}`],
-      ["global", "global", "parent-global"],
-      ["unknown", "unknown", "parent-unknown"],
-    ] as const) {
+    const parents = [
+      ["qualified", `agent:ops:${mainKey}`],
+      ["global", "global"],
+      ["unknown", "unknown"],
+    ] as const;
+    for (const [name, parentSessionKey] of parents) {
+      const parentSessionId = `parent-${parentSessionKey}`;
+      write("ops", parentSessionKey, parentSessionId, { updatedAt: Date.now() });
       write("worker", `agent:worker:subagent:${name}`, `child-${name}`, {
         updatedAt: Date.now(),
         parentSessionId,
@@ -634,15 +627,9 @@ it.for(["main", "unknown", "global"])(
       });
     }
     await withResidentRows(cfg, async (_projection, list) => {
-      for (const [spawnedBy, children] of [
-        [qualifiedParent, ["qualified"]],
-        ["global", ["global"]],
-        ["unknown", ["unknown"]],
-      ] as const) {
+      for (const [name, spawnedBy] of parents) {
         const selected = await list({ spawnedBy, configuredAgentsOnly: true });
-        expect(selected.sessions.map(({ key }) => key).toSorted()).toEqual(
-          children.map((name) => `agent:worker:subagent:${name}`).toSorted(),
-        );
+        expect(selected.sessions.map(({ key }) => key)).toEqual([`agent:worker:subagent:${name}`]);
       }
     });
   },
