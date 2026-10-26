@@ -148,6 +148,30 @@ describe("config mutations against a running Gateway", () => {
     expectGatewayKeptRunning();
   });
 
+  it("persists a write under reload off without restarting, like the offline write", async () => {
+    const suspend = await run(env, ["config", "set", "gateway.reload.mode", "off"]);
+    expect(suspend.code, suspend.stderr).toBe(0);
+    const allow = ["canvas.present"];
+    const result = await run(env, [
+      "config",
+      "set",
+      "gateway.nodes.commands.allow",
+      JSON.stringify(allow),
+      "--strict-json",
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "Updated gateway.nodes.commands.allow. Restart the gateway to apply.",
+    );
+    expect((await readConfig()).gateway.nodes.commands.allow).toEqual(allow);
+    expect((await gatewayConfig()).gateway.nodes.commands.allow).toEqual(allow);
+    expectGatewayKeptRunning();
+
+    const restore = await run(env, ["config", "set", "gateway.reload.mode", "hybrid"]);
+    expect(restore.code, restore.stderr).toBe(0);
+    expectGatewayKeptRunning();
+  });
+
   it("replaces a strict JSON array value", async () => {
     const allow = ["canvas.present", "camera.snap"];
     const result = await run(env, [
