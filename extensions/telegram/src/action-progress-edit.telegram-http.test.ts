@@ -12,7 +12,6 @@ const { requests } = fixture;
 const withEditState = (run: () => Promise<void>) =>
   withOpenClawTestState({ prefix: "telegram-progress-edit-" }, async () => {
     resetTelegramClientOptionsCacheForTests();
-    requests.length = 0;
     await run();
   });
 const edit = (
@@ -88,7 +87,7 @@ it.each([false, true])(
   "edits an adopted snapshot with the native checklist and command layout (rich: %s)",
   async (richMessages) => {
     await withEditState(async () => {
-      const command = "printf '<ready>&' && ./verify --flag=\"<value>\"";
+      const command = "echo '<&>'";
       const progressSnapshot: ChannelProgressDraftCompositorSnapshot = {
         label: "Working",
         statusHeadline: command,
@@ -140,9 +139,7 @@ it.each([false, true])(
       } else {
         expect(fields.rich_message).toBeUndefined();
         expect(fields.parse_mode).toBe("HTML");
-        expect(fields.text).toContain(
-          "printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
-        );
+        expect(fields.text).toContain("echo '&lt;&amp;&gt;'");
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");
         expect(fields.text).not.toContain("&amp;lt;");

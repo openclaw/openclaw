@@ -20,6 +20,18 @@ const { actions: pluginActions, agentPrompt } = telegramPlugin;
 function describeActions(cfg: OpenClawConfig, accountId?: string) {
   return pluginActions?.describeMessageTool?.({ cfg, accountId });
 }
+function expectActions(
+  cfg: OpenClawConfig,
+  accountId: string | undefined,
+  included: string[],
+  excluded: string[],
+) {
+  const actions = describeActions(cfg, accountId)?.actions;
+  expect(actions).toEqual(expect.arrayContaining(included));
+  for (const action of excluded) {
+    expect(actions).not.toContain(action);
+  }
+}
 
 describe("telegram actions contract", () => {
   it("requires send and poll permission on the same discoverable account", () => {
@@ -27,14 +39,8 @@ describe("telegram actions contract", () => {
       defaultAccount: "senderOnly",
       actions: { sendMessage: false, poll: false },
       accounts: {
-        senderOnly: {
-          botToken: "tok-send",
-          actions: { sendMessage: true, poll: false },
-        },
-        pollOnly: {
-          botToken: "tok-poll",
-          actions: { sendMessage: false, poll: true },
-        },
+        senderOnly: { botToken: "tok-send", actions: { sendMessage: true, poll: false } },
+        pollOnly: { botToken: "tok-poll", actions: { sendMessage: false, poll: true } },
       },
     });
     for (const [accountId, sends] of [
@@ -59,20 +65,16 @@ describe("telegram actions contract", () => {
         },
       },
     });
-    const root = describeActions(cfg, "default");
-    const work = describeActions(cfg, "work");
-    expect(root?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
-    expect(root?.actions).not.toContain("react");
-    expect(root?.actions).not.toContain("emoji-list");
-    expect(root?.actions).not.toContain("sticker");
-    const schema = root?.schema;
+    expectActions(cfg, "default", ["send", "poll"], ["react", "emoji-list", "sticker"]);
+    expectActions(
+      cfg,
+      "work",
+      ["react", "emoji-list", "sticker", "sticker-search"],
+      ["send", "poll"],
+    );
+    const schema = describeActions(cfg, "default")?.schema;
     const contributions = Array.isArray(schema) ? schema : schema ? [schema] : [];
     expect(contributions.some((entry) => Object.hasOwn(entry.properties, "emoji"))).toBe(false);
-    expect(work?.actions).not.toContain("send");
-    expect(work?.actions).not.toContain("poll");
-    expect(work?.actions).toEqual(
-      expect.arrayContaining(["react", "emoji-list", "sticker", "sticker-search"]),
-    );
   });
 
   it("discovers SecretRef actions and account-scoped reaction guidance without hiding healthy siblings", () => {
@@ -91,17 +93,11 @@ describe("telegram actions contract", () => {
         },
       },
     });
-    const scoped = describeActions(cfg, "carey-notifications");
-    expect(scoped?.actions).toContain("send");
-    expect(scoped?.actions).not.toContain("react");
-    expect(scoped?.actions).not.toContain("poll");
-    expect(describeActions(cfg)?.actions).toEqual(
-      expect.arrayContaining(["send", "react", "poll"]),
-    );
-    expect(agentPrompt?.reactionGuidance?.({ cfg, accountId: "carey-notifications" })?.level).toBe(
-      "extensive",
-    );
-    expect(agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
+    expectActions(cfg, "carey-notifications", ["send"], ["react", "poll"]);
+    expectActions(cfg, undefined, ["send", "react", "poll"], []);
+    for (const accountId of ["carey-notifications", undefined]) {
+      expect(agentPrompt?.reactionGuidance?.({ cfg, accountId })?.level).toBe("extensive");
+    }
   });
 
   it.each(["disabled", "tokenless", "unknown"] as const)(

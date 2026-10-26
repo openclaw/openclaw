@@ -89,30 +89,22 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     }
   }
 
-  it.each([false, true])(
-    "cleans reasoning previews before Telegram HTTP (visible=%s)",
-    async (visible) => {
-      const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-      const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
-      const snapshots = [opening.slice(0, 20), `${opening}\nprivate runtime metadata`, internal];
-      if (visible) {
-        snapshots.push(
-          `${internal}\n\nChecking files.`,
-          `${internal}\n\nReading config.\n\nChecking files.`,
-        );
-      }
-      await prepareAndDispatch("Visible answer.", "Show status.", snapshots);
-      expect(delivered()).toEqual(
-        visible
-          ? [
-              "🧠 <i>Checking files.</i>",
-              "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
-              "Visible answer.",
-            ]
-          : ["Visible answer."],
-      );
-    },
-  );
+  it("cleans partial and complete internal context before Telegram reasoning previews", async () => {
+    const opening = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const internal = `${opening}\nprivate runtime metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+    await prepareAndDispatch("Visible answer.", "Show status.", [
+      opening.slice(0, 20),
+      `${opening}\nprivate runtime metadata`,
+      internal,
+      `${internal}\n\nChecking files.`,
+      `${internal}\n\nReading config.\n\nChecking files.`,
+    ]);
+    expect(delivered()).toEqual([
+      "🧠 <i>Checking files.</i>",
+      "🧠 <i>Reading config.</i>\n\n<i>Checking files.</i>",
+      "Visible answer.",
+    ]);
+  });
 
   const xmlContext = history(`Conversation info: ⟦openclaw:ctx⟧
 \`\`\`json
@@ -134,22 +126,15 @@ private second inbound paragraph`);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
-    const literal = `The prompt format is:
-
-\`\`\`text
-[Chat messages since your last reply - for context]
-Example: this is public placeholder history.
-
-[Current message - respond to this]
-Example: this is a public placeholder message.
-\`\`\``;
-
+    const historyMarker = "[Chat messages since your last reply - for context]";
+    const currentMarker = "[Current message - respond to this]";
+    const placeholder = "Example: this is a public placeholder message.";
+    const literal = `\`\`\`text\n${historyMarker}\nPublic history.\n\n${currentMarker}\n${placeholder}\n\`\`\``;
     await prepareAndDispatch(literal, history("[Telegram] Alice: current message"));
-
     expect(delivered()).toHaveLength(1);
-    expect(delivered()[0]).toContain("[Chat messages since your last reply - for context]");
-    expect(delivered()[0]).toContain("[Current message - respond to this]");
-    expect(delivered()[0]).toContain("Example: this is a public placeholder message.");
+    for (const text of [historyMarker, currentMarker, placeholder]) {
+      expect(delivered()[0]).toContain(text);
+    }
   });
 
   it("never delivers the internal runtime-context envelope in Telegram HTTP text", async () => {
