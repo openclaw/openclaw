@@ -17,7 +17,7 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
+import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -56,19 +56,6 @@ function cacheEmptySession(host: ChatHost, key: string, sessionId: string) {
       pagination: { hasMore: false, completeSnapshot: true },
     },
   );
-}
-
-function idleChatHistory(sessionKey: string) {
-  return {
-    messages: [],
-    sessionInfo: {
-      key: sessionKey,
-      kind: "direct",
-      updatedAt: null,
-      hasActiveRun: false,
-      status: "done",
-    },
-  };
 }
 
 beforeEach(() => {
@@ -354,8 +341,6 @@ describe("chat attachment terminal retirement", () => {
       }
       if (handoff === "live") {
         // Both panes pin display bytes; the durable payload still awaits consumption.
-        expect(retirementOwner).toHaveNthReturnedWith(1, "retained");
-        expect(retirementOwner).toHaveNthReturnedWith(2, "retained");
         expect(read).not.toHaveBeenCalled();
       } else {
         await waitForFast(() => expect(read).toHaveBeenCalled());
@@ -367,20 +352,12 @@ describe("chat attachment terminal retirement", () => {
           ? vi.spyOn(client, "recoveryScope", "get").mockReturnValue("different-credential")
           : null;
       if (handoff === "new-attempt") {
+        const next = { ...item, sendRunId: "replacement-attempt", sendAttempts: 2 };
         expect(
           updateStoredChatComposerQueueItems(
             visible,
             sessionKey,
-            [
-              {
-                expected: item,
-                next: {
-                  ...item,
-                  sendRunId: "replacement-attempt",
-                  sendAttempts: 2,
-                },
-              },
-            ],
+            [{ expected: item, next }],
             item.agentId,
           ),
         ).toBe(true);

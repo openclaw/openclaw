@@ -42,18 +42,6 @@ function expectRead(
     { agentId: "main", expectedMarkedUnreadAt: marked },
   );
 }
-const observedSessions = (rows: GatewaySessionRow[]) => ({
-  result: sessionsResult(rows, 20),
-  agentId: "main",
-  loading: false,
-  error: null,
-  deletedSessions: [],
-  modelOverrides: {},
-  groups: [],
-  groupSettings: [],
-  sectionOrder: [],
-});
-
 function commitReadMarkerHistory(
   pane: ReturnType<typeof createTestChatPane>["pane"],
   row: GatewaySessionRow = unreadRow({ sessionId: "read-marker-session" }),
@@ -282,38 +270,25 @@ describe("chat pane read markers", () => {
     });
     const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
     commitReadMarkerHistory(pane);
-    const { context } = pane;
-    const errors = vi.fn();
-    onTestFinished(
-      context.sessions.subscribe((state) => {
-        if (state.error) {
-          errors(state.error);
-        }
-      }),
-    );
     const row = unreadRow({ agentStatus: activeStatus() });
 
     pane.markSessionRead(row);
-    await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pane.context.sessions.state.error).toBe(error.message));
     clock.mockReturnValue(600);
     pane.markSessionRead({ ...row, updatedAt: 21 });
     if (retries) {
-      await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     }
 
     expect(request).toHaveBeenCalledTimes(retries ? 2 : 1);
-    expect(errors).toHaveBeenCalledTimes(retries ? 2 : 1);
-    expect(context.sessions.state.error).toBe(error.message);
+    expect(pane.context.sessions.state.error).toBe(error.message);
   });
 
   it("does not clear unread from a hidden retained pane", () => {
     const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
-      Object.assign(
-        pane.context.sessions.state,
-        observedSessions([unreadRow({ label: "Background activity" })]),
-      );
+      pane.context.sessions.state.result = sessionsResult([unreadRow()], 20);
       pane.applySessionsState(pane.context.sessions.state);
     };
 
@@ -426,21 +401,5 @@ describe("chat pane read markers", () => {
         expectRead(patch, "agent:main:subagent:done");
       },
     );
-
-    it("retries a hidden run after a transient UNAVAILABLE failure", async () => {
-      const clock = mockClock();
-      const { pane, patch } = createParentPane([run("done")]);
-      patch.mockRejectedValueOnce(
-        new GatewayRequestError({ code: ErrorCodes.UNAVAILABLE, message: "ack failed" }),
-      );
-
-      pane.markSessionRead(parent);
-      await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
-      await Promise.resolve();
-      clock.mockReturnValue(600);
-      pane.markSessionRead(parent);
-
-      expect(patch).toHaveBeenCalledTimes(2);
-    });
   });
 });

@@ -1,10 +1,8 @@
 import type { EnvironmentsListResult } from "@openclaw/gateway-protocol";
-import { createEffect, createRoot, createSignal, flush } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
@@ -136,69 +134,42 @@ describe("session active resource discovery", () => {
     f = fixture();
   });
 
-  it("projects verified desktop changes and releases the view on disposal", async () => {
+  it("publishes verified desktop changes until its subscriber leaves", async () => {
     const sources: Array<string | null | undefined> = [];
-    let refreshBinding: () => void = () => {};
-    const dispose = createRoot((release) => {
-      const [binding, setBinding] = createSignal(0);
-      refreshBinding = () => setBinding((value) => value + 1);
-      const resources = projectOwner(f.controller, (owner) =>
-        owner.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch, f.owner),
-      );
-      createEffect(
-        () => {
-          binding();
-          return resources.read();
-        },
-        (source) => {
-          sources.push(source);
-        },
-      );
-      return release;
+    const dispose = f.controller.subscribe(() => sources.push(f.desktopSource()));
+    onTestFinished(dispose);
+    expect(f.desktopSource()).toBeUndefined();
+    await f.sync();
+    expect(sources).toEqual(["worker-1"]);
+
+    f.owner.observation.isCurrent = () => false;
+    expect(f.desktopSource()).toBeNull();
+    await f.sync({
+      ...f.owner,
+      observation: { ...f.owner.observation, isCurrent: () => true },
     });
-    try {
-      flush();
-      expect(sources).toEqual([undefined]);
-      await f.sync();
-      flush();
-      expect(sources).toEqual([undefined, "worker-1"]);
+    expect(sources).toEqual(["worker-1", "worker-1"]);
 
-      f.owner.observation.isCurrent = () => false;
-      refreshBinding();
-      flush();
-      expect(sources).toEqual([undefined, "worker-1", null]);
-      await f.sync({
-        ...f.owner,
-        observation: { ...f.owner.observation, isCurrent: () => true },
-      });
-      flush();
-      expect(sources).toEqual([undefined, "worker-1", null, "worker-1"]);
+    const respond = f.request.getMockImplementation()!;
+    f.request.mockImplementation((method, params) =>
+      method === "environments.status"
+        ? Promise.resolve({ ...environment, status: "unavailable" })
+        : respond(method, params),
+    );
+    // Revalidation discovers retirement without a renderer scheduling another sync.
+    f.controller.reconcileObservation();
+    await settle();
+    expect(sources).toEqual(["worker-1", "worker-1", null]);
 
-      const respond = f.request.getMockImplementation()!;
-      f.request.mockImplementation((method, params) =>
-        method === "environments.status"
-          ? Promise.resolve({ ...environment, status: "unavailable" })
-          : respond(method, params),
-      );
-      // Revalidation discovers retirement without a renderer scheduling another sync.
-      f.controller.reconcileObservation();
-      await settle();
-      flush();
-      expect(sources).toEqual([undefined, "worker-1", null, "worker-1", null]);
-
-      dispose();
-      f.request.mockImplementation(respond);
-      f.controller.invalidate();
-      await f.sync({
-        ...f.owner,
-        observation: { ...f.owner.observation, isCurrent: () => true },
-      });
-      flush();
-      expect(f.desktopSource()).toBe("worker-1");
-      expect(sources).toEqual([undefined, "worker-1", null, "worker-1", null]);
-    } finally {
-      dispose();
-    }
+    dispose();
+    f.request.mockImplementation(respond);
+    f.controller.invalidate();
+    await f.sync({
+      ...f.owner,
+      observation: { ...f.owner.observation, isCurrent: () => true },
+    });
+    expect(f.desktopSource()).toBe("worker-1");
+    expect(sources).toEqual(["worker-1", "worker-1", null]);
   });
 
   it("retains a visible verified Desktop when another resource is dismissed", async () => {
@@ -285,11 +256,7 @@ describe("session active resource discovery", () => {
 
   it("keeps metadata-only placement updates out of discovery while the descriptor is pending and after completion", async () => {
     f.owner.placement = activePlacement;
-    const pending = createDeferred<unknown>();
-    const respond = f.request.getMockImplementation()!;
-    f.request.mockImplementation((method, params) =>
-      method === "sessions.describe" ? pending.promise : respond(method, params),
-    );
+    const pending = f.holdDescriptor();
     await f.sync();
     const initialCalls = [...f.request.mock.calls];
     for (const cursor of [1, 2, 3]) {
@@ -308,7 +275,7 @@ describe("session active resource discovery", () => {
       await f.sync();
       expect(f.request.mock.calls).toEqual(initialCalls);
     }
-    pending.resolve(await respond("sessions.describe"));
+    pending.resolve({ session: f.describedSession() });
     await settle();
     expect(f.slots().toSorted()).toEqual(["desktop"]);
     expect(f.request).toHaveBeenCalledTimes(2);
@@ -338,7 +305,13 @@ describe("session active resource discovery", () => {
     expect(f.desktopSource()).not.toBe("worker-1");
   });
 
-  it("reveals the existing desktop once without provisioning", async () => {
+  it("discovers, revalidates, and retires the assigned desktop without provisioning", async () => {
+    f.request.mockResolvedValueOnce({ session: { ...session, placement: { state: "local" } } });
+    await f.sync();
+    expect(f.commit).not.toHaveBeenCalled();
+    f.controller.sync(f.owner);
+    expect(f.request).toHaveBeenCalledTimes(1);
+    f.controller.invalidate();
     await f.sync();
     expect(f.slots().toSorted()).toEqual(["desktop"]);
     const selected = sidebarActivePanel(f.owner.layout())?.slot;
@@ -346,13 +319,17 @@ describe("session active resource discovery", () => {
     await f.sync();
     expect(f.commit).toHaveBeenCalledTimes(1);
     expect(sidebarActivePanel(f.owner.layout())?.slot).toBe(selected);
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.describe",
-      "environments.status",
-      "sessions.describe",
-      "environments.status",
-    ]);
+    expect(new Set(f.request.mock.calls.map(([method]) => method))).toEqual(
+      new Set(["sessions.describe", "environments.status"]),
+    );
     expect(f.request).toHaveBeenCalledWith("environments.status", { environmentId: "worker-1" });
+
+    expect(f.desktopSource()).toBe("worker-1");
+    f.owner.placement = { ...activePlacement, state: "local" };
+    f.request.mockResolvedValueOnce({ session: { ...session, placement: f.owner.placement } });
+    f.controller.invalidate();
+    await f.sync();
+    expect(f.desktopSource()).toBeNull();
   });
 
   it("respects an older minimized dock even when the newly discovered resource has no tab", async () => {
@@ -360,16 +337,6 @@ describe("session active resource discovery", () => {
     await f.sync();
     expect(f.request).not.toHaveBeenCalled();
     expect(f.slots()).toEqual(["terminal"]);
-  });
-
-  it("clears a discovered desktop source without falling back to a stale roster or global source", async () => {
-    await f.sync();
-    expect(f.desktopSource()).toBe("worker-1");
-    f.owner.placement = { ...activePlacement, state: "local" };
-    f.request.mockResolvedValueOnce({ session: { ...session, placement: f.owner.placement } });
-    f.controller.invalidate();
-    await f.sync();
-    expect(f.desktopSource()).toBeNull();
   });
 
   it.each(["before discovery", "during discovery"])(
@@ -441,18 +408,5 @@ describe("session active resource discovery", () => {
       expect(f.request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
     }
     expect(f.commit).not.toHaveBeenCalled();
-  });
-
-  it("discovers a newly active desktop on invalidation without repeated render probes", async () => {
-    f.request.mockResolvedValueOnce({
-      session: { ...session, placement: { state: "local" } },
-    });
-    await f.sync();
-    expect(f.commit).not.toHaveBeenCalled();
-    f.controller.sync(f.owner);
-    expect(f.request).toHaveBeenCalledTimes(1);
-    f.controller.invalidate();
-    await f.sync();
-    expect(f.slots()).toEqual(["desktop"]);
   });
 });

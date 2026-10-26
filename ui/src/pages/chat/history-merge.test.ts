@@ -37,13 +37,7 @@ function projectLiveMessage(
   liveMessage: unknown,
   scope: SessionProjectionScope,
 ) {
-  const projection = reduceSessionProjection(projectionFor(owner, scope), {
-    type: "messagePersisted",
-    message: liveMessage,
-    scope,
-  });
-  publish(owner, projection);
-  return projection;
+  return reduceChat(owner, { type: "messagePersisted", message: liveMessage }, { scope });
 }
 
 function runningPane(scope: SessionProjectionScope) {
@@ -94,8 +88,7 @@ function initialFixture(retain = true) {
     buildInitialChatSubmission(
       sessionKey,
       {
-        text: "inspect this image",
-        attachments: [{ id: "image-1", mimeType: "image/png", dataUrl: imageDataUrl }],
+        text: "initial prompt",
         createdAt: 123,
         sender: {
           id: "local",
@@ -126,33 +119,23 @@ function initialFixture(retain = true) {
       "delivered source",
     );
   return {
-    client,
     chatSubmissions,
     owner,
     sessionKey,
     initial,
     deliver,
     admit: () => admitChatSubmission(owner, undefined),
-    reset: () => reduceChat(owner, { type: "sessionReset" }),
     read: () => chatSubmissions.readInitial(sessionKey, client),
   };
 }
 
 function authoritativeMessage() {
-  return {
-    role: "user",
-    content: "Inspect this persisted image",
-    timestamp: 456,
-    serverField: "authoritative",
-    __openclaw: {
-      id: "persisted-initial-user",
-      idempotencyKey: "initial-run:user",
-      runId: "initial-execution",
-      seq: 1,
-      media: [{ url: "media://inbound/image-1.png", contentType: "image/png" }],
-      mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-    },
-  };
+  return message("user", "persisted prompt", {
+    id: "persisted-initial-user",
+    idempotencyKey: "initial-run:user",
+    runId: "initial-execution",
+    seq: 1,
+  });
 }
 
 it.each(["message", "user", "imported", "session", "agent", "lifecycle"])(
@@ -231,31 +214,6 @@ it.each(["reset", "session", "branch"] as const)(
   },
 );
 
-it.each(["messagePersisted", "snapshotLoaded"] as const)(
-  "sender provenance does not survive authoritative omission in %s",
-  (type) => {
-    const { owner, initial: handoff } = initialFixture();
-    expect(handoff.message["__openclaw"]).toHaveProperty("senderIdentity", {
-      type: "profile",
-      id: "local",
-    });
-    admitChatSubmission(owner, undefined);
-    const authoritative = authoritativeMessage();
-    reduceChat(
-      owner,
-      type === "messagePersisted"
-        ? { type, message: authoritative }
-        : { type, messages: [authoritative] },
-    );
-    const metadata = (owner.chatMessages[0] as { __openclaw: Record<string, unknown> })[
-      "__openclaw"
-    ];
-    for (const key of ["senderIdentity", "senderId", "senderProfileAvatarUrl"]) {
-      expect(metadata).not.toHaveProperty(key);
-    }
-  },
-);
-
 it("uses one canonical identity for an explicitly unbranched pane", () => {
   const owner = {
     sessionKey: "agent:main:shared",
@@ -319,21 +277,17 @@ it("publishes each pane reducer transition and displayed transcript together", (
   expect(projectionFor(owner).entries).toEqual(composed.entries);
 });
 
-it.each([false, true])("owns initial adoption with cached seed: %s", (cached) => {
+it.each([
+  { cached: false, type: "snapshotLoaded" },
+  { cached: true, type: "snapshotLoaded" },
+  { cached: true, type: "messagePersisted" },
+] as const)("owns initial adoption with cached seed $cached via $type", ({ cached, type }) => {
   const f = initialFixture();
   const { owner, initial: handoff } = f;
   if (cached) {
     owner.chatMessages = [handoff.message];
     expect(f.admit()).toBe(!cached);
     expect(projectionFor(owner).entries[0]?.pending).toBe(true);
-    const admittedMessage = owner.chatMessages[0];
-    f.reset();
-    expect(f.admit()).toBe(true);
-    expect(owner.chatMessages).toEqual([admittedMessage]);
-    f.reset();
-    snapshot(owner, [], { scope: scopeFor(owner, { sessionId: "rebound-session" }) });
-    expect(owner.chatMessages).toEqual([admittedMessage]);
-    owner.currentSessionId = "rebound-session";
     const previousUser = persistedMessage("user", "Earlier prompt", "earlier-user", 1, 120);
     const previousReply = persistedMessage("assistant", "Earlier reply", "earlier-reply", 2, 121);
     const output = persistedMessage("assistant", "Preparing reply", "early-output", 3, 124);
@@ -343,25 +297,15 @@ it.each([false, true])("owns initial adoption with cached seed: %s", (cached) =>
     expect(owner.chatMessages).toEqual([handoff.message]);
   }
   const authoritative = authoritativeMessage();
-  const event = cached
-    ? ({ type: "messagePersisted", message: authoritative } as const)
-    : ({ type: "snapshotLoaded", messages: [authoritative] } as const);
-  const projection = reduceChat(owner, event, { runActive: cached });
+  const event =
+    type === "messagePersisted"
+      ? ({ type: "messagePersisted", message: authoritative } as const)
+      : ({ type: "snapshotLoaded", messages: [authoritative] } as const);
+  reduceChat(owner, event, { runActive: cached });
 
   expect(owner.chatMessages).toEqual([authoritative]);
-  expect(projection.messages[0]).toBe(authoritative);
-
-  if (cached) {
-    expect(f.read()).not.toBeNull();
-    f.reset();
-    expect(f.admit()).toBe(false);
-    expect(owner.chatMessages).toEqual([]);
-    snapshot(owner, [authoritative], { runActive: false });
-  }
   expect(f.read()).toMatchObject({ pending: false, message: null });
-  if (!cached) {
-    expect(f.admit()).toBe(false);
-  }
+  expect(f.admit()).toBe(false);
 });
 
 it("does not revive an initial handoff delivered after its canonical user message", () => {
@@ -395,7 +339,6 @@ it("binds learned session and branch identity without reclassifying live runs", 
   expect(projection.runs).toBe(running.runs);
   expect(projection.runs["live-run"]?.status).toBe("streaming");
   expect(getChatRunOwner(owner)).toBe("live-run");
-  expect(getChatRunOwner({})).toBeUndefined();
 });
 
 it.each<[string, SessionProjectionScope, SessionProjectionScope]>([

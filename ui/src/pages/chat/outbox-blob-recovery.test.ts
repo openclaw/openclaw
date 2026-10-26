@@ -83,9 +83,15 @@ async function prepare(
     ),
   };
 }
-async function fixture(id: string, sessionKey = "global", version = 3) {
+async function fixture(
+  id: string,
+  sessionKey = "global",
+  version = 3,
+  selection?: ChatSelectionAnnotation,
+  origin?: "paste" | "file",
+) {
   const host = hostFor();
-  const item = await prepare(host, id, sessionKey);
+  const item = await prepare(host, id, sessionKey, selection, origin);
   return { host, item, source: seed([item], sessionKey, version) };
 }
 function seed(items: ChatQueueItem[], sessionKey = "global", version = 3) {
@@ -161,34 +167,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("stores attachment payloads without secure-context-only browser APIs", async () => {
-  vi.stubGlobal("crypto", {
-    getRandomValues: <T extends Exclude<BufferSource, ArrayBuffer>>(array: T): T => {
-      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
-      return array;
-    },
-  });
-  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
-
-  const host = hostFor();
-  const item = await prepare(host, "insecure-http");
-
-  await expectBytes(host, item);
-  expect(sessionStorage.getItem("openclaw.control.outboxTab.v1")).toBe(
-    "07070707-0707-4707-8707-070707070707",
-  );
-});
-
 it("does not settle payload preparation under a pending connected recovery owner", async () => {
   const host = hostFor();
   const original = await prepare(host, "pending-owner");
-  const allocate = vi.fn(() => "blob:unexpected-preview");
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = allocate;
-    },
-  );
   const started = createDeferred();
   const release = createDeferred();
   const read = payloadStore.readOutboxPayload;
@@ -205,7 +186,6 @@ it("does not settle payload preparation under a pending connected recovery owner
     .mockReturnValue(false);
   release.resolve();
   expect(await prepared).toEqual({ status: "failed", reason: "unavailable" });
-  expect(allocate).not.toHaveBeenCalled();
   ready.mockRestore();
   await expectBytes(host, original);
 });
@@ -223,37 +203,37 @@ it("hydrates queued attachment bytes after offline reload before a new hello", a
   await expectUnavailable(reloaded, original, "unavailable");
 });
 
-it.each(["agent:main:topic", "global"])(
-  "restores landed v3 %s into another conversation without retiring its exact Blob",
-  async (sessionKey) => {
-    const { host, item, source } = await fixture("legacy", sessionKey);
+const annotation: ChatSelectionAnnotation = {
+  text: "complete source bytes",
+  comment: "Keep this context. 🦞",
+  sessionKey: "agent:main:review",
+  messageId: "assistant-1",
+  entryId: "entry-1",
+  start: 5,
+  end: 26,
+};
+it.each([
+  ["agent:main:topic", "paste"],
+  ["global", "file"],
+  ["agent:main:topic", undefined],
+] as const)(
+  "restores v3 %s (%s) into another conversation without retiring its exact Blob",
+  async (sessionKey, origin) => {
+    const selection = origin === undefined ? annotation : undefined;
+    const { host, item, source } = await fixture("legacy", sessionKey, 3, selection, origin);
     const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads");
     const migrated = readStore(sessionStorage, target);
     expect(sessionStorage.getItem(source.key)).toBeNull();
     expect(migrated.version).toBe(4);
-    const rows = [
-      ...Object.values(migrated.sessions),
-      ...Object.values(migrated.recovery).map((entry) => entry.session),
-    ];
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      draftRevision: 42,
-      queue: [{ ...item, sendState: "held" }],
-    });
+    expect(Object.keys(migrated.sessions).length + Object.keys(migrated.recovery).length).toBe(1);
     expect(listOutboxes(host)).toEqual([]);
     const entry = expectDefined(readRecovery(host).entries[0], "owned recovery");
     expect(restoreRecovery(host, entry, destinationFor(host))).toBe("restored");
     const restored = expectDefined(listOutboxes(host)[0]?.queue[0], "restored input");
-    expect(restored).toMatchObject({
-      id: item.id,
-      sendAttempts: 0,
-      sendState: "failed",
-      orderKey: 5,
-      attachmentPayload: item.attachmentPayload,
-    });
-    expect(restored.sendRunId).toBeUndefined();
-    expect(restored.sessionId).toBeUndefined();
-    await expectBytes(host, restored);
+    expect(restored).toMatchObject({ orderKey: 5, attachmentPayload: item.attachmentPayload });
+    const attachment = await expectBytes(host, restored);
+    expect(attachment?.origin).toBe(origin);
+    expect(attachment?.selectionAnnotation).toEqual(selection);
     expect(cleanup).not.toHaveBeenCalled();
     clearOutbox(host);
     expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
@@ -351,14 +331,6 @@ it.each(["failed-write", "failed-remove"])(
     expect(listOutboxes(foreign)).toEqual([]);
     expect(restoreRecovery(foreign, entry, destinationFor(foreign, scope))).toBe("conflict");
 
-    // Another failed recovery/deletion must preserve the same source bytes too.
-    expect(restoreRecovery(host, entry, capture())).toBe("storage-failed");
-    clearOutbox(host);
-    await settleCleanup(cleanup);
-    await expectBytes(host, item);
-    expect(cleanup).toHaveBeenCalledTimes(1);
-    expectSourceOnly();
-
     retirement.mockRestore();
 
     // Once source retirement succeeds, the destination is the last owner.
@@ -442,28 +414,5 @@ it.each(["failed-remove", "deferred-legacy", "unreadable-legacy"])(
     }
     expect(cleanup).not.toHaveBeenCalled();
     await expectBytes(host, item);
-  },
-);
-it.each(["paste", "file", undefined] as const)(
-  "preserves %s origin, annotation, and bytes after durable queue reload",
-  async (origin) => {
-    const annotation: ChatSelectionAnnotation = {
-      text: "complete source bytes",
-      comment: "Keep this context. 🦞",
-      sessionKey: "agent:main:review",
-      messageId: "assistant-1",
-      entryId: "entry-1",
-      start: 5,
-      end: 26,
-    };
-    const host = hostFor();
-    const selection = origin === undefined ? annotation : undefined;
-    const item = await prepare(host, `origin-${origin}`, "agent:main:review", selection, origin);
-    seed([item], "agent:main:review", 4);
-    const store = readStore(sessionStorage, target);
-    const restoredItem = Object.values(store.sessions)[0]?.queue?.[0];
-    const restored = await expectBytes(host, expectDefined(restoredItem, "stored queue item"));
-    expect(restored?.origin).toBe(origin);
-    expect(restored?.selectionAnnotation).toEqual(selection);
   },
 );

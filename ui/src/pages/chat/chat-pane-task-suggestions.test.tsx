@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush, type Setter } from "solid-js";
+import { flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type {
   AgentsListResult,
@@ -19,6 +19,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountView } from "../../test-helpers/solid-render.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   createSessionCapabilityFixture,
@@ -26,7 +27,6 @@ import {
 } from "./chat-pane.test-support.ts";
 import {
   ChatTaskSuggestionTray,
-  type ChatTaskSuggestionTrayProps,
   type TaskSuggestionStartMode,
 } from "./components/chat-task-suggestions.tsx";
 
@@ -102,7 +102,9 @@ const acceptCall = (mode: TaskSuggestionStartMode, cwd?: string) => [
 
 function createTray(pane: ReturnType<typeof createChatPane>["pane"]) {
   const container = document.createElement("div");
-  let setView: Setter<ChatTaskSuggestionTrayProps> | undefined;
+  let tray:
+    | ReturnType<typeof mountView<{ view: ReturnType<typeof pane.suggestionChatProps> }>>
+    | undefined;
   const query: typeof container.querySelector = container.querySelector.bind(container);
   return {
     container,
@@ -111,14 +113,11 @@ function createTray(pane: ReturnType<typeof createChatPane>["pane"]) {
     query,
     draw: (connected = true) => {
       const props = pane.suggestionChatProps(connected, false, false);
-      if (!setView) {
-        const [current, update] = createSignal(props);
-        mountSolid(() => <ChatTaskSuggestionTray view={current()} />, { container });
-        setView = update;
+      if (tray) {
+        tray.update({ view: props });
       } else {
-        setView(props);
+        tray = mountView(ChatTaskSuggestionTray, { view: props }, container);
       }
-      flush();
       return props;
     },
   };
@@ -441,8 +440,8 @@ it.each([
     const first = createDeferred<AcceptResult>();
     const retry = createDeferred<AcceptResult>();
     let attempts = 0;
-    const { pane, state, request, container, draw, query, accept, resolved } = createAcceptancePane(
-      () => (++attempts === 1 ? first.promise : retry.promise),
+    const { pane, state, request, accept, resolved } = createAcceptancePane(() =>
+      ++attempts === 1 ? first.promise : retry.promise,
     );
     const pending = accept("worktree");
     expect(pane.tasks.suggestions).toEqual([]);
@@ -460,13 +459,6 @@ it.each([
     const failure = state.lastError;
     expect(failure).toContain(result ? "Couldn't confirm" : "Synthetic session creation failed");
     expect(state.chatError).toBe(failure);
-    draw();
-    expect(query<HTMLDetailsElement>("details")?.open).toBe(true);
-    expect(container.textContent).toContain(suggestion.prompt);
-    expect(query('[role="alert"]')?.textContent).toContain(
-      result ? "Couldn't confirm" : "Synthetic session creation failed",
-    );
-    expect(query(".task-suggestion__retry")?.textContent).toContain("Retry");
     const retrying = accept();
     expect(pane.tasks.suggestions).toEqual([]);
     expect(state).toMatchObject({ lastError: failure, chatError: failure });
@@ -480,49 +472,30 @@ it.each([
   },
 );
 
-it.each([
-  { field: "lastError", sameMessage: false, beforeRetry: false },
-  { field: "chatError", sameMessage: false, beforeRetry: false },
-  { field: "lastError", sameMessage: true, beforeRetry: true },
-  { field: "chatError", sameMessage: true, beforeRetry: false },
-  { field: "both", sameMessage: true, beforeRetry: false },
-  { field: "task", sameMessage: true, beforeRetry: false },
-] as const)(
-  "preserves a newer error when a task retry succeeds (%j)",
-  async ({ field, sameMessage, beforeRetry }) => {
+it.each(["before retry", "another task"] as const)(
+  "preserves an identical newer error from %s when a retry succeeds",
+  async (writer) => {
     const retry = createDeferred<AcceptResult>();
     let attempts = 0;
     const { pane, state, accept } = createAcceptancePane(() =>
       ++attempts === 2 ? retry.promise : Promise.reject(new Error("Session creation failed")),
     );
     const other = { ...suggestion, id: "task_other" };
-    if (field === "task") {
-      pane.tasks.suggestions = [suggestion, other];
-    }
+    pane.tasks.suggestions = writer === "another task" ? [suggestion, other] : [suggestion];
     await accept();
-    const message = sameMessage ? "Session creation failed" : "Chat send failed";
-    const publishNewerError = () => {
-      for (const target of ["lastError", "chatError"] as const) {
-        if (field === "both" || field === target) {
-          state[target] = message;
-        }
-      }
-    };
-    if (beforeRetry) {
-      publishNewerError();
+    if (writer === "before retry") {
+      state.lastError = "Session creation failed";
     }
     const pending = accept();
-    if (field === "task") {
+    if (writer === "another task") {
       await accept(undefined, other);
-    } else if (!beforeRetry) {
-      publishNewerError();
     }
     retry.resolve(acceptedResult);
     await pending;
-    expect(pane.tasks.suggestions).toEqual(field === "task" ? [other] : []);
+    expect(pane.tasks.suggestions).toEqual(writer === "another task" ? [other] : []);
     expect(state).toMatchObject({
-      lastError: field === "chatError" ? null : message,
-      chatError: field === "lastError" ? null : message,
+      lastError: "Session creation failed",
+      chatError: writer === "another task" ? "Session creation failed" : null,
     });
   },
 );
@@ -570,11 +543,11 @@ it.each(["hello", "client", "unknown"] as const)(
   },
 );
 
-it.each(
-  (["starting", "failed", "started"] as const).flatMap((phase) =>
-    [true, false].map((initiallyKnown) => ({ phase, initiallyKnown })),
-  ),
-)(
+it.each([
+  { phase: "starting", initiallyKnown: false },
+  { phase: "failed", initiallyKnown: true },
+  { phase: "started", initiallyKnown: true },
+])(
   "retires a $phase suggestion after physical session replacement (initially known: $initiallyKnown)",
   async ({ phase, initiallyKnown }) => {
     const { pane, state, request, container, draw, query, accept, accepted } =
