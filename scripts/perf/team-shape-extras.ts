@@ -36,6 +36,7 @@ export type TeamShapeExtrasOptions = {
   sessions: FixtureSession[];
   retainedRuns: number;
   settledRuns?: boolean;
+  teamStress?: boolean;
   approvals: number;
   cronJobs: number;
   cronAnnounceLast?: boolean;
@@ -56,7 +57,9 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const childCount = options.sessions.length - rootCount;
   const childOffset = index % childCount;
   const child = options.sessions[rootCount + childOffset]!;
-  const parent = options.sessions[childOffset % rootCount]!;
+  // Keep collector fan-out on the same bounded parents the stress writer updates.
+  const collector = options.teamStress && options.settledRuns;
+  const parent = options.sessions[childOffset % (collector ? Math.min(64, rootCount) : rootCount)]!;
   const runId = `team-shape-run-${index}`;
   const endedAt =
     options.now - 60_000 - (options.retainedRuns - 1 - index) * TEAM_SHAPE_RUN_SLOT_MS;
@@ -86,7 +89,15 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
     generation: Math.floor(index / childCount) + 1,
     createdAt: startedAt - 1_000,
     archiveAtMs: options.now + 30 * DAY_MS,
-    expectsCompletionMessage: !interrupted,
+    ...(collector
+      ? {
+          collect: true,
+          groupId: `team-shape-collector-${childOffset % Math.min(64, rootCount)}`,
+          swarmRequesterSessionKey: parent.sessionKey,
+          collectorCompletion: { status: failed ? "failed" : "done" },
+        }
+      : {}),
+    expectsCompletionMessage: !collector && !interrupted,
     endedReason: failed ? "subagent-error" : "subagent-complete",
     execution: interrupted
       ? {
@@ -97,30 +108,31 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
           interruptedAt: endedAt,
         }
       : { status: "terminal", startedAt, endedAt, outcome },
-    completion: { required: !interrupted, resultText, capturedAt: endedAt },
-    delivery: interrupted
-      ? { status: "not_required" }
-      : pending
-        ? {
-            status: "pending",
-            createdAt: endedAt,
-            attemptCount: 1,
-            lastAttemptAt: endedAt,
-            lastError: "Synthetic requester temporarily unavailable",
-            nextAttemptAt: options.now + DAY_MS,
-            payload: {
-              requesterSessionKey: parent.sessionKey,
-              requesterDisplayKey: parent.sessionKey,
-              childSessionKey: child.sessionKey,
-              childRunId: runId,
-              task,
-              startedAt,
-              endedAt,
-              outcome,
-              expectsCompletionMessage: true,
-            },
-          }
-        : { status: "delivered", deliveredAt: endedAt + 500 },
+    completion: { required: !collector && !interrupted, resultText, capturedAt: endedAt },
+    delivery:
+      interrupted || collector
+        ? { status: "not_required" }
+        : pending
+          ? {
+              status: "pending",
+              createdAt: endedAt,
+              attemptCount: 1,
+              lastAttemptAt: endedAt,
+              lastError: "Synthetic requester temporarily unavailable",
+              nextAttemptAt: options.now + DAY_MS,
+              payload: {
+                requesterSessionKey: parent.sessionKey,
+                requesterDisplayKey: parent.sessionKey,
+                childSessionKey: child.sessionKey,
+                childRunId: runId,
+                task,
+                startedAt,
+                endedAt,
+                outcome,
+                expectsCompletionMessage: true,
+              },
+            }
+          : { status: "delivered", deliveredAt: endedAt + 500 },
     ...(!pending ? { cleanupHandled: true, cleanupCompletedAt: endedAt + 1_000 } : {}),
   };
 }

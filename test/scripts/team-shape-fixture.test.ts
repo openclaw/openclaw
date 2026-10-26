@@ -273,7 +273,7 @@ it("retains settled history and seeds disabled announce/last jobs without delive
   expect(JSON.parse(String(target?.entry_json))).not.toHaveProperty("deliveryContext");
 });
 
-it("seeds the stress category mix with readable targets and settled unarchived subagents", async () => {
+it("seeds the stress category mix with readable collector parents and settled unarchived children", async () => {
   const stateDir = path.join(temporary.make("team-shape-load-"), "state");
   const { summary } = await generateTeamShapeFixture(
     options(
@@ -296,7 +296,10 @@ it("seeds the stress category mix with readable targets and settled unarchived s
     "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NULL": 4,
   });
   expectCounts(state, {
-    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered'": 43,
+    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'not_required' AND json_extract(payload_json, '$.collect') = 1 AND json_extract(payload_json, '$.collectorCompletion.status') IN ('done', 'failed')": 43,
+  });
+  expectCounts(state, {
+    "subagent_runs WHERE json_extract(payload_json, '$.swarmRequesterSessionKey') = requester_session_key AND json_extract(payload_json, '$.groupId') IS NOT NULL": 43,
   });
   expect(summary.stressTargets?.length).toBeGreaterThan(0);
   for (const target of summary.stressTargets ?? []) {
