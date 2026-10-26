@@ -88,34 +88,32 @@ export const createInboundDiscussionConfig = (): CoreConfig => ({
   },
 });
 
-export function createInboundAgentAccount(
+export const createInboundAgentAccount = (
   overrides: Partial<ResolvedClickClackAccount> = {},
-): ResolvedClickClackAccount {
-  return {
-    ...location,
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    apiEndpoint: "http://127.0.0.1:8080",
-    token: "test-token-placeholder",
-    replyMode: "agent",
-    toolsAllow: [],
-    defaultTo: "channel:general",
-    allowFrom: ["*"],
-    botUserId: "usr_receiver",
-    botHandle: "blackbird",
-    allowBots: false,
-    reconnectMs: 1_500,
-    agentActivity: false,
-    commandMenu: true,
-    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
-    requireMention: false,
-    mentionPatterns: [],
-    groups: {},
-    ...overrides,
-    config: { ...location, allowFrom: ["*"], ...overrides.config },
-  };
-}
+): ResolvedClickClackAccount => ({
+  ...location,
+  accountId: "default",
+  enabled: true,
+  configured: true,
+  apiEndpoint: "http://127.0.0.1:8080",
+  token: "test-token-placeholder",
+  replyMode: "agent",
+  toolsAllow: [],
+  defaultTo: "channel:general",
+  allowFrom: ["*"],
+  botUserId: "usr_receiver",
+  botHandle: "blackbird",
+  allowBots: false,
+  reconnectMs: 1_500,
+  agentActivity: false,
+  commandMenu: true,
+  discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+  requireMention: false,
+  mentionPatterns: [],
+  groups: {},
+  ...overrides,
+  config: { ...location, allowFrom: ["*"], ...overrides.config },
+});
 
 export const createInboundAuthor = (overrides: Partial<ClickClackUser> = {}): ClickClackUser => ({
   id: "usr_owner",
@@ -128,10 +126,7 @@ export const createInboundAuthor = (overrides: Partial<ClickClackUser> = {}): Cl
 });
 
 export function createInboundAccountConfig(
-  account: ResolvedClickClackAccount,
-  config: CoreConfig = {},
-): CoreConfig {
-  const {
+  {
     accountId,
     configured: _configured,
     apiEndpoint,
@@ -141,12 +136,14 @@ export function createInboundAccountConfig(
     botHandle: _botHandle,
     config: authoredConfig,
     ...settings
-  } = account;
+  }: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): CoreConfig {
   const accountConfig = {
     ...authoredConfig,
     ...settings,
     apiBaseUrl: apiEndpoint,
-    workspace: authoredConfig.workspace ?? account.workspace,
+    workspace: authoredConfig.workspace ?? settings.workspace,
     botUserId: authoredConfig.botUserId,
   };
   return {

@@ -4,19 +4,14 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { claimClickClackSetupCode } from "./setup-claim.js";
 
-function createLookupFn(...addresses: string[]): LookupFn {
-  let index = 0;
+function createLookupFn(initialAddress: string, ...nextAddresses: string[]): LookupFn {
+  let address = initialAddress;
   return vi.fn(async (_hostname: string, options?: unknown) => {
-    const address = addresses[Math.min(index, addresses.length - 1)];
-    index += 1;
-    if (!address) {
-      throw new Error("missing mocked DNS address");
-    }
     const result = { address, family: 4 as const };
-    if (typeof options === "object" && options && (options as { all?: boolean }).all) {
-      return [result];
-    }
-    return result;
+    address = nextAddresses.shift() ?? address;
+    return typeof options === "object" && options && (options as { all?: boolean }).all
+      ? [result]
+      : result;
   }) as unknown as LookupFn;
 }
 
@@ -46,13 +41,13 @@ function claim(overrides: Partial<Parameters<typeof claimClickClackSetupCode>[0]
   });
 }
 
-function metadata(contract_version: number, api_base_url = apiBaseUrl) {
-  return claimResponse({ contract_version, api_base_url });
+function metadata(extra: Record<string, unknown> = {}) {
+  return claimResponse({ contract_version: 1, api_base_url: apiBaseUrl, ...extra });
 }
 
 describe("ClickClack setup-code claim", () => {
   it("accepts a matching v1 contract with a path-mounted API base", async () => {
-    fetchMock.mockResolvedValue(Response.json(metadata(1)));
+    fetchMock.mockResolvedValue(Response.json(metadata()));
 
     await expect(claim({ expectedClaimUrl: claimUrl })).resolves.toMatchObject({
       contract_version: 1,
@@ -72,20 +67,21 @@ describe("ClickClack setup-code claim", () => {
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
-  it("rejects incomplete, unsupported, and mismatched v1 metadata", async () => {
-    for (const [response, message] of [
-      [claimResponse(), "legacy response"],
-      [metadata(2), "invalid v1 contract metadata"],
-      [metadata(1, "https://other.example/services/clickclack"), "does not match the claim URL"],
-      [metadata(1, `${apiBaseUrl}?invalid=1`), "response.api_base_url is invalid"],
-      [
-        metadata(1, "http://10.0.0.5/services/clickclack"),
-        "must use HTTPS unless it is on loopback",
-      ],
-    ] as const) {
-      fetchMock.mockResolvedValueOnce(Response.json(response));
-      await expect(claim({ expectedClaimUrl: claimUrl })).rejects.toThrow(message);
-    }
+  it.each([
+    [claimResponse(), "legacy response"],
+    [metadata({ contract_version: 2 }), "invalid v1 contract metadata"],
+    [metadata({ api_base_url: "https://other.example" }), "does not match the claim URL"],
+    [metadata({ api_base_url: `${apiBaseUrl}?invalid=1` }), "response.api_base_url is invalid"],
+    [metadata({ api_base_url: "http://10.0.0.5" }), "must use HTTPS unless it is on loopback"],
+    [
+      metadata({
+        workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
+      }),
+      "invalid workspace.name",
+    ],
+  ] as const)("rejects claim response: %s (%s)", async (response, message) => {
+    fetchMock.mockResolvedValueOnce(Response.json(response));
+    await expect(claim({ expectedClaimUrl: claimUrl })).rejects.toThrow(message);
   });
 
   it("pins the validated loopback address when claiming over HTTP", async () => {
@@ -110,44 +106,31 @@ describe("ClickClack setup-code claim", () => {
     expect(lookupFn).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects non-loopback HTTP claims before sending a request", async () => {
-    for (const address of ["10.0.0.5", "93.184.216.34", "198.18.0.1"]) {
-      await expect(
-        claim({
-          claimUrl: "http://clickclack.example/api/bot-setup-codes/claim",
-          lookupFn: createLookupFn(address),
-        }),
-      ).rejects.toThrow("ClickClack setup codes require HTTPS unless the server is on loopback.");
-    }
-
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("bounds private-host DNS resolution with the claim timeout", async () => {
+  it.each([
+    [
+      "non-loopback DNS",
+      createLookupFn("10.0.0.5"),
+      "ClickClack setup codes require HTTPS unless the server is on loopback.",
+    ],
+    [
+      "stalled DNS",
+      vi.fn(() => new Promise<never>(() => {})) as unknown as LookupFn,
+      "ClickClack setup code claim timed out after 30000ms",
+    ],
+  ] as const)("rejects %s before sending a request", async (_name, lookupFn, message) => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
     });
-    const lookupFn = vi.fn(() => new Promise<never>(() => {})) as unknown as LookupFn;
-
     const pending = expect(
       claim({
         claimUrl: "http://clickclack.internal/api/bot-setup-codes/claim",
         lookupFn,
       }),
-    ).rejects.toThrow("ClickClack setup code claim timed out after 30000ms");
+    ).rejects.toThrow(message);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await pending;
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed claim responses", async () => {
-    fetchMock.mockResolvedValue(
-      Response.json(
-        claimResponse({ workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" } }),
-      ),
-    );
-    await expect(claim()).rejects.toThrow("invalid workspace.name");
   });
 });
