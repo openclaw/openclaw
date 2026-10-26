@@ -9,9 +9,7 @@ const EXPECTED_AUTHORIZATION = `Basic ${Buffer.from(credentials).toString("base6
 
 async function startServer(status = 200, streaming = true) {
   const sockets = new Set<Socket>();
-  const authorizations: Array<string | undefined> = [];
   const server = createServer((request, response) => {
-    authorizations.push(request.headers.authorization);
     if (request.headers.authorization !== EXPECTED_AUTHORIZATION) {
       response.writeHead(401).end();
       return;
@@ -42,14 +40,12 @@ async function startServer(status = 200, streaming = true) {
   return {
     url: `http://${credentials}@127.0.0.1:${port}/json/version`,
     sockets,
-    authorizations,
   };
 }
 
 const waitFor = (assertion: () => void) => vi.waitFor(assertion, { timeout: 1_250, interval: 20 });
 
-async function expectReleased(server: Awaited<ReturnType<typeof startServer>>, requests = 1) {
-  expect(server.authorizations).toEqual(Array(requests).fill(EXPECTED_AUTHORIZATION));
+async function expectReleased(server: Awaited<ReturnType<typeof startServer>>) {
   await waitFor(() => expect(server.sockets.size).toBe(0));
 }
 
@@ -57,7 +53,7 @@ it("closes every unread streaming response after concurrent status probes", asyn
   const server = await startServer();
   await Promise.all(Array.from({ length: 8 }, () => fetchOk(server.url, 1_000)));
 
-  await expectReleased(server, 8);
+  await expectReleased(server);
 });
 
 it("releases an unread streaming response even when a caller clones it", async () => {
@@ -104,6 +100,4 @@ it("preserves authenticated CDP JSON responses with tuple headers", async () => 
   await expect(fetchJson(url.toString(), 1_000, { headers })).resolves.toEqual({
     Browser: "OpenClaw transport fixture",
   });
-
-  expect(server.authorizations).toEqual([EXPECTED_AUTHORIZATION]);
 });

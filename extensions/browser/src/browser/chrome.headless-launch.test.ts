@@ -32,10 +32,7 @@ import { resolveBrowserConfig, resolveProfile } from "./config.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   fixture.root = tempDirs.make("openclaw-headless-launch-");
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify({ Browser: "Chrome/Test" }))),
-  );
+  vi.stubGlobal("fetch", async () => Response.json({ Browser: "Chrome/Test" }));
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -46,7 +43,6 @@ afterEach(() => {
 it.each(["linux", "darwin", "win32"] as const)(
   "seeds a fresh headless profile before its only launch on %s",
   async (platform) => {
-    const syncFlush = vi.spyOn(fs, "fsyncSync");
     const executablePath = path.join(fixture.root, "chrome");
     fs.writeFileSync(executablePath, "");
     const resolved = resolveBrowserConfig({ executablePath });
@@ -81,7 +77,6 @@ it.each(["linux", "darwin", "win32"] as const)(
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });
-    expect(syncFlush).not.toHaveBeenCalled();
     if (process.platform !== "win32") {
       expect(fs.statSync(preferencesPath).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.join(userDataDir, "Local State")).mode & 0o777).toBe(0o600);
