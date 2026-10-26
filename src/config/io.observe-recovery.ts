@@ -17,7 +17,7 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
-import type { ConfigHealthSnapshot } from "./io.health-state.types.js";
+import type { ConfigHealthFingerprint, ConfigHealthSnapshot } from "./io.health-state.types.js";
 import {
   parseBackupConfigRaw,
   prepareLastGoodRecoverySource,
@@ -341,10 +341,7 @@ function* planSuspiciousConfigRead(
   // access to a verified `.last-good` payload promoted for these exact bytes.
   const preferLastGoodSource =
     handAuthoredBaseline &&
-    (backupReadFailed ||
-      !backupRaw ||
-      !backupParse ||
-      hashConfigRaw(backupRaw) !== baseline?.hash);
+    (backupReadFailed || !backupRaw || !backupParse || hashConfigRaw(backupRaw) !== baseline?.hash);
   let restoreSourceRaw: string;
   let restoreSourcePath: string;
   let restoreSourceContext: string;
