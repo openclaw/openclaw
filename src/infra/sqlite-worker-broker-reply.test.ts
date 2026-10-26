@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import * as mainThreadStall from "./main-thread-stall.js";
 import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
@@ -35,6 +36,26 @@ function createJob(request: Job["request"]): Job {
     detach: unexpected,
   };
 }
+
+it("settles ordinary replies without allocating a decode completion envelope", () => {
+  const decode = vi.spyOn(mainThreadStall, "runWithMainThreadTask");
+  try {
+    for (const value of [undefined, null, 42, { bytes: Buffer.from([0, 127, 255]), count: 42n }]) {
+      const job = createJob({ type: "execute", id: 1, actor: 1, input: new Uint8Array() });
+      const finish = vi.fn();
+      receiveSqliteWorkerReply(
+        { actors: new Set(), current: job, worker: { postMessage: unexpected } },
+        { id: 1, ok: true, value: serialize(value) },
+        { fail: unexpected, finish, dispatch() {} },
+      );
+      expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value);
+      // The observation boundary needs only continuation requests; completion allocates no envelope.
+      expect(decode.mock.results.at(-1)?.value).toBeUndefined();
+    }
+  } finally {
+    decode.mockRestore();
+  }
+});
 
 it.each(["framed", "close"])("publishes receipts before settling: %s", async (kind) => {
   const key = "openclaw.sqliteNativeRuntimeAdmission";
