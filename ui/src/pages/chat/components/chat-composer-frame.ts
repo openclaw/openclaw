@@ -253,6 +253,8 @@ export function createChatComposerContext(
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
+      state.slashMenu.reset();
+      state.skillMenu.reset();
       state.pendingClearedSubmittedDraft = {
         key: draftKey,
         value: submittedDraft,
