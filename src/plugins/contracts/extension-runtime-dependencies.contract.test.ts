@@ -1,4 +1,3 @@
-// Extension runtime dependency contract tests cover runtime dependency placement for extensions.
 import fs from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
@@ -43,11 +42,12 @@ const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   ["extensions/lobster", new Set(["@clawdbot/lobster"])],
 ]);
 
-type PackageManifest = {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
+type DependencyField =
+  | "dependencies"
+  | "optionalDependencies"
+  | "peerDependencies"
+  | "devDependencies";
+type PackageManifest = Partial<Record<DependencyField, Record<string, string>>> & {
   openclaw?: {
     build?: {
       staticAssets?: Array<{ source?: string }>;
@@ -75,10 +75,9 @@ function listPackageManifests(root: string): string[] {
 function shouldSkipRuntimeFile(filePath: string): boolean {
   const normalized = toRepoPath(filePath);
   if (
-    normalized.includes("/node_modules/") ||
-    normalized.includes("/dist/") ||
-    normalized.includes("/coverage/") ||
-    normalized.includes("/assets/") ||
+    ["/node_modules/", "/dist/", "/coverage/", "/assets/"].some((part) =>
+      normalized.includes(part),
+    ) ||
     // Bundler configs execute during asset preparation, not in the plugin runtime.
     normalized.endsWith("/web/vite.config.ts") ||
     normalized.endsWith("/rolldown.config.mjs")
@@ -119,19 +118,12 @@ function listRuntimeFiles(root: string): string[] {
 }
 
 function readManifestText(root: string): string {
-  const manifestPath = path.join(root, "openclaw.plugin.json");
-  const resolvedManifestPath = path.resolve(REPO_ROOT, manifestPath);
+  const resolvedManifestPath = path.resolve(REPO_ROOT, root, "openclaw.plugin.json");
   return fs.existsSync(resolvedManifestPath) ? fs.readFileSync(resolvedManifestPath, "utf8") : "";
 }
 
 function packageNameForSpecifier(specifier: string): string | null {
-  if (
-    specifier.startsWith("$") ||
-    specifier.includes("${") ||
-    specifier.startsWith(".") ||
-    specifier.startsWith("/") ||
-    specifier.startsWith("node:")
-  ) {
+  if (/^(?:[$./]|node:)/.test(specifier) || specifier.includes("${")) {
     return null;
   }
   if (specifier.startsWith("@")) {
@@ -149,13 +141,10 @@ function isTypeOnlyClause(clause: string | undefined): boolean {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return false;
   }
-  for (const part of trimmed.slice(1, -1).split(",")) {
-    const importName = part.trim();
-    if (importName.length > 0 && !importName.startsWith("type ")) {
-      return false;
-    }
-  }
-  return true;
+  return trimmed
+    .slice(1, -1)
+    .split(",")
+    .every((part) => !part.trim() || part.trim().startsWith("type "));
 }
 
 function collectRuntimeImports(filePath: string): string[] {
@@ -178,12 +167,17 @@ function collectRuntimeImports(filePath: string): string[] {
   return [...imports].toSorted();
 }
 
+function dependencyNames(
+  manifest: PackageManifest,
+  fields: readonly DependencyField[] = ["dependencies", "optionalDependencies"],
+) {
+  return fields.flatMap((field) => Object.keys(manifest[field] ?? {}));
+}
+
 function runtimeDependencyNames(manifest: PackageManifest): Set<string> {
-  return new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.optionalDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ]);
+  return new Set(
+    dependencyNames(manifest, ["dependencies", "optionalDependencies", "peerDependencies"]),
+  );
 }
 
 function collectBundledRuntimeDependencies(root: string, manifest: PackageManifest) {
@@ -230,45 +224,21 @@ function collectBundledRuntimeDependencies(root: string, manifest: PackageManife
   return { dependencies, entryFiles };
 }
 
-function allDependencyNames(manifest: PackageManifest): string[] {
-  return [
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.devDependencies ?? {}),
-    ...Object.keys(manifest.optionalDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ].toSorted();
-}
-
-function isDiscordPackageDependency(dependencyName: string): boolean {
-  return (
-    dependencyName === "discord-api-types" ||
-    dependencyName.startsWith("@discordjs/") ||
-    dependencyName.startsWith("@snazzah/")
-  );
-}
-
 describe("Discord dependency ownership", () => {
-  it("keeps Discord packages out of the root manifest", () => {
-    const manifest = readPackageManifest("package.json");
-    const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
-
-    expect(discordDependencies).toStrictEqual([]);
+  it.each(
+    ["package.json", ...listPackageManifests(EXTENSION_ROOT)].filter(
+      (file) => file !== "extensions/discord/package.json",
+    ),
+  )("%s does not own Discord package dependencies", (file) => {
+    const manifest = readPackageManifest(file);
+    const names = [
+      ...runtimeDependencyNames(manifest),
+      ...Object.keys(manifest.devDependencies ?? {}),
+    ];
+    expect(
+      names.filter((name) => /^(?:discord-api-types$|@discordjs\/|@snazzah\/)/.test(name)),
+    ).toStrictEqual([]);
   });
-
-  for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
-    const extensionDir = toRepoPath(path.dirname(manifestPath));
-
-    if (extensionDir === "extensions/discord") {
-      continue;
-    }
-
-    it(`${extensionDir} does not own Discord package dependencies`, () => {
-      const manifest = readPackageManifest(manifestPath);
-      const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
-
-      expect(discordDependencies).toStrictEqual([]);
-    });
-  }
 });
 
 describe("extension runtime dependency manifests", () => {
@@ -292,10 +262,7 @@ describe("extension runtime dependency manifests", () => {
   for (const [extensionDir, dependencies] of COMPUTED_RUNTIME_DEPENDENCIES) {
     it(`${extensionDir} declares every computed runtime dependency`, () => {
       const manifest = readPackageManifest(path.join(extensionDir, "package.json"));
-      const declared = new Set([
-        ...Object.keys(manifest.dependencies ?? {}),
-        ...Object.keys(manifest.optionalDependencies ?? {}),
-      ]);
+      const declared = new Set(dependencyNames(manifest));
 
       expect([...dependencies].filter((dependencyName) => !declared.has(dependencyName))).toEqual(
         [],
@@ -306,7 +273,7 @@ describe("extension runtime dependency manifests", () => {
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
     const extensionDir = toRepoPath(path.dirname(manifestPath));
 
-    it(`${extensionDir} declares every runtime package import`, () => {
+    it(`${extensionDir} declares exactly its runtime dependencies`, () => {
       const manifest = readPackageManifest(manifestPath);
       const declared = runtimeDependencyNames(manifest);
       const bundled = collectBundledRuntimeDependencies(extensionDir, manifest);
@@ -333,17 +300,8 @@ describe("extension runtime dependency manifests", () => {
       }
 
       expect(Object.fromEntries(missing)).toStrictEqual({});
-    });
-
-    it(`${extensionDir} does not keep unused direct runtime dependencies`, () => {
-      const manifest = readPackageManifest(manifestPath);
-      const declared = [
-        ...Object.keys(manifest.dependencies ?? {}),
-        ...Object.keys(manifest.optionalDependencies ?? {}),
-      ].toSorted();
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const allowedComputed = COMPUTED_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
-      const bundled = collectBundledRuntimeDependencies(extensionDir, manifest);
       const bundledIndirect = new Map(
         [...bundled.dependencies.values()].flatMap((dependency) =>
           Object.entries({ ...dependency.dependencies, ...dependency.optionalDependencies }),
@@ -354,15 +312,17 @@ describe("extension runtime dependency manifests", () => {
         .concat(readManifestText(extensionDir))
         .join("\n");
 
-      const unused = declared.filter(
-        (dependencyName) =>
-          !allowedIndirect.has(dependencyName) &&
-          !allowedComputed.has(dependencyName) &&
-          bundledIndirect.get(dependencyName) !==
-            (manifest.optionalDependencies?.[dependencyName] ??
-              manifest.dependencies?.[dependencyName]) &&
-          !runtimeText.includes(dependencyName),
-      );
+      const unused = dependencyNames(manifest)
+        .toSorted()
+        .filter(
+          (dependencyName) =>
+            !allowedIndirect.has(dependencyName) &&
+            !allowedComputed.has(dependencyName) &&
+            bundledIndirect.get(dependencyName) !==
+              (manifest.optionalDependencies?.[dependencyName] ??
+                manifest.dependencies?.[dependencyName]) &&
+            !runtimeText.includes(dependencyName),
+        );
 
       expect(unused).toStrictEqual([]);
     });

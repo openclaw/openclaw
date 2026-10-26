@@ -1,4 +1,3 @@
-// Plugin tool contract tests cover bundled plugin tool schemas and invocation contracts.
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/ast";
@@ -125,20 +124,10 @@ function collectToolContractFailures(extensionsDir: string): string[] {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as PluginManifestFile;
     const pluginId = typeof manifest.id === "string" ? manifest.id : path.basename(pluginDir);
     const declaredTools = new Set(normalizeManifestTools(manifest.contracts?.tools));
-    const registeredNames = new Set<string>();
-    let registerCallCount = 0;
-
-    for (const filePath of walkFiles(pluginDir).filter(isProductionSource)) {
-      const source = fs.readFileSync(filePath, "utf-8");
-      for (const names of listRegisterToolCalls(filePath, source)) {
-        registerCallCount += 1;
-        for (const name of names) {
-          registeredNames.add(name);
-        }
-      }
-    }
-
-    if (registerCallCount === 0) {
+    const calls = walkFiles(pluginDir)
+      .filter(isProductionSource)
+      .flatMap((filePath) => listRegisterToolCalls(filePath, fs.readFileSync(filePath, "utf-8")));
+    if (calls.length === 0) {
       continue;
     }
     if (declaredTools.size === 0) {
@@ -146,7 +135,9 @@ function collectToolContractFailures(extensionsDir: string): string[] {
       continue;
     }
 
-    const missing = [...registeredNames].filter((name) => !declaredTools.has(name)).toSorted();
+    const missing = [...new Set(calls.flat())]
+      .filter((name) => !declaredTools.has(name))
+      .toSorted();
     if (missing.length > 0) {
       failures.push(`${pluginId}: missing contracts.tools for ${missing.join(", ")}`);
     }
