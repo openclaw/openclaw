@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import * as installedPluginIndexInstallRecords from "./installed-plugin-index-install-records.js";
@@ -29,7 +30,11 @@ it("uses supplied install records without extracting the startup snapshot again"
       installedPluginIndexRecords,
       "loadInstalledPluginIndexInstallRecordsSync",
     );
-    for (const installRecords of [{ alpha: { source: "npm" as const, spec: "alpha@2" } }, {}]) {
+    const suppliedLedgers: Record<string, PluginInstallRecord>[] = [
+      { alpha: { source: "npm", spec: "alpha@2" } },
+      {},
+    ];
+    for (const installRecords of suppliedLedgers) {
       const context = resolvePluginLoadCacheContext({
         metadataSnapshot: prepared,
         installRecords,
