@@ -229,7 +229,7 @@ it("preserves unknown value-only model identities instead of matching display al
   ).toEqual({ currentOverride: "proxy/retired", defaultModel: "custom/missing" });
 });
 
-it.each<[string, Partial<ModelInput>, string]>([
+it.each<[string, Partial<Omit<ModelInput, "sessionsResult">>, string]>([
   ["agent before global", {}, "openai/agent"],
   ["global when the agent has no default", { agentDefaultModel: undefined }, "openai/global"],
   [
