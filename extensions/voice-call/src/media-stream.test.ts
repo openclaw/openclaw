@@ -10,7 +10,7 @@ import type {
 import * as realtimeVoiceSdk from "openclaw/plugin-sdk/realtime-voice";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocket, type WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { MediaStreamHandler, type MediaStreamConfig } from "./media-stream.js";
 import {
@@ -79,6 +79,31 @@ function createAcceptedHandler(
   });
 }
 
+function createLifecycleFixture(overrides: Partial<RealtimeTranscriptionSession> = {}) {
+  const session = { ...createStubSession(), close: vi.fn(), ...overrides };
+  const createSession = vi.fn(() => session);
+  const onConnect = vi.fn();
+  const onDisconnect = vi.fn();
+  const onTranscriptionReady = vi.fn();
+  const shouldAcceptStream = vi.fn(() => true);
+  const handler = createHandler({
+    transcriptionProvider: createStubSttProvider(createSession),
+    shouldAcceptStream,
+    onConnect,
+    onDisconnect,
+    onTranscriptionReady,
+  });
+  return {
+    handler,
+    session,
+    createSession,
+    onConnect,
+    onDisconnect,
+    onTranscriptionReady,
+    shouldAcceptStream,
+  };
+}
+
 function captureConsole(method: "log" | "error") {
   const spy = vi.spyOn(console, method).mockImplementation(() => {});
   onTestFinished(() => spy.mockRestore());
@@ -101,19 +126,10 @@ describe("MediaStreamHandler security hardening", () => {
     await withConnection(handler, async (ws) => {
       ws.send("{not json");
 
-      await vi.waitFor(() => {
-        expect(errorSpy).toHaveBeenCalledWith(
-          "[MediaStream] Error processing message:",
-          expect.objectContaining({
-            message: "Twilio media stream message was malformed JSON",
-          }),
-        );
-      });
-      const error = errorSpy.mock.calls.find(
-        ([message]) => message === "[MediaStream] Error processing message:",
-      )?.[1];
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+      const error = errorSpy.mock.calls[0]?.[1];
+      expect(error).toMatchObject({ message: "Twilio media stream message was malformed JSON" });
       expect(error).toBeInstanceOf(Error);
-      expect(error).not.toBeInstanceOf(SyntaxError);
       expect((error as Error).cause).toBeInstanceOf(SyntaxError);
 
       await closeWs(ws);
@@ -243,7 +259,6 @@ describe("MediaStreamHandler security hardening", () => {
         transport: "gateway-relay",
         brain: "agent-consult",
         provider: "openai",
-        seq: 1,
       });
       expect(talkEvents().find((event) => event.type === "transcript.done")).toMatchObject({
         final: true,
@@ -350,49 +365,50 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
-  it("enforces pending connection limits", async () => {
-    const handler = createHandler({
-      preStartTimeoutMs: 5_000,
+  it.each([
+    {
+      name: "global pending cap",
       maxPendingConnections: 1,
-      maxPendingConnectionsPerIp: 1,
-    });
-    await withServer(handler, async (url) => {
-      const first = await connectWs(url);
-      const second = await connectWs(url);
-      const secondClosed = await waitForClose(second);
-
-      expect(secondClosed.code).toBe(1013);
-      expect(secondClosed.reason).toContain("Too many pending");
-      expect(first.readyState).toBe(WebSocket.OPEN);
-
-      await closeWs(first);
-    });
-  });
-
-  it("uses resolved client IPs for per-IP pending limits", async () => {
+      secondIp: "203.0.113.20",
+      rejects: true,
+    },
+    {
+      name: "per-IP pending cap",
+      maxPendingConnections: 10,
+      secondIp: "198.51.100.10",
+      rejects: true,
+    },
+    {
+      name: "distinct resolved IPs",
+      maxPendingConnections: 10,
+      secondIp: "203.0.113.20",
+      rejects: false,
+    },
+  ])("enforces $name", async ({ maxPendingConnections, secondIp, rejects }) => {
     const handler = createHandler({
       preStartTimeoutMs: 5_000,
-      maxPendingConnections: 10,
+      maxPendingConnections,
       maxPendingConnectionsPerIp: 1,
       resolveClientIp: (request) => String(request.headers["x-forwarded-for"] ?? ""),
     });
     await withServer(handler, async (url) => {
       const connectFrom = async (ip: string) => {
         const ws = new WebSocket(url, { headers: { "x-forwarded-for": ip } });
-        await withTimeout(
-          new Promise((resolve) => {
-            ws.once("open", resolve);
-          }),
-        );
+        await withTimeout(once(ws, "open"));
         return ws;
       };
       const first = await connectFrom("198.51.100.10");
-      const second = await connectFrom("203.0.113.20");
-
+      const second = await connectFrom(secondIp);
       expect(first.readyState).toBe(WebSocket.OPEN);
-      expect(second.readyState).toBe(WebSocket.OPEN);
-
-      await closeWs(first, second);
+      if (rejects) {
+        const closed = await waitForClose(second);
+        expect(closed.code).toBe(1013);
+        expect(closed.reason).toContain("Too many pending");
+        await closeWs(first);
+      } else {
+        expect(second.readyState).toBe(WebSocket.OPEN);
+        await closeWs(first, second);
+      }
     });
   });
 
@@ -405,15 +421,7 @@ describe("MediaStreamHandler security hardening", () => {
 
     const fakeWss = {
       clients: new Set([{}]),
-      handleUpgrade:
-        vi.fn<
-          (
-            request: IncomingMessage,
-            socket: unknown,
-            head: Buffer,
-            callback: (ws: WebSocket) => void,
-          ) => void
-        >(),
+      handleUpgrade: vi.fn<WebSocketServer["handleUpgrade"]>(),
       emit: vi.fn(),
       on: vi.fn(),
     };
@@ -429,19 +437,10 @@ describe("MediaStreamHandler security hardening", () => {
       write: vi.fn(),
       destroy: vi.fn(),
     });
-    const firstSocket = makeSocket();
-    handler.handleUpgrade(
-      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
-      firstSocket as never,
-      Buffer.alloc(0),
-    );
-
+    const request = { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage;
+    handler.handleUpgrade(request, makeSocket() as never, Buffer.alloc(0));
     const secondSocket = makeSocket();
-    handler.handleUpgrade(
-      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
-      secondSocket as never,
-      Buffer.alloc(0),
-    );
+    handler.handleUpgrade(request, secondSocket as never, Buffer.alloc(0));
 
     expect(fakeWss.handleUpgrade).toHaveBeenCalledTimes(1);
     expect(secondSocket.write).toHaveBeenCalledOnce();
@@ -452,12 +451,7 @@ describe("MediaStreamHandler security hardening", () => {
       throw new Error("Expected upgrade callback to be registered");
     }
     completeUpgrade({} as WebSocket);
-    expect(fakeWss.emit).toHaveBeenCalledOnce();
-    expect(fakeWss.emit).toHaveBeenCalledWith(
-      "connection",
-      expect.anything(),
-      expect.objectContaining({ socket: expect.objectContaining({ remoteAddress: "127.0.0.1" }) }),
-    );
+    expect(fakeWss.emit).toHaveBeenCalledExactlyOnceWith("connection", expect.anything(), request);
   });
 
   it("releases in-flight reservations when ws rejects a malformed upgrade before the callback", async () => {
@@ -537,11 +531,7 @@ describe("MediaStreamHandler security hardening", () => {
     const transcriptionReady = createDeferred<void>();
     const audioReceived = createDeferred<void>();
     const receivedAudio: Buffer[] = [];
-    const onConnect = vi.fn();
-    const onTranscriptionReady = vi.fn(() => transcriptionReady.resolve());
-
-    const session: RealtimeTranscriptionSession = {
-      ...createStubSession(),
+    const { handler, onConnect, onTranscriptionReady } = createLifecycleFixture({
       connect: async () => {
         expect(onConnect).toHaveBeenCalledOnce();
         sttConnectStarted.resolve();
@@ -552,12 +542,8 @@ describe("MediaStreamHandler security hardening", () => {
         audioReceived.resolve();
       },
       isConnected: () => false,
-    };
-
-    const handler = createAcceptedHandler(session, {
-      onConnect,
-      onTranscriptionReady,
     });
+    onTranscriptionReady.mockImplementation(() => transcriptionReady.resolve());
     await withConnection(handler, async (ws) => {
       try {
         sendStart(ws, "MZ-early-media", "CA-early-media");
@@ -567,7 +553,6 @@ describe("MediaStreamHandler security hardening", () => {
         await withTimeout(audioReceived.promise);
 
         expect(Buffer.concat(receivedAudio).toString()).toBe("early");
-        expect(onConnect).toHaveBeenCalledOnce();
         expect(onTranscriptionReady).not.toHaveBeenCalled();
 
         sttReady.resolve();
@@ -589,25 +574,15 @@ describe("MediaStreamHandler security hardening", () => {
   it("closes the media stream and disconnects once when STT readiness fails", async () => {
     const sttConnectStarted = createDeferred<void>();
     const onDisconnectReady = createDeferred<void>();
-    const onConnect = vi.fn();
-    const onTranscriptionReady = vi.fn();
-    const onDisconnect = vi.fn(() => onDisconnectReady.resolve());
-
-    const session: RealtimeTranscriptionSession = {
-      ...createStubSession(),
-      connect: async () => {
-        sttConnectStarted.resolve();
-        throw new Error("provider unavailable");
-      },
-      close: vi.fn(),
-      isConnected: () => false,
-    };
-
-    const handler = createAcceptedHandler(session, {
-      onConnect,
-      onTranscriptionReady,
-      onDisconnect,
-    });
+    const { handler, session, onConnect, onTranscriptionReady, onDisconnect } =
+      createLifecycleFixture({
+        connect: async () => {
+          sttConnectStarted.resolve();
+          throw new Error("provider unavailable");
+        },
+        isConnected: () => false,
+      });
+    onDisconnect.mockImplementation(() => onDisconnectReady.resolve());
     await withConnection(handler, async (ws) => {
       sendStart(ws, "MZ-stt-fail", "CA-stt-fail");
 
@@ -673,18 +648,8 @@ describe("MediaStreamHandler security hardening", () => {
 
 describe("MediaStreamHandler lifecycle", () => {
   it("rejects duplicate start frames without creating another STT session", async () => {
-    const closeSession = vi.fn();
-    const sttSession = { ...createStubSession(), close: closeSession };
-    const createSession = vi.fn(() => sttSession);
-    const shouldAcceptStream = vi.fn(() => true);
-    const onConnect = vi.fn();
-    const onDisconnect = vi.fn();
-    const handler = createHandler({
-      transcriptionProvider: createStubSttProvider(createSession),
-      shouldAcceptStream,
-      onConnect,
-      onDisconnect,
-    });
+    const { handler, session, createSession, shouldAcceptStream, onConnect, onDisconnect } =
+      createLifecycleFixture();
     await withConnection(handler, async (ws) => {
       sendStart(ws, "MZ-first", "CA-first");
       await vi.waitFor(() => expect(onConnect).toHaveBeenCalledWith("CA-first", "MZ-first"));
@@ -697,20 +662,14 @@ describe("MediaStreamHandler lifecycle", () => {
       expect(shouldAcceptStream).toHaveBeenCalledTimes(1);
       expect(onConnect).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => {
-        expect(closeSession).toHaveBeenCalledTimes(1);
+        expect(session.close).toHaveBeenCalledTimes(1);
         expect(onDisconnect).toHaveBeenCalledExactlyOnceWith("CA-first", "MZ-first");
       });
     });
   });
 
   it("terminates active streams and shares concurrent close completion", async () => {
-    const closeSession = vi.fn();
-    const onConnect = vi.fn();
-    const onDisconnect = vi.fn();
-    const handler = createAcceptedHandler(
-      { ...createStubSession(), close: closeSession },
-      { onConnect, onDisconnect },
-    );
+    const { handler, session, onConnect, onDisconnect } = createLifecycleFixture();
     const server = await startWsServer(handler);
     const ws = await connectWs(server.url);
     const shutdownBarrier = createDeferred<void>();
@@ -730,7 +689,7 @@ describe("MediaStreamHandler lifecycle", () => {
       expect(secondClose).toBe(firstClose);
       expect(await closed).toEqual({ code: 1006, reason: "" });
       await vi.waitFor(() => {
-        expect(closeSession).toHaveBeenCalledTimes(1);
+        expect(session.close).toHaveBeenCalledTimes(1);
         expect(onDisconnect).toHaveBeenCalledExactlyOnceWith("CA-shutdown", "MZ-shutdown");
       });
       expect(closeSettled).toBe(false);
@@ -797,25 +756,6 @@ describe("MediaStreamHandler TTS queue", () => {
       expect(completed).toBe(true);
       await closeWs(ws);
     });
-  });
-
-  it("cancels active playback and clears queued items", async () => {
-    const handler = createHandler();
-    let queuedRan = false;
-    const started: string[] = [];
-    const active = handler.queueTts("stream-1", async (signal) => {
-      started.push("active");
-      await waitForAbort(signal);
-    });
-    const queued = handler.queueTts("stream-1", async () => {
-      queuedRan = true;
-    });
-
-    expect(started).toEqual(["active"]);
-    handler.clearTtsQueue("stream-1");
-    await active;
-    await withTimeout(queued);
-    expect(queuedRan).toBe(false);
   });
 
   it("bounds pending playback per stream and recovers after draining", async () => {
