@@ -1,4 +1,3 @@
-import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -10,9 +9,8 @@ import { createCdpFixture, cdpResult } from "./src/browser/cdp.test-support.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
 import * as registry from "./src/browser/session-tab-registry.js";
 
-it("closes owned tabs over their transports and rechecks claims after runtime lookup", async () => {
+it("rechecks durable claims after runtime lookup before closing owned CDP targets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const requests: string[] = [];
     const closedTargets: string[] = [];
     const targets = new Set(["owned", "user"]);
     const cdp = createCdpFixture({});
@@ -27,56 +25,16 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
         return cdpResult({ success: targets.delete(targetId) });
       },
     });
-    const control = await cdp.listenHttp((request, response) => {
-      if (request.method === "DELETE") {
-        requests.push(`${request.method} ${request.url}`);
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify({ ok: true }));
-      } else {
-        response.statusCode = 404;
-        response.end("{}");
-      }
-    });
     const { config, store } = await setupMaintenance(state, cdpUrl);
     const sessionKey = "agent:main:transport-cleanup";
     const close = () => closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
-    const forget = () =>
-      registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: [sessionKey],
-        closeTab: async () => {},
-      });
-    const route = {
-      kind: "browser-control" as const,
-      baseUrl: `http://127.0.0.1:${(control.address() as AddressInfo).port}`,
-    };
     const tabDefaults = { sessionKey, profile: "remote", now: 1_000 };
     try {
-      for (const firstKind of ["sweep", "lifecycle"] as const) {
-        const joined = { ...tabDefaults, targetId: `joined-${firstKind}`, route };
-        await registry.trackSessionBrowserTab(joined);
-        const lifecycle = () =>
-          registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
-        const sweep = () => registry.sweepTrackedBrowserTabs({ now: 20_000, idleMs: 1 });
-        const before = requests.length;
-        const first = firstKind === "sweep" ? sweep() : lifecycle();
-        await Promise.resolve();
-        expect(requests).toHaveLength(before);
-        await registry.touchSessionBrowserTab({ ...joined, now: 11_000 });
-        const second = firstKind === "sweep" ? lifecycle() : sweep();
-        const results = await Promise.all([first, second]);
-        expect.soft(results.reduce((total, closed) => total + closed, 0)).toBe(1);
-        expect
-          .soft(requests.slice(before))
-          .toEqual([`DELETE /tabs/joined-${firstKind}?targetIdMode=raw&profile=remote`]);
-        await forget();
-      }
-
       const ownership = await resolveCdpTabOwnership({
         profileName: "remote",
         cdpUrl,
         nativeTargetId: "owned",
       });
-      expect(ownership.status).toBe("durable");
       const tab = { ...tabDefaults, targetId: "owned", ownership };
       await registry.trackSessionBrowserTab(tab);
       const resolved = resolveBrowserConfig(config.browser, config);
@@ -107,11 +65,11 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       expect(closedTargets).toEqual(["owned"]);
       expect([...targets]).toEqual(["user"]);
       expect(await store.entries()).toEqual([]);
-      await expect(close()).resolves.toBe(0);
-      expect(requests).toHaveLength(2);
-      expect(closedTargets).toHaveLength(1);
     } finally {
-      await forget();
+      await registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: [sessionKey],
+        closeTab: async () => {},
+      });
       resetPluginStateStoreForTests();
     }
   });

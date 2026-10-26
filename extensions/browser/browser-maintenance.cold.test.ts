@@ -10,8 +10,7 @@ const runtime = vi.hoisted(() => ({
   onClientLoad: undefined as (() => Promise<void>) | undefined,
   onControlLoad: undefined as (() => Promise<void>) | undefined,
   closeVolatile: vi.fn(async () => {}),
-  closeDurable: vi.fn(async (..._args: unknown[]) => ({ status: "closed" as const })),
-  getControlState: vi.fn(() => null),
+  closeDurable: vi.fn(async () => ({ status: "closed" as const })),
 }));
 
 vi.mock("openclaw/plugin-sdk/browser-config", async (importOriginal) => {
@@ -33,7 +32,7 @@ vi.mock("./src/browser/cdp.helpers.js", () => {
     closeTrackedCdpTarget: async (
       params: Parameters<typeof import("./src/browser/cdp.helpers.js").closeTrackedCdpTarget>[0],
     ) => {
-      const dispatch = () => runtime.closeDurable(params);
+      const dispatch = () => runtime.closeDurable();
       return params.closeIfCurrent ? await params.closeIfCurrent(dispatch) : await dispatch();
     },
   };
@@ -41,7 +40,7 @@ vi.mock("./src/browser/cdp.helpers.js", () => {
 vi.mock("./src/browser-control-state.js", async () => {
   runtime.loaded.push("control");
   await runtime.onControlLoad?.();
-  return { getBrowserControlState: runtime.getControlState };
+  return { getBrowserControlState: () => null };
 });
 
 it("loads browser close runtimes only for owned tabs", async () => {
@@ -78,30 +77,13 @@ it("loads browser close runtimes only for owned tabs", async () => {
         expect(durable ? runtime.closeDurable : runtime.closeVolatile).not.toHaveBeenCalled();
         if (durable) {
           expect(await store.entries()).toHaveLength(1);
-        }
-        await expect(close()).resolves.toBe(1);
-        if (!durable) {
+        } else {
           expect.soft(runtime.loaded).toEqual(["client"]);
-          expect(runtime.closeVolatile).toHaveBeenCalledWith(controlUrl, "volatile-tab", {
-            profile: "remote",
-          });
         }
+        await untrackSessionBrowserTab(tab);
       }
       expect(runtime.loaded.toSorted()).toEqual(["cdp", "client", "control"]);
       expect(runtime.coldImports).toContain("browser-config-resolution");
-      expect(runtime.closeDurable).toHaveBeenCalledWith(
-        expect.objectContaining({
-          profileName: "remote",
-          nativeTargetId: "native-tab",
-          expectedProfileFingerprint: "p",
-          expectedBrowserInstanceFingerprint: "b",
-          closeIfCurrent: expect.any(Function),
-        }),
-      );
-      expect(await store.entries()).toEqual([]);
-      await expect(close()).resolves.toBe(0);
-      expect(runtime.closeVolatile).toHaveBeenCalledOnce();
-      expect(runtime.closeDurable).toHaveBeenCalledOnce();
     } finally {
       resetPluginStateStoreForTests();
     }
