@@ -770,8 +770,6 @@
 ["extensions/qa-lab/src/live-transports/telegram/adapter.runtime.test.ts","./userbot-skill.runtime.js","0f253de8ce6e9182b05157e3f5ae9f307450eaa5fcf81bb11f710c567469cd4e",1]
 ["extensions/qa-lab/src/live-transports/telegram/cli.runtime.test.ts","../../suite-launch.runtime.js","28c9f4afdbb21ac098b820807c11f92a35a9719e79c37219b0184edaa6e758c8",1]
 ["extensions/qa-lab/src/live-transports/telegram/cli.runtime.test.ts","./adapter.runtime.js","eba1eb15990fd99fc2845775d6d1abc181700105877912778eb8e27e756998cf",1]
-["extensions/qa-lab/src/live-transports/telegram/cli.runtime.test.ts","./run-options.runtime.js","79d5ef4e871d2adf38464e6debbcb4a4c7184bec4eb3538b2cfd83322ae3680b",1]
-["extensions/qa-lab/src/live-transports/telegram/cli.runtime.test.ts","./scenario-selection.js","dfc3ccb948927ffc547c29475fd5d87f38784153acf67e8d0e1830983215ad36",1]
 ["extensions/qa-lab/src/live-transports/telegram/private-production.runtime.test.ts","openclaw/plugin-sdk/ssrf-runtime","c4158bd78d2436e364e9cae0b8bf7b683375c110d09f099c5f1bb97ac4933ab7",1]
 ["extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.gateway.test.ts","../../gateway-rpc-client.js","59ecbcf6dff52585fd7311079e2e371b9222d9eb6b2c51fb498bcd2c0aa95e62",1]
 ["extensions/qa-lab/src/mantis/cli.test.ts","./cli.runtime.js","0f3cdf2568d2d84d38dfe04c4cf4047444af2d8c8a4101c70e69d2de5c2110be",1]

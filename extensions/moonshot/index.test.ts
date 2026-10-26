@@ -1,4 +1,3 @@
-import { text } from "node:stream/consumers";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -247,12 +246,19 @@ it("measures caller replacements and rejects an oversized non-video body", async
 it("sends ordered video_url content through the real Chat Completions transport", async () => {
   let requestBody: unknown;
   await withServer(
-    async (request, response) => {
-      requestBody = JSON.parse(await text(request));
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
-      );
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        requestBody = JSON.parse(body);
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
+        );
+      });
     },
     async (origin) => {
       const transport = createOpenAICompletionsTransportStreamFn();
