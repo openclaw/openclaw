@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
-import { resolveServiceTmpDir } from "../daemon/service-tmp-dir.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
@@ -72,19 +71,6 @@ export type {
   ManagedHandoffLeaseStoreOptions,
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
-
-/** Earlier macOS Gateways kept leases under their state's TMPDIR; repair still reads it. */
-export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | undefined {
-  const uid = process.getuid?.();
-  const legacy = path.join(
-    resolveServiceTmpDir(process.env, "darwin"),
-    uid === undefined ? "openclaw" : `openclaw-${uid}`,
-    "managed-update-handoffs.sqlite",
-  );
-  return process.platform === "darwin" && legacy !== resolveManagedUpdateLeaseDatabasePath()
-    ? legacy
-    : undefined;
-}
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
   const uid = process.getuid?.();

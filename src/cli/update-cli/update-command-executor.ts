@@ -11,6 +11,10 @@ import {
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  readLegacyGatewayCustodyRefusal,
+  resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
+} from "../../infra/update-managed-service-handoff-legacy-store.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -353,6 +357,14 @@ export async function withUpdateCommandExecutor<T>(
             borrowed = true;
             managedHandoff = true;
           } else {
+            // An earlier macOS Gateway's store still fences its unsettled custody.
+            const legacyRefusal = readLegacyGatewayCustodyRefusal(
+              key,
+              resolveLegacyGatewayManagedUpdateLeaseDatabasePath(),
+            );
+            if (legacyRefusal) {
+              throw new UpdateCommandRecoveryPendingError(legacyRefusal);
+            }
             const admissionStore = store;
             const acquired = requireUpdateCommandAcquisition(
               store.acquire(key, randomUUID(), { kind: "update" }),

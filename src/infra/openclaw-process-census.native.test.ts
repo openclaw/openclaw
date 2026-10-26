@@ -8,16 +8,29 @@ import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const orphans = new Set<number>();
-afterEach(() => {
-  for (const pid of orphans) {
+// Registered after the temp-dir tracker, so every holder exits before its directory goes.
+afterEach(async () => {
+  await Promise.all([...orphans].map(killTree));
+  orphans.clear();
+});
+
+/** Signal a fixture and every descendant, then wait until none remains. */
+async function killTree(root: number) {
+  const tree = [root];
+  // The array iterator also visits descendants appended while walking.
+  for (const pid of tree) {
+    tree.push(...childPids(pid));
+  }
+  for (const pid of tree) {
     try {
       process.kill(pid, "SIGKILL");
     } catch {
       // Already exited.
     }
   }
-  orphans.clear();
-});
+  await waitFor(() => tree.every((pid) => !readCommand(pid)));
+}
+
 // Rosetta cannot inspect native Darwin arguments; that refusal has its own unit contract.
 const translated = process.arch === "x64" && os.cpus()[0]?.model.includes("Apple");
 const native = process.platform === "darwin" && !translated;
@@ -103,7 +116,7 @@ it.runIf(native)("does not report the inspector's own child processes", async ()
     expect(observed.matchingPids).not.toContain(grandchildren[0]);
     expect(observed.unverifiedPids).not.toContain(child.pid);
   } finally {
-    child.kill("SIGKILL");
+    await killTree(child.pid!);
     await closed;
   }
 });

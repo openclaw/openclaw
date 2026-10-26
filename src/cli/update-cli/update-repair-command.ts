@@ -17,10 +17,8 @@ import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-c
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import {
-  prepareManagedHandoffLeaseStore,
-  resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
-} from "../../infra/update-managed-service-handoff-lease.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {

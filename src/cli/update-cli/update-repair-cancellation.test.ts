@@ -25,6 +25,7 @@ import {
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
 import * as handoffLease from "../../infra/update-managed-service-handoff-lease.js";
+import * as legacyHandoffStore from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -85,20 +86,13 @@ function createCrashFixture(root: string) {
   // Host census is the only synthetic observation; process and SQLite custody stay real.
   const censusRuns: string[] = [];
   const censusMatches: number[] = [];
-  const censusScopes: { sharedRoots?: readonly string[]; familyDeadline?: number }[] = [];
   vi.spyOn(census, "inspectOtherOpenClawProcesses").mockImplementation(((references?: {
     runId: string;
-    sharedRoots?: readonly string[];
-    familyDeadline?: number;
   }) => {
     if (typeof references !== "object") {
       return { pids: [] };
     }
     censusRuns.push(references.runId);
-    censusScopes.push({
-      sharedRoots: references.sharedRoots,
-      familyDeadline: references.familyDeadline,
-    });
     return { matchingPids: censusMatches.splice(0), unverifiedPids: [] };
   }) as typeof census.inspectOtherOpenClawProcesses);
   const rows = () =>
@@ -118,7 +112,6 @@ function createCrashFixture(root: string) {
     candidate: undefined as number | undefined,
     censusRuns,
     censusMatches,
-    censusScopes,
     rows,
     /** The orphan's clock starts in the past so explicit repair's grace has elapsed. */
     crash() {
@@ -253,13 +246,6 @@ unix(
       expect(f.rows()).toEqual(family);
     }
     expect(f.censusRuns).toEqual([runId]);
-    // Only work that may predate the family's 45-minute grace, or that runs from a
-    // candidate lineage rather than the installation and its slot, can block repair.
-    const latestActivity = Math.max(...family.map((row) => row.updated_at));
-    expect(f.censusScopes.at(-1)).toEqual({
-      sharedRoots: [f.install, f.slot],
-      familyDeadline: latestActivity + 45 * 60_000,
-    });
 
     vi.mocked(defaultRuntime.writeJson).mockClear();
     await repair();
@@ -353,11 +339,10 @@ unix.each(["failed", "deferred"] as const)(
 );
 
 unix(
-  "repair settles cancelled custody an earlier macOS Gateway left in its own store",
+  "an earlier macOS Gateway's cancelled custody fences admission until repair settles it",
   { timeout: 60_000 },
   async () => {
     const { family } = f.crash();
-    await f.stopCandidate();
     // The current per-user store is empty; the Gateway's TMPDIR store holds the family.
     const current = path.join(path.dirname(path.dirname(f.databasePath)), "current-tmp");
     fs.mkdirSync(current, { mode: 0o700 });
@@ -365,10 +350,16 @@ unix(
     vi.mocked(handoffLease.resolveManagedUpdateLeaseDatabasePath).mockReturnValue(
       path.join(current, "managed-update-handoffs.sqlite"),
     );
-    vi.spyOn(handoffLease, "resolveLegacyGatewayManagedUpdateLeaseDatabasePath").mockReturnValue(
-      f.databasePath,
-    );
+    vi.spyOn(
+      legacyHandoffStore,
+      "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+    ).mockReturnValue(f.databasePath);
 
+    // Normal admission reads the shared store, yet the earlier store still fences it.
+    await expect(admit("blocked-by-earlier-gateway")).rejects.toThrow(
+      `Another update executor owns this installation in an earlier Gateway's handoff store (${f.databasePath})`,
+    );
+    await f.stopCandidate();
     await repair();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(lastJson()).toMatchObject({ status: "ok" });
@@ -382,5 +373,6 @@ unix(
         `Settled keys: ${family.map((row) => row.install_root).join(", ")}`,
       ),
     });
+    await expect(admit("after-earlier-gateway-repair")).resolves.toBe("admitted");
   },
 );

@@ -6,10 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as temporaryRoot from "./tmp-openclaw-dir.js";
-import {
-  resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
-  resolveManagedUpdateLeaseDatabasePath,
-} from "./update-managed-service-handoff-lease.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
+import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-legacy-store.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
