@@ -1,5 +1,6 @@
 import { setImmediate as drainContinuations } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
+import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -15,7 +16,13 @@ vi.mock("../command/runtime-loaders.js", () => ({
   loadSessionStoreRuntime: () => import("../command/session-store.runtime.js"),
 }));
 
-it("preserves prepared model facts and restrictive policy without foreground authority", () => {
+vi.mock("../../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: () => {
+    throw new Error("Prepared runtime hints must not be rediscovered");
+  },
+}));
+
+it("preserves prepared model facts and restrictive policy without foreground authority", async () => {
   const model = { provider: "test-provider", model: "test-model" };
   const { run } = createTestFollowupRun({
     ...model,
@@ -28,14 +35,21 @@ it("preserves prepared model facts and restrictive policy without foreground aut
     run,
     ...model,
     sessionEntry: { sessionId: "maintenance", updatedAt: 1 },
+    sessionKey: "agent:main:maintenance",
     cfg: run.config,
     auth: {},
   });
-  expect(maintenance.run.thinkingCatalog).toEqual(run.thinkingCatalog);
-  expect(maintenance.run).toMatchObject({ senderIsOwner: false, skipProviderRuntimeHints: true });
-  expect(maintenance.run.conversationToolPolicy).toEqual({ deny: ["read"] });
-  expect(maintenance.run.toolOverrides).toBeUndefined();
-  expect(maintenance.run.runtimePluginToolGrant).toBeUndefined();
+  const embedded = await buildEmbeddedRunExecutionParams({
+    run: maintenance.run,
+    ...model,
+    runId: "maintenance-run",
+    sessionCtx: {},
+    hasRepliedRef: undefined,
+  });
+  expect(embedded).toMatchObject({ modelHasVision: true, senderIsOwner: false });
+  expect(embedded.conversationToolPolicy).toEqual({ deny: ["read"] });
+  expect(embedded.toolOverrides).toBeUndefined();
+  expect(embedded.runtimePluginToolGrant).toBeUndefined();
   expect(maintenance.userTurnTranscriptRecorder).toBeUndefined();
 });
 

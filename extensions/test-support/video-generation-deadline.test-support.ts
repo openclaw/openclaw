@@ -75,6 +75,7 @@ export function testVideoGenerationDeadlines({
         await expect(outcome).rejects.toThrow(`timed out after ${timeoutMs}ms`);
         expect(fetchWithTimeoutMock.mock.calls.some(([url]) => url === videoUrl)).toBe(false);
       }
+      expect(postJsonRequestMock).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     });
   });

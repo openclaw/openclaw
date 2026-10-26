@@ -78,5 +78,10 @@ it
     ]);
     const reason = messages.find((m) => m.type === "closing")?.reason;
     expect(reason).toBe(hostLost ? "parent-lost" : "lineage-lost");
+    if (!hostLost) {
+      expect(messages).toContainEqual(
+        expect.objectContaining({ type: "root-result", code: 0, signal: null }),
+      );
+    }
   },
 );
