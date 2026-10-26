@@ -99,6 +99,36 @@ describe("Responses SSE decoding", () => {
     expect(decode.mock.calls.length).toBeLessThanOrEqual(chunks.length + 1);
   });
 
+  it("does not materialize ignored SSE field values", async () => {
+    const ignored = "unused-metadata-".repeat(64);
+    const wire = `id: ${ignored}\nretry: 100\ndata: {"delta":"kept"}\n\ndata: [DONE]\n\n`;
+    const { stream } = await openFixtureStream([new TextEncoder().encode(wire)]);
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve native slice and its string receiver.
+    const slice = String.prototype.slice;
+    let ignoredValues = 0;
+    const slicing = vi.spyOn(String.prototype, "slice").mockImplementation(function (
+      this: string,
+      start,
+      end,
+    ) {
+      const value = slice.call(this, start, end);
+      if (value === ignored) {
+        ignoredValues++;
+      }
+      return value;
+    });
+    const events = [];
+    try {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    } finally {
+      slicing.mockRestore();
+    }
+    expect(events).toEqual([{ delta: "kept" }]);
+    expect(ignoredValues).toBe(0);
+  });
+
   it("keeps delimiter scan input linear for a large event split across small chunks", async () => {
     const expected = { type: "response.output_text.delta", delta: "x".repeat(1024 * 1024) };
     const wire = new TextEncoder().encode(`data: ${JSON.stringify(expected)}\n\ndata: [DONE]\n\n`);
@@ -137,6 +167,13 @@ describe("Responses SSE decoding", () => {
         'data: "response.output_text.delta",\ndata: "delta":"🌊"}\r\n\r\n' +
         'data: {"delta":"final"}',
       expected: [{ type: "response.output_text.delta", delta: "🌊" }, { delta: "final" }],
+    },
+    {
+      name: "exact field names and EOF after a trailing ignored line",
+      wire:
+        "database: ignored\neventual: error\nevent: error\nevent\n" +
+        'data: {"delta":"kept"}\nid: trailing\r\n',
+      expected: [{ delta: "kept" }],
     },
     {
       name: "thread event envelopes including embedded error payloads",
