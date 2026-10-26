@@ -224,6 +224,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
   prepare: () => SubagentRegistryWorkerWrite<T>,
 ): Promise<T> {
   const write = prepare();
+  let acknowledged = false;
   let commitGranted = false;
   let admission: SqliteWorkerOperationAdmission | undefined;
   try {
@@ -235,7 +236,15 @@ export async function runSubagentRegistryWorkerWrite<T>(
         }
         await write.execute(scope);
         // The broker drains native receipts before acknowledging the command.
-        return write.decode(admission?.committed?.facts);
+        if (!admission?.committed) {
+          throw new SqliteWorkerError(
+            "Registry committed receipt is unavailable",
+            "outcome-unknown",
+          );
+        }
+        const result = write.decode(admission.committed.facts);
+        acknowledged = true;
+        return result;
       },
       {
         assertCurrent: write.assertCurrent,
@@ -309,7 +318,11 @@ export async function runSubagentRegistryWorkerWrite<T>(
       throw error;
     }
     throw new SubagentRegistryWriteError(
-      commitGranted || hasSqliteWorkerOutcomeUnknown(error) ? "unknown" : "not-committed",
+      write.kind === "registry" && acknowledged
+        ? "committed"
+        : commitGranted || hasSqliteWorkerOutcomeUnknown(error)
+          ? "unknown"
+          : "not-committed",
       error,
     );
   }
