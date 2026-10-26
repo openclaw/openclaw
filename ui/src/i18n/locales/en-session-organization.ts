@@ -302,6 +302,18 @@ const enSessionOrganization = {
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
+    automationPauseTitle: "Pause automations?",
+    automationPauseArchiveOne:
+      'Archiving "{session}" pauses its automations. Restoring it does not resume them; re-enable each with: openclaw automations enable <id>',
+    automationPauseArchiveOther:
+      "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations, and restoring it does not resume them; re-enable each with: openclaw automations enable <id>",
+    automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
+    automationPauseDeleteOther:
+      "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
+    automationPauseUnlisted: "Automation names are unavailable right now.",
+    automationPauseMore: "+{count} more",
+    archiveAnyway: "Archive anyway",
+    deleteAnyway: "Delete anyway",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",
