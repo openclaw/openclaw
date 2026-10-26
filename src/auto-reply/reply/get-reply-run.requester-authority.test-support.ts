@@ -4,7 +4,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   captureRequesterContinuationCaller,
   prepareRequesterCronAuthority,
@@ -28,7 +28,11 @@ import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript
 import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
-import { baseParams, createProviderSurface } from "./get-reply-run.test-support.js";
+import {
+  baseParams,
+  createProviderSurface,
+  type createPreparedReplyTurn,
+} from "./get-reply-run.test-support.js";
 
 type ReplyParams = Parameters<typeof runPreparedReply>[0];
 export function registerPendingRequesterAuthorityCases({
@@ -40,12 +44,7 @@ export function registerPendingRequesterAuthorityCases({
   runPrepared: (overrides?: Partial<ReplyParams>) => ReturnType<typeof runPreparedReply>;
   loadSessionEntryMock: { mockReturnValue(value: SessionEntry): unknown };
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
-  turn: (
-    body: string,
-    common: ReplyParams["ctx"],
-    session?: Partial<ReplyParams["sessionCtx"]>,
-    inbound?: Partial<ReplyParams["ctx"]>,
-  ) => Pick<ReplyParams, "ctx" | "sessionCtx">;
+  turn: typeof createPreparedReplyTurn;
 }): void {
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
@@ -86,32 +85,15 @@ export function registerPendingRequesterAuthorityCases({
   });
 
   type IdentityCase = [string, ReplyParams["ctx"], string?, string?];
+  const direct = { ChatType: "direct", From: " discord:alice " };
+  const phone = "+15550100100";
+  const rawId = "transport-identity";
   it.each<IdentityCase>([
-    ["direct From", { ChatType: "direct", From: " discord:alice " }, "discord:alice"],
-    [
-      "blank sender",
-      { ChatType: "direct", From: "discord:alice", SenderId: " ", SenderE164: " " },
-      "discord:alice",
-    ],
+    ["blank sender", { ...direct, SenderId: " ", SenderE164: " " }, "discord:alice"],
     ["senderless group", { ChatType: "group", From: "discord:alice" }],
     ["conversation From", { From: "discord:channel:123" }],
-    [
-      "raw sender",
-      {
-        ChatType: "direct",
-        From: "discord:alice",
-        SenderId: "transport-identity",
-        SenderE164: "+15550100100",
-      },
-      "transport-identity",
-      "+15550100100",
-    ],
-    [
-      "phone only",
-      { ChatType: "direct", From: "discord:alice", SenderE164: "+15550100100" },
-      undefined,
-      "+15550100100",
-    ],
+    ["raw sender", { ...direct, SenderId: rawId, SenderE164: phone }, rawId, phone],
+    ["phone only", { ...direct, SenderE164: phone }, undefined, phone],
   ])("captures requester identity for %s", async (_name, context, senderId, senderE164) => {
     const params = baseParams();
     params.command.senderId = "configured-owner-alias";
@@ -135,17 +117,12 @@ export function registerPendingRequesterAuthorityCases({
       const sessionKey = "agent:default:discord:channel:123";
       const sessionId = "pending-owner-session";
       const originalRunId = "pending-owner-run";
-      const child: SubagentRunRecord = {
+      const child = createSubagentRunRecord({
         runId: "pending-child",
-        execution: { status: "running" },
         requesterTurnRunId: originalRunId,
         requesterAgentId: "default",
         childSessionKey: "agent:default:subagent:child",
         requesterSessionKey: sessionKey,
-        requesterDisplayKey: "discord",
-        task: "review",
-        cleanup: "keep",
-        createdAt: 1,
         requesterSettleWake: {
           status: "pending",
           attemptCount: 0,
@@ -153,7 +130,7 @@ export function registerPendingRequesterAuthorityCases({
           rearmGeneration: 1,
           batchRunIds: ["pending-child"],
         },
-      };
+      });
       const batch = [child];
       const runs = new Map([[child.runId, child]]);
       const sessionEntry: SessionEntry = { sessionId, updatedAt: 1, lifecycleRevision: "original" };

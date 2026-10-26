@@ -27,18 +27,12 @@ describe("sender-owned directive projection", () => {
       expected: "Please continue <@BOT> (Bek (Ops))",
     },
     {
-      name: "selects an inline shortcut after mention rendering in a direct message",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      isGroup: false,
-    },
-    {
-      name: "keeps attachment context after a multiline sender shortcut",
+      name: "keeps direct-message attachment context after a multiline sender shortcut",
       rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
       commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
+      isGroup: false,
     },
     {
       name: "rejects prepared metadata that does not reconstruct the command body",

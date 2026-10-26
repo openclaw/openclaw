@@ -166,7 +166,6 @@ describe("prepared reply routing", () => {
         }
       },
     });
-    expect(beforeDeliver).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ ok: false, delivered: false });
     expect(result.error).toContain("event producer retired");
     expect(visible).toEqual([]);

@@ -34,22 +34,13 @@ it.each([
     const key = `source-runner-rebind-${sessionId}`;
     const outcome = createDeferredCore<{ runner: string; run: FollowupRun }>();
     const source = createRun({ prompt: "queued source" });
+    const settings = { mode: "followup", debounceMs: 0, cap: 10 } as const;
+    const record = (runner: string) => async (run: FollowupRun) => outcome.resolve({ runner, run });
+    const callback = registered ? record("source") : undefined;
     source.run.sessionId = sessionId;
     try {
-      enqueueFollowupRun(
-        key,
-        source,
-        { mode: "followup", debounceMs: 0, cap: 10 },
-        "none",
-        registered ? async (run) => outcome.resolve({ runner: "source", run }) : undefined,
-        false,
-      );
-      scheduleFollowupDrain(
-        key,
-        async (run) => outcome.resolve({ runner: "wake", run }),
-        undefined,
-        { from: "S1", to: "S2" },
-      );
+      enqueueFollowupRun(key, source, settings, "none", callback, false);
+      scheduleFollowupDrain(key, record("wake"), undefined, { from: "S1", to: "S2" });
       const executed = await outcome.promise;
       expect(executed.runner).toBe(registered ? "source" : "wake");
       expect(executed.run.admissionSessionId).toBe(admissionSessionId);

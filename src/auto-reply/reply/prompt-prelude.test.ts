@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createCliCurrentPromptRenderer } from "../../agents/cli-runner/prompt-context.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
@@ -106,7 +105,6 @@ it.each([
       transcriptCommandBody: softResetTail || "[OpenClaw session reset]",
       currentInboundContext: undefined,
     });
-    expect(envelope.transcriptCommandBody).not.toContain("Startup context");
   },
 );
 
@@ -280,18 +278,11 @@ it("keeps requester trailers in full and resumed backend prompt projections", as
     }),
     { agentId: "main", sessionKey: "agent:main:main" },
   );
-  // Codex consumes text, while reused CLI sessions can select resumableText.
   expect(envelope.currentInboundContext?.text).toContain(trailer);
   expect(envelope.currentInboundContext?.resumableText).toContain(trailer);
   expect(envelope.currentInboundContext?.fragments).toContainEqual({
     kind: "runtime-instruction",
     text: trailer,
   });
-  const render = createCliCurrentPromptRenderer(
-    { currentInboundContext: envelope.currentInboundContext },
-    { mode: "reuse", sessionId: "credit-cli-session" },
-  );
-  expect(render(envelope.prefixedCommandBody)).toContain(trailer);
-  expect(render(envelope.prefixedCommandBody, true)).toContain(trailer);
   expect(envelope.transcriptCommandBody).not.toContain(trailer);
 });

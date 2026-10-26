@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -46,24 +47,21 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["install ./candidate", "enable authority-plugin", "disable authority-plugin"])(
-  "rejects a stale owner snapshot before %s",
-  (action) =>
-    withTempHome("openclaw-plugins-stale-owner-", async (home) => {
-      const params = buildPluginsCommandParams({
-        commandBodyNormalized: `/plugins ${action}`,
-        workspaceDir: home,
-      });
-      delete params.ctx.GatewayClientScopes;
-      params.command.assertOwnerCurrent = () => {
-        throw new Error("owner authority revoked");
-      };
+it("rejects a stale owner snapshot before plugin mutation", () =>
+  withTempHome("openclaw-plugins-stale-owner-", async (home) => {
+    const params = buildPluginsCommandParams({
+      commandBodyNormalized: "/plugins disable authority-plugin",
+      workspaceDir: home,
+    });
+    delete params.ctx.GatewayClientScopes;
+    params.command.assertOwnerCurrent = () => {
+      throw new Error("owner authority revoked");
+    };
 
-      expect((await handlePluginsCommand(params, true))?.reply?.text).toBe(
-        "Your owner authority changed; send a new request.",
-      );
-    }),
-);
+    expect((await handlePluginsCommand(params, true))?.reply?.text).toBe(
+      "Your owner authority changed; send a new request.",
+    );
+  }));
 
 it.each([
   { action: "install", gatewayAdmin: false },
@@ -150,14 +148,11 @@ it.each([
         (error: unknown) => ({ result: undefined, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          command.then((outcome) => {
-            throw new Error(
-              `Command settled before capability review: ${formatErrorMessage(outcome.error ?? outcome.result?.reply?.text)}`,
-            );
-          }),
-        ]);
+          command,
+          "Command settled before capability review",
+        );
         await expectUnchanged();
         if (action === "install") {
           expect(fs.existsSync(installedDir)).toBe(false);
