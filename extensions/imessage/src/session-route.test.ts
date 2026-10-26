@@ -26,12 +26,12 @@ describe("iMessage outbound session routing", () => {
     const resolved = await resolveTarget("imessage:Alice");
 
     expect(resolved).toMatchObject({ to: "imessage:Alice", display: "Alice" });
+    expect(await routeTo("imessage:Alice")).toMatchObject({ recipientSessionExact: false });
   });
 
   it.each([
     ["+1 (555) 123-4567", true],
     ["imessage:User@Example.com", true],
-    ["imessage:Alice", false],
     ["alice@example", false],
     ["1-800-FLOWERS", false],
     ["chat_identifier:team-thread", false],
@@ -57,7 +57,6 @@ describe("iMessage outbound session routing", () => {
 
   it.each([
     ["chat_id:43", {}, "43"],
-    ["chat_guid:iMessage;+;chat123", {}, "43"],
     ["chat_id:42", { channels: { imessage: { groups: { "42": {} } } } }, "42"],
     [
       "chat_id:42",

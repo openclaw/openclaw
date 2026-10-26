@@ -94,22 +94,7 @@ export function createIMessageTestRequest(
   };
 }
 
-export function createInboundMessage(
-  message: Pick<IMessagePayload, "id" | "guid" | "text"> &
-    Partial<
-      Pick<
-        IMessagePayload,
-        | "chat_id"
-        | "chat_guid"
-        | "chat_identifier"
-        | "sender"
-        | "is_from_me"
-        | "is_group"
-        | "created_at"
-        | "destination_caller_id"
-      >
-    >,
-): IMessagePayload {
+export function createInboundMessage(message: IMessagePayload): IMessagePayload {
   return {
     id: message.id,
     guid: message.guid,

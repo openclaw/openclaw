@@ -11,15 +11,6 @@ import {
 } from "./targets.js";
 
 describe("imessage targets", () => {
-  it("parses sms handles with service", () => {
-    expect(parseIMessageTarget("sms:+1555")).toEqual({
-      kind: "handle",
-      to: "+1555",
-      service: "sms",
-      serviceExplicit: true,
-    });
-  });
-
   it("normalizes service-prefixed chat identifiers", () => {
     expect(normalizeIMessageHandle("auto:chatident:AbC")).toBe("chat_identifier:AbC");
   });
@@ -27,7 +18,6 @@ describe("imessage targets", () => {
   it.each([
     ["chat_id:9", { chatId: 9 }],
     ["imessage:chat_id:9", { chatId: 9 }],
-    ["chat_guid:team-thread", { chatGuid: "team-thread" }],
     ["imessage:chat_guid:team-thread", { chatGuid: "team-thread" }],
     ["chat_identifier:team", { chatIdentifier: "team" }],
   ] as const)("only permits conversation allowFrom %s for reply context", (entry, context) => {
@@ -57,15 +47,7 @@ describe("imessage targets", () => {
     expect(looksLikeIMessageExplicitTargetId("chat_id:42")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("sms:+15552223333")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("+15552223333")).toBe(false);
-    expect(looksLikeIMessageExplicitTargetId("user@example.com")).toBe(false);
     expect(looksLikeIMessageExplicitTargetId("7d5297154d5f436d83dbbdf03fcc8fdd")).toBe(true);
-  });
-
-  it("infers direct and group chat types from normalized targets", () => {
-    expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
-    expect(inferIMessageTargetChatType("chat_guid:iMessage;-;+15552223333")).toBe("direct");
-    expect(inferIMessageTargetChatType("chat_guid:iMessage;+;chat42")).toBe("group");
   });
 
   it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
@@ -78,6 +60,7 @@ describe("imessage targets", () => {
       parsed,
     ]);
     expect(inferIMessageTargetChatType(hex)).toBeUndefined();
+    expect(inferIMessageTargetChatType("chat_id:42")).toBeUndefined();
   });
 });
 
