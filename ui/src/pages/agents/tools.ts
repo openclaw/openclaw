@@ -1,7 +1,33 @@
 import { createMemo, createSignal } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { readToolsEffective } from "../../lib/agents/index.ts";
+import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import {
+  uiConversationMatches,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
+import {
+  readSessionChangedEvent,
+  sessionChangedSnapshots,
+} from "../../lib/sessions/session-row-reconcile.ts";
+
+export function agentEffectiveToolsEventInvalidates(
+  event: GatewayEventFrame,
+  scope: UiSessionDefaultsHost & { agentId: string; sessionKey: string },
+): boolean {
+  return Boolean(
+    modelCatalogEventInvalidation(event, { agentId: scope.agentId }) ||
+    (event.event === "sessions.changed" &&
+      sessionChangedSnapshots(event.payload).some((snapshot) => {
+        const change = readSessionChangedEvent(snapshot);
+        return (
+          !change ||
+          uiConversationMatches(scope, scope.sessionKey, change.key, change.agentId, scope.agentId)
+        );
+      })),
+  );
+}
 
 type ReadOptions = {
   scope: () => {
