@@ -43,10 +43,31 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
   workerTurnEnvironments,
+  type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 afterAll(closeStateDatabaseForTest);
+
+function executeTurn(
+  input: Parameters<ReturnType<typeof createWorkerSessionTurnPlacementProvider>["executeTurn"]>[1],
+  environment: ReturnType<typeof attachedEnvironment>,
+  launchTurn: NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>,
+  options: Partial<Pick<WorkerTurnLauncherOptions, "reconcileActivePlacement">> = {},
+) {
+  const tunnel = createWorkerTurnTunnel({
+    launchTurn,
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+  });
+  return createWorkerSessionTurnPlacementProvider({
+    placements,
+    ...options,
+    environments: workerTurnEnvironments(tunnel, {
+      get: () => environment,
+      acknowledgeCredentialDelivery: async () => true,
+    }),
+  }).executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn());
+}
 
 describe("worker-side before_agent_run admission", () => {
   beforeEach(async () => {
@@ -224,24 +245,15 @@ describe("worker-side before_agent_run admission", () => {
           return createCommandResult();
         },
       );
-      const tunnel = createWorkerTurnTunnel({
-        launchTurn: launch,
-        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-      });
-      const environments = workerTurnEnvironments(tunnel, {
-        get: () => environment,
-        acknowledgeCredentialDelivery: async () => true,
-      });
-      const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
       try {
-        const execution = provider.executeTurn(
-          { ...sessionTarget, runId: input.runId },
+        const execution = executeTurn(
           {
             ...input,
             pluginGeneration: runtime.pluginGeneration,
             userTurnTranscriptRecorder: recorder,
           },
-          vi.fn(),
+          environment,
+          launch,
         );
         if (block) {
           const result = await execution;
@@ -333,21 +345,8 @@ describe("worker-side before_agent_run admission", () => {
         return { ...result, signal: null, killed: false, termination: "exit" };
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      environments: workerTurnEnvironments(tunnel, {
-        get: () => environment,
-        acknowledgeCredentialDelivery: async () => true,
-      }),
-    });
     try {
-      await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
-      ).rejects.toThrow(error);
+      await expect(executeTurn(input, environment, launch)).rejects.toThrow(error);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
     } finally {
       input.preparedRunAdmission.close();
@@ -509,22 +508,12 @@ describe("worker-side before_agent_run admission", () => {
         });
       },
     );
-    const tunnel = createWorkerTurnTunnel({
-      launchTurn: launch,
-      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
-      // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
-      reconcileActivePlacement: async () => {},
-      environments: workerTurnEnvironments(tunnel, {
-        get: () => environment,
-        acknowledgeCredentialDelivery: async () => true,
-      }),
-    });
     try {
       await expect(
-        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+        executeTurn(input, environment, launch, {
+          // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
+          reconcileActivePlacement: async () => {},
+        }),
       ).rejects.toThrow(admissionError);
       expect(launch).toHaveBeenCalledOnce();
       expect(execute).not.toHaveBeenCalled();
