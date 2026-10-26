@@ -11,6 +11,7 @@ import {
 import { classifyAgentToolSource } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
+import { memoizeFrozenPlainDataProjection } from "openclaw/plugin-sdk/provider-tools";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -253,8 +254,15 @@ function buildCodexToolReportEntry(
   };
 }
 
+// Only deeply frozen plain schemas qualify; mutable schemas are recomputed.
+const immutableSchemaHash = memoizeFrozenPlainDataProjection((value: JsonValue & object) =>
+  sha256Text(JSON.stringify(stabilizeJsonValue(value)) ?? "null"),
+);
+
 function stableJsonHash(value: JsonValue): string {
-  return sha256Text(JSON.stringify(stabilizeJsonValue(value)) ?? "null");
+  return value !== null && typeof value === "object"
+    ? immutableSchemaHash(value)
+    : sha256Text(JSON.stringify(value) ?? "null");
 }
 
 function buildCodexBootstrapInjectionStats(

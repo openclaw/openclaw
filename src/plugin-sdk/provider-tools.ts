@@ -29,6 +29,8 @@ import type {
   ProviderToolSchemaDiagnostic,
 } from "./plugin-entry.js";
 
+export { memoizeFrozenPlainDataProjection };
+
 export {
   normalizeOpenAIStrictCompatSchema,
   cleanSchemaForGemini,
