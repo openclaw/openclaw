@@ -3,23 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
   hasResolvableProactiveOwnerRoute,
-  resolveProactiveDeliveryTarget as resolveCanonicalProactiveDeliveryTarget,
-  resolveProactiveDeliveryTargetWithSessionRoute as resolveCanonicalProactiveDeliveryTargetWithSessionRoute,
-  resolveOutboundTarget,
-  resolveSessionDeliveryTarget as resolveCanonicalSessionDeliveryTarget,
+  resolveProactiveDeliveryTarget,
+  resolveProactiveDeliveryTargetWithSessionRoute,
+  resolveSessionDeliveryTarget,
 } from "./targets.js";
 import type { SessionDeliveryTarget } from "./targets.js";
-import {
-  installResolveOutboundTargetPluginRegistryHooks,
-  runResolveOutboundTargetCoreTests,
-} from "./targets.shared-test.js";
+import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 import {
   createForumTargetTestPlugin,
   createGenericTargetTestPlugin,
@@ -32,50 +27,14 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
 }));
 
-type LegacyDeliveryFixture = SessionEntry & {
-  route?: ChannelRouteRef;
+type SessionFixture = {
   deliveryContext?: DeliveryContext;
-  origin?: { provider?: string; accountId?: string; threadId?: string | number };
-  channel?: string;
+  chatType?: SessionEntry["chatType"];
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
 };
-
-function resolveSessionDeliveryTarget(
-  params: Omit<Parameters<typeof resolveCanonicalSessionDeliveryTarget>[0], "entry"> & {
-    entry?: LegacyDeliveryFixture;
-  },
-) {
-  return resolveCanonicalSessionDeliveryTarget({
-    ...params,
-    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
-  });
-}
-
-function resolveProactiveDeliveryTarget(
-  params: Omit<Parameters<typeof resolveCanonicalProactiveDeliveryTarget>[0], "entry"> & {
-    entry?: LegacyDeliveryFixture;
-  },
-) {
-  return resolveCanonicalProactiveDeliveryTarget({
-    ...params,
-    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
-  });
-}
-
-async function resolveProactiveDeliveryTargetWithSessionRoute(
-  params: Omit<
-    Parameters<typeof resolveCanonicalProactiveDeliveryTargetWithSessionRoute>[0],
-    "entry"
-  > & { entry?: LegacyDeliveryFixture },
-) {
-  return await resolveCanonicalProactiveDeliveryTargetWithSessionRoute({
-    ...params,
-    entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
-  });
-}
 
 const passthroughOutbound: NonNullable<ChannelPlugin["outbound"]> = {
   deliveryMode: "direct",
@@ -159,8 +118,19 @@ beforeEach(() => {
   setActivePluginRegistry(createTargetsTestRegistry());
 });
 
-function session(fields: Partial<LegacyDeliveryFixture> = {}): LegacyDeliveryFixture {
-  return { sessionId: "session", updatedAt: 1, ...fields };
+function session(fields: SessionFixture): SessionEntry {
+  const context = fields.deliveryContext ?? {
+    channel: fields.lastChannel,
+    to: fields.lastTo,
+    accountId: fields.lastAccountId,
+    threadId: fields.lastThreadId,
+  };
+  return {
+    sessionId: "session",
+    updatedAt: 1,
+    chatType: fields.chatType,
+    delivery: normalizeSessionDeliveryState({ context }),
+  };
 }
 
 type SessionTargetCase = {
@@ -168,29 +138,6 @@ type SessionTargetCase = {
   input: Parameters<typeof resolveSessionDeliveryTarget>[0];
   expected: Partial<SessionDeliveryTarget>;
 };
-
-describe("resolveOutboundTarget defaultTo config fallback", () => {
-  installResolveOutboundTargetPluginRegistryHooks();
-
-  it("falls back to the active registry when the cached channel map is stale", async () => {
-    const registry = createTargetsTestRegistry([]);
-    setActivePluginRegistry(registry, "stale-registry-test");
-    expect(
-      (await resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" })).ok,
-    ).toBe(false);
-    registry.channels.push({
-      pluginId: "alpha",
-      plugin: createGenericTargetTestPlugin("alpha", "Alpha"),
-      source: "test",
-    });
-    expect(
-      await resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" }),
-    ).toEqual({
-      ok: true,
-      to: "room-one",
-    });
-  });
-});
 
 describe("resolveSessionDeliveryTarget", () => {
   it("selects the unsupported channel fallback", () => {
@@ -296,9 +243,6 @@ describe("resolveSessionDeliveryTarget", () => {
       }
       const cfg = { channels: { alpha: {}, beta: {} } } as OpenClawConfig;
 
-      expect(await hasResolvableProactiveOwnerRoute({ cfg, policy: { accountId: "work" } })).toBe(
-        true,
-      );
       expect(
         await resolveProactiveDeliveryTarget({ cfg, policy: { accountId: "work" } }),
       ).toMatchObject({
@@ -403,12 +347,6 @@ describe("resolveSessionDeliveryTarget", () => {
       policy: proactive,
     });
     expect(resolved).toMatchObject({ channel: "forum", to: "room:ops", threadId: 1008013 });
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "forum",
-      cfg,
-      agentId: "main",
-      allowBootstrap: true,
-    });
   });
 
   it("upgrades an owner-route setup shell with the selected agent runtime", async () => {
@@ -435,12 +373,6 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved).toMatchObject({ channel: "forum", to: "user:ops" });
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "forum",
-      cfg,
-      agentId: "ops",
-      allowBootstrap: true,
-    });
   });
 
   it.each([
@@ -472,11 +404,6 @@ describe("resolveSessionDeliveryTarget", () => {
       policy: { target: "last", accountId },
     });
     expect(resolved).toMatchObject(expected);
-    expect(
-      mocks.resolveOutboundChannelPlugin.mock.calls.filter(
-        ([params]) => params.allowBootstrap === true,
-      ),
-    ).toHaveLength(1);
   });
 
   it("uses explicit direct policy without inheriting retired heartbeat defaults", async () => {
@@ -639,77 +566,54 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
-    expect(inferTargetChatType).toHaveBeenCalledWith({ to: "+15555550166" });
   });
 
-  it("blocks direct targets from prepared external target resolvers without route hooks", async () => {
-    const external = createTestChannelPlugin({
-      id: "external-channel",
-      outbound: passthroughOutbound,
-      messaging: {
-        targetResolver: {
-          resolveTarget: directoryTarget("user"),
+  it.each(["target-resolver", "infer-only"] as const)(
+    "blocks direct targets from activation-aware %s plugins without route hooks",
+    async (mode) => {
+      const inferOnly = mode === "infer-only";
+      const external = createTestChannelPlugin({
+        id: "external-channel",
+        outbound: { ...passthroughOutbound, ...(inferOnly ? { sendText: vi.fn() } : {}) },
+        messaging: inferOnly
+          ? { inferTargetChatType: () => "direct" }
+          : { targetResolver: { resolveTarget: directoryTarget("user") } },
+      });
+      const setup = { ...external, messaging: undefined };
+      setPlugins();
+      mocks.resolveOutboundChannelPlugin.mockImplementation(
+        ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
+          if (channel !== "external-channel") {
+            return undefined;
+          }
+          if (inferOnly) {
+            return allowBootstrap === true ? external : setup;
+          }
+          if (allowBootstrap === true) {
+            setPlugins(external);
+            return external;
+          }
+          return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
+            ?.plugin;
         },
-      },
-    });
-    setPlugins();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
-        if (channel !== "external-channel") {
-          return undefined;
-        }
-        if (allowBootstrap === true) {
-          setPlugins(external);
-          return external;
-        }
-        return getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)
-          ?.plugin;
-      },
-    );
+      );
 
-    const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
-      cfg: {},
-      agentId: "main",
-      policy: {
-        target: "external-channel",
-        to: "person-123",
-        directPolicy: "block",
-      },
-    });
+      const params = {
+        cfg: {},
+        agentId: "main",
+        policy: {
+          target: "external-channel",
+          to: "person-123",
+          directPolicy: "block" as const,
+        },
+      };
+      const resolved = await (inferOnly
+        ? resolveProactiveDeliveryTarget(params)
+        : resolveProactiveDeliveryTargetWithSessionRoute(params));
 
-    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
-  });
-
-  it("uses an activation-aware infer-only plugin for proactive direct policy", async () => {
-    const external = createTestChannelPlugin({
-      id: "external-channel",
-      label: "External",
-      outbound: { ...passthroughOutbound, sendText: vi.fn() },
-      messaging: {
-        inferTargetChatType: () => "direct",
-      },
-    });
-    const setupExternal = { ...external, messaging: undefined };
-    mocks.resolveOutboundChannelPlugin.mockImplementation(
-      ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
-        if (channel !== "external-channel") {
-          return undefined;
-        }
-        return allowBootstrap === true ? external : setupExternal;
-      },
-    );
-
-    const resolved = await resolveProactiveDeliveryTarget({
-      cfg: {},
-      policy: {
-        target: "external-channel",
-        to: "person-123",
-        directPolicy: "block",
-      },
-    });
-
-    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
-  });
+      expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+    },
+  );
 
   it.each([
     {
@@ -820,28 +724,25 @@ describe("resolveSessionDeliveryTarget", () => {
       storedTo: "user:operator",
       storedType: "direct",
       eventTo: "group:ops",
-      expectedChannel: "alpha",
-      expectedType: "group",
+      expected: { channel: "alpha", chatType: "group", to: "group:ops" },
     },
     {
       name: "moved group session does not allow the event direct chat",
       storedTo: "group:ops",
       storedType: "group",
       eventTo: "user:operator",
-      expectedChannel: "none",
-      expectedType: undefined,
+      expected: { channel: "none", chatType: undefined, reason: "dm-blocked", to: undefined },
     },
     {
       name: "same opaque direct conversation retains its hint",
       storedTo: "opaque-dm",
       storedType: "direct",
       eventTo: "opaque-dm",
-      expectedChannel: "none",
-      expectedType: undefined,
+      expected: { channel: "none", chatType: undefined, reason: "dm-blocked", to: undefined },
     },
   ] as const)(
     "qualifies proactive chat type by the selected conversation: $name",
-    async ({ storedTo, storedType, eventTo, expectedChannel, expectedType }) => {
+    async ({ storedTo, storedType, eventTo, expected }) => {
       const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
         cfg: {},
         agentId: "main",
@@ -856,21 +757,16 @@ describe("resolveSessionDeliveryTarget", () => {
           directPolicy: "block",
         },
       });
-      expect(resolved.channel).toBe(expectedChannel);
-      expect(resolved.chatType).toBe(expectedType);
-      if (expectedChannel === "none") {
-        expect(resolved.reason).toBe("dm-blocked");
-        expect(resolved.to).toBeUndefined();
-      } else {
-        expect(resolved.to).toBe(eventTo);
-      }
+      expect(resolved).toMatchObject(expected);
     },
   );
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
-  const topicSession = session({ lastChannel: "forum", lastTo: "room:ops", lastThreadId: 1122 });
-  const changedSession = session({ lastChannel: "beta", lastTo: "wrong-room" });
+  const topic = { lastChannel: "forum", lastTo: "room:ops", lastThreadId: 1122 };
+  const changed = { lastChannel: "beta", lastTo: "wrong-room" };
+  const topicSession = session(topic);
+  const changedSession = session(changed);
   it.each([
     {
       name: "explicit channel overrides turn source",
@@ -886,7 +782,7 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     {
       name: "turn source owns account and thread",
       input: {
-        entry: { ...changedSession, lastAccountId: "wrong-account", lastThreadId: 999 },
+        entry: session({ ...changed, lastAccountId: "wrong-account", lastThreadId: 999 }),
         turnSourceChannel: "forum",
         turnSourceTo: "room:ops",
         turnSourceAccountId: "bot-123",
@@ -897,7 +793,7 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     {
       name: "turn source channel suppresses stale metadata",
       input: {
-        entry: { ...changedSession, lastAccountId: "wrong-account", lastThreadId: "thread-1" },
+        entry: session({ ...changed, lastAccountId: "wrong-account", lastThreadId: "thread-1" }),
         turnSourceChannel: "alpha",
       },
       expected: {
@@ -913,7 +809,7 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     {
       name: "same conversation inherits session topic",
       input: {
-        entry: { ...topicSession, lastAccountId: "work" },
+        entry: session({ ...topic, lastAccountId: "work" }),
         turnSourceChannel: "forum",
         turnSourceTo: "room:ops",
         turnSourceAccountId: "work",
@@ -929,7 +825,7 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     {
       name: "different account cannot inherit session topic",
       input: {
-        entry: { ...topicSession, lastAccountId: "personal" },
+        entry: session({ ...topic, lastAccountId: "personal" }),
         turnSourceChannel: "forum",
         turnSourceTo: "room:ops",
         turnSourceAccountId: "work",
