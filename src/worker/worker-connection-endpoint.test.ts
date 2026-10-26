@@ -13,6 +13,15 @@ const credentials = { clientId: "cf-worker-id", clientSecret: "cf-worker-secret"
 const plaintext = { ...websocket, url: "ws://127.0.0.1/__openclaw__/worker" };
 const inherited = (prototype: object, own: object): object =>
   Object.assign(Object.create(prototype), own);
+const maxText = `x${"\0".repeat(4_095)}`;
+const maxEndpoint = {
+  ...websocket,
+  url:
+    "wss://worker.invalid/".padEnd(4_096 - "/__openclaw__/worker".length, "\0") +
+    "/__openclaw__/worker",
+  tlsFingerprint: colonFingerprint,
+  cloudflareAccess: { clientId: maxText, clientSecret: maxText },
+};
 
 it.each([
   { kind: "unix", socketPath: "/tmp/gateway:sock" },
@@ -33,7 +42,13 @@ it.each([
     inherited({ clientId: "fixture-id" }, { clientSecret: "fixture-secret" }),
     inherited({ clientSecret: "fixture-secret" }, { clientId: "fixture-id" }),
   ].map((cloudflareAccess) => Object.assign({}, websocket, { cloudflareAccess })),
-])("rejects malformed or unsafe worker endpoint %j", (endpoint) => {
+  { ...maxEndpoint, url: maxEndpoint.url.replace("wss://", "wss://x") },
+  ...["clientId", "clientSecret"].map((key) =>
+    Object.assign({}, maxEndpoint, {
+      cloudflareAccess: { ...maxEndpoint.cloudflareAccess, [key]: `${maxText}x` },
+    }),
+  ),
+])("rejects malformed or unsafe worker endpoint %#", (endpoint) => {
   expect(parseEndpoint(endpoint)).toBeUndefined();
 });
 
@@ -44,26 +59,8 @@ function expectBounded(input: unknown) {
 }
 
 it("bounds maximal control endpoint and Access fields", () => {
-  const prefix = "wss://worker.invalid/";
-  const suffix = "/__openclaw__/worker";
-  const fill = (length: number) => "\0".repeat(length);
-  const input = {
-    kind: "websocket",
-    url: prefix + fill(4_096 - prefix.length - suffix.length) + suffix,
-    tlsFingerprint: colonFingerprint,
-    cloudflareAccess: { clientId: `x${fill(4_095)}`, clientSecret: `s${fill(4_095)}` },
-  };
-  expectBounded(input);
-  for (const key of ["url", "clientId", "clientSecret"] as const) {
-    const candidate = structuredClone(input);
-    if (key === "url") {
-      candidate.url = prefix + "x" + input.url.slice(prefix.length);
-    } else {
-      candidate.cloudflareAccess[key] += "x";
-    }
-    expect(parseEndpoint(candidate)).toBeUndefined();
-  }
-  expectBounded({ kind: "unix", socketPath: `/${fill(255)}` });
+  expectBounded(maxEndpoint);
+  expectBounded({ kind: "unix", socketPath: `/${"\0".repeat(255)}` });
 });
 
 it("omits explicitly undefined optional credentials", () => {
