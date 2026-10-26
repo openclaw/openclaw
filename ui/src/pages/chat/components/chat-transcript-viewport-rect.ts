@@ -4,7 +4,6 @@ import {
   syncScrollMargin,
   type createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
-import type { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import { type TranscriptLayoutOwner, unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 
 type ViewportRectOwner = {
@@ -16,7 +15,6 @@ type ViewportRectOwner = {
   queueRowMeasure(): void;
   onViewportResize(): void;
   layout: TranscriptLayoutOwner;
-  initialRange: TranscriptInitialRange;
   invalidate(): void;
 };
 
@@ -78,8 +76,7 @@ export class TranscriptViewportRect {
       delivered = true;
       const railGeometry = this.owner.positionRail.read();
       if (railGeometry) {
-        this.owner.layout.rowWidth = railGeometry.columnWidth;
-        this.owner.initialRange.restore(rect.height, this.owner.layout.rowMinimum);
+        this.owner.layout.restoreRows(instance, railGeometry.columnWidth);
       }
       this.owner.commitComposerResize();
       const widthChanged =

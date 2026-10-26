@@ -10,6 +10,10 @@ export class TranscriptInitialRange {
     return this.pending || this.preparingOverscan;
   }
 
+  get reading(): boolean {
+    return !this.pending && !this.viewportOnly;
+  }
+
   constructor(
     initialOffset: number | null,
     private readonly virtualizer: () => Virtualizer<HTMLDivElement, HTMLElement>,
@@ -34,29 +38,6 @@ export class TranscriptInitialRange {
       // Range extraction is memoized by function identity, independently of row measurements.
       rangeExtractor: (range) => this.extract(range),
     });
-  }
-
-  restore(height: number, minimum: (index: number) => number): void {
-    if (!this.pending) {
-      return;
-    }
-    const virtualizer = this.virtualizer();
-    let start = virtualizer.options.count,
-      covered = 0;
-    for (let index = start - 1; index >= 0; index--) {
-      const size = minimum(index);
-      if (size) {
-        virtualizer.resizeItem(index, size);
-      }
-      if (size && start === index + 1 && covered < height) {
-        start = index;
-        covered += size;
-      }
-    }
-    if (this.tailRows && (covered >= height || start === 0)) {
-      this.tailRows = Math.max(1, virtualizer.options.count - start);
-      this.refresh();
-    }
   }
 
   extend(element: HTMLDivElement): boolean {

@@ -1,3 +1,4 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
@@ -81,6 +82,16 @@ export class TranscriptLayoutOwner {
     const key = this.rowLayoutKey(index);
     return key ? (this.rowLayout?.read(key) ?? 0) : 0;
   };
+
+  restoreRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, width: number): void {
+    this.rowWidth = width;
+    this.rows.forEach((row, index) => {
+      const minimum = this.rowMinimum(index);
+      if (minimum > (instance.itemSizeCache.get(row.key) ?? 0)) {
+        instance.resizeItem(index, minimum);
+      }
+    });
+  }
 
   readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
     const size = measureTranscriptRow(element, entry, instance);

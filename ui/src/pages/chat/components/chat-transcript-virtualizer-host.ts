@@ -198,7 +198,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       queueRowMeasure: () => this.presentation.queueRowMeasure(),
       onViewportResize: () => this.callbacks.onViewportResize?.(),
       layout: this.layout,
-      initialRange: this.initialRange,
       invalidate,
     });
     this.virtualizer = new Virtualizer({
@@ -249,7 +248,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     // Initial placement owns compensation; an estimated end is not a native scroll target.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-    const beforeMeasure = () => !this.initialRange.pending && this.offsetState.syncNativeOffset?.();
+    // A boot re-anchor can precede its native extent; only reader geometry may override it.
+    const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
@@ -488,6 +488,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           announce && !this.offsetState.pendingScrollOffset,
         );
         this.messageRowKeysById = messageRows;
+        this.layout.rows = rows;
         this.prependAnchor.committedMessageRows = renderKeyRows;
         this.renderPreviousRows = () => this.renderCommittedRows(snapshot, false);
         // Capture only after the unmount gate permits the projection to commit.

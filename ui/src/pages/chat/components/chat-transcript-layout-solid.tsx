@@ -250,7 +250,6 @@ export class ChatTranscriptRenderer {
   }
 
   render(next: TranscriptLayoutProps): HTMLDivElement {
-    next.layout.rows = next.rows;
     this.accepted = next;
     const binding = typeof next.presented === "boolean" ? undefined : next.presented;
     if (binding?.owner !== this.binding?.owner) {
