@@ -1,6 +1,11 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readFileCallback } from "node:fs";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
+import { promisify } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
+
+// Tiny procfs reads do not need fs/promises' per-read FileHandle lifecycle.
+const readFile = promisify(readFileCallback);
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
