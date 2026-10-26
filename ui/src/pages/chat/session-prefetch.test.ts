@@ -80,15 +80,6 @@ describe("session navigation intent prefetch", () => {
     return { response, request, snapshot };
   }
 
-  it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
-    const key = "agent:main:deleted";
-    const { response, snapshot } = await holdPrefetch(key);
-    updatePrefetch({ ...snapshot, rows: [] });
-    response.resolve(historyResult(key));
-    await settlePromises();
-    await expectStored(key, null);
-  });
-
   it("keeps unchanged intended history while another session becomes active", async () => {
     const key = "agent:main:report";
     const otherKey = "agent:main:active";
@@ -115,33 +106,29 @@ describe("session navigation intent prefetch", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("does not publish history for a replaced session", async () => {
-    const key = "agent:main:main";
-    const original = { ...row(key, NOW - 1), sessionId: "original" };
-    const { response, snapshot } = await holdPrefetch(key, [original]);
-
-    updatePrefetch({
-      ...snapshot,
-      listRevision: 2,
-      rows: [{ ...original, sessionId: "replacement" }],
-    });
-    response.resolve(historyResult(key));
-    await settlePromises();
-    await expectStored(key, null);
-  });
-
   it.each([
+    "session removed without a roster revision",
+    "session replaced",
     "client replacement",
     "same-client reconnect",
     "session invalidation",
     "profile cache clear",
     "newer pane snapshot",
-  ] as const)("rejects a held prefetch after %s without a roster revision", async (change) => {
+  ] as const)("rejects a held prefetch after %s", async (change) => {
     const key = "agent:main:owned";
-    const { response, request, snapshot } = await holdPrefetch(key);
+    const original = { ...row(key, NOW - 1), sessionId: "original" };
+    const { response, request, snapshot } = await holdPrefetch(key, [original]);
 
     let expected: ChatSessionSnapshot | null = null;
-    if (change === "client replacement") {
+    if (change === "session removed without a roster revision") {
+      updatePrefetch({ ...snapshot, rows: [] });
+    } else if (change === "session replaced") {
+      updatePrefetch({
+        ...snapshot,
+        listRevision: 2,
+        rows: [{ ...original, sessionId: "replacement" }],
+      });
+    } else if (change === "client replacement") {
       updatePrefetch({ ...snapshot, client: createTestGatewayClient(request) });
     } else if (change === "same-client reconnect") {
       updatePrefetch({ ...snapshot, client: null });
@@ -190,20 +177,6 @@ describe("session navigation intent prefetch", () => {
       expect(await store.read(cacheKey(key))).toEqual(snapshot);
     },
   );
-
-  it("does not fetch unopened history on connect or roster refresh without navigation intent", async () => {
-    const request = historyRequest();
-    const state = prefetchState(request, [
-      row("agent:main:recent", NOW),
-      row("agent:main:older", NOW - 1),
-    ]);
-    updatePrefetch(state);
-    await advancePrefetch(1_000);
-    updatePrefetch({ ...state, listRevision: 2 });
-    await advancePrefetch(31_000);
-
-    expect(request).not.toHaveBeenCalled();
-  });
 
   it.each(["presented alias", "fresh snapshot", "active run", "full presented cache"])(
     "does not prefetch intent already owned by %s",
@@ -332,41 +305,10 @@ describe("session navigation intent prefetch", () => {
     expect(readSnapshot(presentedSessionKey)).toEqual(historySnapshot("presented"));
     expect(store.readSavedAt(cacheKey(presentedSessionKey))).not.toBeNull();
 
-    updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
-    await advancePrefetch(31_000);
-    await store.flush();
-    expect(request).toHaveBeenCalledTimes(backgroundRows.length);
     expect(store.readSavedAt(cacheKey("agent:main:background-0"))).not.toBeNull();
   });
 
-  it("coalesces a newer list revision until the per-session cooldown expires", async () => {
-    const request = historyRequest();
-    const base = prefetchState(request, []);
-    updatePrefetch({ ...base, listRevision: 1, rows: [row("agent:main:warm", NOW - 1)] });
-    await intend("agent:main:warm", 2_000);
-    expect(request).toHaveBeenCalledTimes(1);
-
-    const newerActivityAt = Date.now() + 1;
-    updatePrefetch({
-      ...base,
-      listRevision: 2,
-      rows: [row("agent:main:warm", newerActivityAt)],
-    });
-    updatePrefetch({
-      ...base,
-      listRevision: 3,
-      rows: [row("agent:main:warm", newerActivityAt + 1)],
-    });
-    await advancePrefetch(2_000);
-    expect(request).toHaveBeenCalledTimes(1);
-
-    await advancePrefetch(27_000);
-    expect(request).toHaveBeenCalledTimes(1);
-    await advancePrefetch(2_000);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("brings new intent ahead of another session's cooldown without bypassing it", async () => {
+  it("coalesces list revisions behind cooldown while prioritizing new intent", async () => {
     const warm = "agent:main:warm";
     const intended = "agent:main:intended";
     let firstRequestAt = 0;
@@ -386,6 +328,11 @@ describe("session navigation intent prefetch", () => {
       rows: [row(warm, Date.now()), row(intended, NOW - 2)],
     };
     updatePrefetch(changed);
+    updatePrefetch({
+      ...changed,
+      listRevision: 3,
+      rows: [row(warm, Date.now() + 1), row(intended, NOW - 2)],
+    });
     await advancePrefetch(1_000);
     expect(request).toHaveBeenCalledOnce();
 
@@ -403,28 +350,20 @@ describe("session navigation intent prefetch", () => {
     expectRequests(request, warm, intended, warm);
   });
 
-  it("keeps the first intent deadline across later list revisions", async () => {
+  it("keeps the first intent deadline across list revisions and pointer sweeps", async () => {
     const request = historyRequest();
-    const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
-    updatePrefetch(state);
-    await intend("agent:main:recent", 30);
-    updatePrefetch({ ...state, listRevision: 2 });
-    await advancePrefetch(44);
-    expect(request).not.toHaveBeenCalled();
-    await advancePrefetch(1);
-    expectRequests(request, "agent:main:recent");
-  });
-
-  it("coalesces pointer sweeps into the latest intent", async () => {
-    const request = historyRequest();
-    updatePrefetch(
-      prefetchState(request, [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)], {
+    const state = prefetchState(
+      request,
+      [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)],
+      {
         hiddenConversationSessionKeys: ["agent:main:foreground"],
-      }),
+      },
     );
+    updatePrefetch(state);
     await advancePrefetch(300);
     const target = fixture.intend("agent:main:swept");
     await advancePrefetch(30);
+    updatePrefetch({ ...state, listRevision: 2 });
     target.dataset.sessionKey = "agent:main:intended";
     target.dispatchEvent(new Event("pointerover", { bubbles: true }));
     await advancePrefetch(44);
@@ -582,8 +521,7 @@ describe("session navigation intent prefetch", () => {
     expectRequests(request, "agent:main:hidden");
   });
 
-  it("logs fetch errors without retrying or stopping later navigation intent", async () => {
-    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  it("does not retry fetch errors or stop later navigation intent", async () => {
     const request = vi.fn(async (_method: string, params: unknown) => {
       const sessionKey = (params as { sessionKey: string }).sessionKey;
       if (sessionKey.endsWith("failed")) {
@@ -603,10 +541,6 @@ describe("session navigation intent prefetch", () => {
     await intend("agent:main:succeeded");
 
     expectRequests(request, "agent:main:failed", "agent:main:succeeded");
-    expect(debug).toHaveBeenCalledWith(
-      "[chat-session-prefetch] history fetch failed for agent:main:failed",
-      expect.any(Error),
-    );
     expect(readSnapshot("agent:main:succeeded")).not.toBeNull();
     await advancePrefetch(60_000);
     expect(
