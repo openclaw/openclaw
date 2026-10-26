@@ -145,6 +145,10 @@ function expectKinds(items: readonly { kind: string }[], kinds: string[]) {
   expect(items.map((item) => item.kind)).toEqual(kinds);
 }
 
+function expectRoles(items: ReturnType<typeof buildItems>, roles: string[]) {
+  expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual(roles);
+}
+
 function firstMessageContent(group: MessageGroup): unknown[] {
   const content = messageRecord(group).content;
   return Array.isArray(content) ? content : [];
@@ -213,14 +217,7 @@ describe("assistant commentary grouping", () => {
         }),
       ],
     });
-    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
-      "user",
-      "tool",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-    ]);
+    expectRoles(items, ["user", "tool", "assistant", "user", "assistant", "user"]);
   });
 
   it.each([
@@ -1248,7 +1245,7 @@ describe("buildCachedChatItems", () => {
     ({ props, app, showToolCalls = false, order, canvases }) => {
       const items = buildItems({ ...props, toolMessages: [app], showToolCalls });
       if (order) {
-        expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual(order);
+        expectRoles(items, order);
       }
       const groups = groupsIn(items);
       for (const [index, count] of canvases.entries()) {
