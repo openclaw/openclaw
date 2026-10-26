@@ -79,6 +79,9 @@ Restart restores ready completion reservations in requester FIFO order. A cohort
 still waiting for a child or descendant stays with the registry without reserving
 the requester's mailbox, so ordinary user input can run in FIFO order while it
 waits. The existing settlement events make its continuation eligible when ready.
+Interrupted terminal deliveries also wait for their recovery owner to reconcile
+them before reserving the mailbox. Retained recovery records from an older child
+execution must not block a ready continuation after another Gateway restart.
 When a restored wave needs no further delivery, the registry releases its unclaimed
 mailbox reservations after its settlement commits. Already delivered waves must
 not hold later yielded cohorts behind an unprepared input. Claimed turns keep
