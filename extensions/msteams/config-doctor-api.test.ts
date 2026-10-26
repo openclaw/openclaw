@@ -13,7 +13,11 @@ const webhook = { path: "/teams/events" };
 afterEach(() => vi.unstubAllEnvs());
 
 it.each([undefined, false] as const)("migrates config with opt-out %j", (legacy) => {
-  const old = { legacyWebhook: legacy, webhook: { ...webhook, port: 3978 }, streamMode: "block" };
+  const old = {
+    ...(legacy === false ? { legacyWebhook: false as const } : {}),
+    webhook: { ...webhook, port: 3978 },
+    streamMode: "block",
+  };
   expect(MSTeamsConfigSchema.safeParse(old).success).toBe(false);
   expect(legacyConfigRules.some((rule) => rule.match?.(old, {}))).toBe(true);
   const migrated = normalizeCompatibilityConfig({ cfg: { channels: { msteams: old } } });

@@ -6,6 +6,7 @@ import { commandResult as spawnResult } from "../test-support/command-result.tes
 
 const runCommandMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Simulate process failures without spawning an external speech executable.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandBuffered: runCommandMock,
 }));
