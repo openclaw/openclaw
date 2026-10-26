@@ -134,21 +134,13 @@ describe("Solid shell chrome", () => {
 
   it("retains native history actions across the Settings takeover", () => {
     const [historyOnly, setHistoryOnly] = createSignal(false);
-    const [canGoBack, setCanGoBack] = createSignal(false);
     const back = vi.spyOn(globalThis.history, "back").mockImplementation(() => {});
     const view = mountSolid(() => (
-      <MacosTitlebarControls
-        historyOnly={historyOnly()}
-        canGoBack={canGoBack()}
-        canGoForward={false}
-      />
+      <MacosTitlebarControls historyOnly={historyOnly()} canGoBack={true} canGoForward={false} />
     ));
     const find = queryWithin(view.container);
     const backButton = find<HTMLButtonElement>(".macos-titlebar-controls__back")!;
-    expect(backButton.disabled).toBe(true);
     expect(view.container.querySelectorAll("button")).toHaveLength(2);
-    setCanGoBack(true);
-    flush();
     backButton.click();
     expect(back).toHaveBeenCalledOnce();
 

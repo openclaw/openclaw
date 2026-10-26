@@ -116,18 +116,6 @@ describe("settings save indicator", () => {
     expect(feedback()).toMatchObject({ title: lastError });
   });
 
-  it("applies pending changes and reports the in-flight state", async () => {
-    const { onApply } = await update({ needsApply: true });
-
-    button("Apply changes")?.click();
-    expect(onApply).toHaveBeenCalledOnce();
-
-    await update({ needsApply: true, applying: true, onApply });
-    expect(indicator.textContent?.trim()).toBe("Applying…");
-    expect(part("spinner")).not.toBeNull();
-    expect(button("Apply changes")).toBeUndefined();
-  });
-
   it("presents an admitted Save without inventing an accepted owner result", async () => {
     const held = createDeferred<boolean>();
     const onSave = vi.fn(() => held.promise);

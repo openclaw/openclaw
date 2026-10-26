@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   createTestSessionCapability,
@@ -18,13 +18,10 @@ function snapshot(
 ): SessionListSnapshot {
   return { result, error, agentId: null, loading: false, readSucceeded };
 }
-function setup(client = createTestGatewayClient(async () => ({}))) {
-  const gateway = createGatewayHarness(client);
-  const sessions = createTestSessionCapability(gateway.gateway);
-  return { gateway, sessions, context: createContext(gateway.gateway, sessions) };
-}
 function fixture() {
-  const { gateway, sessions, context } = setup();
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  const sessions = createTestSessionCapability(gateway.gateway);
+  const context = createContext(gateway.gateway, sessions);
   const refresh = createDeferred();
   const dispose = vi.fn();
   let publish!: (snapshot: SessionListSnapshot) => void;
@@ -77,9 +74,9 @@ it("keeps live and late-open cards current without a sidebar rendering publicati
   context.sessions.dispose();
 });
 
-it.each([false, true])(
-  "admits only fresh cross-agent membership (opening rejected=%s)",
-  async (rejected) => {
+it.each(["success", "rejected", "unavailable"])(
+  "admits only fresh cross-agent membership after %s",
+  async (outcome) => {
     const f = fixture();
     const query = f.observe.mock.calls[0]![0];
     expect(query).toMatchObject({ limit: 200, rowMode: "compact", includeDerivedTitles: true });
@@ -88,16 +85,16 @@ it.each([false, true])(
     }
     expect(f.activity.data?.sessionsResult).toBeNull();
     const result = sessionsResult([{ key: "agent:research:recent", kind: "direct" }], 2);
-    f.publish(result);
+    f.publish(result, undefined, outcome !== "unavailable");
     expect(f.activity.data?.sessionsResult).toBeNull();
-    if (rejected) {
+    if (outcome === "rejected") {
       f.refresh.reject(new Error("Unavailable"));
     } else {
       f.refresh.resolve();
     }
     await f.refresh.promise.catch(() => undefined);
-    expect(f.activity.data?.sessionsResult).toBe(rejected ? null : result);
-    if (rejected) {
+    expect(f.activity.data?.sessionsResult).toBe(outcome === "success" ? result : null);
+    if (outcome !== "success") {
       f.publish(result);
       expect(f.activity.data?.sessionsResult).toBe(result);
     }
@@ -130,15 +127,3 @@ it.each(["close", "connection"] as const)(
     }
   },
 );
-
-it("requires a successful-read receipt even when the managed refresh resolves without an error", async () => {
-  const f = fixture();
-  onTestFinished(() => f.activity.dispose());
-  const result = sessionsResult([{ key: "agent:main:recovered", kind: "direct" }], 2);
-  f.publish(result, undefined, false);
-  f.refresh.resolve();
-  await f.refresh.promise;
-  expect(f.activity.data?.sessionsResult).toBeNull();
-  f.publish(result);
-  expect(f.activity.data?.sessionsResult).toBe(result);
-});
