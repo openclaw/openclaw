@@ -313,32 +313,7 @@ test.each(["completed", "error"] as const)(
   30_000,
 );
 
-test("exports cache-write TTL facts on OpenClaw usage keys", async () => {
-  await startOtelService({ traces: true });
-  for (const usage of [
-    { cacheWrite: 1_000_000, cacheWrite1h: 400_000, cacheWrite5m: 600_000 },
-    { cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0 },
-    { cacheWrite: 1_000_000 },
-  ]) {
-    emit({
-      type: "model.call.completed",
-      ...runBase,
-      callId: "cache-write",
-      durationMs: 10,
-      usage,
-    });
-  }
-  await waitForDiagnosticEventsDrained();
-  const attrs = sdk.exporter.getFinishedSpans().map((span) => span.attributes);
-  const local = "openclaw.model_call.usage.cache_creation_input_tokens";
-  expect(attrs.map((a) => [a[local], a[`${local}_1h`], a[`${local}_5m`]])).toEqual([
-    [1_000_000, 400_000, 600_000],
-    [0, 0, 0],
-    [1_000_000, undefined, undefined],
-  ]);
-});
-
-test("exports cache-write TTL buckets on generic usage keys", async () => {
+test("exports cache-write TTL facts on generic and OpenClaw usage keys", async () => {
   await startOtelService({ traces: true });
   for (const usage of [
     { cacheWrite: 1_000_000, cacheWrite1h: 400_000, cacheWrite5m: 600_000 },
@@ -356,12 +331,8 @@ test("exports cache-write TTL buckets on generic usage keys", async () => {
   await waitForDiagnosticEventsDrained();
   const attrs = sdk.exporter.getFinishedSpans().map((span) => span.attributes);
   const generic = "gen_ai.usage.cache_creation.input_tokens";
-  const genericTtlKeys = [
-    generic,
-    "gen_ai.usage.input_cache_creation_1h",
-    "gen_ai.usage.input_cache_creation_5m",
-  ].toSorted();
-  // The OTel GenAI conventions define no TTL attributes, so these generic
+  const local = "openclaw.model_call.usage.cache_creation_input_tokens";
+  // The OTel GenAI conventions define no TTL attributes, so the generic TTL
   // keys extend gen_ai.usage.* for usage-type pricing. They decompose the
   // blended cache-write total the standard keeps authoritative, so pricing
   // consumers sum the total or its buckets, never both.
@@ -370,12 +341,21 @@ test("exports cache-write TTL buckets on generic usage keys", async () => {
       a[generic],
       a["gen_ai.usage.input_cache_creation_1h"],
       a["gen_ai.usage.input_cache_creation_5m"],
+      a[local],
+      a[`${local}_1h`],
+      a[`${local}_5m`],
     ]),
   ).toEqual([
-    [1_000_000, 400_000, 600_000],
-    [0, 0, 0],
-    [1_000_000, undefined, undefined],
+    [1_000_000, 400_000, 600_000, 1_000_000, 400_000, 600_000],
+    [0, 0, 0, 0, 0, 0],
+    [1_000_000, undefined, undefined, 1_000_000, undefined, undefined],
   ]);
+  const genericTtlKeys = [
+    generic,
+    "gen_ai.usage.input_cache_creation_1h",
+    "gen_ai.usage.input_cache_creation_5m",
+  ].toSorted();
+  const localTtlKeys = [local, `${local}_1h`, `${local}_5m`].toSorted();
   expect(
     attrs.map((a) =>
       Object.keys(a)
@@ -383,6 +363,15 @@ test("exports cache-write TTL buckets on generic usage keys", async () => {
         .toSorted(),
     ),
   ).toEqual([genericTtlKeys, genericTtlKeys, [generic].toSorted()]);
+  expect(
+    attrs.map((a) =>
+      Object.keys(a)
+        .filter(
+          (key) => key.startsWith("openclaw.model_call.usage.") && key.includes("cache_creation"),
+        )
+        .toSorted(),
+    ),
+  ).toEqual([localTtlKeys, localTtlKeys, [local].toSorted()]);
 });
 
 test("leaves message and exec spans parentless when no ancestor was exported", async () => {
