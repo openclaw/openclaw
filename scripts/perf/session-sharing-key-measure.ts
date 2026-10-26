@@ -7,6 +7,10 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-sharing-key-measure.ts
  * Add --owner src/gateway/.session-sharing-read-base.ts for a saved base sibling;
  * --allocations runs a separate V8 allocation pass. Run five interleaved pairs.
+ * --workload rows --events 3 scans all 10k rows for each client three times,
+ * preparing sharing once per list and requesting its key without a revision.
+ * --owner <base> --compare-owner <candidate> --pairs 5 runs counterbalanced
+ * AB/BA pairs in one process; repeat separately with --allocations.
  * Acceptance: identical digest, lower CPU/allocation, unchanged live authority.
  */
 import assert from "node:assert/strict";
@@ -25,17 +29,33 @@ import type { SessionSharingTarget } from "../../src/gateway/session-sharing-pol
 const { values } = parseArgs({
   options: {
     owner: { type: "string", default: "src/gateway/session-sharing-read.ts" },
+    "compare-owner": { type: "string" },
+    pairs: { type: "string" },
     events: { type: "string", default: "3000" },
+    workload: { type: "string", default: "events" },
     allocations: { type: "boolean", default: false },
   },
 });
 const events = Number(values.events);
 assert(Number.isSafeInteger(events) && events > 0);
-const owner = path.resolve(values.owner);
-const {
-  prepareProjectedSessionSharing,
-}: typeof import("../../src/gateway/session-sharing-read.js") = await import(
-  pathToFileURL(owner).href
+const workload = values.workload;
+assert(workload === "events" || workload === "rows");
+const pairs = Number(values.pairs ?? (values["compare-owner"] ? "5" : "1"));
+assert(Number.isSafeInteger(pairs) && pairs > 0);
+const ownerPaths = values["compare-owner"]
+  ? [values.owner, values["compare-owner"]]
+  : [values.owner];
+const owners = await Promise.all(
+  ownerPaths.map(async (ownerPath) => {
+    const owner = path.resolve(ownerPath);
+    const source: typeof import("../../src/gateway/session-sharing-read.js") = await import(
+      pathToFileURL(owner).href
+    );
+    return {
+      prepareProjectedSessionSharing: source.prepareProjectedSessionSharing,
+      sha256: createHash("sha256").update(readFileSync(owner)).digest("hex"),
+    };
+  }),
 );
 const cfg: OpenClawConfig = {
   plugins: {
@@ -84,80 +104,120 @@ const targets: SessionSharingTarget[] = Array.from({ length: 10_000 }, (_, i) =>
   storeKeys: [`agent:main:${i}`],
   entry: { sessionId: `session-${i}`, updatedAt: 1, visibility: "shared" },
 }));
-let revision: object = {};
-let member = false;
-let checksum = 0;
-function publish(index: number, digest?: ReturnType<typeof createHash>) {
-  // A committed sharing change retires the owner fact; transcript deltas do not.
-  if (index % 100 === 0) {
-    revision = {};
-    member = !member;
+async function measure(owner: (typeof owners)[number], pair: number, arm: string) {
+  const { prepareProjectedSessionSharing } = owner;
+  let revision: object = {};
+  let member = false;
+  let checksum = 0;
+  function publish(index: number, digest?: ReturnType<typeof createHash>) {
+    // A committed sharing change retires the owner fact; transcript deltas do not.
+    if (index % 100 === 0) {
+      revision = {};
+      member = !member;
+    }
+    const target = targets[index % targets.length]!;
+    for (const client of clients) {
+      const sharing = prepareProjectedSessionSharing({
+        cfg,
+        client,
+        isMember: () => member,
+      });
+      const key = sharing.getCacheKey(revision);
+      const role = sharing.roleForTarget(target);
+      assert.equal(role, member ? "member" : "viewer");
+      checksum += key.length + role.length;
+      digest?.update(key).update(role);
+    }
   }
-  const target = targets[index % targets.length]!;
-  for (const client of clients) {
-    const sharing = prepareProjectedSessionSharing({
-      cfg,
-      client,
-      isMember: () => member,
+  function listRows(index: number, digest?: ReturnType<typeof createHash>) {
+    member = index % 2 === 0;
+    for (const client of clients) {
+      const sharing = prepareProjectedSessionSharing({ cfg, client, isMember: () => member });
+      const key = sharing.getCacheKey();
+      checksum += key.length;
+      digest?.update(key);
+      let visible = 0;
+      let members = 0;
+      for (const target of targets) {
+        if (sharing.entryFilter?.(target.canonicalKey, target.entry) === false) {
+          continue;
+        }
+        visible++;
+        const role = sharing.roleForTarget(target);
+        members += Number(role === "member");
+        checksum += role.length;
+        digest?.update(target.canonicalKey).update(role);
+      }
+      assert.equal(visible, targets.length);
+      assert.equal(members, member ? targets.length : 0);
+    }
+  }
+  const run = workload === "events" ? publish : listRows;
+  for (let i = 0; i < (workload === "events" ? 200 : 2); i++) {
+    run(i);
+  }
+  global.gc?.();
+  const inspector = new Session();
+  if (values.allocations) {
+    inspector.connect();
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 16384,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
     });
-    const key = sharing.getCacheKey(revision);
-    const role = sharing.roleForTarget(target);
-    assert.equal(role, member ? "member" : "viewer");
-    checksum += key.length + role.length;
-    digest?.update(key).update(role);
+  }
+  const hostLoadBefore = loadavg();
+  const memoryBefore = process.memoryUsage();
+  const cpuStart = process.threadCpuUsage();
+  const start = performance.now();
+  for (let i = 0; i < events; i++) {
+    run(i);
+  }
+  const elapsedMs = performance.now() - start;
+  const cpu = process.threadCpuUsage(cpuStart);
+  const memoryAfter = process.memoryUsage();
+  let sampledBytes: number | undefined;
+  if (values.allocations) {
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    sampledBytes = sum(profile.head);
+    inspector.disconnect();
+  }
+  member = false;
+  const digest = createHash("sha256");
+  for (let i = 0; i < events; i++) {
+    run(i, digest);
+  }
+  console.log(
+    JSON.stringify({
+      ownerSha256: owner.sha256,
+      pair,
+      arm,
+      node: process.version,
+      workload,
+      events,
+      clients: clients.length,
+      broadcasts: workload === "events" ? events : 0,
+      listScans: workload === "rows" ? events * clients.length : 0,
+      audienceKeys: events * clients.length,
+      roleChecks: events * clients.length * (workload === "rows" ? targets.length : 1),
+      mode: values.allocations ? "allocation" : "timing",
+      elapsedMs,
+      threadCpuMs: (cpu.user + cpu.system) / 1000,
+      sampledBytes,
+      checksum,
+      digest: digest.digest("hex"),
+      hostLoadBefore,
+      hostLoadAfter: loadavg(),
+      memoryBefore,
+      memoryAfter,
+    }),
+  );
+}
+for (let pair = 1; pair <= pairs; pair++) {
+  const order = pair % 2 === 1 ? owners : owners.toReversed();
+  for (const owner of order) {
+    await measure(owner, pair, owner === owners[0] ? "base" : "candidate");
   }
 }
-for (let i = 0; i < 200; i++) {
-  publish(i);
-}
-global.gc?.();
-const inspector = new Session();
-if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
-}
-const hostLoadBefore = loadavg();
-const memoryBefore = process.memoryUsage();
-const cpuStart = process.threadCpuUsage();
-const start = performance.now();
-for (let i = 0; i < events; i++) {
-  publish(i);
-}
-const elapsedMs = performance.now() - start;
-const cpu = process.threadCpuUsage(cpuStart);
-const memoryAfter = process.memoryUsage();
-let sampledBytes: number | undefined;
-if (values.allocations) {
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-  sampledBytes = sum(profile.head);
-  inspector.disconnect();
-}
-member = false;
-const digest = createHash("sha256");
-for (let i = 0; i < events; i++) {
-  publish(i, digest);
-}
-console.log(
-  JSON.stringify({
-    ownerSha256: createHash("sha256").update(readFileSync(owner)).digest("hex"),
-    node: process.version,
-    events,
-    clients: clients.length,
-    mode: values.allocations ? "allocation" : "timing",
-    elapsedMs,
-    threadCpuMs: (cpu.user + cpu.system) / 1000,
-    sampledBytes,
-    checksum,
-    digest: digest.digest("hex"),
-    hostLoadBefore,
-    hostLoadAfter: loadavg(),
-    memoryBefore,
-    memoryAfter,
-  }),
-);
