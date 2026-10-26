@@ -26,7 +26,7 @@ function openAudioResponse(chunks: Uint8Array[], init?: ResponseInit) {
     },
     cancel,
   });
-  return { stream, cancel, response: new Response(stream, init) };
+  return { cancel, response: new Response(stream, init) };
 }
 
 describe("elevenlabs tts diagnostics", () => {
@@ -37,24 +37,10 @@ describe("elevenlabs tts diagnostics", () => {
   beforeEach(() => {
     vi.spyOn(configApi, "resolveElevenLabsApiKeyWithProfileFallback").mockReturnValue(null);
   });
-
   const request: Parameters<typeof provider.synthesize>[0] = {
     text: "hello",
     cfg: {},
-    providerConfig: {
-      apiKey: "test-key",
-      baseUrl: "https://api.elevenlabs.io",
-      voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2",
-      voiceSettings: {
-        stability: 0.5,
-        similarityBoost: 0.75,
-        style: 0,
-        useSpeakerBoost: true,
-        speed: 1,
-      },
-    },
-    providerOverrides: { outputFormat: "mp3_44100_128" },
+    providerConfig: { apiKey: "test-key" },
     target: "audio-file",
     timeoutMs: 5_000,
   };
@@ -64,17 +50,15 @@ describe("elevenlabs tts diagnostics", () => {
     vi.restoreAllMocks();
   });
   it("includes raw non-JSON error detail while capping streamed body reads", async () => {
-    const streamed = createStreamingResponse({
+    const body = createStreamingResponse({
       status: 503,
       chunkCount: 200,
       chunkSize: 1024,
       byte: 121,
     });
-    mockFetch(streamed.response);
-
+    mockFetch(body.response);
     await expect(provider.synthesize(request)).rejects.toThrow("ElevenLabs API error (503): yyyy");
-
-    expect(streamed.getReadCount()).toBeLessThan(200);
+    expect(body.getReadCount()).toBeLessThan(200);
   });
 
   it("rejects JSON success from streaming TTS as malformed audio", async () => {
@@ -85,9 +69,9 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("uses the streaming endpoint without buffering the audio body", async () => {
-    const audioStream = createClosedChunkStream([new Uint8Array([1, 2, 3])]);
+    const chunk = new Uint8Array([1, 2, 3]);
+    const audioStream = createClosedChunkStream([chunk]);
     const fetchMock = mockFetch(new Response(audioStream));
-
     const result = await streamSynthesize({
       ...request,
       providerOverrides: { outputFormat: "mp3_44100_128", latencyTier: 2 },
@@ -108,10 +92,7 @@ describe("elevenlabs tts diagnostics", () => {
         "xi-api-key": "test-key",
       });
       const reader = result.audioStream.getReader();
-      await expect(reader.read()).resolves.toEqual({
-        done: false,
-        value: new Uint8Array([1, 2, 3]),
-      });
+      await expect(reader.read()).resolves.toEqual({ done: false, value: chunk });
       await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
       expect(audioStream.locked).toBe(false);
     } finally {
@@ -120,20 +101,17 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("cancels streamed audio before delivering bytes beyond the audio limit", async () => {
-    const {
-      stream: audioStream,
-      cancel,
-      response,
-    } = openAudioResponse([new Uint8Array(MAX_AUDIO_BYTES), new Uint8Array([1])], {
-      headers: { "content-type": "audio/mpeg" },
-    });
+    const { cancel, response } = openAudioResponse(
+      [new Uint8Array(MAX_AUDIO_BYTES), new Uint8Array([1])],
+      {
+        headers: { "content-type": "audio/mpeg" },
+      },
+    );
     mockFetch(response);
-
     const result = await streamSynthesize(request);
     const release = expectDefined(result.release, "ElevenLabs stream release");
     try {
       const reader = result.audioStream.getReader();
-
       const first = await reader.read();
       expect(first.done).toBe(false);
       expect(first.value).toHaveLength(MAX_AUDIO_BYTES);
@@ -141,7 +119,7 @@ describe("elevenlabs tts diagnostics", () => {
         `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
       );
       expect(cancel).toHaveBeenCalledOnce();
-      expect(audioStream.locked).toBe(false);
+      expect(response.body?.locked).toBe(false);
     } finally {
       await release();
     }
@@ -150,7 +128,6 @@ describe("elevenlabs tts diagnostics", () => {
   it("cancels the live helper error body when ElevenLabs returns non-2xx", async () => {
     const { cancel, response } = openAudioResponse([new Uint8Array([1, 2, 3])], { status: 401 });
     mockFetch(response);
-
     await expect(
       synthesizeElevenLabsLiveSpeech({
         text: "OpenClaw leak check.",
@@ -159,7 +136,6 @@ describe("elevenlabs tts diagnostics", () => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow("ElevenLabs live TTS failed (401)");
-
     expect(cancel).toHaveBeenCalledOnce();
     expect(response.bodyUsed).toBe(true);
   });
