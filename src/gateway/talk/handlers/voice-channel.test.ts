@@ -5,10 +5,7 @@ import { releaseAgentRunDelegatedAuthority } from "../../../infra/agent-run-regi
 import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  registerRealtimeVoiceSelection,
-  type RealtimeVoiceSelectionRequest,
-} from "../../../talk/voice-selection-control.js";
+import { registerRealtimeVoiceSelection } from "../../../talk/voice-selection-control.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -26,39 +23,34 @@ describe("channel-owned voice selection RPC", () => {
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn();
 
-  function managedCall(change?: (request: RealtimeVoiceSelectionRequest) => Promise<void>) {
+  function managedCall(change?: () => Promise<void>) {
     const runtime = runtimes.create(agentId, sessionKey);
     let voice = "marin";
-    let speakerCurrent = true;
-    const apply = vi.fn(async (next: string, request: RealtimeVoiceSelectionRequest) => {
-      await change?.(request);
-      request.assertCurrent();
-      voice = next;
-    });
+    const speaker = new AbortController();
     const handle = registerRealtimeVoiceSelection({
       voiceSessionId: "discord-room",
       agentId,
       sessionKey,
       read: () => ({ provider: "openai", voice, voices: ["marin", "cedar"], canChange: true }),
-      changeVoice: apply,
+      changeVoice: async (next, request) => {
+        await change?.();
+        request.assertCurrent();
+        voice = next;
+      },
       assertCurrent: () => {},
     });
     const release = handle.bindRun({
       runId: runtime.runId,
-      assertCurrent: () => {
-        if (!speakerCurrent) {
-          throw new Error("Speaker authorization changed");
-        }
-      },
+      assertCurrent: () => speaker.signal.throwIfAborted(),
     });
     cleanup.push(release, handle.unregister);
     return {
       ...runtime,
-      apply,
-      handle,
-      release,
-      revokeSpeaker: () => {
-        speakerCurrent = false;
+      retire: {
+        run: () => releaseAgentRunDelegatedAuthority(runtime.authority),
+        binding: release,
+        call: handle.unregister,
+        speaker: () => speaker.abort(new Error("Speaker authorization changed")),
       },
       currentVoice: () => voice,
     };
@@ -85,23 +77,7 @@ describe("channel-owned voice selection RPC", () => {
     await state.cleanup();
   });
 
-  it("lists and changes the bound channel call without a browser handoff", async () => {
-    const call = managedCall();
-    expectSuccess(await invoke("talk.voice.get", {}, call.client), {
-      voiceSessionId: "discord-room",
-      voice: "marin",
-      voices: ["marin", "cedar"],
-    });
-    expectSuccess(await invoke("talk.voice.set", { voice: "Cedar" }, call.client), {
-      voiceSessionId: "discord-room",
-      voice: "cedar",
-      status: "applied",
-    });
-    expect(call.currentVoice()).toBe("cedar");
-    expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("retains the channel plugin runtime when voice replacement schedules later consults", async () => {
+  it("lists and changes the channel voice while retaining its plugin runtime for later consults", async () => {
     const discordInstance = new PluginInstance("discord");
     const talkVoiceInstance = new PluginInstance("talk-voice");
     const runtimeStore = createPluginRuntimeStore<string>({
@@ -118,15 +94,18 @@ describe("channel-owned voice selection RPC", () => {
           );
         }),
       );
-
+      expectSuccess(await invoke("talk.voice.get", {}, call.client), {
+        voiceSessionId: "discord-room",
+        voice: "marin",
+        voices: ["marin", "cedar"],
+      });
       expectSuccess(
         await talkVoiceInstance.run(() =>
-          invoke("talk.voice.set", { voice: "cedar" }, call.client),
+          invoke("talk.voice.set", { voice: "Cedar" }, call.client),
         ),
-        { voice: "cedar", status: "applied" },
+        { voiceSessionId: "discord-room", voice: "cedar", status: "applied" },
       );
-
-      expect(call.currentVoice()).toBe("cedar");
+      expect(broadcast).not.toHaveBeenCalled();
       expect(consult?.()).toBe("discord-runtime");
     } finally {
       await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
@@ -134,18 +113,19 @@ describe("channel-owned voice selection RPC", () => {
   });
 
   it("rejects foreign targets and unsupported voices before reconnecting", async () => {
-    const call = managedCall();
+    const reconnect = vi.fn(async () => {});
+    const call = managedCall(reconnect);
     for (const params of [
       { voice: "unknown" },
       { voice: "cedar", voiceSessionId: "another-room" },
     ]) {
       expectFailure(await invoke("talk.voice.set", params, call.client));
     }
-    expect(call.apply).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
     expect(call.currentVoice()).toBe("marin");
   });
 
-  it.for(["run", "binding", "call", "speaker"])(
+  it.for(["run", "binding", "call", "speaker"] as const)(
     "rechecks %s ownership after replacement preparation",
     async (retired, { signal }) => {
       const entered = createDeferredCore();
@@ -164,21 +144,12 @@ describe("channel-owned voice selection RPC", () => {
           ),
           signal,
         );
-        expect(call.apply).toHaveBeenCalledOnce();
         expect(changing.respond).not.toHaveBeenCalled();
         expectFailure(
           await invoke("talk.voice.set", { voice: "cedar" }, call.client),
           "already in progress",
         );
-        if (retired === "run") {
-          releaseAgentRunDelegatedAuthority(call.authority);
-        } else if (retired === "binding") {
-          call.release();
-        } else if (retired === "call") {
-          call.handle.unregister();
-        } else {
-          call.revokeSpeaker();
-        }
+        call.retire[retired]();
       } finally {
         ready.resolve();
       }

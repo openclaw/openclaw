@@ -15,35 +15,29 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
     options: Pick<ChatSendInternalOptions, "beforeDispatch">,
   ) => {
     let registration: Promise<void | (() => void)> | undefined;
-    return Promise.resolve(
-      chatSend(
-        {
-          ...request,
-          respond: (...args: Parameters<RespondFn>) => {
-            const [ok, payload] = args;
-            const { runId, status } = (payload ?? {}) as { runId?: string; status?: string };
-            if (ok && runId && (!status || status === "started")) {
-              registration = options.beforeDispatch?.({
-                runId,
-                assertCurrent() {},
-                assertWorkAdmissionCurrent() {},
-              });
-            }
-            const respond = () => request.respond(...args);
-            return registration
-              ? void registration.then(respond, (error: unknown) =>
-                  request.respond(false, undefined, {
-                    code: ErrorCodes.UNAVAILABLE,
-                    message: String(error),
-                  }),
-                )
-              : respond();
-          },
-        },
-        onAdmissionOwned,
-        options,
-      ),
-    ).then(() => registration);
+    const respond: RespondFn = (...args) => {
+      const [ok, payload] = args;
+      const { runId, status } = (payload ?? {}) as { runId?: string; status?: string };
+      if (ok && runId && (!status || status === "started")) {
+        registration = options.beforeDispatch?.({
+          runId,
+          assertCurrent() {},
+          assertWorkAdmissionCurrent() {},
+        });
+      }
+      const forward = () => request.respond(...args);
+      return registration
+        ? void registration.then(forward, (error: unknown) =>
+            request.respond(false, undefined, {
+              code: ErrorCodes.UNAVAILABLE,
+              message: String(error),
+            }),
+          )
+        : forward();
+    };
+    return Promise.resolve(chatSend({ ...request, respond }, onAdmissionOwned, options)).then(
+      () => registration,
+    );
   };
 }
 
@@ -108,11 +102,7 @@ export function createDelegatedBrowserProviderFixture(
 }
 
 /** Wait for the requested event while surfacing any earlier handler failure. */
-export function observeTalkVoiceChangeRequest(
-  broadcast: ReturnType<
-    typeof createDelegatedBrowserProviderFixture
-  >["context"]["broadcastToConnIds"],
-) {
+export function observeTalkVoiceChangeRequest(broadcast: ReturnType<typeof vi.fn>) {
   const requested = createDeferred();
   broadcast.mockImplementation((event) => {
     if (event === "talk.voice.change") {
