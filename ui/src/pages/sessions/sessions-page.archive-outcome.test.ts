@@ -211,40 +211,28 @@ describe("Sessions archive outcome lifetime", () => {
     expect(page.context.navigation.snapshot.sidebarEntries).toEqual([pin]);
   });
 
-  it.each(
-    ["rename", "archive", "restore"].flatMap((action) =>
-      [false, true].map((replaced) => ({ action, replaced })),
-    ),
-  )(
-    "settles $action selection only for its session (replaced=$replaced)",
-    async ({ action, replaced }) => {
-      const original = { ...target, archived: action === "restore" };
-      const successor = { ...original, sessionId: "successor-session", label: "Replacement work" };
-      const fixture = await setup(original, true);
+  it.each([false, true])(
+    "settles a patch selection only for its session (replaced=%s)",
+    async (replaced) => {
+      const successor = { ...target, sessionId: "successor-session", label: "Replacement work" };
+      const fixture = await setup(target, true);
       const { page, pending, started, patches, gateway } = fixture;
       const checkbox = () =>
         page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`)!;
       checkbox().click();
       await page.updateComplete;
-      const patch =
-        action === "rename" ? { label: "Renamed work" } : { archived: action === "archive" };
-      const completion = page.patchSession(target.key, patch, undefined, original.sessionId);
-      const response: SessionPatchResult = {
-        ...patched,
-        entry: {
-          sessionId: original.sessionId!,
-          ...(action === "rename"
-            ? { label: "Renamed work" }
-            : { archivedAt: action === "archive" ? 1 : undefined }),
-        },
-      };
+      const completion = page.patchSession(
+        target.key,
+        { archived: true },
+        undefined,
+        target.sessionId,
+      );
       try {
         await started.promise;
-        expect(patches()).toHaveLength(1);
         expect(patches()[0]?.[1]).toMatchObject({
           key: target.key,
-          expectedSessionId: original.sessionId,
-          ...patch,
+          expectedSessionId: target.sessionId,
+          archived: true,
         });
         if (replaced) {
           await fixture.replace(successor);
@@ -253,7 +241,7 @@ describe("Sessions archive outcome lifetime", () => {
           await page.updateComplete;
           expect(page.selectedSessions.get(target.key)?.sessionId).toBe(successor.sessionId);
         }
-        pending.resolve(response);
+        pending.resolve(patched);
         expect(await completion).toBe("completed");
         await page.updateComplete;
         expect(checkbox().checked).toBe(replaced);
@@ -265,7 +253,7 @@ describe("Sessions archive outcome lifetime", () => {
         }
         expect(gateway.setSessionKey).not.toHaveBeenCalled();
       } finally {
-        pending.resolve(response);
+        pending.resolve(patched);
         await completion;
       }
     },

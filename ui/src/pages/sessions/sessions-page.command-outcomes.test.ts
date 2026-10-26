@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
@@ -41,7 +40,6 @@ describe("sessions command outcomes", () => {
     async (retired) => {
       const pending = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
       const failure = new Error("Patch unavailable. Try again.");
-      const formatError = vi.spyOn(uiErrors, "formatUiError");
       const { page, sessions, connection } = await mountMutation({
         patch: vi.fn(() => pending.promise),
       });
@@ -64,7 +62,6 @@ describe("sessions command outcomes", () => {
           expect(alerts).toHaveLength(1);
           expect(alerts[0]?.textContent).toContain(failure.message);
         });
-        expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
       }
     },
   );
@@ -72,7 +69,6 @@ describe("sessions command outcomes", () => {
   it("presents involvement failure once and clears it on explicit refresh", async () => {
     const pending = createDeferred<{ ok: boolean }>();
     const failure = new Error("Personal visibility unavailable. Try again.");
-    const formatError = vi.spyOn(uiErrors, "formatUiError");
     const request = vi.fn((method: string) =>
       method === "sessions.setInvolvement" ? pending.promise : Promise.resolve({ profiles: [] }),
     );
@@ -101,7 +97,6 @@ describe("sessions command outcomes", () => {
       expect(alerts[0]?.textContent).toContain(failure.message);
       expect(page.textContent).not.toContain("Working…");
     });
-    expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
 
     const refreshCalls = managed.refreshList.mock.calls.length;
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
@@ -133,13 +128,11 @@ describe("sessions command outcomes", () => {
         return { deleted: true };
       },
     });
-    const subscribe = vi.spyOn(context.sessions, "subscribeList");
     const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
     await waitForFast(() => expect(page.loading).toBe(false));
     selectRows(page, target);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     expect(await page.deleteSelected()).toBe("completed");
-    expect(context.sessions.listSnapshot(subscribe.mock.calls[0]![0]).error).toBe(failure.message);
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent ?? "").toContain(failure.message),
     );

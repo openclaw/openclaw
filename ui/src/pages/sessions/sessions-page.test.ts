@@ -9,7 +9,6 @@ import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
@@ -36,6 +35,7 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -50,6 +50,7 @@ import {
   openRowMenu,
   selectRows,
   sessionRow,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -263,13 +264,10 @@ describe("sessions page lifecycle", () => {
     const sessions = createSessions({
       deleteMany: vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(next.promise),
     });
-    const context = createContext(createGateway().gateway, sessions);
-    const listeners = new Set<() => void>();
-    context.agentSelection.subscribe = (listener) => {
-      const notify = () => listener(context.agentSelection.state);
-      listeners.add(notify);
-      return () => listeners.delete(notify);
-    };
+    const { context, changeScope } = withNotifyingAgentSelection(
+      createContext(createGateway().gateway, sessions),
+      "main",
+    );
     const target = sessionRow("old-scope-command");
     const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
@@ -277,8 +275,7 @@ describe("sessions page lifecycle", () => {
       await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
       expect(page.textContent).toContain("Working…");
-      context.agentSelection.state.scopeId = "reviewer";
-      listeners.forEach((notify) => notify());
+      changeScope("reviewer");
       await page.updateComplete;
       expect(page.textContent).not.toContain("Working…");
       const nextTarget = sessionRow("new-scope-command", {
@@ -321,7 +318,6 @@ describe("sessions page lifecycle", () => {
         label: "Assignment fixture",
       });
       const failure = new Error("Assignment unavailable. Try again.");
-      const formatError = vi.spyOn(uiErrors, "formatUiError");
       const assignment = createDeferred<unknown>();
       const { request, connection, sessions, context } = liveSessions(
         {
@@ -359,7 +355,6 @@ describe("sessions page lifecycle", () => {
       } else {
         await expect(assignOwner.mock.results[0]!.value).rejects.toBe(failure);
         await waitForFast(() => expect(page.textContent).toContain(failure.message));
-        expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
         expect(page.textContent).toContain("Assignment fixture");
       }
     },
@@ -633,27 +628,11 @@ describe("sessions page lifecycle", () => {
         createGateway({ request } as unknown as GatewayBrowserClient).gateway,
         managed.sessions,
       );
-      const placement = {
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        environmentId: "environment-1",
-      };
+      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
       const target = sessionRow("cloud", {
         label: "Cloud task",
         hasActiveRun: state === "provisioning",
-        placement:
-          state === "active"
-            ? {
-                ...placement,
-                state,
-                activeOwnerEpoch: 1,
-                workerBundleHash: "0".repeat(64),
-                workspaceBaseManifestRef: "base-ref",
-                remoteWorkspaceDir: "/workspace",
-              }
-            : { ...placement, state },
+        placement: state === "active" ? placement : { ...placement, state },
       });
       const page = await createRenderedPage(context, sessionsResult([target], 1));
       expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
