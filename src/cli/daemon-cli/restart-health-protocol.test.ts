@@ -39,10 +39,7 @@ it.each(["none", "token"] as const)(
               minProtocol: protocol,
               maxProtocol: protocol,
             });
-          const previous = await probe(retainedProtocol).then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
-          );
+          await expect(probe(retainedProtocol)).rejects.toThrow(/protocol mismatch/);
           expect(observed).toHaveLength(1);
           expect(observed[0]).toMatchObject({
             minProtocol: retainedProtocol,
@@ -52,23 +49,14 @@ it.each(["none", "token"] as const)(
                 ? { id: "gateway-client", mode: "backend" }
                 : { id: "cli", mode: "cli" },
           });
-          expect(previous).toMatchObject({
-            error: expect.objectContaining({ message: expect.stringMatching(/protocol mismatch/) }),
-          });
           await expect(probe(PROTOCOL_VERSION)).resolves.toMatchObject({ ok: true });
           expect(failures).toEqual(["protocol-mismatch"]);
-          expect(observed.map((connect) => connect.client)).toEqual([
-            expect.objectContaining(
-              mode === "none"
-                ? { id: "gateway-client", mode: "backend" }
-                : { id: "cli", mode: "cli" },
-            ),
-            expect.objectContaining(
-              mode === "none"
-                ? { id: "gateway-client", mode: "backend" }
-                : { id: "cli", mode: "cli" },
-            ),
-          ]);
+          expect(observed).toHaveLength(2);
+          expect(observed[1]?.client).toMatchObject(
+            mode === "none"
+              ? { id: "gateway-client", mode: "backend" }
+              : { id: "cli", mode: "cli" },
+          );
           const actualCallGateway = gatewayCall.callGateway;
           vi.spyOn(gatewayCall, "callGateway").mockImplementation((options) =>
             actualCallGateway({
@@ -125,19 +113,17 @@ it.each([
           let callError: unknown;
           const outcome = await withUpdateCommandExecutor(randomUUID(), async (owner) => {
             const fence = await owner.enter(root);
-            try {
-              return await confirmGatewayReachable({
-                config,
-                auth: config.gateway.auth,
-                env: state.env,
-                port,
-                timeoutMs: 2_000,
-                assertCurrent: fence.assertCurrent,
-              });
-            } catch (error) {
+            return confirmGatewayReachable({
+              config,
+              auth: config.gateway.auth,
+              env: state.env,
+              port,
+              timeoutMs: 2_000,
+              assertCurrent: fence.assertCurrent,
+            }).catch((error: unknown) => {
               callError = error;
               throw error;
-            }
+            });
           }).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
@@ -160,10 +146,12 @@ it.each([
           expect(requests).toEqual([]);
           expect(observed).toEqual([]);
           expect(revoked).toBe(true);
+          expect(outcome).toMatchObject({
+            error: { message: "Update executor ownership is no longer current." },
+          });
           expect(callError).toMatchObject({
             message: "Update executor ownership is no longer current.",
           });
-          expect(outcome).toHaveProperty("error");
         },
         {
           beforeChallenge: async () => {
