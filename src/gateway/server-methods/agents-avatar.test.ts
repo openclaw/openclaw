@@ -5,8 +5,7 @@ import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const generation = vi.hoisted(() => vi.fn());
-const capture = vi.hoisted(() => vi.fn());
+const { generation, capture } = vi.hoisted(() => ({ generation: vi.fn(), capture: vi.fn() }));
 // mock-isolation: test Gateway admission and responses without model inference.
 vi.mock("../../agents/blobster-generation.js", () => ({ generateBlobsterForAgent: generation }));
 // mock-isolation: control admitted authority and its cleanup explicitly.
