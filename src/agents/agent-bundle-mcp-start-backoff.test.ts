@@ -160,6 +160,14 @@ it.each(["embedded", "native"])(
       for (let index = 0; index < 8; index++) {
         expect(toolNames(await catalogFor(makeRuntime()))).toEqual([]);
       }
+      const otherWorkspace = createSessionMcpRuntime({
+        sessionId: "other-workspace",
+        workspaceDir: "/other-workspace",
+        agentDir: "/other-agent",
+        cfg: { mcp: { servers: { remote: remoteServer } } },
+      });
+      runtimes.push(otherWorkspace);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual([]);
       expect(initializes).toBe(1);
       expect(transports).toHaveLength(1);
       expect(warn).toHaveBeenCalledTimes(1);
@@ -176,7 +184,8 @@ it.each(["embedded", "native"])(
       );
       expect(toolNames(await catalogFor(first))).toEqual(["probe"]);
       expect(toolNames(await catalogFor(makeRuntime()))).toEqual(["probe"]);
-      expect(initializes).toBe(3);
+      expect(toolNames(await catalogFor(otherWorkspace))).toEqual(["probe"]);
+      expect(initializes).toBe(4);
     });
   },
 );

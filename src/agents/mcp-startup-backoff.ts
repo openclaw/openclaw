@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 
 type StartupState = {
   owner: AbortSignal;
@@ -183,13 +184,26 @@ async function connectWithMcpStartupBackoff(
 
 /** A runtime owns transient failures; credential denials outlive native capability contexts. */
 export function createMcpStartupBackoff(params: {
-  identity: readonly unknown[];
+  identity: readonly [
+    workspaceDir: string,
+    agentDir: string | undefined,
+    requester: SessionMcpRequesterScope | undefined,
+    serverName: string,
+    configFingerprint: string,
+  ];
   signal: AbortSignal;
   recoveryRetryMs: number;
   runScoped: boolean;
 }) {
   const key = JSON.stringify([...params.identity, ...(params.runScoped ? [randomUUID()] : [])]);
-  const authorizationKey = JSON.stringify([...params.identity, "oauth-authorization"]);
+  // Native OAuth credentials belong to the server/principal, not an agent workspace.
+  const [, , requester, serverName, fingerprint] = params.identity;
+  const authorizationKey = JSON.stringify([
+    requester,
+    serverName,
+    fingerprint,
+    "oauth-authorization",
+  ]);
   return {
     get: () => getMcpStartupBackoff(key, params.signal, params.recoveryRetryMs, authorizationKey),
     connect: (connect: () => Promise<void>) =>
