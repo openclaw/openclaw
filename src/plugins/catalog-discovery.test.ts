@@ -34,6 +34,45 @@ function installed(overrides: Partial<PluginCatalogEntry>): PluginCatalogEntry {
 
 describe("plugin discovery identity and local join", () => {
   it.each([
+    { intent: "all", includeBundledOnly: true },
+    { intent: "all", query: "memory" },
+    { intent: "bundled", includeBundledOnly: true },
+    { intent: "trending", cursor: "next" },
+  ] as const)("excludes theme packages from general discovery: %j", (options) => {
+    const items = joinClawHubPluginCatalog({
+      ...options,
+      remote: [
+        remote,
+        { ...remote, packageName: "remote-theme", categories: ["themes", "memory"] },
+        { ...remote, packageName: "local-theme" },
+      ],
+      local: catalogState([
+        installed({ id: "theme", origin: "bundled", categories: ["themes"] }),
+        installed({ id: "legacy-theme", category: "themes" }),
+        installed({
+          id: "local-theme",
+          clawhubPackage: "local-theme",
+          categories: ["themes"],
+          capabilityCategories: ["media"],
+        }),
+      ]),
+    });
+    expect(items.map((item) => item.catalog.packageName)).toEqual([remote.packageName]);
+  });
+
+  it("returns no general plugin results for an explicit themes category", () => {
+    expect(
+      joinClawHubPluginCatalog({
+        remote: [remote],
+        local: catalogState([installed({ categories: ["themes"] })]),
+        intent: "all",
+        includeBundledOnly: true,
+        category: "themes",
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([
     [false, true],
     [true, true],
     [false, false],

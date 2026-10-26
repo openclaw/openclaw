@@ -27,6 +27,7 @@ function loadWithCategories(categories?: unknown) {
 describe("plugin manifest categories", () => {
   it.each([
     ["agent-runtimes"],
+    ["themes"],
     ["documents-files", "context", "research"],
     ["scheduling", "productivity", "inbox-collaboration"],
     ["tools", "runtime", "gateway"],

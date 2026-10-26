@@ -530,6 +530,18 @@ export const validateThemesImportParams = createProtocolValidator(
   S.ThemesImportParamsSchema,
   Checks.isThemesImportParams,
 );
+export const validateThemesBrowseParams = createProtocolValidator(
+  S.ThemesBrowseParamsSchema,
+  Checks.isThemesBrowseParams,
+);
+export const validateThemesInstallParams = createProtocolValidator(
+  S.ThemesInstallParamsSchema,
+  Checks.isThemesInstallParams,
+);
+export const validateThemesRemoveParams = createProtocolValidator(
+  S.ThemesRemoveParamsSchema,
+  Checks.isThemesRemoveParams,
+);
 export const validateCatalogBrowseParams = createProtocolValidator(
   S.CatalogBrowseParamsSchema,
   Checks.isCatalogBrowseParams,

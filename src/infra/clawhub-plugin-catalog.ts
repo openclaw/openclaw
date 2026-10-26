@@ -254,7 +254,9 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
       ...(pinnedPackages ? { pinnedPackages } : {}),
     };
   });
-  return categories.toSorted((left, right) => left.order - right.order);
+  return categories
+    .filter((category) => category.slug !== "themes")
+    .toSorted((left, right) => left.order - right.order);
 }
 
 function readOptionalRecord(
@@ -381,6 +383,10 @@ export async function fetchClawHubPluginCatalog(
   categories?: ClawHubPluginCategory[];
   nextCursor?: string;
 }> {
+  // The Themes category belongs to Appearance, including explicit category searches.
+  if (params.category === "themes") {
+    return { items: [] };
+  }
   const query = params.query?.trim();
   const shared = {
     baseUrl: params.baseUrl,
@@ -408,12 +414,14 @@ export async function fetchClawHubPluginCatalog(
       throw new Error("Malformed ClawHub plugin search response: expected results to be an array.");
     }
     return {
-      items: value.results.map((result, index) => {
-        if (!isRecord(result)) {
-          throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
-        }
-        return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
-      }),
+      items: value.results
+        .map((result, index) => {
+          if (!isRecord(result)) {
+            throw new Error(`Malformed ClawHub plugin search result ${index}: expected an object.`);
+          }
+          return parseCatalogPackage(result.package, `plugin search result ${index}`, baseUrl);
+        })
+        .filter((plugin) => !plugin.categories.includes("themes")),
     };
   }
   const value = await fetchClawHubJson<unknown>({
@@ -440,9 +448,9 @@ export async function fetchClawHubPluginCatalog(
   }
   const nextCursor = readClawHubStringField(value, "nextCursor", "plugin catalog response");
   return {
-    items: value.items.map((item, index) =>
-      parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
-    ),
+    items: value.items
+      .map((item, index) => parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl))
+      .filter((plugin) => !plugin.categories.includes("themes")),
     ...(nextCursor ? { nextCursor } : {}),
     ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
   };
@@ -461,9 +469,11 @@ export async function fetchClawHubPluginOverview(
     throw new Error("Malformed ClawHub plugin overview response: expected items to be an array.");
   }
   return {
-    items: value.items.map((item, index) =>
-      parseCatalogPackage(item, `plugin overview item ${index}`, options.baseUrl),
-    ),
+    items: value.items
+      .map((item, index) =>
+        parseCatalogPackage(item, `plugin overview item ${index}`, options.baseUrl),
+      )
+      .filter((plugin) => !plugin.categories.includes("themes")),
     categories: parsePluginCategories(value),
   };
 }

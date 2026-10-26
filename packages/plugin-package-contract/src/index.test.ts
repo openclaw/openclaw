@@ -12,7 +12,7 @@ const gatewayVersion = "2026.3.24-beta.2";
 describe("@openclaw/plugin-package-contract", () => {
   it("publishes the controlled plugin category taxonomy", () => {
     expect(PLUGIN_CATEGORY_SLUGS).toEqual(
-      "channels models agent-runtimes memory context voice web computer-use media security integrations developer-tools infrastructure documents-files inbox-collaboration productivity scheduling finance-payments sales-marketing data-analytics agent-orchestration research other".split(
+      "channels models agent-runtimes memory context voice web computer-use media security integrations developer-tools infrastructure documents-files inbox-collaboration productivity scheduling finance-payments sales-marketing data-analytics agent-orchestration research themes other".split(
         " ",
       ),
     );
@@ -20,6 +20,10 @@ describe("@openclaw/plugin-package-contract", () => {
 
   it("validates ordered package-owned plugin categories", () => {
     expect(validatePluginCategories(undefined)).toEqual({ ok: true });
+    expect(validatePluginCategories(["themes"])).toEqual({
+      ok: true,
+      categories: ["themes"],
+    });
     expect(validatePluginCategories(["web", "tools", "runtime"])).toEqual({
       ok: true,
       categories: ["web", "tools", "runtime"],

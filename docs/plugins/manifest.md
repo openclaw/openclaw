@@ -308,7 +308,10 @@ install or enable a plugin, grant permissions, or change provider selection.
 
 OpenClaw's manifest reader continues to accept one to three unique, ordered categories
 so previously installed and published packages remain readable. When reading older
-multiple-category declarations, the first remains primary and all remain searchable.
+multiple-category declarations, the first remains primary and all remain searchable,
+except `themes`: packages declaring it are managed in Appearance and excluded from
+general plugin discovery, search, and category lists. Declaring a theme category
+does not change a package's installation or runtime-loading behavior.
 The stricter new-publication rule does not invalidate an installed plugin's manifest.
 
 The active categories below are listed in browse order:
@@ -337,6 +340,7 @@ The active categories below are listed in browse order:
 | `data-analytics`      | Querying databases, processing datasets, analysis, reporting, and business intelligence. Agent memory storage belongs in Memory; operational telemetry belongs in Infrastructure.                                                           |
 | `agent-orchestration` | Coordinating agents, delegating work, and running multi-step agent workflows. Engines and backends that execute the agent loop and manage its native sessions belong in Agent runtimes.                                                     |
 | `research`            | Investigating topics, evaluating sources, working with scientific literature, and synthesizing evidence. General web search and page fetching belong in Web; interactive browser control belongs in Computer use.                           |
+| `themes`              | Appearance theme packages. Managed in Appearance rather than listed in general plugin discovery.                                                                                                                                            |
 | `other`               | Use only when the plugin's main purpose does not fit another category or the available evidence is insufficient. Do not use this just because a plugin has several capabilities.                                                            |
 
 Legacy `tools`, `runtime`, and `gateway` declarations remain valid so existing

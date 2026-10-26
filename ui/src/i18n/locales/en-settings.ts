@@ -1799,6 +1799,21 @@ const enSettings = {
       overrideAgents: "Override for this device",
     },
     appearance: {
+      discoverThemes: "Browse and manage themes",
+      clawhubThemes: "Themes from ClawHub",
+      themeDataOnly:
+        "Personal themes are appearance data, not executable plugins. Browse, install, and manage them here.",
+      searchThemes: "Search themes",
+      installTheme: "Install and apply",
+      installingTheme: "Installing…",
+      themeInstalled: "Theme installed and applied to your profile.",
+      themeRemoved: "Personal theme removed.",
+      noThemes: "No themes found. Try another search.",
+      moreThemes: "Load more themes",
+      personalThemes: "Your personal themes",
+      personalThemesHint:
+        "Select a theme above to use it. Removing the active theme restores your default.",
+      activeTheme: "Active",
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",

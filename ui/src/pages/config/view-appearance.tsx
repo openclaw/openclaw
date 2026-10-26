@@ -30,6 +30,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { AppearanceThemeDiscovery } from "./appearance-theme-discovery.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
@@ -355,6 +356,7 @@ export function AppearanceSection(props: ConfigProps) {
               </For>
             </div>
           </div>
+          <AppearanceThemeDiscovery theme={props.theme} themeCatalog={props.themeCatalog} />
           <SettingsRow
             title={t("common.colorMode")}
             description={

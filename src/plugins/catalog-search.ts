@@ -30,6 +30,9 @@ export async function searchInstallablePluginPackages(params: {
   );
   const byName = new Map<string, ClawHubPackageSearchResult>();
   for (const entry of groups.flat()) {
+    if (entry.package.categories?.includes("themes")) {
+      continue;
+    }
     const existing = byName.get(entry.package.name);
     if (!existing || entry.score > existing.score) {
       byName.set(entry.package.name, entry);

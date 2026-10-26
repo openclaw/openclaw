@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -59,6 +60,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   profileCatalog.release();
   await state.cleanup();
@@ -730,4 +732,187 @@ it("rolls back both import and selection when the live run retires at the commit
   );
   expect(reachedCommit).toBe(true);
   preferences();
+});
+
+function registryRelease() {
+  const definition = themeDefinition();
+  return {
+    id: "example/space",
+    name: definition.name,
+    description: definition.description,
+    version: "1.2.3",
+    category: "themes",
+    author: { handle: "example" },
+    updatedAt: 1000,
+    definition,
+    sha256: createHash("sha256").update(JSON.stringify(definition)).digest("hex"),
+  };
+}
+
+it("browses data-only registry themes and installs the pinned release into personal preferences", async () => {
+  const release = registryRelease();
+  const { definition, sha256: _sha256, ...summary } = release;
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ items: [summary], nextCursor: "next" }))
+    .mockResolvedValue(Response.json({ item: release }));
+  vi.stubGlobal("fetch", fetch);
+  await expectRpc(invoke("themes.browse", { query: "space", limit: 24 }), {
+    items: [summary],
+    nextCursor: "next",
+  });
+  seedPreferences({ "ui.accent": "#aabbcc", "ui.fontUi": "geist", "ui.fontChat": "lora" });
+  const response = await invoke("themes.install", { id: release.id, version: release.version });
+  expect(response).toMatchObject(
+    success({
+      application: "saved",
+      definition,
+      current: { scope: "profile" },
+      theme: { source: "user" },
+    }),
+  );
+  const current = (response.payload as { current: { id: string } }).current;
+  expect(current.id).toMatch(/^user[/]ch-[a-z0-9_-]+$/);
+  expect(current.id.slice(5).length).toBeLessThanOrEqual(64);
+  await closeOpenClawStateDatabaseAsync();
+  expect(getUserPreferences(requesterId)).toMatchObject({
+    "ui.theme": current.id,
+    "ui.accent": "theme",
+    [`ui.themeDefinition.${current.id.slice(5)}`]: definition,
+  });
+  preferences({}, otherId);
+  await expectRpc(invoke("themes.remove", { id: current.id }), {
+    application: "saved",
+    current: { id: "claw" },
+  });
+  preferences({ "ui.accent": "theme" });
+  const installCall = expectDefined(fetch.mock.calls[1], "install request");
+  const url = new URL(String(installCall[0]));
+  expect(url.pathname).toBe("/api/v1/themes/example/space");
+  expect(url.searchParams.get("version")).toBe("1.2.3");
+  expect(fetch.mock.calls.every((call) => !call[1].headers?.Authorization)).toBe(true);
+});
+
+it.each(["profile", "authority", "merge"])(
+  "does not persist a registry install when %s changes during fetch",
+  async (change) => {
+    const requester = client(requesterId);
+    let active = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        if (change === "profile") {
+          requester.authenticatedUserProfile = gatewayProfile(otherId);
+        } else if (change === "merge") {
+          linkEmail("requester@example.test", otherId);
+        } else {
+          active = false;
+        }
+        return Response.json({ item: registryRelease() });
+      }),
+    );
+    await expectError(
+      invoke(
+        "themes.install",
+        { id: "example/space", version: "1.2.3" },
+        {
+          client: requester,
+          hasCurrentClientAuthority: () => active,
+        },
+      ),
+    );
+    preferences();
+    preferences({}, otherId);
+  },
+);
+
+it("rolls back registry install at the live commit boundary", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async () => Response.json({ item: registryRelease() })),
+  );
+  let active = true;
+  beforeWorkerCommit(() => {
+    active = false;
+  });
+  await expectError(
+    invoke(
+      "themes.install",
+      { id: "example/space", version: "1.2.3" },
+      { hasCurrentClientAuthority: () => active },
+    ),
+    "no longer active",
+  );
+  preferences();
+});
+
+it("removes only personal themes, preserves unrelated preferences, and detects concurrent selections", async () => {
+  const definition = themeDefinition();
+  seedPreferences({
+    "ui.theme": "rose",
+    "ui.themeMode": "dark",
+    "ui.themeDefinition.saved": definition,
+  });
+  await expectRpc(invoke("themes.remove", { id: "user/saved" }), {
+    current: { id: "rose", mode: "dark" },
+    application: "saved",
+  });
+  preferences(themePreferences("rose"));
+  for (const id of ["claw", "space-pack/xenovessel", "user/missing"]) {
+    await expectError(invoke("themes.remove", { id }));
+  }
+  await expectRpc(importTheme("saved", { definition, apply: true }));
+  changePreferencesAfterSnapshot({ "ui.theme": "tide" });
+  await expectError(invoke("themes.remove", { id: "user/saved" }), "Appearance changed");
+  preferences({ ...themePreferences("tide"), "ui.themeDefinition.saved": definition });
+  const replacement = daylight();
+  changePreferencesAfterSnapshot({ "ui.themeDefinition.saved": replacement });
+  await expectError(invoke("themes.remove", { id: "user/saved" }), "Appearance changed");
+  preferences({ ...themePreferences("tide"), "ui.themeDefinition.saved": replacement });
+});
+
+it("validates registry RPC bounds and rejects caller-selected URLs before network I/O", async () => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  for (const params of [
+    { limit: 0 },
+    { limit: 49 },
+    { query: "x".repeat(201) },
+    { cursor: "x".repeat(4097) },
+    { url: "https://example.test" },
+  ]) {
+    await expectError(invoke("themes.browse", params));
+  }
+  for (const params of [
+    { id: "../space", version: "1.0.0" },
+    { id: "example/space" },
+    { id: "example/space", version: "1.0.0", profileId: otherId },
+  ]) {
+    await expectError(invoke("themes.install", params));
+  }
+  await expectError(
+    invoke("themes.install", { id: "example/space", version: "1.0.0" }, { client: client() }),
+    "authenticated profile",
+  );
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("rejects non-theme packages, bad checksums and executable CSS through public install without writes", async () => {
+  const release = registryRelease();
+  for (const patch of [
+    { category: "themes-plugin", tarball: "https://example.test/code.tgz" },
+    { sha256: "0".repeat(64) },
+    {
+      definition: themeDefinition({
+        dark: themePalette({ background: "url(https://example.test/collect)" }),
+      }),
+    },
+  ]) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => Response.json({ item: { ...release, ...patch } })),
+    );
+    await expectError(invoke("themes.install", { id: release.id, version: release.version }));
+    preferences();
+  }
 });

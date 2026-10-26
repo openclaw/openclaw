@@ -26,6 +26,9 @@ import type {
   ThemesGetParams,
   ThemesSetParams,
   ThemesImportParams,
+  ThemesBrowseParams,
+  ThemesInstallParams,
+  ThemesRemoveParams,
 } from "./schema/themes.js";
 import type { UiCommandParams, UiCommandReportParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
@@ -115,4 +118,7 @@ export type GatewayCoreRequestParams = {
   "themes.get": ThemesGetParams;
   "themes.set": ThemesSetParams;
   "themes.import": ThemesImportParams;
+  "themes.browse": ThemesBrowseParams;
+  "themes.install": ThemesInstallParams;
+  "themes.remove": ThemesRemoveParams;
 };

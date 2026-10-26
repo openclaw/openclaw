@@ -134,37 +134,49 @@ export function joinClawHubPluginCatalog(params: {
   query?: string;
   cursor?: string;
 }): PluginDiscoveryEntry[] {
+  // Themes are managed in Appearance, never in general plugin discovery.
+  if (params.category === "themes") {
+    return [];
+  }
   const localIndex = indexClawHubPlugins(params.local.plugins);
-  const remote = params.remote.map((plugin) => {
+  const remote = params.remote.flatMap((plugin) => {
     const localPlugin = localIndex.get(normalizedAlias(plugin.packageName) ?? "");
+    if (
+      plugin.categories.includes("themes") ||
+      (localPlugin && localDiscoveryCategories(localPlugin).includes("themes"))
+    ) {
+      return [];
+    }
     // Keep the registry purpose first; later pages must retain known local capabilities.
     const categories = [
       ...new Set([...plugin.categories, ...(localPlugin?.capabilityCategories ?? [])]),
     ];
-    return {
-      id: encodePluginDiscoveryId(plugin.packageName),
-      catalog: {
-        name: plugin.displayName,
-        packageName: plugin.packageName,
-        ...(plugin.summary ? { summary: plugin.summary } : {}),
-        family: plugin.family,
-        ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
-        official: plugin.isOfficial,
-        categories,
-        ...categoryPriorityFacts(plugin.packageName, categories, params.categories),
-        ...(plugin.iconUrl ? { imageUrl: plugin.iconUrl } : {}),
-        ...(plugin.latestVersion ? { latestVersion: plugin.latestVersion } : {}),
-        ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
-        ...(plugin.installs !== undefined ? { installs: plugin.installs } : {}),
-        ...(plugin.verificationTier ? { verificationTier: plugin.verificationTier } : {}),
-        ...(plugin.featured !== undefined ? { featured: plugin.featured } : {}),
-        ...(plugin.trending !== undefined ? { trending: plugin.trending } : {}),
-        ...(plugin.featuredRank !== undefined ? { featuredRank: plugin.featuredRank } : {}),
-        ...(plugin.trendingRank !== undefined ? { trendingRank: plugin.trendingRank } : {}),
-        publishedToClawHub: true,
+    return [
+      {
+        id: encodePluginDiscoveryId(plugin.packageName),
+        catalog: {
+          name: plugin.displayName,
+          packageName: plugin.packageName,
+          ...(plugin.summary ? { summary: plugin.summary } : {}),
+          family: plugin.family,
+          ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
+          official: plugin.isOfficial,
+          categories,
+          ...categoryPriorityFacts(plugin.packageName, categories, params.categories),
+          ...(plugin.iconUrl ? { imageUrl: plugin.iconUrl } : {}),
+          ...(plugin.latestVersion ? { latestVersion: plugin.latestVersion } : {}),
+          ...(plugin.downloads !== undefined ? { downloads: plugin.downloads } : {}),
+          ...(plugin.installs !== undefined ? { installs: plugin.installs } : {}),
+          ...(plugin.verificationTier ? { verificationTier: plugin.verificationTier } : {}),
+          ...(plugin.featured !== undefined ? { featured: plugin.featured } : {}),
+          ...(plugin.trending !== undefined ? { trending: plugin.trending } : {}),
+          ...(plugin.featuredRank !== undefined ? { featuredRank: plugin.featuredRank } : {}),
+          ...(plugin.trendingRank !== undefined ? { trendingRank: plugin.trendingRank } : {}),
+          publishedToClawHub: true,
+        },
+        local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
       },
-      local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
-    };
+    ];
   });
   if ((!params.includeBundledOnly && params.intent !== "all") || params.cursor) {
     return remote;
@@ -174,6 +186,7 @@ export function joinClawHubPluginCatalog(params: {
   );
   const query = normalizedAlias(params.query);
   const localOnly = params.local.plugins
+    .filter((plugin) => !localDiscoveryCategories(plugin).includes("themes"))
     .filter(
       (plugin) =>
         !publishedPackages.has(normalizedAlias(localClawHubIdentity(plugin))) &&
