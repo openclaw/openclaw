@@ -2,21 +2,14 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { MODELS_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
 it.each([true, false])(
   "models.list and session changes separate manual policy from defaults and auth=%s",
   async (authenticated) => {
     const state = await createOpenClawTestState({
       label: "manual-model-policy",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: { ...MODELS_AUTH_INTEGRATION_ENV },
     });
     const token = "manual-policy-fixture-token";
     const cfg = {

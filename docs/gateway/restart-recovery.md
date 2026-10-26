@@ -30,6 +30,12 @@ whose runs are all recorded terminal and have no remaining execution or delivery
 owner. For a killed conversation, it also releases unfinished fences after checking
 that no run or session work remains active and no final delivery is pending. This
 lets a stopped conversation continue without resetting its history.
+A worker placement already marked failed does not start another automatic recovery
+turn. Recovery records the failure and its next step once; later restarts preserve
+that outcome. Inspect the placement error, finish any pending worker cleanup, then
+repair or restart the worker and use Resume. Explicit session recovery remains
+available after worker cleanup is complete.
+
 Cron owns recovery of interrupted scheduled turns. An enabled, unchanged,
 time-scheduled agent job interrupted before delivery gets one fresh retry after
 startup, including one-shot jobs. Its original run remains recorded as interrupted.

@@ -173,18 +173,6 @@ export function assertCronJobsStoreUnchanged(
   }
 }
 
-/** Removes an owned declarative job family left under obsolete absolute store keys. */
-export async function removeStaleCronJobFamilyRows(
-  storePath: string,
-  family: CronJobFamilyIdentity,
-  opts?: { commitGuard?: () => void },
-): Promise<number> {
-  const context = captureOpenClawStateWorkerContext();
-  const selectedFamily = { ...family };
-  const storeKey = await prepareMutableCronStoreKey(storePath, context);
-  return removeStaleCronJobFamilyRowsByKey(storeKey, selectedFamily, opts);
-}
-
 export async function removeStaleCronJobFamilyRowsByKey(
   storeKey: string,
   family: CronJobFamilyIdentity,
@@ -410,7 +398,7 @@ function saveCronJobsStoreWithRevisionNative(
 }
 
 /** Persist cron data and return only this operation's publication revision. */
-export async function saveCronJobsStoreWithRevision(
+async function saveCronJobsStoreWithRevision(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,

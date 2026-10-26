@@ -166,7 +166,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
   return {
     // Delegating transports carry one admission to the physical request. A different
     // account must enter its own gate; unrelated calls do not inherit ambient admission.
-    options: key ? { ...options, [admittedAccount]: key } : options,
+    options: key && !inherited ? { ...options, [admittedAccount]: key } : options,
     async wait(
       onWait?: (retryAt: number) => () => void,
       priority: "interactive" | "background" = "background",

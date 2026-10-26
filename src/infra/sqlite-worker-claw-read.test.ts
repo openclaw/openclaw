@@ -9,13 +9,11 @@ import {
   stateEnv,
 } from "../claws/provenance.test-helpers.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -54,34 +52,19 @@ it("preserves installed Claw and plugin extension facts through the read-only wo
   });
   const install = seedLegacyClawInstall(plan, { env });
   runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<Pick<DB, "claw_package_refs">>(db)
-          .insertInto("claw_package_refs")
-          .values({
-            schema_version: "openclaw.clawPackageRef.v1",
-            agent_id: plan.agent.finalId,
-            claw_name: plan.claw.name,
-            package_kind: "plugin",
-            package_source: "clawhub",
-            package_ref: "@openclaw/tools",
-            package_version: "1.0.0",
-            package_integrity: "sha256:fixture",
-            package_status: "complete",
-            relationship: "referenced",
-            origin: "pre-existing",
-            independent_owner: 1,
-            extension_id: "tools",
-            extension_format: "claude",
-            extension_detected_format: "claude",
-            extension_mapped_json: '["commands","skills"]',
-            extension_unavailable_json: '["agents"]',
-            extension_adapter_identity: "openclaw/v1",
-            installed_at_ms: 123,
-            updated_at_ms: 123,
-          }),
-      ),
+    ({ db }) => {
+      // Bootstrap persisted input independently of the reader's row conversion.
+      db.prepare(`INSERT INTO claw_package_refs (
+      schema_version, agent_id, claw_name, package_kind, package_source, package_ref,
+      package_version, package_integrity, package_status, relationship, origin,
+      independent_owner, extension_id, extension_format, extension_detected_format,
+      extension_mapped_json, extension_unavailable_json, extension_adapter_identity,
+      installed_at_ms, updated_at_ms
+    ) VALUES ('openclaw.clawPackageRef.v1', ?, ?, 'plugin', 'clawhub', '@openclaw/tools',
+      '1.0.0', 'sha256:fixture', 'complete', 'referenced', 'pre-existing', 1,
+      'tools', 'claude', 'claude', '["commands","skills"]', '["agents"]', 'openclaw/v1', 123, 123)
+    `).run(plan.agent.finalId, plan.claw.name);
+    },
     { env },
   );
   const pkg: PersistedClawPackageRef = {

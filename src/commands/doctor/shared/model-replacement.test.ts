@@ -19,10 +19,8 @@ import {
 import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import { repairCronCodexModelRefsAfterConfigWrite } from "../cron/legacy-repair.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
-import {
-  createDoctorModelRefResolver,
-  inspectDoctorModelReferences,
-} from "./model-reference-inventory.js";
+import { inspectDoctorModelReferences } from "./model-reference-inventory.js";
+import { createDoctorModelRefResolver } from "./model-reference-resolver.js";
 import { prepareModelReplacementConfig } from "./model-replacement-config.js";
 import { prepareExplicitModelReplacement } from "./model-replacement-preparation.js";
 import { parseDoctorModelReplacements } from "./model-replacement.js";

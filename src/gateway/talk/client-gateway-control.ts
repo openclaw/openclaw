@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { retireUnadoptedReplySource } from "../../auto-reply/reply/reply-source-binding.js";
 import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   reserveSessionControllerSource,
@@ -351,7 +352,7 @@ export function createTalkClientGatewayControlOwner(
       const reserve = () => {
         assertActive();
         admissionSignal.throwIfAborted();
-        return reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
+        const input = reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
           policy: { mode: "followup" },
           target: captureSessionTarget({
             storeScope: params.sessionTarget.storePath,
@@ -360,6 +361,9 @@ export function createTalkClientGatewayControlOwner(
           }),
           adapter: { signal: controller.signal },
         });
+        // Provider callbacks can arrive outside the originating RPC's async scope.
+        bindGatewayContextResolver(input, params.context.resolveGatewayContext);
+        return input;
       };
       const waitForRecovery = () =>
         waitForAgentInputRecovery(params.sessionTarget.agentId, {

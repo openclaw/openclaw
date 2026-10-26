@@ -294,7 +294,12 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   await open();
   const rows = () => [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   expect(rows()).toHaveLength(9);
-  const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+  // Shortcut rows are pinned before the viewport's remaining rows are measured.
+  const more = await vi.waitFor(() => {
+    const button = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]");
+    expect(button?.checkVisibility()).toBe(true);
+    return button!;
+  });
   more.click();
   flush();
   const search = getSearch();

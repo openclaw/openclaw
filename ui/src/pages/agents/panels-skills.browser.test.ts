@@ -73,6 +73,29 @@ function mountSkills(skills: SkillStatusEntry[], overrides: Partial<Params> = {}
 }
 
 describe("agents skills panel (browser)", () => {
+  it("retains cached skill rows and the search control when the initial read settles", async () => {
+    const pending = deferred<SkillStatusReport>();
+    const container = document.createElement("div");
+    const params = skillsParams(
+      [createSkill({ name: "Cached first" }), createSkill({ name: "Cached second" })],
+      { agentSkillsRead: { agentId: "main", result: pending.promise } },
+    );
+    mountSolid(AgentSkills, params, container);
+    await waitForSolid(() => {
+      expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
+      expect(container.textContent).toContain("Loading");
+    });
+    const rows = [...container.querySelectorAll(".agent-skill-row")];
+    const filter = container.querySelector("input[name=agent-skills-filter]");
+
+    pending.resolve(structuredClone(params.agentSkillsReport!));
+    await waitForSolid(() => expect(container.textContent).not.toContain("Loading"));
+    const currentRows = [...container.querySelectorAll(".agent-skill-row")];
+    expect(currentRows).toHaveLength(rows.length);
+    rows.forEach((row, index) => expect(currentRows[index]).toBe(row));
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+  });
+
   it("retains skill rows and diagnostics when a refresh returns new snapshots", async () => {
     const view = mountSkills([
       createSkill({
@@ -264,15 +287,45 @@ describe("agents skills panel (browser)", () => {
     },
   );
 
-  it("keeps cached skills when a reload returns no report", async () => {
-    const pending = deferred<SkillStatusReport | undefined>();
-    const view = mountSkills([createSkill({ name: "Synthetic cached skill" })], {
-      agentSkillsRead: { agentId: "main", result: pending.promise },
-    });
-    await view.text(["Loading"]);
-    pending.resolve(undefined);
-    await view.text(["Synthetic cached skill"], ["Loading"]);
-  });
+  it.each(["cached", "uncached"])(
+    "settles an initially %s read when no report is returned",
+    async (cacheState) => {
+      const pending = deferred<SkillStatusReport | undefined>();
+      const container = document.createElement("div");
+      const cached = cacheState === "cached";
+      const params = skillsParams([createSkill({ name: "Synthetic cached skill" })], {
+        ...(!cached ? { agentSkillsReport: null, agentSkillsAgentId: null } : {}),
+        agentSkillsRead: { agentId: "main", result: pending.promise },
+      });
+      mountSolid(AgentSkills, params, container);
+      const button = (label: string) =>
+        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+          (element) => element.textContent === label,
+        );
+      await waitForSolid(() => {
+        expect(button("Loading…")?.disabled).toBe(true);
+        expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
+        expect(container.textContent).not.toContain("Load skills for this agent");
+      });
+      const rows = [...container.querySelectorAll(".agent-skill-row")];
+      const filter = container.querySelector("input[name=agent-skills-filter]");
+
+      pending.resolve(undefined);
+      await waitForSolid(() => {
+        expect(button("Loading…")).toBeUndefined();
+        expect(button("Refresh")?.disabled).toBe(false);
+        expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
+        if (cached) {
+          expect(container.textContent).toContain("Synthetic cached skill");
+        } else {
+          expect(container.textContent).toContain("Load skills for this agent");
+        }
+      });
+      const currentRows = [...container.querySelectorAll(".agent-skill-row")];
+      rows.forEach((row, index) => expect(currentRows[index]).toBe(row));
+      expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+    },
+  );
 
   it("shows matches from default-collapsed groups while filtering", async () => {
     const view = mountSkills([

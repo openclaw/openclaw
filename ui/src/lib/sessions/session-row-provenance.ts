@@ -101,15 +101,21 @@ export function createSessionRowProvenance() {
         ? offeredAt > currentAt
           ? offered
           : current
-        : offered.updatedAt != null &&
-            current.updatedAt != null &&
-            offered.updatedAt !== current.updatedAt
-          ? offered.updatedAt > current.updatedAt
+        : offered.snapshotAt !== undefined &&
+            current.snapshotAt !== undefined &&
+            offered.snapshotAt !== current.snapshotAt
+          ? offered.snapshotAt > current.snapshotAt
             ? offered
             : current
-          : rowRevision(offered) >= rowRevision(current)
-            ? offered
-            : current;
+          : offered.updatedAt != null &&
+              current.updatedAt != null &&
+              offered.updatedAt !== current.updatedAt
+            ? offered.updatedAt > current.updatedAt
+              ? offered
+              : current
+            : rowRevision(offered) >= rowRevision(current)
+              ? offered
+              : current;
     const older = newer === offered ? current : offered;
     const olderValues: Record<string, unknown> = older;
     const next = { ...newer, key: current.key };

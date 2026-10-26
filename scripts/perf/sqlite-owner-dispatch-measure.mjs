@@ -75,7 +75,7 @@ const owner = acquireGatewayStateOwner({
     processNamespace: readGatewayLockProcessNamespace(),
   },
 });
-const access = captureStateDatabaseAccess(databasePath);
+const access = await captureStateDatabaseAccess(databasePath);
 const run = async (count) => {
   for (let i = 0; i < count; i++) {
     if (values.baseline) {

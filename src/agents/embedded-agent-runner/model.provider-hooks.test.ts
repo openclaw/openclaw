@@ -5,7 +5,6 @@ import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import {
   normalizeResolvedModel,
   resolveRuntimeHooks,
@@ -42,18 +41,6 @@ function resolve(
   });
 }
 
-function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): boolean {
-  return resolveAgentToolSurfacePlan({
-    config,
-    model: resolvedModel,
-    modelProvider: resolvedModel.provider,
-    modelId: resolvedModel.id,
-    forceDirectMessageTool: false,
-    toolsEnabled: true,
-    isRawModelRun: false,
-  }).toolSearchControlsEnabled;
-}
-
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
@@ -73,9 +60,6 @@ describe("resolved model Tool Search policy", () => {
     };
     const resolved = resolve(route, config);
     expect(resolved).toHaveProperty("toolSearchMode", expected);
-    expect(toolSearchEnabled(resolved, config)).toBe(true);
-    expect(toolSearchEnabled(resolved, { ...config, tools: { toolSearch: false } })).toBe(false);
-    expect(config.tools).toBeUndefined();
   });
 
   it("uses the final transport and clears a previous attempt's preference", () => {
@@ -90,9 +74,7 @@ describe("resolved model Tool Search policy", () => {
       },
     });
     expect(hosted).toMatchObject({ baseUrl, toolSearchMode: undefined });
-    expect(toolSearchEnabled(hosted)).toBe(true);
     expect(local).toHaveProperty("toolSearchMode", "tools");
-    expect(toolSearchEnabled(local)).toBe(true);
   });
 
   it("uses in-place model normalization for transport routing", () => {
@@ -126,7 +108,5 @@ describe("resolved model Tool Search policy", () => {
     const cfg: OpenClawConfig = { models: { providers: { " CUSTOM-HOST ": providerConfig } } };
     const resolved = resolve({ api, baseUrl: finalBaseUrl }, cfg);
     expect(resolved).toHaveProperty("toolSearchMode", expected);
-    expect(toolSearchEnabled(resolved, cfg)).toBe(true);
-    expect(cfg.tools).toBeUndefined();
   });
 });

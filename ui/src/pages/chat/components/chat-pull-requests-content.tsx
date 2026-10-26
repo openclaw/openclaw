@@ -17,6 +17,7 @@ import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
 import { PullRequestActions } from "./chat-pull-request-actions.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
@@ -28,8 +29,6 @@ import {
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
 import { hasChatPullRequests, retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
-import "./chat-ci-details.tsx";
-import "./chat-ci-automation-control.tsx";
 import "./chat-pull-request-presenters.css";
 
 registerGitHubEnglish();
@@ -57,7 +56,7 @@ function Checks(props: {
   const presentation = createMemo(() => projectPresentation(props.presented ?? true));
   const presented = () => parentPresented() && presentation().read();
   const content = () => (
-    <div class="chat-pr__checks-menu" role="group" aria-label={t("chat.pullRequests.ciMonitoring")}>
+    <>
       <div class="chat-pr__checks-menu-header">
         <span>{t("chat.pullRequests.ciMonitoring")}</span>
         <Show when={props.pullRequest.checksUrl}>
@@ -77,22 +76,22 @@ function Checks(props: {
         <ChecksRows checks={checks()} />
         <Show when={!checks()}>{t("chat.pullRequests.automationNoChecks")}</Show>
       </div>
-      <openclaw-chat-ci-automation
-        prop:pullRequest={props.pullRequest}
-        prop:gateway={props.gateway}
-        prop:sessionKey={props.sessionKey ?? ""}
-        prop:sessionId={props.sessionId ?? ""}
-        prop:presented={presented()}
+      <ChatCiAutomationPanel
+        pullRequest={props.pullRequest}
+        gateway={props.gateway}
+        sessionKey={props.sessionKey ?? ""}
+        sessionId={props.sessionId ?? ""}
+        presented={presented()}
       />
       <Show when={checks()}>
-        <openclaw-chat-ci-details
-          prop:pullRequest={props.pullRequest}
-          prop:gateway={props.gateway}
-          prop:sessionKey={props.sessionKey ?? ""}
-          prop:presented={presented()}
+        <ChatCiDetailsPanel
+          pullRequest={props.pullRequest}
+          gateway={props.gateway}
+          sessionKey={props.sessionKey ?? ""}
+          presented={presented()}
         />
       </Show>
-    </div>
+    </>
   );
   return (
     <ChatPullRequestChecks
@@ -101,7 +100,7 @@ function Checks(props: {
       presented={presented()}
       dismissed={props.dismissed}
     >
-      {content()}
+      {content}
     </ChatPullRequestChecks>
   );
 }

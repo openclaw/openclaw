@@ -6,10 +6,7 @@ import * as pluginPreflight from "../plugins/plugin-install-preflight.js";
 import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
 import * as packageLease from "../state/claw-package-lifecycle-lease.js";
 import * as addState from "./add-state-write.js";
-import {
-  installClawPackages as installPackages,
-  rollbackStatelessClawPackages as rollbackPackages,
-} from "./packages.js";
+import { installClawPackages as installPackages } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
 import type { readClawPackageRefs } from "./provenance.js";
 
@@ -61,6 +58,7 @@ export function testPackageLease(onRelease: () => void = () => {}) {
       owner: "test-owner",
     },
     assertCurrent: () => {},
+    assertOwned: async () => {},
     release: onRelease,
   };
 }
@@ -184,14 +182,4 @@ export function installClawPackages(
   { deps, ...options }: PackageInstallFixtureOptions = {},
 ) {
   return withPackageBoundaries(() => installPackages(plan, options), deps);
-}
-
-export function rollbackStatelessClawPackages(
-  refs: Parameters<typeof rollbackPackages>[0],
-  {
-    deps,
-    ...options
-  }: Pick<PackageInstallFixtureOptions, "assertCurrent" | "deps" | "env" | "path" | "runtime"> = {},
-) {
-  return withPackageBoundaries(() => rollbackPackages(refs, options), deps);
 }

@@ -1034,7 +1034,7 @@ describe("agentCommand", () => {
     expect(fs.readFileSync(insidePath, "utf8")).toBe("inside");
   });
 
-  it("reuses a Discord voice session after one stale-session rollover", async ({ home, store }) => {
+  it("preserves a Discord voice transcript across one automatic reset", async ({ home, store }) => {
     const sessionKey = "agent:main:discord:channel:voice-1";
     const staleStartedAt = Date.now() - 2 * 24 * 60 * 60_000;
     const cfg = mockConfig(home, store);
@@ -1057,8 +1057,7 @@ describe("agentCommand", () => {
 
     await runVoiceTurn("remember 42");
     const firstSessionId = getLastEmbeddedCall()?.sessionId;
-    expect(firstSessionId).toBeTruthy();
-    expect(firstSessionId).not.toBe("stale-voice-session");
+    expect(firstSessionId).toBe("stale-voice-session");
     const firstPersisted = readSessionStore<SessionEntry>(store)[sessionKey];
     expect(firstPersisted?.sessionId).toBe(firstSessionId);
     expect(firstPersisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);

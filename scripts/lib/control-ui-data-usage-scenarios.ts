@@ -162,7 +162,7 @@ const fixture = {
   createRequestHandlers: () => ({ "sessions.usage": createDataUsageHandler() }),
 };
 
-export const dataUsageScenarios: readonly InteractionScenario[] = [
+const usageScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-usage-first-render",
@@ -280,3 +280,44 @@ export const dataUsageScenarios: readonly InteractionScenario[] = [
     },
   },
 ];
+
+function usageRoundTripScenario(
+  scenario: InteractionScenario,
+  roundTripMs: 0 | 100,
+): InteractionScenario {
+  return {
+    ...scenario,
+    id: `${scenario.id}${roundTripMs ? "-100ms" : ""}`,
+    createRequestHandlers: () => {
+      const read = createDataUsageHandler();
+      return {
+        "sessions.usage": roundTripMs
+          ? async (params: unknown) => {
+              // Delay this RPC response, not assets, status reads, or browser timers.
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, roundTripMs);
+              });
+              return read(params);
+            }
+          : read,
+      };
+    },
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests("sessions.usage")).length;
+      const evidence = await scenario.run(page, gateway);
+      await ready(page);
+      const requests = (await gateway.getRequests("sessions.usage")).length - before;
+      if (requests === 0) {
+        throw new Error(`Usage action ${scenario.id} completed without a sessions.usage request`);
+      }
+      return { ...evidence, usageRequests: requests, usageRoundTripMs: roundTripMs };
+    },
+  };
+}
+
+export const dataUsageScenarios: readonly InteractionScenario[] = usageScenarios.flatMap(
+  (scenario) =>
+    scenario.id === "data-usage-scroll"
+      ? [scenario]
+      : [usageRoundTripScenario(scenario, 0), usageRoundTripScenario(scenario, 100)],
+);

@@ -12,6 +12,8 @@
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
+ * --audiences selects distinct prepared row identities (default 2); use 8 with 65
+ * clients to measure reuse within interleaved audiences rather than across all clients.
  * --fresh-fields replaces every nested field per event to measure misses separately.
  * --profile <path> saves the sampled profile when used with --allocations.
  * --encode-envelopes includes JSON encoding once per distinct projected payload,
@@ -38,6 +40,7 @@ const { values } = parseArgs({
     "delivery-owner": { type: "string", default: "src/gateway/session-ancestor-references.ts" },
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
+    audiences: { type: "string", default: "2" },
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
     "encode-envelopes": { type: "boolean", default: false },
@@ -46,17 +49,23 @@ const { values } = parseArgs({
 });
 const events = Number(values.events);
 const clients = Number(values.clients);
+const audiences = Number(values.audiences);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(clients) && clients > 0);
+assert(Number.isSafeInteger(audiences) && audiences > 0 && audiences <= clients);
 const owner = path.resolve(values.owner);
 const ownerSha256 = createHash("sha256").update(readFileSync(owner)).digest("hex");
 const key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
+let audienceRows: GatewaySessionRow[];
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
   namedExports: {
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
       getAudienceKey: () => client.connect.scopes?.[0] ?? "viewer",
-      getPresentation: () => ({ present: () => row, sharing: {} }),
+      getPresentation: () => ({
+        present: () => audienceRows[Number(client.connect.scopes![0])],
+        sharing: {},
+      }),
     }),
   },
 });
@@ -175,7 +184,7 @@ const peers = Array.from({ length: clients }, (_, index) => ({
       client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "ui" },
       minProtocol: 3,
       maxProtocol: 3,
-      scopes: [index % 2 ? "owner" : "viewer"],
+      scopes: [String(index % audiences)],
       caps:
         index % 10 === 0
           ? []
@@ -224,6 +233,9 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     startedAt: 1,
     hasActiveRun: true,
   });
+  audienceRows = Array.from({ length: audiences }, (_, audience) =>
+    freezeTrustedJsonSnapshot({ ...row, sharingRole: audience === 0 ? "owner" : "viewer" }),
+  );
   const project = prepare(
     "sessions.changed",
     { ...fields, ...row, sessionKey: key, session: row, reason: "send" },
@@ -304,6 +316,7 @@ console.log(
     node: process.version,
     events,
     clients,
+    audiences,
     freshFields: values["fresh-fields"],
     encodeEnvelopes: values["encode-envelopes"],
     ...measuredEncoding,

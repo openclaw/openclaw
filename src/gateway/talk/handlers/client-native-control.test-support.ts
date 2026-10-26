@@ -166,6 +166,7 @@ export async function withNativePlugin(
   options: {
     model?: string;
     nativeEffects?: boolean;
+    operatorScopes?: string[];
     onConsult?: () => void;
     configure?: (config: OpenClawConfig) => void;
   } = {},
@@ -207,7 +208,7 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: [
+          scopes: options.operatorScopes ?? [
             "operator.read",
             "operator.talk",
             ...(options.nativeEffects ? ["operator.write"] : []),

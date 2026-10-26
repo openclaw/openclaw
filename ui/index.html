@@ -323,10 +323,6 @@
         --boot-content-bg: #f4f1ec;
       }
 
-      :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route) * {
-        box-sizing: border-box;
-      }
-
       .connect-splash__layout {
         display: grid;
         grid-template-columns: calc(var(--openclaw-boot-nav-width, 258px) + 52px) minmax(0, 1fr);
@@ -430,6 +426,7 @@
 
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
         .loading-skeleton__header {
+        box-sizing: border-box;
         display: flex;
         flex: none;
         align-items: center;
@@ -479,6 +476,7 @@
 
       :is(.connect-splash--skeleton, .content--workbench .lazy-view-state--route)
         .loading-skeleton__composer {
+        box-sizing: border-box;
         flex: none;
         width: min(100%, 48rem);
         height: 92px;
