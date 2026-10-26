@@ -20,27 +20,41 @@ vi.mock("./update-check.js", async (importOriginal) => ({
   checkUpdateStatus,
 }));
 
+async function fixture(label: string) {
+  const state = await createOpenClawTestState({ label });
+  const startup = await import("./update-startup.js");
+  const scheduler = createTestGatewayScheduler();
+  startup.resetUpdateAvailableStateForTest(scheduler);
+  const started = createDeferred<AbortSignal | undefined>();
+  const probe = createDeferred<UpdateCheckResult>();
+  const status: UpdateCheckResult = { root: null, installKind: "package", packageManager: "npm" };
+  checkUpdateStatus.mockReset().mockImplementation(({ signal }) => {
+    started.resolve(signal);
+    return probe.promise;
+  });
+  return {
+    startup,
+    scheduler,
+    started,
+    probe,
+    status,
+    async cleanup() {
+      startup.resetUpdateAvailableStateForTest(scheduler);
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    },
+  };
+}
+
 it.each(["complete", "close"] as const)(
   "preserves early status and update admission discovery when the scheduler attaches (%s)",
   async (outcome) => {
-    const state = await createOpenClawTestState({ label: "update-request-adoption" });
-    const {
-      createGatewayUpdateCheck,
-      getUpdateEffectiveChannel,
-      initializeGatewayUpdateStatus,
-      resetUpdateAvailableStateForTest,
-    } = await import("./update-startup.js");
-    const scheduler = createTestGatewayScheduler();
-    resetUpdateAvailableStateForTest(scheduler);
+    const { startup, scheduler, started, probe, status, cleanup } =
+      await fixture("update-request-adoption");
+    const { createGatewayUpdateCheck, getUpdateEffectiveChannel, initializeGatewayUpdateStatus } =
+      startup;
     const { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
     const lifecycle = createGatewayUpdateLifecycle(scheduler);
-    const started = createDeferred<AbortSignal | undefined>();
-    const probe = createDeferred<UpdateCheckResult>();
-    const status: UpdateCheckResult = { root: null, installKind: "package", packageManager: "npm" };
-    checkUpdateStatus.mockReset().mockImplementation(({ signal }) => {
-      started.resolve(signal);
-      return probe.promise;
-    });
     const channelRequest = getUpdateEffectiveChannel();
     const admissionRequest = initializeGatewayUpdateStatus();
     let owner: ReturnType<typeof createGatewayUpdateCheck> | undefined;
@@ -82,32 +96,22 @@ it.each(["complete", "close"] as const)(
     } finally {
       probe.resolve(status);
       await Promise.allSettled([channelRequest, admissionRequest, initialization, owner?.stop()]);
-      resetUpdateAvailableStateForTest(scheduler);
-      closeOpenClawStateDatabaseForTest();
-      await state.cleanup();
+      await cleanup();
     }
   },
 );
 
 it("aborts and joins early update requests before the post-ready scheduler loads", async () => {
-  const state = await createOpenClawTestState({ label: "update-request-before-ready" });
+  const { startup, scheduler, started, probe, status, cleanup } = await fixture(
+    "update-request-before-ready",
+  );
   const { createDeferredGatewayUpdateCheck } =
     await import("../gateway/server-startup-update-check.js");
   const { resolveGatewayUpdateAdmission } =
     await import("../gateway/server-methods/update-admission.js");
-  const updateStartup = await import("./update-startup.js");
-  const { getUpdateEffectiveChannel, resetUpdateAvailableStateForTest } = updateStartup;
-  const scheduler = createTestGatewayScheduler();
-  resetUpdateAvailableStateForTest(scheduler);
+  const { getUpdateEffectiveChannel } = startup;
   const ready = createDeferred();
-  const started = createDeferred<AbortSignal | undefined>();
-  const probe = createDeferred<UpdateCheckResult>();
-  const status: UpdateCheckResult = { root: null, installKind: "package", packageManager: "npm" };
-  checkUpdateStatus.mockReset().mockImplementation(({ signal }) => {
-    started.resolve(signal);
-    return probe.promise;
-  });
-  const factory = vi.spyOn(updateStartup, "createGatewayUpdateCheck");
+  const factory = vi.spyOn(startup, "createGatewayUpdateCheck");
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
     getConfig: () => ({}),
@@ -136,10 +140,8 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     expect(factory).not.toHaveBeenCalled();
     probe.resolve(status);
     const results = await requests;
-    expect(results).toEqual([
-      { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) },
-      { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) },
-    ]);
+    const aborted = { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) };
+    expect(results).toEqual([aborted, aborted]);
     await stopping;
     expect(stopped).toBe(true);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
@@ -150,8 +152,6 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     await (stopping ?? owner.stop());
     factory.mockRestore();
     ready.resolve();
-    resetUpdateAvailableStateForTest(scheduler);
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
+    await cleanup();
   }
 });

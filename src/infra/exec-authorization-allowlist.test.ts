@@ -26,9 +26,7 @@ function evaluate(
 }
 
 function expectInlineEval(segments: Parameters<typeof detectInlineEvalInSegments>[0]) {
-  expect(detectInlineEvalInSegments(segments)).toEqual(
-    expect.objectContaining({ executable: "python3", flag: "-c" }),
-  );
+  expect(detectInlineEvalInSegments(segments)).toMatchObject({ executable: "python3", flag: "-c" });
 }
 
 function expectOneShot(
@@ -97,58 +95,40 @@ describe("authorization-backed exec allowlist", () => {
     });
   });
 
-  it("does not satisfy path-scoped shell wrappers from trusted inner payloads", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const result = await evaluate(`./sh -c 'git status'`, { safeBins: new Set(["git"]) });
-
-    expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
-    expect(result.segments.map((segment) => segment.argv)).toEqual([["./sh", "-c", "git status"]]);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
-  });
-
-  it("keeps background jobs visible but not allowlist-satisfied", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const result = await evaluate("sleep 10 & echo done", { safeBins: new Set(["sleep", "echo"]) });
-
-    expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
-    expect(result.segments.map((segment) => segment.argv)).toEqual([
-      ["sleep", "10"],
-      ["echo", "done"],
-    ]);
-    expect(result.authorizationPlan).toEqual(
-      expect.objectContaining({ ok: false, reason: "background" }),
-    );
-  });
-
-  it("keeps line-continuation shell commands out of allow-always approval", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const command = "echo safe \\\nunsafe";
-    const result = await evaluate(command, { safeBins: new Set(["echo"]) });
-
-    expect(result.analysisOk).toBe(false);
-    expect(result.authorizationPlan).toEqual(
-      expect.objectContaining({ ok: false, reason: "line-continuation" }),
-    );
-
-    expectOneShot(result, command, "unplanned");
-  });
-
-  it("does not satisfy allowlist policy for escaped word-boundary newlines", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const result = await evaluate("tr x\n\\id", { safeBins: new Set(["tr"]) });
-
-    expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
-    expect(result.authorizationPlan).toEqual(
-      expect.objectContaining({ ok: false, reason: "line-continuation" }),
-    );
-    expect(requiresExecApproval({ ask: "on-miss", security: "allowlist", ...result })).toBe(true);
-  });
+  it.each([
+    ["./sh -c 'git status'", ["git"], null, [["./sh", "-c", "git status"]], false],
+    [
+      "sleep 10 & echo done",
+      ["sleep", "echo"],
+      "background",
+      [
+        ["sleep", "10"],
+        ["echo", "done"],
+      ],
+      false,
+    ],
+    ["echo safe \\\nunsafe", ["echo"], "line-continuation", null, true],
+    ["tr x\n\\id", ["tr"], "line-continuation", null, false],
+  ] as const)(
+    "requires approval for unsafe shell syntax: %s",
+    async (command, bins, reason, argv, oneShot) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const result = await evaluate(command, { safeBins: new Set(bins) });
+      expect(result).toMatchObject({ analysisOk: reason === null, allowlistSatisfied: false });
+      if (reason) {
+        expect(result.authorizationPlan).toMatchObject({ ok: false, reason });
+      } else {
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      }
+      if (argv) {
+        expect(result.segments.map((segment) => segment.argv)).toEqual(argv);
+      }
+      if (oneShot) {
+        expectOneShot(result, command, "unplanned");
+      }
+      expect(requiresExecApproval({ ask: "on-miss", security: "allowlist", ...result })).toBe(true);
+    },
+  );
 });

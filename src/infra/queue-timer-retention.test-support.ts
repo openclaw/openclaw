@@ -14,13 +14,10 @@ assert.ok(rootArgument, "The retention fixture requires its owned temporary dire
 const root = rootArgument;
 const context = new AsyncLocalStorage<QueueTimerCaller>();
 
-class QueueTimerCaller {
-  readonly prompt = Buffer.alloc(1024 * 1024, 1);
-  constructor(readonly label: string | undefined) {}
-}
+type QueueTimerCaller = { label: string | undefined; prompt: Buffer };
 
 async function completedCaller(run: () => unknown) {
-  const caller = new QueueTimerCaller(resource);
+  const caller = { label: resource, prompt: Buffer.alloc(1024 * 1024, 1) };
   const references = [new WeakRef(caller), new WeakRef(caller.prompt)];
   await context.run(caller, run);
   return references;
@@ -97,36 +94,32 @@ async function timerFixture(): Promise<Fixture> {
       }
     },
   });
-  const trackTimers = async (run: () => unknown) => {
-    hook.enable();
-    try {
-      return await completedCaller(run);
-    } finally {
-      hook.disable();
-    }
-  };
-  const assertAlive = () => {
-    assert.ok(
-      timers.some((timer) => timer.deref()),
-      "A real native timeout must remain alive",
-    );
-  };
   assert.equal(resource, "terminal");
   let uploadedPath = "";
-  const references = await trackTimers(async () => {
-    const uploaded = await stageTerminalUpload(
-      {
-        name: "retention.txt",
-        contentBase64: Buffer.from("retention fixture").toString("base64"),
-        assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
-      },
-      { tempRoot: root },
-    );
-    uploadedPath = uploaded.path;
-  });
+  hook.enable();
+  let references: WeakRef<object>[];
+  try {
+    references = await completedCaller(async () => {
+      const uploaded = await stageTerminalUpload(
+        {
+          name: "retention.txt",
+          contentBase64: Buffer.from("retention fixture").toString("base64"),
+          assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
+        },
+        { tempRoot: root },
+      );
+      uploadedPath = uploaded.path;
+    });
+  } finally {
+    hook.disable();
+  }
   return {
     references,
-    assertAlive,
+    assertAlive: () =>
+      assert.ok(
+        timers.some((timer) => timer.deref()),
+        "A real native timeout must remain alive",
+      ),
     reuse: async () => {
       assert.equal(await readFile(uploadedPath, "utf8"), "retention fixture");
       await ensureTerminalUploadCleanup({ tempRoot: root });
