@@ -10,11 +10,12 @@ import * as fixtures from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
 type StageParams = { abortSignal?: AbortSignal; compactionTimeoutReset?: () => void };
-const { compactRuntime } = vi.hoisted(() => ({ compactRuntime: vi.fn() }));
+const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
+}));
 
-// mock-isolation: Drive staged compaction without loading native runner state or model calls.
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionOnDemand: compactRuntime,
+  compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
 const timeoutMs = 60;
@@ -26,8 +27,8 @@ beforeAll(() => fixtures.captureContextEngineRegistryStateForTests());
 
 beforeEach(async () => {
   await registerLegacyContextEngine();
-  compactRuntime.mockReset();
-  compactRuntime.mockImplementation(async (params: StageParams) => {
+  compactEmbeddedAgentSessionOnDemandMock.mockReset();
+  compactEmbeddedAgentSessionOnDemandMock.mockImplementation(async (params: StageParams) => {
     for (let stage = 0; stage < 3; stage += 1) {
       params.compactionTimeoutReset?.();
       await sleep(stageMs);
