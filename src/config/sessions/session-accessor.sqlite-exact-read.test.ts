@@ -63,6 +63,21 @@ const sessionEntry = (sessionId: string, label?: string) => ({
   ...(label === undefined ? {} : { label }),
 });
 
+const retainWindow = (scope: ReturnType<typeof fixture>, sessionKey: string) =>
+  writeTransaction((database) => {
+    ensureTranscriptSessionRoot(database, { ...scope, sessionKey, sessionId: sessionKey }, 1);
+  }, scope);
+const participant = (scope: ReturnType<typeof sessionFixture>, id = scope.sessionKey) =>
+  recordParticipant(scope, { identity: { type: "profile", id }, promptedAt: 1 });
+function readError(read: () => unknown) {
+  try {
+    read();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected a failed session read");
+}
+
 describe("exact SQLite session reads", () => {
   it("checks captured database birthtime even without an open owner handle", () => {
     const filename = path.join(
@@ -188,12 +203,7 @@ describe("exact SQLite session reads", () => {
       } else {
         listEntries(scope);
       }
-      let originalError: unknown;
-      try {
-        readEntry({ ...scope, sessionKey: broken });
-      } catch (error) {
-        originalError = error;
-      }
+      const originalError = readError(() => readEntry({ ...scope, sessionKey: broken }));
       expect(originalError).toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
       const readRow = readRows(
         database,
@@ -227,10 +237,7 @@ describe("exact SQLite session reads", () => {
       const scope = fixture();
       const storedKey = "agent:main:replacement-\ufffd";
       putEntry({ ...scope, sessionKey: storedKey }, sessionEntry("replacement"));
-      recordParticipant(
-        { ...scope, sessionKey: storedKey },
-        { identity: { type: "profile", id: "person" }, promptedAt: 1 },
-      );
+      participant({ ...scope, sessionKey: storedKey }, "person");
       const keys = [
         "agent:main:replacement-\ud800",
         "agent:main:replacement-\udc00",
@@ -258,18 +265,9 @@ describe("exact SQLite session reads", () => {
       const retained = "agent:main:retained";
       for (const sessionKey of keys) {
         putEntry({ ...scope, sessionKey }, sessionEntry(sessionKey));
-        recordParticipant(
-          { ...scope, sessionKey },
-          { identity: { type: "profile", id: sessionKey }, promptedAt: 1 },
-        );
+        participant({ ...scope, sessionKey });
       }
-      writeTransaction((database) => {
-        ensureTranscriptSessionRoot(
-          database,
-          { ...scope, sessionKey: retained, sessionId: retained },
-          1,
-        );
-      }, scope);
+      retainWindow(scope, retained);
       for (const projection of ["full", "list"] as const) {
         for (const sessionKey of keys) {
           expect(readEntry({ ...scope, sessionKey, projection })?.entry.sessionId).toBe(sessionKey);
@@ -291,12 +289,9 @@ describe("exact SQLite session reads", () => {
         )
         .run(9007199254740993n, keys[1]);
       for (const projection of ["full", "list"] as const) {
-        let originalError: unknown;
-        try {
-          readEntry({ ...scope, sessionKey: keys[1], projection });
-        } catch (error) {
-          originalError = error;
-        }
+        const originalError = readError(() =>
+          readEntry({ ...scope, sessionKey: keys[1], projection }),
+        );
         expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
         const readRow = readRows(database, [...keys, retained], projection, "canonical", {
           includeBoardPresence: true,
@@ -428,13 +423,7 @@ describe("exact SQLite session reads", () => {
         { ...scope, sessionKey: healthy },
         { sessionId: healthy, updatedAt: 1, parentSessionKey: parent },
       );
-      writeTransaction((database) => {
-        ensureTranscriptSessionRoot(
-          database,
-          { ...scope, sessionKey: retained, sessionId: retained },
-          1,
-        );
-      }, scope);
+      retainWindow(scope, retained);
       const database = openDatabase(scope);
       database.db
         .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
