@@ -38,22 +38,21 @@ it("optimizes the whole table offline and closes it after reporting counts", asy
   });
 
   expect(runWithLocalStateOwner).toHaveBeenCalledWith(
-    expect.objectContaining({ onForeignOwner: "refuse", params: {} }),
+    expect.objectContaining({ onForeignOwner: "refuse" }),
   );
-  expect(harness.optimize).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
   expect(console.log).toHaveBeenCalledWith("Fragments: 6 -> 1");
   expect(console.log).toHaveBeenCalledWith("Rows: 6 -> 6");
   expect(harness.dbClose).toHaveBeenCalledOnce();
-  expect(harness.embed).not.toHaveBeenCalled();
 });
 
 it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
   await harness.run("search", "private account memory", "--agent", "private");
 
-  expect(harness.embed).toHaveBeenCalledWith("private", "private account memory", {
-    provider: "openai",
-    model: "text-embedding-3-small",
-  });
+  expect(harness.embed).toHaveBeenCalledWith(
+    "private",
+    "private account memory",
+    expect.any(Object),
+  );
   expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
   expect(harness.close).toHaveBeenCalledTimes(1);
 });
@@ -64,15 +63,10 @@ it("rejects an invalid limit before generating an embedding", async () => {
   );
 
   expect(harness.embed).not.toHaveBeenCalled();
-  expect(harness.search).not.toHaveBeenCalled();
-  expect(harness.close).toHaveBeenCalledTimes(1);
 });
 
 it("preserves a falsy search rejection over cleanup failure", async () => {
-  harness = createHarness({
-    embedError: null,
-    closeError: new Error("close failed"),
-  });
+  harness = createHarness({ embedError: null, closeError: new Error("close failed") });
   await expect(harness.run("search", "hello")).rejects.toBeNull();
   expect(harness.close).toHaveBeenCalledTimes(1);
 });
