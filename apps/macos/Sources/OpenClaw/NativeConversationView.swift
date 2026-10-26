@@ -124,11 +124,9 @@ final class NativeConversationController {
     private func installCallbacks(on bridge: NativeConversationBridge) {
         bridge.onReady = { [weak self, weak bridge] in
             guard let self, let bridge, self.bridge === bridge else { return }
-            var focusTransferredDraft = false
             if let draft = self.loadedDraft {
                 if self.viewModel.matchesWebConversationContext(draft.context), self.viewModel.input == draft.text {
                     self.viewModel.input = ""
-                    focusTransferredDraft = true
                 }
                 self.initialDraft = nil
                 self.loadedDraft = nil
@@ -149,8 +147,6 @@ final class NativeConversationController {
             self.present(visible: self.visible, active: self.active)
             if let context = self.viewModel.webConversationContext, context != self.loadedContext {
                 self.navigate(context, source: .synchronization)
-            } else if focusTransferredDraft {
-                self.focusComposer()
             }
         }
         bridge.onState = { [weak self, weak bridge] state in
