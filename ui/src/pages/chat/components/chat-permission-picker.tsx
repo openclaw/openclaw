@@ -100,7 +100,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = selectedMode() === mode;
         const locked = mode === "full" && !canSelectFull();
-        const label = modeLabel(mode);
+        const label = modeLabel(mode, defaultMode());
         const fullAccess = mode === "full" || (mode === null && defaultMode() === "full");
         return {
           id: value,
@@ -131,7 +131,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           content: (
             <span class="chat-controls__permission-option-copy">
               <span class="chat-controls__permission-option-title">
-                <span>{label}</span>
+                <span>{modeLabel(mode)}</span>
                 {mode && mode === defaultMode() && (
                   <span class="chat-controls__permission-default-badge">
                     {t("chat.permissionControls.default")}

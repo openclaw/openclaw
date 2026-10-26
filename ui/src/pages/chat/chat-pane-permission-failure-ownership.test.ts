@@ -53,11 +53,12 @@ function sessionList(...sessions: GatewaySessionRow[]) {
   return { ...createSessionsListResult(), sessions };
 }
 
-function expectPicker(trigger: HTMLButtonElement, mode: string, disabled: boolean) {
+function expectPicker(trigger: HTMLButtonElement, mode: string, pending: boolean) {
   expect(trigger.getAttribute("aria-label")).toContain(
     t(`chat.permissionControls.modes.${mode}.label`),
   );
-  expect(trigger.disabled).toBe(disabled);
+  expect(trigger.disabled).toBe(false);
+  expect(trigger.getAttribute("aria-busy")).toBe(pending ? "true" : null);
 }
 
 function expectErrors(state: ChatPageHost, error: string | null) {

@@ -91,8 +91,14 @@ it.each(["saved", "failed"])(
         .querySelector('[data-chat-permission-option="default"]')
         ?.getAttribute("aria-checked"),
     ).toBe("true");
+    expect(
+      container
+        .querySelector('[data-chat-permission-option="default"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Default (Guarded)");
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true, cancelable: true }));
     await waitForSolid(() => expect(trigger.getAttribute("aria-busy")).toBe("true"));
+    expect(trigger.disabled).toBe(false);
     expect(menu.matches(":popover-open")).toBe(true);
     expect(
       container
@@ -189,6 +195,7 @@ it("preserves option content on unrelated refreshes while admitting permission c
   expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
   expect(row.textContent).toContain("The agent's configured permissions.");
   expect(row.getAttribute("aria-checked")).toBe("false");
+  expect(row.getAttribute("aria-label")).toBe("Default (Guarded)");
   expect(container.querySelector('[data-chat-permission-option="guarded"]')?.textContent).toContain(
     "Default",
   );
