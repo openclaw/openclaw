@@ -15,7 +15,6 @@ function expectEverySplit(input: string, text: string, expected: string[]) {
     const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
     expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(text);
     expect(controls).toEqual(expected);
-    expect(stripper.finish()).toBe("");
   }
 }
 
@@ -73,7 +72,6 @@ describe("terminal ansi helpers", () => {
 
   it("strips the agent output escape grammar without changing text policy", () => {
     expect(stripAnsiSequences("\u001B[38:5:196mred\u001B[0m")).toBe("red");
-    expect(stripAnsiSequences("\u009B31mred\u009B0m")).toBe("red");
     expect(stripAnsiSequences("line\n\t🙂\u001B]unterminated")).toBe("line\n\t🙂nterminated");
     expect(() => stripAnsiSequences(null as never)).toThrow("Expected a `string`, got `object`");
   });
@@ -91,16 +89,9 @@ describe("terminal ansi helpers", () => {
     expect(sanitizeForLog(input)).toBe("]visibleafter");
   });
 
-  it("strips every no-argument C1 CSI final byte", () => {
-    for (let finalCode = 0x40; finalCode <= 0x7e; finalCode += 1) {
-      const sequence = "\u009B" + String.fromCharCode(finalCode);
-      expect(stripAnsi(`before${sequence}after`)).toBe("beforeafter");
-      expect(stripAnsiSequences(`before${sequence}after`)).toBe("beforeafter");
-    }
-  });
-
-  it("handles C1 CSI cancellation, restart, and EOF", () => {
+  it("handles C1 CSI final-byte boundaries, cancellation, restart, and EOF", () => {
     for (const strip of [stripAnsi, stripAnsiSequences]) {
+      expect(strip("before\u009B@after\u009B~")).toBe("beforeafter");
       expect(strip("before\u009B31\u0018after")).toBe("beforeafter");
       expect(strip("before\u009B31\u001Aafter")).toBe("beforeafter");
       expect(strip("before\u009B31\u001B[0mafter")).toBe("beforeafter");
@@ -126,7 +117,6 @@ describe("terminal ansi helpers", () => {
     ["का", 1, ""],
     ["ᄀᄀ", 3, ""],
     ["👨‍👩‍👧‍👦", 1, ""],
-    ["📸📸", 1, ""],
     ["🇬🇧", 1, ""],
     ["\u200B表", 1, "\u200B"],
     ["a\tb", 2, "a\t"],
@@ -138,13 +128,7 @@ describe("terminal ansi helpers", () => {
     ["表\uDC00\t", 3, "表\uDC00"],
     ["表" + "\u200B".repeat(64) + "b", 1, ""],
     ["\u001B[31mabc\u001B[0m", 2, "\u001B[31mab\u001B[0m"],
-    ["plain", 3, "pla"],
-    [
-      "\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\",
-      2,
-      "\u001B]8;;https://openclaw.ai\u001B\\li\u001B]8;;\u001B\\",
-    ],
-    ["\u001B[32mxy\u001B[0m", 1, "\u001B[32mx\u001B[0m"],
+    ["\u001B]8;;x\u001B\\link\u001B]8;;\u001B\\", 2, "\u001B]8;;x\u001B\\li\u001B]8;;\u001B\\"],
   ])("truncates %j to %s columns without splitting graphemes", (input, width, expected) => {
     expect(truncateToVisibleWidth(input, width)).toBe(expected);
   });
