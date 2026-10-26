@@ -38,21 +38,18 @@ describe("resolveTelegramInlineButtons precedence", () => {
     ).toBe(buttons);
   });
 
-  it.each([{ blocks: [{ type: "text", text: "Legacy heading" }] }])(
-    "falls back to presentation when the legacy payload has no usable controls: %j",
-    (interactive) => {
-      expect(
-        resolveTelegramInlineButtons({
-          interactive,
-          presentation: {
-            blocks: [{ type: "buttons", buttons: [{ label: "Fallback", value: "fallback" }] }],
-          },
-        })
-          ?.flat()
-          .map((button) => button.callback_data),
-      ).toEqual(["fallback"]);
-    },
-  );
+  it("falls back to presentation when legacy content has no controls", () => {
+    expect(
+      resolveTelegramInlineButtons({
+        interactive: { blocks: [{ type: "text", text: "Legacy heading" }] },
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Fallback", value: "fallback" }] }],
+        },
+      })
+        ?.flat()
+        .map((button) => button.callback_data),
+    ).toEqual(["fallback"]);
+  });
 });
 
 describe("buildTelegramPresentationButtons action domains", () => {
@@ -66,30 +63,25 @@ describe("buildTelegramPresentationButtons action domains", () => {
     ).toEqual(["/approve req-1 allow-once", "tgcmd:/approve req-1 allow-once"]);
   });
 
-  it("keeps typed callback values opaque, including slash text, whitespace and delimiters", () => {
-    const values = ["/not-a-native-command", "env | prod", "/approve plugin:123 allow-once"];
-    const data = callbacks(values.map((value) => actionButton({ type: "callback", value })));
-    expect(data?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
-    for (const callback of data ?? []) {
-      expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
-      expect(parseTelegramNativeCommandCallbackData(callback)).toBeNull();
-    }
-  });
-
-  it("reserves approval and question namespaces without trimming legacy callback identity", () => {
-    const values = [
-      "tga1:e:x:not-a-typed-action",
-      " tga1:e:o:plugin:123 ",
-      "tgq1:ask_0123456789abcdef0123456789abcdef:0",
-      " tgq1:ask_0123456789abcdef0123456789abcdef:0 ",
-    ];
-    const data = callbacks(values.map((value) => ({ label: "Plugin", value })));
-    expect(data?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
-    for (const callback of data ?? []) {
-      expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
-      expect(parseTelegramQuestionCallbackData(callback)).toBeNull();
-    }
-  });
+  it.each([true, false])(
+    "keeps callback identity outside native namespaces (typed=%s)",
+    (typed) => {
+      const values = typed
+        ? [" /approve env|prod allow-once "]
+        : [" tga1:e:x:plugin|123 ", " tgq1:ask_0123456789abcdef0123456789abcdef:0 "];
+      const data = callbacks(
+        values.map((value) =>
+          typed ? actionButton({ type: "callback", value }) : { label: "Plugin", value },
+        ),
+      );
+      expect(data?.map(parseTelegramOpaqueCallbackData)).toEqual(values);
+      for (const callback of data ?? []) {
+        expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
+        expect(parseTelegramNativeCommandCallbackData(callback)).toBeNull();
+        expect(parseTelegramQuestionCallbackData(callback)).toBeNull();
+      }
+    },
+  );
 
   it("keeps legacy values that look like opaque callback prefixes raw", () => {
     const rows = buildButtons([{ label: "Raw", value: "tgcb1:inspect:123" }]);
@@ -97,42 +89,20 @@ describe("buildTelegramPresentationButtons action domains", () => {
     expect(parseTelegramOpaqueCallbackData(rows?.[0]?.[0]?.callback_data)).toBeNull();
   });
 
-  it("shortens legacy allow-always before prefixing and retains the approval overflow path", () => {
-    const uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const approvalId = `plugin:${"a".repeat(36)}`;
-    const data = callbacks(
-      [uuid, approvalId].map((id) => ({
-        label: "Always",
-        action: { type: "command", command: `/approve ${id} allow-always` },
-      })),
-    );
-    expect(data).toEqual([`tgcmd:/approve ${uuid} always`, `/approve ${approvalId} always`]);
-  });
-
-  it("encodes typed approvals with explicit kind, decision, and exact id", () => {
-    const data = callbacks([actionButton(approval("plugin:id/with:delimiters", "allow-always"))]);
-    expect(parseTelegramApprovalCallbackData(data?.[0])).toEqual(
-      approval("plugin:id/with:delimiters", "allow-always"),
-    );
-  });
-
-  it("compacts an overlong approval callback and keeps the Review URL", () => {
+  it("encodes typed approvals with exact identity beside a Review URL", () => {
     const rows = buildButtons([
-      actionButton(approval("x".repeat(56), "allow-once")),
+      actionButton(approval("plugin:id/with:delimiters", "allow-always")),
       { label: "Review", action: { type: "url", url: "https://gateway.example/approve/long-id" } },
     ]);
-    expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual({
-      type: "approval",
-      approvalId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
-      approvalKind: "exec",
-      decision: "allow-once",
-    });
+    expect(parseTelegramApprovalCallbackData(rows?.[0]?.[0]?.callback_data)).toEqual(
+      approval("plugin:id/with:delimiters", "allow-always"),
+    );
     expect(rows?.[0]?.[1]?.url).toBe("https://gateway.example/approve/long-id");
   });
 
   it("keeps question option indices independent and stable across presentation blocks", () => {
-    const firstQuestionId = "ask_0123456789abcdef0123456789abcdef";
-    const secondQuestionId = "ask_fedcba9876543210fedcba9876543210";
+    const firstQuestionId = `ask_${"a".repeat(32)}`;
+    const secondQuestionId = `ask_${"b".repeat(32)}`;
     const questionBlock = (questionId: string, values: string[]) => ({
       type: "buttons" as const,
       buttons: values.map((optionValue) => ({

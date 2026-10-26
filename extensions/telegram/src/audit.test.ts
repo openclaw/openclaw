@@ -127,32 +127,18 @@ it.each(["network failure", "malformed JSON"] as const)(
 );
 
 it("keeps the audit transport open until the final group's response body settles", async () => {
-  const readingBody = Promise.withResolvers<void>();
-  const finishBody = Promise.withResolvers<void>();
-  respond = () =>
-    requests.length === 1
-      ? membership()
-      : new Response(
-          new ReadableStream<Uint8Array>(
-            {
-              async pull(controller) {
-                readingBody.resolve();
-                await finishBody.promise;
-                controller.enqueue(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
-                controller.close();
-              },
-            },
-            { highWaterMark: 0 },
-          ),
-        );
+  const body = new TransformStream<Uint8Array>();
+  const writer = body.writable.getWriter();
+  respond = () => (requests.length === 1 ? membership() : new Response(body.readable));
+  const readingBody = writer.write(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
   const audit = auditGroups(["-1001", "-1002"]);
   try {
-    await readingBody.promise;
+    await readingBody;
     expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001", "-1002"));
     expect(requests[0]?.dispatcher).toBe(requests[1]?.dispatcher);
     expect(requests[1]?.dispatcher.destroyed).toBe(false);
   } finally {
-    finishBody.resolve();
+    await writer.close();
   }
   expect(await audit).toMatchObject({
     ok: true,

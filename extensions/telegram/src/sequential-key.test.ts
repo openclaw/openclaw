@@ -1,6 +1,5 @@
 import type { Chat, Message } from "grammy/types";
-import { assert, describe, expect, it } from "vitest";
-import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
+import { describe, expect, it } from "vitest";
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
@@ -21,10 +20,9 @@ const forumMessage = (text: string) =>
   });
 const groupMessage = (id: number, extra: Partial<Message> = {}) =>
   mockMessage({ chat: { id, type: "supergroup", title: "Group" }, ...extra });
-const callback = (id: number, data: string | undefined) => {
-  assert(data, "expected callback data");
-  return { update: { callback_query: { message: groupMessage(id), data } } };
-};
+const callback = (id: number, data: string) => ({
+  update: { callback_query: { message: groupMessage(id), data } },
+});
 
 const addressed = (text: string) => ({
   me: { username: "openclaw_bot" } as never,
@@ -46,18 +44,7 @@ describe("getTelegramSequentialKey", () => {
     [messageContext({ text: "/approve exec:def456 allow-once" }), "telegram:123:control"],
     [{ message: forumMessage("/new sync tars") }, "telegram:-100:topic:5907"],
     [messageContext({ text: "/btw what is the time?" }), "telegram:123:btw:1"],
-    [
-      callback(
-        654,
-        buildTelegramApprovalCallbackData({
-          type: "approval",
-          approvalKind: "plugin",
-          approvalId: "signed-approval",
-          decision: "allow-once",
-        }),
-      ),
-      "telegram:654:approval",
-    ],
+    [callback(654, "tga1:p:o:signed-approval"), "telegram:654:approval"],
     [callback(321, "tgq1:ask_0123456789abcdef0123456789abcdef:2"), "telegram:321:question"],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);

@@ -132,11 +132,7 @@ function parseRecords(records: ChannelIngressQueueRecord<TelegramSpooledUpdatePa
     .toSorted((a, b) => a.updateId - b.updateId);
 }
 
-export async function listTelegramSpooledUpdates(
-  params: QueueScope & {
-    limit?: number | "all";
-  },
-) {
+export async function listTelegramSpooledUpdates(params: QueueScope & { limit?: number | "all" }) {
   const records = await openTelegramIngressQueue(params).listPending({
     limit: params.limit ?? 100,
     orderBy: "id",

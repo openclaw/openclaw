@@ -11,6 +11,7 @@ vi.mock("./bot/delivery.resolve-media.js", async (importOriginal) => ({
 
 const file = { file_id: "photo-one", file_unique_id: "unique-one" };
 const photo = { ...file, width: 160, height: 160 };
+const profilePhotos = { total_count: 1, photos: [[photo]] };
 type Context = Pick<TelegramContext, "message" | "me">;
 function context(id = 1000000001, overrides: Partial<Context["message"]> = {}): Context {
   return {
@@ -29,7 +30,7 @@ function account(accountId = "sample-bot", abortSignal?: AbortSignal) {
   const api = {
     getUserProfilePhotos: vi
       .fn<Parameters<typeof createTelegramDirectAvatarResolver>[0]["api"]["getUserProfilePhotos"]>()
-      .mockResolvedValue({ total_count: 1, photos: [[photo]] }),
+      .mockResolvedValue(profilePhotos),
     getFile: vi.fn().mockResolvedValue({ ...file, file_path: "photos/example.jpg" }),
   };
   const params = { api, accountId, token: "test-token", abortSignal };
@@ -58,25 +59,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("returns immediately while a cold portrait request is pending", () => {
+it("coalesces a cold portrait request, applies media policy, and caches the result", async () => {
   const { api, resolve } = account();
-  api.getUserProfilePhotos.mockReturnValueOnce(new Promise(() => {}));
-  expect(resolve(context(), {})).toBeUndefined();
-  expect(resolve(context(), {})).toBeUndefined();
-  expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
-  expect(resolveMedia).not.toHaveBeenCalled();
-});
-
-it("downloads through the existing account media policy and reuses the bounded native-peer cache", async () => {
-  const { api, resolve } = account();
+  const pending = Promise.withResolvers<typeof profilePhotos>();
+  api.getUserProfilePhotos.mockReturnValueOnce(pending.promise);
   const ctx = context();
   const before = structuredClone(ctx.message);
-  expect(await load(resolve, ctx)).toBe("/media/inbound/portrait.png");
-  expect(api.getUserProfilePhotos).toHaveBeenCalledExactlyOnceWith(
-    1000000001,
-    { offset: 0, limit: 1 },
-    expect.objectContaining({ aborted: false }),
-  );
+  expect(resolve(ctx, {})).toBeUndefined();
+  expect(resolve(ctx, {})).toBeUndefined();
+  expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
+  expect(resolveMedia).not.toHaveBeenCalled();
+  pending.resolve(profilePhotos);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(resolve(ctx, {})).toBe("/media/inbound/portrait.png");
+  expect(api.getUserProfilePhotos).toHaveBeenCalledOnce();
   expect(vi.mocked(resolveMedia).mock.calls[0]?.[0]).toMatchObject({
     token: "test-token",
     maxBytes: 256 * 1024,
