@@ -1,16 +1,12 @@
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
-import { expect, vi } from "vitest";
+import { assert, expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createPromptRequest } from "./translator.bridge-test-helpers.js";
-import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
+import * as acp from "./translator.test-helpers.js";
 
 type ScenarioOptions = Pick<
-  NonNullable<Parameters<typeof createAcpGatewayAgent>[2]>,
+  NonNullable<Parameters<typeof acp.createAcpGatewayAgent>[2]>,
   "eventLedger" | "sessionCreateRateLimit" | "provenanceMode"
 > & {
   sessions?: string[];
@@ -31,11 +27,11 @@ export function createTranslatorScenario(
   for (const sessionId of sessions) {
     sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
   }
-  const connection = createAcpConnection({ requestPermission });
+  const connection = acp.createAcpConnection({ requestPermission });
   const sessionUpdate = connection["__sessionUpdateMock"];
-  const agent = createAcpGatewayAgent(
+  const agent = acp.createAcpGatewayAgent(
     connection,
-    createAcpGateway(request as GatewayClient["request"]),
+    acp.createAcpGateway(request as GatewayClient["request"]),
     { ...options, sessionStore },
   );
   return { agent, connection, sessionKey, sessionStore, sessionUpdate };
@@ -63,9 +59,7 @@ export function createPromptScenario({
       return handleRequest(method, params);
     }
     const runId = params?.idempotencyKey;
-    if (typeof runId !== "string") {
-      throw new Error("missing Gateway run id");
-    }
+    assert(typeof runId === "string", "missing Gateway run id");
     runIds.push(runId);
     nextSend.resolve(runId);
     nextSend = createDeferred<string>();
@@ -85,23 +79,17 @@ export function createPromptScenario({
     return { result, sent, settlement };
   };
   const active = async (...args: Parameters<typeof prompt>) => {
-    const before = runIds.length;
     const pending = start(...args);
-    await vi.waitFor(() => expect(runIds).toHaveLength(before + 1));
     return { ...pending, runId: await pending.sent };
   };
-  const event = (name: string, payload: Record<string, unknown>) =>
-    h.agent.handleGatewayEvent({
-      type: "event",
-      event: name,
-      payload: { sessionKey: options.sessionKey ?? "agent:main:main", seq: 1, ...payload },
-    });
+  const event = (name: string, fields: Record<string, unknown>) => {
+    const payload = { sessionKey: h.sessionKey, seq: 1, ...fields };
+    return h.agent.handleGatewayEvent({ type: "event", event: name, payload });
+  };
   const chat = (runId: string, payload: Record<string, unknown> = {}) =>
     event("chat", { runId, state: "final", ...payload });
-  const finish = async (
-    pending: Pick<ReturnType<typeof start>, "sent" | "result">,
-    fields: Record<string, unknown> = {},
-  ) => {
+  type PendingPrompt = Pick<ReturnType<typeof start>, "sent" | "result">;
+  const finish = async (pending: PendingPrompt, fields: Record<string, unknown> = {}) => {
     await chat(await pending.sent, fields);
     await expect(pending.result).resolves.toEqual({ stopReason: "end_turn" });
   };
