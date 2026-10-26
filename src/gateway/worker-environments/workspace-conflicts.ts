@@ -60,6 +60,7 @@ export function projectWorkspaceConflictDetails(
     return undefined;
   }
   const details = readRecord(entry.details);
+  const totalCount = details?.totalCount;
   if (
     !details ||
     !Array.isArray(details.paths) ||
@@ -69,18 +70,15 @@ export function projectWorkspaceConflictDetails(
     ) ||
     typeof details.stagedResultRef !== "string" ||
     !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
-    (details.totalCount !== undefined &&
-      (!Number.isSafeInteger(details.totalCount) ||
-        (details.totalCount as number) < details.paths.length))
+    (totalCount !== undefined &&
+      (typeof totalCount !== "number" ||
+        !Number.isSafeInteger(totalCount) ||
+        totalCount < details.paths.length))
   ) {
     return undefined;
   }
   try {
-    return projectWorkspaceResultConflict(
-      details.paths,
-      details.stagedResultRef,
-      details.totalCount as number | undefined,
-    );
+    return projectWorkspaceResultConflict(details.paths, details.stagedResultRef, totalCount);
   } catch {
     return undefined;
   }
