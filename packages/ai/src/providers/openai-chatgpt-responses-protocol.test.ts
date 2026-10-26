@@ -54,6 +54,7 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
         if (stallCancel) {
           return new Promise<void>(() => {});
         }
+        return undefined;
       },
     });
     const iterator = parse(body);

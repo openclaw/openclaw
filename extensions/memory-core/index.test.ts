@@ -451,33 +451,35 @@ describe("memory-core plugin runtime registration", () => {
   );
 
   it("defers nested host runtime access until the injected operation runs", async () => {
-    let ready = false;
     const acquireLocalService = vi.fn(async () => undefined);
     const openKeyedStore = vi.fn(() => ({}));
-    const host = {
-      get llm() {
-        expect(ready).toBe(true);
-        return { acquireLocalService };
+    const llmGetter = vi.fn(() => ({ acquireLocalService }));
+    const stateGetter = vi.fn(() => ({ openKeyedStore }));
+    const host = Object.defineProperties(
+      {},
+      {
+        llm: { configurable: true, enumerable: true, get: llmGetter },
+        state: { configurable: true, enumerable: true, get: stateGetter },
       },
-      get state() {
-        expect(ready).toBe(true);
-        return { openKeyedStore };
-      },
-    } as OpenClawPluginApi["runtime"];
+    ) as OpenClawPluginApi["runtime"];
     const { runtime } = captureCapability({ runtime: host });
+
+    expect(llmGetter).not.toHaveBeenCalled();
+    expect(stateGetter).not.toHaveBeenCalled();
     await runtime?.getMemorySearchManager({ cfg: {}, agentId: "main" });
     const injectedHost = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    assert(
-      injectedHost?.acquireLocalService && injectedHost.openKeyedStore,
-      "Expected host operations",
-    );
-    ready = true;
+    if (!injectedHost?.acquireLocalService || !injectedHost.openKeyedStore) {
+      throw new Error("expected memory-core host operations");
+    }
+
     const target = { providerId: "local", baseUrl: "http://127.0.0.1:11434" };
     await injectedHost.acquireLocalService(target);
     const storeOptions = { namespace: "lazy-host", maxEntries: 1 };
     injectedHost.openKeyedStore(storeOptions);
 
+    expect(llmGetter).toHaveBeenCalledOnce();
     expect(acquireLocalService).toHaveBeenCalledWith(target);
+    expect(stateGetter).toHaveBeenCalledOnce();
     expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
   });
 

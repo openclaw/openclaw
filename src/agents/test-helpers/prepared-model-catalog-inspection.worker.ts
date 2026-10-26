@@ -97,6 +97,10 @@ port.postMessage = (message: { status: string; value?: object }, transferList) =
     }
     response = { ...message, value: { ...message.value, inspection } };
   }
-  post(response, transferList);
+  if (Array.isArray(transferList)) {
+    post(response, transferList);
+  } else {
+    post(response, transferList);
+  }
 };
 await import("../prepared-model-catalog.worker.js");

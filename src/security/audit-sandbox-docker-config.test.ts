@@ -75,7 +75,7 @@ describe("security audit sandbox docker config", () => {
     for (const [suffix, field] of [
       ["docker_config_mode_off", ""],
       ["dangerous_bind_mount", ".binds"],
-    ]) {
+    ] as const) {
       expect(findings).toContainEqual(
         finding(suffix, {
           detail: expect.stringContaining(`agents.entries.ops.sandbox.docker${field}`),

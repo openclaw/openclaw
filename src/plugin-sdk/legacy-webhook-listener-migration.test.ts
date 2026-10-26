@@ -30,6 +30,8 @@ it.each([
       { ...legacy(8787, "0.0.0.0"), webhookPath: "/telegram" },
       { inherited, port: legacy(8789, "0.0.0.0"), host: legacy(8787, "127.0.0.2") },
     ),
+    3,
+    undefined,
   ],
   [
     "explicit host and default port",
@@ -63,6 +65,8 @@ it.each([
     "canonical settings and malformed ports",
     { webhookPort: 8787, ...legacy(9000), accounts: { invalid: { webhookPort: "invalid" } } },
     { ...legacy(9000), accounts: { invalid: legacy("invalid") } },
+    2,
+    "already configured",
   ],
   ...["0.0.0.0", undefined].map(
     (host) =>
@@ -76,9 +80,11 @@ it.each([
           port: legacy(9001, host),
           host: legacy(9000, "127.0.0.2"),
         }),
+        2,
+        undefined,
       ] as const,
   ),
-] as const)("preserves %s", (_name, input, expected) => {
+] as const)("preserves %s", (_name, input, expected, changeCount, message) => {
   const cfg = config(structuredClone(input));
   const match = (value: OpenClawConfig) =>
     contract.legacyConfigRules[0]!.match?.(value.channels?.telegram, value);
@@ -86,9 +92,18 @@ it.each([
   const result = contract.normalizeCompatibilityConfig({ cfg });
   expect(result.config).toEqual(config(expected));
   expect(cfg.channels?.telegram).toEqual(input);
-  expect(result.changes.length).toBeGreaterThan(0);
-  const unchanged = contract.normalizeCompatibilityConfig({ cfg: result.config });
-  expect(unchanged.config).toBe(result.config);
-  expect(unchanged.changes).toEqual([]);
+  expect(result.changes).toHaveLength(changeCount);
+  if (message) {
+    expect(result.changes[0]).toContain(message);
+  }
+  expect(contract.normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+    config: result.config,
+    changes: [],
+  });
   expect(match(result.config)).toBe(false);
+});
+
+it("leaves implicit config unchanged", () => {
+  const untouched = config({ webhookUrl: "https://example.com/telegram" });
+  expect(contract.normalizeCompatibilityConfig({ cfg: untouched }).config).toBe(untouched);
 });

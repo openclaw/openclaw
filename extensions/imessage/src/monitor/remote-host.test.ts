@@ -34,7 +34,7 @@ describe("detectRemoteHostFromCliPath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDir = () => tempDirs.make("openclaw-imessage-");
   async function wrapper(content: string, dir?: string, basename = "imsg-remote") {
-    const wrapperDir = dir ?? (await tempDir());
+    const wrapperDir = dir ?? tempDir();
     await fs.mkdir(wrapperDir, { recursive: true });
     const wrapperPath = path.join(wrapperDir, basename);
     await fs.writeFile(wrapperPath, content);
@@ -47,7 +47,7 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("uses the system home when HOME is blank", async () => {
-    const home = await tempDir();
+    const home = tempDir();
     vi.stubEnv("HOME", "");
     vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
     await wrapper(sshWrapper("user@example.test"), path.join(home, ".openclaw"));
@@ -55,7 +55,7 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {
-    const cwd = await tempDir();
+    const cwd = tempDir();
     const basename = `imsg-${randomUUID()}`;
     await wrapper(
       "#!/bin/sh\nexec ssh rogue@example.test imsg\n",
@@ -110,7 +110,7 @@ describe("detectRemoteHostFromCliPath", () => {
   ] as const)(
     "coalesces and caches %s wrapper reads by expanded cliPath",
     async (_, content, expected) => {
-      const home = await tempDir();
+      const home = tempDir();
       vi.stubEnv("HOME", home);
       const wrapperPath = await wrapper(content, path.join(home, ".openclaw"));
       const readFile = vi.spyOn(fs, "readFile");

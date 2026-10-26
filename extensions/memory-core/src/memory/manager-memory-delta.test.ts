@@ -9,6 +9,16 @@ import {
 
 const fixture = createManagerIndexFixture(await import("./index.js"));
 
+type IndexedRow = {
+  id: string;
+  chunkRowid: number;
+  startLine: number;
+  endLine: number;
+  updatedAt: number;
+  embedded: number;
+  observedAt: number;
+};
+
 const notesPath = "memory/delta-notes.md";
 const line = (index: number) =>
   `Entry ${index} marker${index} ${"lorem ipsum dolor sit amet ".repeat(3)}`.trim();
@@ -33,7 +43,7 @@ function readIndex(database: DatabaseSync) {
            WHERE chunk.path = ? AND chunk.source = 'memory'
            ORDER BY chunk.start_line, chunk.id`,
     )
-    .all(notesPath);
+    .all(notesPath) as IndexedRow[];
   const fts = database
     .prepare("SELECT id FROM memory_index_chunks_fts WHERE path = ? ORDER BY id")
     .all(notesPath)
@@ -80,7 +90,7 @@ it.each([false, true])("publishes memory appends and shifts (semantic=%s)", asyn
   }
   expect(after.length).toBeGreaterThan(before.length);
   expect(after.every((row) => row.embedded === Number(semantic))).toBe(true);
-  expect(Math.max(...after.map((row) => Number(row.endLine)))).toBe(initial.length + 1 + 6);
+  expect(Math.max(...after.map((row) => row.endLine))).toBe(initial.length + 1 + 6);
   expect(after.every((row) => row.observedAt === mtimes[1])).toBe(true);
 
   const fields = ["path", "startLine", "endLine", "score", "snippet"] as const;

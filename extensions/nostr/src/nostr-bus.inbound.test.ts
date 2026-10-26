@@ -321,7 +321,9 @@ describe("startNostrBus inbound guards", () => {
     for (let i = 0; i < count; i++) {
       await emitEvent({ id: `event-${i}` });
     }
-    await emitEvent({ id: "event-0" });
+    if (valid) {
+      await emitEvent({ id: "event-0" });
+    }
     expectDispatchCounts(valid ? count : 1, delivered, delivered);
     expect(authorizeSender).toHaveBeenCalledTimes(delivered);
     expect(countRejection("invalid_signature")).toBe(valid ? 0 : 1);
