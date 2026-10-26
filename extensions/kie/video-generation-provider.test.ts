@@ -81,13 +81,11 @@ it("submits, polls pending states, decodes resultJson, and downloads without aut
   expect(release).toHaveBeenCalledOnce();
 });
 
-it.each([
-  { model: "hailuo/02-text-to-video-pro", input: {} },
-  {
-    model: "hailuo/2-3-image-to-video-standard",
-    input: { duration: "6", resolution: "768P", image_url: IMAGE },
-  },
-])("maps optional controls and scalar image URLs for $model", async ({ model, input }) => {
+it.each<{ model: string; input: Record<string, string> }>`
+  model                                   | input
+  ${"hailuo/02-text-to-video-pro"}        | ${{}}
+  ${"hailuo/2-3-image-to-video-standard"} | ${{ duration: "6", resolution: "768P", image_url: IMAGE }}
+`("maps optional controls and scalar image URLs for $model", async ({ model, input }) => {
   mockSuccess();
   const inputImages = input.image_url ? [{ url: input.image_url }] : undefined;
   const result = await generate({ model, inputImages });
@@ -118,21 +116,18 @@ it("stops before submission when upload returns an HTTP-200 body error", async (
   expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
 });
 
-it.each`
+it.each<{ error: string; data: unknown }>`
   error                                   | data
   ${"CONTENT_REJECTED): Prompt rejected"} | ${{ state: "fail", failCode: "CONTENT_REJECTED", failMsg: "Prompt rejected" }}
   ${"unknown state: mystery"}             | ${{ state: "mystery" }}
   ${"malformed resultJson"}               | ${{ state: "success", resultJson: "not JSON" }}
   ${"without result URLs"}                | ${{ state: "success", resultJson: '{"resultUrls":[]}' }}
-`(
-  "rejects unusable completed jobs: $error",
-  async ({ error, data }: { error: string; data: unknown }) => {
-    postResponse({ code: 200, data: { taskId: "task-1" } });
-    taskResponse(data);
-    await expect(generate()).rejects.toThrow(error);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-  },
-);
+`("rejects unusable completed jobs: $error", async ({ error, data }) => {
+  postResponse({ code: 200, data: { taskId: "task-1" } });
+  taskResponse(data);
+  await expect(generate()).rejects.toThrow(error);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+});
 
 it("uses model-specific capabilities through the shared runtime", async () => {
   mockSuccess();
@@ -159,7 +154,7 @@ it("uses model-specific capabilities through the shared runtime", async () => {
   expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
 });
 
-it.each`
+it.each<{ error: string; request: Partial<VideoGenerationRequest> }>`
   error                                        | request
   ${"does not support video or audio"}         | ${{ inputVideos: [{ url: OUTPUT }] }}
   ${"at most one input image"}                 | ${{ inputImages: [{ url: IMAGE }, { url: IMAGE }] }}
@@ -168,10 +163,7 @@ it.each`
   ${"1080P only at 6 seconds"}                 | ${{ model: "hailuo/2-3-image-to-video-pro", inputImages: [{ url: IMAGE }], resolution: "1080P", durationSeconds: 10 }}
   ${"does not support model unknown"}          | ${{ model: "unknown" }}
   ${"requires a prompt of 3-20000 characters"} | ${{ model: "bytedance/seedance-1.5-pro", prompt: "Hi" }}
-`(
-  "rejects invalid inputs before upload or billing: $error",
-  async ({ error, request }: { error: string; request: Partial<VideoGenerationRequest> }) => {
-    await expect(generate(request)).rejects.toThrow(error);
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  },
-);
+`("rejects invalid inputs before upload or billing: $error", async ({ error, request }) => {
+  await expect(generate(request)).rejects.toThrow(error);
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});
