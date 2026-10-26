@@ -167,13 +167,8 @@ export async function mountTestTranscript(
   container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
   const renderRows = (rows: readonly TestContentRow[]) => {
     currentRows = rows;
-    render(
-      transcript.renderSession(`agent:main:${paneId}`, (session) => {
-        currentSession = session;
-        return session.render(rows, rowContent, null, false);
-      }),
-      container,
-    );
+    currentSession = transcript.renderSession(`agent:main:${paneId}`, (session) => session);
+    render(currentSession.render(rows, rowContent, null, false), container);
     transcript.update();
     flush();
   };
