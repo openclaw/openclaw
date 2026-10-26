@@ -132,18 +132,22 @@ describe("cold native MCP App session preparation", () => {
   it("uses the existing client and thread lifecycle without sending a model turn", async () => {
     const fixtureParams = fixture();
     await expect(prepareCodexMcpAppSession(fixtureParams)).resolves.toMatchObject(thread);
-    expect(mocks.start).toHaveBeenCalledOnce();
-    expect(mocks.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          hostCapabilities: fixtureParams.preparation.params.hostCapabilities,
-        }),
-        userMcpServersEnabled: false,
-        nativeModelAdmission: "required",
-        shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
-        dynamicTools: [],
-      }),
-    );
+    expect(mocks.acquire).toHaveBeenCalledOnce();
+    expect(mocks.ensure).toHaveBeenCalledOnce();
+    expect(mocks.start.mock.calls).toMatchObject([
+      [
+        {
+          bindingStore: fixtureParams.bindingStore,
+          params: {
+            hostCapabilities: fixtureParams.preparation.params.hostCapabilities,
+          },
+          userMcpServersEnabled: false,
+          nativeModelAdmission: "required",
+          shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
+          dynamicTools: [],
+        },
+      ],
+    ]);
     expect(mocks.request).not.toHaveBeenCalled();
     expect(mocks.retain).toHaveBeenCalledOnce();
     expect(mocks.rollback).not.toHaveBeenCalled();

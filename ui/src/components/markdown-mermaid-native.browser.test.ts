@@ -2,7 +2,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
-import { theme } from "./markdown-mermaid.test-support.ts";
+import { parsePassiveSvg, theme } from "./markdown-mermaid.test-support.ts";
 
 type NativeReply = {
   id: string;
@@ -54,7 +54,7 @@ afterEach(() => {
   diagram.remove();
 });
 
-it("delivers ordered decoded images at the requested viewport width", async () => {
+it("delivers ordered passive images at the requested viewport width", async () => {
   await Promise.all([
     render("first", "flowchart LR\nA[First] --> B[Diagram]", 512),
     render("second", "sequenceDiagram\nAlice->>Bob: Ready", 384),
@@ -63,15 +63,23 @@ it("delivers ordered decoded images at the requested viewport width", async () =
     ["first", true, 512],
     ["second", true, 384],
   ]);
-  expect(replies[1]?.heightCssPx).toBeGreaterThan(0);
+  for (const reply of replies) {
+    expect(reply.heightCssPx).toBeGreaterThan(0);
+    parsePassiveSvg(reply.svg!);
+  }
   const image = diagram.querySelector("img")!;
   expect(image).toMatchObject({ complete: true, width: 384 });
   expect(image.naturalWidth).toBeGreaterThan(0);
+  const frame = document.querySelector<HTMLIFrameElement>("iframe[sandbox='allow-scripts']")!;
+  expect(frame.contentDocument).toBeNull();
 });
 
 it("keeps syntax and raster-limit failures permanent and renders the next request", async () => {
   const source = "flowchart TB\nA[One] --> B[Two] --> C[Three]";
   await render("oversized", source, 4_096);
+  expect(replies).toEqual([
+    { id: "oversized", success: false, error: "Diagram image is too large.", retryable: false },
+  ]);
   expectFailure(0, "oversized", false);
   await render("invalid", "flowchart LR\nA -->");
   expectFailure(1, "invalid", false);
@@ -113,6 +121,7 @@ it.each(["engine load", "engine render", "image decode"])(
     }
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const schedule = vi.spyOn(window, "setTimeout");
     let settled = false;
     let pending: Promise<void> | undefined;
     try {
@@ -122,22 +131,28 @@ it.each(["engine load", "engine render", "image decode"])(
       // Load/decode arm their watchdog after the intercepted call returns.
       // Awaiting the stall lets that synchronous registration finish.
       await stalled.promise;
+      expect(schedule).toHaveBeenLastCalledWith(expect.any(Function), deadline);
+      expect(vi.getTimerCount()).toBe(1);
       await vi.advanceTimersByTimeAsync(deadline - 1);
       expect(settled).toBe(false);
       expect(replies).toEqual([]);
+      expect(diagram.querySelector("img")).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
       await pending;
       expectFailure(0, "timeout", true);
     } finally {
-      // A failed assertion must not strand the serialized native decode queue.
-      decoding.resolve();
-      if (pending && !settled) {
-        window.dispatchEvent(new PageTransitionEvent("pagehide"));
-        await pending;
+      try {
+        // A failed assertion must not strand the serialized native decode queue.
+        decoding.resolve();
+        if (pending && !settled) {
+          window.dispatchEvent(new PageTransitionEvent("pagehide"));
+          await pending;
+        }
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
       }
-      vi.restoreAllMocks();
-      vi.useRealTimers();
     }
     await expectRecovery(source, 1);
   },

@@ -11,6 +11,7 @@ import {
   viewer,
   withOwnerSidebar,
 } from "../test-helpers/agent-sidebar.test-support.ts";
+import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
@@ -45,7 +46,7 @@ it.each(["visible", "bounded"])(
   },
 );
 
-it("settles with multiple owners", async () => {
+it("settles with multiple owners and keeps an explicitly selected owner's empty list", async () => {
   await withOwnerSidebar(
     [mine()],
     [viewer, other],
@@ -55,6 +56,13 @@ it("settles with multiple owners", async () => {
       expect(requests.length).toBeLessThanOrEqual(2);
       expect(requests.at(-1)?.ownerId).toBe("viewer");
       expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+      await sidebar.sidebarMenus.preloadMenuRenderer();
+      await selectSessionMenuValue(sidebar, "owner:other");
+      await settle();
+      expect(requests.at(-1)?.ownerId).toBe("other");
+      expect(requests.length).toBeLessThanOrEqual(3);
+      expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+      expect(sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain("Other");
     },
   );
 });

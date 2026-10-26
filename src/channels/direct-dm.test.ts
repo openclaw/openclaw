@@ -2,10 +2,9 @@ import { expect, it, vi } from "vitest";
 import { dispatchInboundDirectDm } from "./direct-dm.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import { resolveStableChannelIngressPolicy } from "./message-access/runtime.js";
-import type { ChannelTurnPlan } from "./turn/types.js";
 
 const mocks = vi.hoisted(() => ({
-  dispatchRoutedChannelTurn: vi.fn<(plan: ChannelTurnPlan) => Promise<void>>(async () => undefined),
+  dispatchRoutedChannelTurn: vi.fn(async () => undefined),
   onModelSelected: vi.fn(),
 }));
 
@@ -71,8 +70,20 @@ const ingressPolicy = (
     contextBinding,
   });
 
-it("dispatches resolved ingress through the canonical reply and adoption pipeline", async () => {
-  const resolveChannelIngress = vi.fn(ingressPolicy);
+it("forwards the canonical model-selection reply pipeline", async () => {
+  const channelIngress = await ingressPolicy();
+  await dispatchDm({ channelIngress });
+
+  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
+      replyOptions: { onModelSelected: mocks.onModelSelected },
+    }),
+  );
+  expect(contextParams()?.channelIngress).toBe(channelIngress);
+});
+
+it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
   const assertAuthority = vi.fn();
   const turnAdoptionLifecycle = {
     admission: "exclusive" as const,
@@ -83,20 +94,28 @@ it("dispatches resolved ingress through the canonical reply and adoption pipelin
   };
 
   await dispatchDm({
-    resolveChannelIngress,
+    channelIngress: "unsupported",
     turnAdoptionLifecycle,
     assertAuthority,
   });
 
-  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
+  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenLastCalledWith(
     expect.objectContaining({
       assertAuthority,
-      replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
-      replyOptions: { onModelSelected: mocks.onModelSelected, turnAdoptionLifecycle },
+      replyOptions: expect.objectContaining({ turnAdoptionLifecycle }),
     }),
   );
   expect(assertAuthority).not.toHaveBeenCalled();
-  expect(resolveChannelIngress).toHaveBeenCalledExactlyOnceWith({
+  expect(contextParams()?.channelIngress).toBe("unsupported");
+});
+
+it("resolves exact ingress provenance once after the final route is known", async () => {
+  const resolveChannelIngress = vi.fn(ingressPolicy);
+
+  await dispatchDm({ resolveChannelIngress });
+
+  expect(resolveChannelIngress).toHaveBeenCalledOnce();
+  expect(resolveChannelIngress).toHaveBeenCalledWith({
     agentId: "agent-1",
     sessionKey: "agent:agent-1:nostr:direct:peer-1",
     messageId: "event-1",
@@ -112,9 +131,8 @@ it("preserves the shipped SDK contract for callers without ingress provenance", 
 });
 
 it("preserves Reef's explicit unsupported trust-path classification", async () => {
-  const channelIngress = "unsupported";
   await dispatchDm({
-    channelIngress,
+    channelIngress: "unsupported",
     channel: "reef",
     channelLabel: "Reef",
     senderAddress: "reef:peer-1",

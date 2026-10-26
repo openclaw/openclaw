@@ -25,37 +25,29 @@ function waitItem(fields: JsonObject = {}): JsonObject {
     ...fields,
   };
 }
+type ContextualNotificationItem = {
+  type: string;
+  role: string;
+  phase?: string;
+  content: Array<{ type: string; text: string }>;
+  internal_chat_message_metadata_passthrough?: { content_item_kinds: string[] };
+};
+
 function contextualNotificationItem(
   status: { completed: string | null } | { errored: string } | string = { completed: "done" },
-  source = "native",
-) {
-  const text = `<subagent_notification>\n${JSON.stringify({ agent_path: "child-thread", status })}\n</subagent_notification>`;
+): ContextualNotificationItem {
   return {
     type: "message",
-    role: source === "model-message" ? "assistant" : "user",
+    role: "user",
     content: [
       {
-        type: ["model-message", "output-text"].includes(source) ? "output_text" : "input_text",
-        text:
-          source === "quoted-fragment"
-            ? `Example: ${text}`
-            : source === "malformed"
-              ? "<subagent_notification>{not-json}</subagent_notification>"
-              : text,
+        type: "input_text",
+        text: `<subagent_notification>\n${JSON.stringify({ agent_path: "child-thread", status })}\n</subagent_notification>`,
       },
     ],
-    ...(source === "missing-classification"
-      ? {}
-      : {
-          internal_chat_message_metadata_passthrough: {
-            content_item_kinds:
-              source === "user-classification"
-                ? ["user.text"]
-                : source === "misaligned-classification"
-                  ? ["user.text", "multi_agent.subagent_notification"]
-                  : ["multi_agent.subagent_notification"],
-          },
-        }),
+    internal_chat_message_metadata_passthrough: {
+      content_item_kinds: ["multi_agent.subagent_notification"],
+    },
   };
 }
 
@@ -91,9 +83,26 @@ describe("Codex native subagent notifications", () => {
     "output-text",
     "quoted-fragment",
     "wrong-notification",
-    "malformed",
   ])("rejects a contextual completion with %s", (source) => {
-    const item = contextualNotificationItem(undefined, source);
+    const item = contextualNotificationItem();
+    const content = item.content;
+    if (source === "missing-classification") {
+      delete item.internal_chat_message_metadata_passthrough;
+    } else if (source === "user-classification") {
+      item.internal_chat_message_metadata_passthrough = { content_item_kinds: ["user.text"] };
+    } else if (source === "misaligned-classification") {
+      item.internal_chat_message_metadata_passthrough = {
+        content_item_kinds: ["user.text", "multi_agent.subagent_notification"],
+      };
+    } else if (source === "model-message") {
+      item.role = "assistant";
+      item.phase = "commentary";
+      content[0]!.type = "output_text";
+    } else if (source === "output-text") {
+      content[0]!.type = "output_text";
+    } else if (source === "quoted-fragment") {
+      content[0]!.text = `Example: ${content[0]!.text}`;
+    }
     const method = source === "wrong-notification" ? "item/started" : "rawResponseItem/completed";
     expect(read(item, method)).toEqual({
       threadId: "parent-thread",
@@ -127,6 +136,22 @@ describe("Codex native subagent notifications", () => {
     ).toEqual(["succeeded-child", "failed-child"]);
   });
 
+  it("recognizes a native completion receipt without treating its payload as a status", () => {
+    expect(
+      deliveredPaths({
+        type: "agent_message",
+        author: "/root/worker",
+        recipient: "/root",
+        content: [
+          {
+            type: "input_text",
+            text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nBuild result",
+          },
+        ],
+      }),
+    ).toEqual(["/root/worker"]);
+  });
+
   it.each([
     [
       { completed: "  " },
@@ -145,5 +170,11 @@ describe("Codex native subagent notifications", () => {
 
   it.each(["running"])("leaves native %s status unresolved", (nativeStatus) => {
     expect(completions(contextualNotificationItem(nativeStatus))).toEqual([]);
+  });
+
+  it("ignores malformed classified completion payloads", () => {
+    const item = contextualNotificationItem();
+    item.content[0]!.text = "<subagent_notification>{not-json}</subagent_notification>";
+    expect(completions(item)).toEqual([]);
   });
 });

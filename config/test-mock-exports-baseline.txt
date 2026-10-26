@@ -2619,8 +2619,6 @@
 ["src/browser-lifecycle-cleanup.test.ts","./plugin-sdk/browser-maintenance.js","14fa958d9bde1df2ae19f0d3d109a572cc62c83195a5e15ae07515a123490cf9",1]
 ["src/channels/bundled-channel-catalog-read.fail-soft.test.ts","../infra/openclaw-root.js","ac27bdb2af0d74fbc106813beb7a40e43a90a6b45c55dadf31f79e13be04957b",1]
 ["src/channels/bundled-channel-catalog-read.fail-soft.test.ts","../plugins/bundled-dir.js","ec16d177c43a6fc76b37d51ceaa4dbff93882bf898e99851fa939819b7b55915",1]
-["src/channels/bundled-channel-catalog-read.test.ts","../infra/openclaw-root.js","bd2ba6c86bb6cac80660e12b38d2659da2146980ee9e38336184dd93d72493ba",1]
-["src/channels/bundled-channel-catalog-read.test.ts","../plugins/bundled-dir.js","3eb08deea29e6ffb80e2e3f8df8a76ccca1885f96a78a5a9fede2a81e42be1f2",1]
 ["src/channels/direct-dm.test.ts","./inbound-event/context.js","8042e0c26a4977ee5497de943ebd0c811ae63822afd9b3411b18bb5a6f180372",1]
 ["src/channels/direct-dm.test.ts","./message/reply-pipeline.js","da1d4072ae1aae1dee61c5bff2bc57c1bc7caab132b1f1b0a0d734e734120d09",1]
 ["src/channels/direct-dm.test.ts","./turn/lifecycle.js","466de6050393ae7dd10e49dd05ff1bd4d2f2e3f478c76f94914a266fdd5b7a3b",1]
