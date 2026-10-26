@@ -286,8 +286,10 @@ it("uses the current PR renderer and preserves CI session identity and branch di
     expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
-  await waitForSolid(() =>
-    expect(element.querySelector("openclaw-chat-ci-automation")).not.toBeNull(),
+  // The monitoring panel loads a second lazy module on first entry.
+  await waitForSolid(
+    () => expect(element.querySelector("openclaw-chat-ci-automation")).not.toBeNull(),
+    { timeout: 5_000 },
   );
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
