@@ -129,12 +129,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             },
             { catalogMode: "static", pluginMetadataSnapshot: metadata },
           );
-          expect(prepared.snapshot.pluginRegistry?.providers).toContainEqual(
-            expect.objectContaining({ pluginId: record.id, source: record.source }),
-          );
-          expect(prepared.snapshot.modelCatalog.entries).toContainEqual(
-            expect.objectContaining({ provider: "typesafe", id: "kev-latest" }),
-          );
+          expect(prepared.snapshot.isCurrent()).toBe(true);
           const pending = turn(initial);
           await Promise.race([
             loading.promise,

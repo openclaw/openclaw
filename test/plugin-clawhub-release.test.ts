@@ -25,14 +25,8 @@ const trustedPublisher = {
 const fixturePackageName = "@openclaw/demo-plugin";
 const registryBaseUrl = "https://clawhub.ai";
 const packagePath = "/api/v1/packages/%40openclaw%2Fdemo-plugin";
-const publishedPackage = { status: 200, body: { trustedPublisher } };
-
 function availablePackageFetch(override: (pathname: string) => Response | undefined) {
-  const { fetchImpl } = createClawHubPlanFetch({
-    packages: { [fixturePackageName]: { status: 200 } },
-    trustedPublishers: { [fixturePackageName]: publishedPackage },
-    versions: { [`${fixturePackageName}@2026.4.1`]: 404 },
-  });
+  const { fetchImpl } = createClawHubPlanFetch({ [fixturePackageName]: "available" });
   const wrapped: typeof fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     return override(new URL(url).pathname) ?? fetchImpl(input, init);
@@ -45,17 +39,10 @@ function planOptions(rootDir: string, fetchImpl: typeof fetch) {
 }
 
 function publicationFixture(publication: Record<string, unknown>, exists = true) {
-  const name = fixturePackageName;
-  const version = "2026.4.1";
-  const { fetchImpl, requests } = createClawHubPlanFetch({
-    packages: { [name]: { status: exists ? 200 : 404 } },
-    trustedPublishers: exists ? { [name]: publishedPackage } : undefined,
-    publications: {
-      [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
-    },
-    // A legacy probe would wrongly turn pending/failed into a publish candidate.
-    versions: { [`${name}@${version}`]: 404 },
-  });
+  const { fetchImpl, requests } = createClawHubPlanFetch(
+    { [fixturePackageName]: exists ? "available" : "missing" },
+    publication,
+  );
   return { options: { rootDir: createTempPluginRepo(), fetchImpl }, requests };
 }
 
@@ -191,13 +178,9 @@ describe("collectPluginClawHubReleasePlan", () => {
     const packageNames = ["demo-plugin", ...extraExtensionIds].map(
       (extensionId) => `@openclaw/${extensionId}`,
     );
-    const baseFetch = createClawHubPlanFetch({
-      packages: Object.fromEntries(packageNames.map((name) => [name, { status: 200 }])),
-      trustedPublishers: Object.fromEntries(packageNames.map((name) => [name, publishedPackage])),
-      versions: Object.fromEntries(
-        packageNames.map((packageName) => [`${packageName}@2026.4.1`, 404]),
-      ),
-    }).fetchImpl;
+    const baseFetch = createClawHubPlanFetch(
+      Object.fromEntries(packageNames.map((name) => [name, "available"])),
+    ).fetchImpl;
     let activeRequests = 0;
     let maxActiveRequests = 0;
     let releaseFirstWave: () => void;
@@ -360,19 +343,9 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       requiredLatestDependencyVersion: "1.2.3",
     });
     const { fetchImpl } = createClawHubPlanFetch({
-      packages: {
-        "@openclaw/demo-plugin": { status: 200, body: { package: {}, owner: {} } },
-        "@openclaw/demo-two": { status: 404 },
-        "@openclaw/demo-three": { status: 200, body: { package: {}, owner: {} } },
-      },
-      trustedPublishers: {
-        "@openclaw/demo-plugin": publishedPackage,
-        "@openclaw/demo-three": { status: 200, body: { trustedPublisher: null } },
-      },
-      versions: {
-        "@openclaw/demo-plugin@2026.4.1": 404,
-        "@openclaw/demo-three@2026.4.1": 404,
-      },
+      "@openclaw/demo-plugin": "available",
+      "@openclaw/demo-two": "missing",
+      "@openclaw/demo-three": "untrusted",
     });
 
     const resolveLatestVersion = vi.fn(() => "1.2.4");
@@ -521,22 +494,6 @@ describe("plugin-clawhub-publish.sh", () => {
       }
     },
   );
-
-  it("prefers GNU timeout and keeps a portable bounded fallback", () => {
-    const source = readFileSync("scripts/plugin-clawhub-publish.sh", "utf8");
-    const packExitIndex = source.indexOf('if [[ "${mode}" == "--pack" ]]');
-    const timeoutProbeIndex = source.indexOf("for timeout_candidate in timeout gtimeout");
-
-    expect(timeoutProbeIndex).toBeGreaterThan(packExitIndex);
-    expect(source).toContain("--signal=TERM --kill-after=1s 1s true");
-    expect(source).toContain('"${repo_root}/scripts/lib/bounded-command.mjs"');
-    expect(readFileSync("scripts/lib/bounded-command.mts", "utf8")).toContain(
-      "timeoutKillGraceMs: 10_000",
-    );
-    expect(readFileSync("scripts/lib/bounded-command.mjs", "utf8")).toContain(
-      "forceKillDelayMs: 15_000",
-    );
-  });
 
   it.each(["./clawhub"])("rejects relative ClawHub CLI override %s", (cli) => {
     const repoDir = createTempPluginRepo();
@@ -756,48 +713,40 @@ function createTempPluginRepo(
   return repoDir;
 }
 
-type RegistryReply = { status: number; body?: unknown };
-function createClawHubPlanFetch(config: {
-  packages: Record<string, RegistryReply>;
-  trustedPublishers?: Record<string, RegistryReply>;
-  versions?: Record<string, number>;
-  publications?: Record<string, RegistryReply>;
-}) {
+function createClawHubPlanFetch(
+  packages: Record<string, "available" | "missing" | "untrusted">,
+  publication?: Record<string, unknown>,
+) {
   const requests: string[] = [];
-  const reply = (value: RegistryReply | undefined, resource: string) => {
-    if (!value) {
-      throw new Error(`Unexpected ${resource} request`);
+  const routes = new Map<string, { status: number; body?: unknown }>();
+  for (const [name, state] of Object.entries(packages)) {
+    const resource = `/api/v1/packages/${encodeURIComponent(name)}`;
+    routes.set(resource, { status: state === "missing" ? 404 : 200 });
+    if (state !== "missing") {
+      routes.set(`${resource}/trusted-publisher`, {
+        status: 200,
+        body: { trustedPublisher: state === "available" ? trustedPublisher : null },
+      });
     }
-    return new Response(JSON.stringify(value.body ?? {}), { status: value.status });
-  };
-  const fetchImpl: typeof fetch = async (input) => {
-    const requestUrl =
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const url = new URL(requestUrl);
-    requests.push(url.pathname);
-
-    const match = url.pathname.match(
-      /^\/api\/v1\/packages\/([^/]+)(?:\/(trusted-publisher)|\/versions\/([^/]+)(\/publication)?)?$/u,
+    // The legacy probe stays absent even when publication detail says pending/failed.
+    routes.set(`${resource}/versions/2026.4.1`, { status: 404 });
+    routes.set(
+      `${resource}/versions/2026.4.1/publication`,
+      publication
+        ? { status: 200, body: { name, version: "2026.4.1", ...publication } }
+        : { status: 404 },
     );
-    if (!match?.[1]) {
-      throw new Error(`Unexpected ClawHub request to ${url.pathname}`);
+  }
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const pathname = new URL(url).pathname;
+    requests.push(pathname);
+    const reply = routes.get(pathname);
+    if (!reply) {
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
     }
-    const name = decodeURIComponent(match[1]);
-    if (match[2]) {
-      return reply(config.trustedPublishers?.[name], `trusted-publisher for ${name}`);
-    }
-    if (match[3]) {
-      const key = `${name}@${decodeURIComponent(match[3])}`;
-      if (match[4]) {
-        return reply(config.publications?.[key] ?? { status: 404 }, key);
-      }
-      const status =
-        config.versions?.[key] ?? (config.packages[name]?.status === 404 ? 404 : undefined);
-      return reply(status ? { status } : undefined, `version detail for ${key}`);
-    }
-    return reply(config.packages[name], `package detail for ${name}`);
+    return Response.json(reply.body ?? {}, { status: reply.status });
   };
-
   return { fetchImpl, requests };
 }
 

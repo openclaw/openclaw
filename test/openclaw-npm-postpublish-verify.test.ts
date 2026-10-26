@@ -90,6 +90,7 @@ const version = "2026.3.23";
 const publishSha = "a".repeat(40);
 const publishRef = `refs/tags/release-publish/${publishSha.slice(0, 12)}-123`;
 const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
+type ProvenanceOptions = Parameters<typeof verifyNpmProvenanceAttestation>[0];
 const buildProvenancePayload = (
   releaseVersion: string,
   workflowRef: string,
@@ -135,13 +136,9 @@ const releaseIdentity = (ref: string) => ({
   certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${ref}`,
 });
 const makeBundleVerifier = () =>
-  vi.fn<NonNullable<Parameters<typeof verifyNpmProvenanceAttestation>[0]["verifyBundle"]>>(
-    async () => undefined,
-  );
+  vi.fn<NonNullable<ProvenanceOptions["verifyBundle"]>>(async () => undefined);
 
-function verifyProvenance(
-  overrides: Partial<Parameters<typeof verifyNpmProvenanceAttestation>[0]> = {},
-) {
+function verifyProvenance(overrides: Partial<ProvenanceOptions> = {}) {
   return expect(
     verifyNpmProvenanceAttestation({
       packageName,
@@ -202,7 +199,7 @@ it("derives attested release-publish tooling only after the trusted-source check
   const attestations = attestationsFor(buildProvenancePayload(version, publishRef, publishSha));
   const verifyBundle = makeBundleVerifier();
   const verifyDerivedWorkflow = vi.fn();
-  const verify = (overrides: Partial<Parameters<typeof verifyNpmProvenanceAttestation>[0]> = {}) =>
+  const verify = (overrides: Partial<ProvenanceOptions> = {}) =>
     verifyProvenance({ attestations, verifyBundle, verifyDerivedWorkflow, ...overrides });
 
   await verify().resolves.toBeUndefined();
