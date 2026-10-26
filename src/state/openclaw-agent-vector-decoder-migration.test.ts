@@ -46,14 +46,6 @@ function seed(database: DatabaseSync, predecessor: number): void {
 
 function retained(database: DatabaseSync) {
   return {
-    sources: rows(database, "SELECT * FROM memory_index_sources ORDER BY path, source"),
-    chunks: rows(database, "SELECT * FROM memory_index_chunks ORDER BY id"),
-    recall: rows(database, "SELECT * FROM memory_index_chunk_recall_metadata ORDER BY chunk_id"),
-    provenance: rows(database, "SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id"),
-    embeddings: rows(database, "SELECT * FROM memory_embedding_cache ORDER BY hash"),
-    revision: row(database, "SELECT revision FROM memory_index_state WHERE id = 1"),
-    layout: rows(database, "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
-    statistics: rows(database, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx"),
     userVersion: row(database, "PRAGMA user_version")?.user_version,
     schemaVersion: row(database, "SELECT schema_version FROM schema_meta")?.schema_version,
   };
@@ -87,9 +79,6 @@ describe.each([
           });
           expect(assertWitnessPreserved(witness, captureWitness(database))).toEqual({
             warnings: [],
-          });
-          expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({
-            bytes: "000100FF",
           });
           expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
         },

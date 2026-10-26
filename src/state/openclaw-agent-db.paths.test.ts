@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUserPathBaseDirectory } from "../infra/home-dir.js";
 import {
-  resolveIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath as incognitoPath,
+  resolveOpenClawAgentSqlitePath as agentPath,
 } from "./openclaw-agent-db.paths.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath as statePath } from "./openclaw-state-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -15,26 +15,26 @@ function expectedPath(root: string, agentId = "worker"): string {
   return path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
+function expectPaths(env: NodeJS.ProcessEnv, root: string) {
+  expect(statePath(env)).toBe(path.join(root, "state", "openclaw.sqlite"));
+  expect(agentPath({ agentId: "worker", env })).toBe(expectedPath(root));
+}
+
 describe("SQLite path memoization", () => {
   it("follows changes to the same environment without crossing agent roots", () => {
     const root = tempDirs.make("openclaw-agent-paths-");
     const env = { OPENCLAW_STATE_DIR: path.join(root, "first") };
     for (const dir of ["first", "second", "first"]) {
       env.OPENCLAW_STATE_DIR = path.join(root, dir);
-      expect(resolveOpenClawStateSqlitePath(env)).toBe(
-        path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
-      );
+      expect(statePath(env)).toBe(path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"));
       for (const agentId of ["Worker", "other", "Worker"]) {
-        expect(resolveOpenClawAgentSqlitePath({ agentId, env })).toBe(
+        expect(agentPath({ agentId, env })).toBe(
           expectedPath(env.OPENCLAW_STATE_DIR, agentId.toLowerCase()),
         );
       }
-      expect(resolveIncognitoOpenClawAgentSqlitePath({ agentId: "Worker", env })).toBe(
+      expect(incognitoPath({ agentId: "Worker", env })).toBe(
         path.join(
-          env.OPENCLAW_STATE_DIR,
-          "agents",
-          "worker",
-          "agent",
+          path.dirname(expectedPath(env.OPENCLAW_STATE_DIR)),
           "incognito-openclaw-agent.sqlite",
         ),
       );
@@ -48,15 +48,10 @@ describe("SQLite path memoization", () => {
     for (const dir of ["first", "second", "first"]) {
       const workingDir = path.join(root, dir);
       cwd.mockReturnValue(workingDir);
-      expect(resolveOpenClawAgentSqlitePath({ agentId: "worker", env })).toBe(
-        expectedPath(path.join(workingDir, "relative-state")),
+      expectPaths(env, path.join(workingDir, "relative-state"));
+      expect(agentPath({ agentId: "worker", env, path: "custom.sqlite" })).toBe(
+        path.join(workingDir, "custom.sqlite"),
       );
-      expect(resolveOpenClawStateSqlitePath(env)).toBe(
-        path.join(workingDir, "relative-state", "state", "openclaw.sqlite"),
-      );
-      expect(
-        resolveOpenClawAgentSqlitePath({ agentId: "worker", env, path: "custom.sqlite" }),
-      ).toBe(path.join(workingDir, "custom.sqlite"));
     }
   });
 
@@ -71,16 +66,16 @@ describe("SQLite path memoization", () => {
       agent: expectedPath(env.OPENCLAW_STATE_DIR),
     }));
     for (const env of environments) {
-      resolveOpenClawStateSqlitePath(env);
-      resolveOpenClawAgentSqlitePath({ agentId: "worker", env });
+      statePath(env);
+      agentPath({ agentId: "worker", env });
     }
     const resolve = vi.spyOn(path, "resolve");
     const join = vi.spyOn(path, "join");
     for (const fixture of [...fixtures, ...fixtures]) {
       // New env objects must share by input strings, not object identity.
       const env = { ...fixture.env };
-      expect(resolveOpenClawStateSqlitePath(env)).toBe(fixture.state);
-      expect(resolveOpenClawAgentSqlitePath({ agentId: "worker", env })).toBe(fixture.agent);
+      expect(statePath(env)).toBe(fixture.state);
+      expect(agentPath({ agentId: "worker", env })).toBe(fixture.agent);
     }
     if (process.platform !== "win32") {
       expect(resolve).not.toHaveBeenCalled();
@@ -97,18 +92,10 @@ describe("SQLite path memoization", () => {
         { OPENCLAW_HOME: home },
         { HOME: home, OPENCLAW_STATE_DIR: "~/.openclaw" },
       ]) {
-        expect(resolveOpenClawStateSqlitePath(env)).toBe(
-          path.join(home, ".openclaw", "state", "openclaw.sqlite"),
-        );
+        expect(statePath(env)).toBe(path.join(home, ".openclaw", "state", "openclaw.sqlite"));
       }
       withUserPathBaseDirectory(home, () => {
-        const env = { OPENCLAW_STATE_DIR: "relative-state" };
-        expect(resolveOpenClawStateSqlitePath(env)).toBe(
-          path.join(home, "relative-state", "state", "openclaw.sqlite"),
-        );
-        expect(resolveOpenClawAgentSqlitePath({ agentId: "worker", env })).toBe(
-          expectedPath(path.join(home, "relative-state")),
-        );
+        expectPaths({ OPENCLAW_STATE_DIR: "relative-state" }, path.join(home, "relative-state"));
       });
     }
   });

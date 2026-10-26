@@ -75,11 +75,9 @@ it("moves owned-native artifact token SQL off the caller while retaining its sou
       return result;
     });
     try {
-      const calibration = openNodeSqliteDatabase(state.path("owner.sqlite"));
-      try {
+      {
+        using calibration = openNodeSqliteDatabase(state.path("owner.sqlite"));
         calibration.exec("SELECT 1");
-      } finally {
-        calibration.close();
       }
       expect(tokenSql).toEqual(["SELECT 1"]);
       tokenSql.length = 0;
