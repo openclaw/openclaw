@@ -12,6 +12,7 @@ const listCalls = ["device.pair.list", "node.list"].map((method) => [method, {}]
 const transitions = ["client", "generation", "disconnect"] as const;
 const nodeList = { nodes: [{ id: "node-1" }] };
 const deviceList = { pending: [], paired: [{ deviceId: "device-1" }] };
+const errors = { devicesError: "device error", lastError: "node error" };
 
 function setup(order: Array<"mutation" | "devices" | "nodes"> = ["mutation"]) {
   const replies = {
@@ -32,48 +33,33 @@ function settle(mutation: ReturnType<typeof deferred<unknown>>, error?: string) 
 }
 
 it.each(actions)(
-  "%s sends one decision per in-flight request",
+  "guards in-flight %s decisions until settlement",
   async (method, run, isNode, failed) => {
     const siblings = actions.filter((action) => action[2] === isNode);
-    const mutation = deferred<unknown>();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(mutation.promise)
-      .mockResolvedValue({ pending: [], paired: [] });
-    const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
+    const { mutation, request, state } = setup();
+    request.mockResolvedValue({ pending: [], paired: [] });
     const first = run(state, "request-1");
     await Promise.all(siblings.map((action) => action[1](state, "request-1")));
     expect(request).toHaveBeenCalledTimes(1);
-    if (failed) {
-      mutation.reject(new Error("pairing denied"));
-    } else {
-      mutation.resolve({});
-    }
+    settle(mutation, failed ? "pairing denied" : undefined);
     await first;
-    // The guard clears once the decision settles, so the operator can decide again.
     await run(state, "request-1");
     expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
   },
 );
 
 it("keeps a replacement decision guarded when a retired request settles", async () => {
-  const retired = deferred<unknown>();
-  const replacement = deferred<unknown>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(retired.promise)
-    .mockReturnValueOnce(replacement.promise)
-    .mockResolvedValue({ pending: [], paired: [] });
-  const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
+  const { mutation, devices, request, state } = setup(["mutation", "devices"]);
+  request.mockResolvedValue({ pending: [], paired: [] });
   const first = pairing.approveDevicePairing(state, "request-1");
   state.requestGeneration += 1;
   state.devicesDeciding = [];
   const second = pairing.approveDevicePairing(state, "request-1");
-  retired.resolve({});
+  mutation.resolve({});
   await first;
   await pairing.rejectDevicePairing(state, "request-1");
   expect(request).toHaveBeenCalledTimes(2);
-  replacement.resolve({});
+  devices.resolve({});
   await second;
 });
 
@@ -81,7 +67,6 @@ it.each(actions)("%s refresh/error", async (method, run, isNode, failed) => {
   const { mutation, devices, nodes, request, state, settled, start } = setup();
   const current = isNode ? vi.fn() : request;
   current.mockReturnValueOnce(devices.promise).mockReturnValueOnce(nodes.promise);
-  const errors = { devicesError: "device error", lastError: "node error" };
   Object.assign(state, errors);
   const pending = start(run);
   expect(request.mock.calls).toEqual([[method, { requestId: "request-1" }]]);
@@ -139,7 +124,7 @@ it.each(transitions)("fences stale results: %s", async (transition) => {
   }
 });
 
-it("records node failure while an existing inventory load queues its quiet refresh", async () => {
+it("preserves node failure through queued inventory refreshes", async () => {
   const fixture = setup(["devices", "nodes", "mutation"]);
   const { devices, nodes, mutation, request, state, start } = fixture;
   request.mockResolvedValue({ pending: [], paired: [], nodes: [] });
