@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ColumnType, Insertable } from "kysely";
+import { sql, type ColumnType, type Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -242,9 +242,17 @@ function readAuditSequenceHighWater(db: EngineConnection): number {
 
 function allocateAuditSequence(db: EngineConnection): number {
   if (isPostgresSqlConnection(db)) {
-    const row = db
-      .prepare("SELECT nextval(pg_get_serial_sequence('audit_events', 'sequence')) AS sequence")
-      .get();
+    const kysely = getSkillSelectionAuditKysely(db);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely.selectNoFrom((eb) =>
+        eb
+          .fn<number>("nextval", [
+            eb.fn<string>("pg_get_serial_sequence", [sql.lit("audit_events"), sql.lit("sequence")]),
+          ])
+          .as("sequence"),
+      ),
+    );
     return normalizeSequenceHighWater(row?.sequence);
   }
   const nextSequence = readAuditSequenceHighWater(db) + 1;
