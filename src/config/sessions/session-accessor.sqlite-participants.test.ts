@@ -73,6 +73,19 @@ const aggregate = (
   lastPromptedAt = firstPromptedAt,
 ) => ({ identity, contributionCount, firstPromptedAt, lastPromptedAt });
 
+function trackReads<Key extends string>(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  key: Key,
+  matches: (sql: string) => boolean,
+) {
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    [key],
+    (sql) => (matches(sql) ? key : null),
+  );
+  return Object.assign(reads, { [Symbol.dispose]: reads.restore });
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.useRealTimers();
@@ -90,22 +103,17 @@ describe("SQLite session participants", () => {
         };
         await upsertSessionEntryCore(scope, { sessionId: `capacity-${sample}`, updatedAt: 1 });
         const database = openOpenClawAgentDatabase(scope);
-        const reads = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(database.db),
-          ["capacity"],
+        using reads = trackReads(
+          database,
+          "capacity",
           (sql) =>
-            sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"')
-              ? "capacity"
-              : null,
+            sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"'),
         );
-        try {
-          expect(contribute(scope, remote("sender"), 10)).toBe("inserted");
-          expect(reads.counts).toEqual({ capacity: 0 });
-          expect(contribute(scope, remote("sender"), 20)).toBe("updated");
-          expect(reads.counts).toEqual({ capacity: 0 });
-        } finally {
-          reads.restore();
-        }
+        expect(contribute(scope, remote("sender"), 10)).toBe("inserted");
+        expect(reads.counts).toEqual({ capacity: 0 });
+        expect(contribute(scope, remote("sender"), 20)).toBe("updated");
+        expect(reads.counts).toEqual({ capacity: 0 });
+
         expect(readParticipants(scope)).toEqual([aggregate(remote("sender"), 2, 10, 20)]);
       }
     });
@@ -163,32 +171,23 @@ describe("SQLite session participants", () => {
       const read = () => listSessionEntriesCore({ ...scope, projection: "list" })[0]?.entry;
       read();
       const database = openOpenClawAgentDatabase(scope);
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["participants"],
-        (sql) =>
-          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-            ? "participants"
-            : null,
+      using reads = trackReads(database, "participants", (sql) =>
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"'),
       );
-      try {
-        for (let index = 0; index < 100; index++) {
-          await patchSessionEntryCore(scope, () => ({ label: `Update ${index}` }), {
-            skipMaintenance: true,
-          });
-        }
-        // Metadata-only updates retain the participant owner's current revision.
-        expect(reads.counts.participants).toBe(0);
-        contribute(scope, remote("new"), 2);
-        expect(reads.counts.participants).toBe(1);
-        expect(read()).toMatchObject({
-          label: "Update 99",
-          participants: ["existing", "new"].map((id) => ({ identity: remote(id) })),
-          participantCount: 2,
+      for (let index = 0; index < 100; index++) {
+        await patchSessionEntryCore(scope, () => ({ label: `Update ${index}` }), {
+          skipMaintenance: true,
         });
-      } finally {
-        reads.restore();
       }
+      // Metadata-only updates retain the participant owner's current revision.
+      expect(reads.counts.participants).toBe(0);
+      contribute(scope, remote("new"), 2);
+      expect(reads.counts.participants).toBe(1);
+      expect(read()).toMatchObject({
+        label: "Update 99",
+        participants: ["existing", "new"].map((id) => ({ identity: remote(id) })),
+        participantCount: 2,
+      });
     });
   });
 
@@ -390,7 +389,7 @@ describe("SQLite session participants", () => {
         listSessionEntriesCore({ ...scope, projection: "list" }).find(
           (row) => row.sessionKey === scope.sessionKey,
         )?.entry;
-      read();
+      const before = listSessionEntriesCore({ ...scope, projection: "list" });
       const database = openOpenClawAgentDatabase(scope);
       const observed: Array<{ inTransaction: boolean; entry: ReturnType<typeof read> }> = [];
       const unsubscribe = onSessionLifecycleEvent((event) => {
@@ -410,6 +409,17 @@ describe("SQLite session participants", () => {
             throw new Error("rollback participant");
           }, scope),
         ).toThrow("rollback participant");
+        expect(observed).toEqual([]);
+        runOpenClawAgentWriteTransaction(() => {
+          expect(() =>
+            runOpenClawAgentWriteTransaction(() => {
+              contribute(scope, profile("b"), 20);
+              throw new Error("rollback participant");
+            }, scope),
+          ).toThrow("rollback participant");
+        }, scope);
+        expect(listSessionEntriesCore({ ...scope, projection: "list" })).toEqual(before);
+        expect(readParticipants(scope)).toHaveLength(1);
         expect(observed).toEqual([]);
         runOpenClawAgentWriteTransaction(() => {
           contribute(scope, profile("a"), 30);
@@ -435,24 +445,6 @@ describe("SQLite session participants", () => {
       } finally {
         unsubscribe();
       }
-    });
-  });
-
-  it("retains committed participants after a nested transaction rollback", async () => {
-    await withParticipantSession("rollback", async (scope) => {
-      contribute(scope, profile("a"), 10);
-      const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
-      const before = read();
-      const attempt = () =>
-        runOpenClawAgentWriteTransaction(() => {
-          contribute(scope, profile("b"), 20);
-          throw new Error("rollback participant");
-        }, scope);
-      runOpenClawAgentWriteTransaction(() => {
-        expect(attempt).toThrow("rollback participant");
-      }, scope);
-      expect(read()).toEqual(before);
-      expect(readParticipants(scope)).toHaveLength(1);
     });
   });
 
@@ -519,27 +511,22 @@ describe("SQLite session participants", () => {
             ...(selected ? { sessionKeys: [sessionKey] } : {}),
           });
         read();
-        const executions = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(database.db),
-          ["metadata"],
-          (sql) =>
-            sql.includes('from "session_nodes"') && sql.includes("entry_json") ? "metadata" : null,
+        using executions = trackReads(
+          database,
+          "metadata",
+          (sql) => sql.includes('from "session_nodes"') && sql.includes("entry_json"),
         );
-        try {
-          for (const [identity, promptedAt, order] of [
-            ["c", 30, ["a", "b", "c"]],
-            ["a", 40, ["a", "b", "c"]],
-            ["b", 5, ["b", "a", "c"]],
-          ] as const) {
-            contribute({ ...scope, sessionKey }, profile(identity), promptedAt);
-            const entry = read().find((row) => row.sessionKey === sessionKey)?.entry;
-            expect(entry?.participants).toEqual(order.map((id) => ({ identity: profile(id) })));
-            expect(entry?.participantCount).toBe(3);
-          }
-          expect(executions.rowCounts.metadata).toBeLessThanOrEqual(3);
-        } finally {
-          executions.restore();
+        for (const [identity, promptedAt, order] of [
+          ["c", 30, ["a", "b", "c"]],
+          ["a", 40, ["a", "b", "c"]],
+          ["b", 5, ["b", "a", "c"]],
+        ] as const) {
+          contribute({ ...scope, sessionKey }, profile(identity), promptedAt);
+          const entry = read().find((row) => row.sessionKey === sessionKey)?.entry;
+          expect(entry?.participants).toEqual(order.map((id) => ({ identity: profile(id) })));
+          expect(entry?.participantCount).toBe(3);
         }
+        expect(executions.rowCounts.metadata).toBeLessThanOrEqual(3);
       });
     },
   );
@@ -602,13 +589,8 @@ describe("SQLite session participants", () => {
             input: { scope, params: { identity: remote("second"), promptedAt } },
           }),
         );
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["projection"],
-        (sql) =>
-          sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
-            ? "projection"
-            : null,
+      const reads = trackReads(database, "projection", (sql) =>
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"'),
       );
       try {
         expect(record(30)).toEqual({
@@ -817,31 +799,26 @@ describe("SQLite session participants", () => {
       database.db
         .prepare("UPDATE session_participants SET first_prompted_at = NULL WHERE session_key = ?")
         .run(second.sessionKey);
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["participants"],
-        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+      using reads = trackReads(database, "participants", (sql) =>
+        sql.includes('from "session_participants"'),
       );
-      try {
-        runOpenClawAgentWriteTransaction(() => {
-          copySessionNodeArtifactsForRepair(
-            database,
-            database,
-            [canonical.sessionKey, first.sessionKey, second.sessionKey],
-            canonical.sessionKey,
-          );
-          // A second transfer must consume the aggregate written earlier in this transaction.
-          copySessionNodeArtifactsForRepair(
-            database,
-            database,
-            [first.sessionKey],
-            canonical.sessionKey,
-          );
-        }, canonical);
-        expect(reads.counts.participants).toBe(2);
-      } finally {
-        reads.restore();
-      }
+      runOpenClawAgentWriteTransaction(() => {
+        copySessionNodeArtifactsForRepair(
+          database,
+          database,
+          [canonical.sessionKey, first.sessionKey, second.sessionKey],
+          canonical.sessionKey,
+        );
+        // A second transfer must consume the aggregate written earlier in this transaction.
+        copySessionNodeArtifactsForRepair(
+          database,
+          database,
+          [first.sessionKey],
+          canonical.sessionKey,
+        );
+      }, canonical);
+      expect(reads.counts.participants).toBe(2);
+
       expect(readParticipants(canonical)).toEqual([aggregate(profile("shared"), 6, null, 40)]);
     });
   });
@@ -878,17 +855,12 @@ describe("SQLite session participants", () => {
         rows.find((row) => row.identity.type === "profile" && row.identity.id === "profile-0")
           ?.contributionCount,
       ).toBe(2);
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(target.db),
-        ["participants"],
-        (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+      using reads = trackReads(target, "participants", (sql) =>
+        sql.includes('from "session_participants"'),
       );
-      try {
-        expect(contribute(targetScope, profile("profile-0"), 40)).toBe("updated");
-        expect(reads.rowCounts.participants).toBeLessThanOrEqual(1);
-      } finally {
-        reads.restore();
-      }
+      expect(contribute(targetScope, profile("profile-0"), 40)).toBe("updated");
+      expect(reads.rowCounts.participants).toBeLessThanOrEqual(1);
+
       expect(contribute(targetScope, profile("overflow"), 40)).toBe("capped");
     });
   });

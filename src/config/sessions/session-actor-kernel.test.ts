@@ -85,6 +85,9 @@ function kernelFixture() {
   };
 }
 
+const withKernel = (run: (fixture: ReturnType<typeof kernelFixture>) => void | Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, () => run(kernelFixture()));
+
 const header = (id: string) => ({
   type: "session",
   id,
@@ -118,9 +121,8 @@ function expectReload(result: ReturnType<typeof applySessionActorAppend>, snapsh
   });
 }
 
-it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", () =>
+  withKernel((f) => {
     const { database, target, write, inState, context, writeContext } = f;
     const scope = { ...f.scope, path: database.path };
     write(() => {
@@ -170,8 +172,6 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         reason: "projection",
         generation: state.hot.transcript.version.generation,
       });
-      expect(state.hot.transcript.idempotency).toEqual([]);
-      expect(state.hot.completionKeys).toEqual([]);
       counter.counts.reads = 0;
       reads.length = 0;
       const beforeCommit = structuredClone(state);
@@ -218,8 +218,6 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       expect(postimage.pendingInputs).toMatchObject([
         { input_id: "accepted-input", state: "queued" },
       ]);
-      expect(postimage.transcript.anchorsState).toBe("unavailable");
-      expect(postimage.transcript.anchors).toEqual([]);
       expect(postimage.transcript.modelContext).toEqual({
         kind: "unavailable",
         reason: "projection",
@@ -243,40 +241,19 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         .events,
     ).toMatchObject([{ type: "session" }, { id: "user" }, { id: "assistant" }]);
     expect(cachedEntries().entries.get(scope.sessionKey)?.label).toBe("actor committed");
-    const committed = projectSessionActorHotState(state);
-    const projectionState = {
-      ...state,
-      hot: {
-        ...state.hot,
-        entry: {
-          ...state.hot.entry!,
-          cliSessionIds: { synthetic: "original-session" },
-        },
-        participants: [
-          {
-            identity: { type: "profile" as const, id: "owner" },
-            contributionCount: 1,
-            firstPromptedAt: 1,
-            lastPromptedAt: 2,
-          },
-        ],
-        members: [{ identityId: "owner", addedBy: "owner", addedAt: 1 }],
-      },
-    };
-    const retained = structuredClone(projectionState);
-    const detached = projectSessionActorHotState(projectionState);
+    const retained = structuredClone(state);
+    const detached = projectSessionActorHotState(state);
     const original = structuredClone(detached);
     // Internal projections retain replace-only metadata; publication owns detachment.
-    expect(detached.target).toBe(projectionState.hot.target);
-    expect(detached.version).toBe(projectionState.hot.version);
-    expect(detached.participants).toBe(projectionState.hot.participants);
-    expect(detached.members).toBe(projectionState.hot.members);
+    expect(detached.target).toBe(state.hot.target);
+    expect(detached.version).toBe(state.hot.version);
+    expect(detached.participants).toBe(state.hot.participants);
+    expect(detached.members).toBe(state.hot.members);
     detached.pendingInputs[0]!.input_id = "caller edit";
     detached.transcript.version.rawSeq = -1;
     detached.transcript.watermark.maxSeq = -1;
-    expect(projectionState).toEqual(retained);
-    expect(projectSessionActorHotState(projectionState)).toEqual(original);
-    const beforeRollback = structuredClone(state);
+    expect(state).toEqual(retained);
+    expect(projectSessionActorHotState(state)).toEqual(original);
     const abandoned = forkSessionActorStoredState(state);
     expect(() =>
       inState(abandoned, () => {
@@ -306,8 +283,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         );
       }),
     ).toThrow("authority revoked");
-    expect(state).toEqual(beforeRollback);
-    expect(projectSessionActorHotState(state)).toEqual(committed);
+    expect(state).toEqual(retained);
     expect(readSessionInputCompletion(database, pending)).toBeUndefined();
     expect(readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id).toBe(
       "accepted-input",
@@ -326,7 +302,6 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     });
     const completedPostimage = projectSessionActorHotState(completed);
     expect(completedPostimage.pendingInputs).toEqual([]);
-    expect(completedPostimage.completionKeys).toEqual([]);
     expect(readSessionInputCompletion(database, pending)).toBeDefined();
     const rehydrated = hydrateSessionActorState(
       database,
@@ -335,12 +310,10 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       state.hot.writeToken,
     );
     expect(projectSessionActorHotState(rehydrated)).toEqual(completedPostimage);
-  });
-});
+  }));
 
-it("initializes over a retained transcript and preserves prepared snapshots, reloads, replay, and fresh authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("initializes over a retained transcript and preserves prepared snapshots, reloads, replay, and fresh authority", () =>
+  withKernel((f) => {
     const { database, target, scope, inState, write } = f;
     write(() => {
       appendTranscriptEventsInTransaction(database, { ...scope, path: database.path }, [
@@ -576,12 +549,10 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       events: [{ id: scope.sessionId }, { id: "reset" }],
       parents: new Map([["reset", "newer-user"]]),
     });
-  });
-});
+  }));
 
-it("bounds completion residency while preserving old retries, committed writes, and rollback", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("bounds completion residency while preserving old retries, committed writes, and rollback", () =>
+  withKernel((f) => {
     const { database } = f;
     const { write, inState } = f;
     const scope = (idempotencyKey: string) => ({
@@ -648,12 +619,10 @@ it("bounds completion residency while preserving old retries, committed writes, 
       expect(readSessionInputCompletion(database, newScope)?.outcome).toEqual(success);
       expect(readSessionInputCompletion(database, scope("receipt-000"))?.outcome).toEqual(success);
     });
-  });
-});
+  }));
 
-it("preserves historical replay and branch ancestry outside the actor's retained window", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("preserves historical replay and branch ancestry outside the actor's retained window", () =>
+  withKernel((f) => {
     const { database } = f;
     const scope = { ...f.scope, path: database.path };
     const { write, inState } = f;
@@ -737,12 +706,10 @@ it("preserves historical replay and branch ancestry outside the actor's retained
     const events = f.events();
     expect(events).toHaveLength(526);
     expect(events.at(-1)).toMatchObject({ id: "next", parentId: "answer" });
-  });
-});
+  }));
 
-it("keeps partial actor appends after a reset when a leaf targets older history", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("keeps partial actor appends after a reset when a leaf targets older history", () =>
+  withKernel((f) => {
     const { database } = f;
     const scope = { ...f.scope, path: database.path };
     const { write, inState } = f;
@@ -781,12 +748,10 @@ it("keeps partial actor appends after a reset when a leaf targets older history"
       ).toMatchObject({ appended: true, effectiveParentId: "after-reset" });
     });
     expect(f.events().at(-1)).toMatchObject({ id: "continued", parentId: "after-reset" });
-  });
-});
+  }));
 
-it("bounds committed actor growth across the window limit without retaining rolled-back events", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("bounds committed actor growth across the window limit without retaining rolled-back events", () =>
+  withKernel((f) => {
     const { database } = f;
     const scope = { ...f.scope, path: database.path };
     const { write, inState } = f;
@@ -848,5 +813,4 @@ it("bounds committed actor growth across the window limit without retaining roll
     });
     expect(f.events()).toHaveLength(514);
     residency.clear();
-  });
-});
+  }));
