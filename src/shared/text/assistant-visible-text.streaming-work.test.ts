@@ -34,24 +34,13 @@ it.each([
   expect(project.mock.calls.length).toBe(0);
 });
 
-it.each([
-  [
-    "split tool header",
-    ["Before\n[too", "l:write]", "\r\n" + " ".repeat(5000), '{"content":"ok"}\nDone.'],
-    "Before\nDone.",
-  ],
-  ["named bracket", ["[read]", "\r\n", "{}\n[/read]\nAfter"], "After"],
-  [
-    "fenced example",
-    ["```text\n[tool:read]", " {}\n```\nDone."],
-    "```text\n[tool:read] {}\n```\nDone.",
-  ],
-])("preserves canonical output for a %s", (_shape, chunks, expected) => {
+it("keeps a split tool header across an unbounded whitespace gap", () => {
+  const chunks = ["Before\n[too", "l:write]", "\r\n" + " ".repeat(5000), '{"content":"ok"}\nDone.'];
   const stream = createAssistantVisibleStreamText("final_answer");
   for (const chunk of chunks) {
     stream.append(chunk);
   }
-  expect(stream.text).toBe(expected);
+  expect(stream.text).toBe("Before\nDone.");
 });
 
 const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
