@@ -112,7 +112,7 @@ function createTray(pane: ReturnType<typeof createChatPane>["pane"]) {
     draw: (connected = true) => {
       const props = pane.suggestionChatProps(connected, false, false);
       if (!setView) {
-        const [current, update] = createSignal(props);
+        const [current, update] = createSignal<ChatTaskSuggestionTrayProps>(props);
         mountSolid(() => <ChatTaskSuggestionTray view={current()} />, { container });
         setView = update;
       } else {
