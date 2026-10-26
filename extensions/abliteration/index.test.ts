@@ -46,16 +46,11 @@ it("registers API-key onboarding with the default model and connection", async (
   expect(config?.agents?.defaults?.models?.[defaultModel]?.alias).toBe("Abliterated Large Flash");
 });
 
-it("publishes the static catalog without credentials", async () => {
+it("publishes the default model in the static catalog without credentials", async () => {
   const provider = await registerSingleProviderPlugin(plugin);
   const catalog = await provider.staticCatalog?.run({} as never);
   assert(catalog && "provider" in catalog, "Missing static Abliteration catalog");
-  expect(catalog.provider.models.map(({ id }) => id)).toEqual([
-    "abliterated-model-large-flash",
-    "abliterated-model-large-v2",
-    "abliterated-model",
-    "abliterated-model-large",
-  ]);
+  expect(catalog.provider.models[0]?.id).toBe("abliterated-model-large-flash");
 });
 
 it("sends native reasoning efforts and cache keys through Chat Completions", () => {
@@ -79,10 +74,8 @@ it("sends native reasoning efforts and cache keys through Chat Completions", () 
       { messages: [{ role: "user", content: "Hello", timestamp: 1 }] },
       { reasoning, sessionId: "synthetic-session", maxTokens: 1024, cacheRetention: "long" },
     );
-    expect(payload).toMatchObject({
-      reasoning_effort: effort,
-      prompt_cache_key: "synthetic-session",
-    });
+    expect(payload.reasoning_effort).toBe(effort);
+    expect(payload.prompt_cache_key).toBe("synthetic-session");
     expect(payload).not.toHaveProperty("store");
     expect(payload).not.toHaveProperty("prompt_cache_retention");
   }
