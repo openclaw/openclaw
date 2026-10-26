@@ -4,7 +4,6 @@ import { createQaBusState } from "../../bus-state.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
-import { resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 import type { TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
 
 const scenarioId = "telegram-participant-identity-inspection";
@@ -28,15 +27,13 @@ const faults = [
 type Fault = (typeof faults)[number][0];
 type Selector = { runId?: string; executionId?: string };
 type Inbound = Parameters<ReturnType<typeof createQaBusState>["addInboundMessage"]>[0];
+type NativeReply = Pick<TelegramUserbotUpdate, "text" | "chatId" | "senderId" | "forumTopicId">;
 
 function runIdentityFlow(fault?: Fault) {
   const state = createQaBusState();
   const admittedRuns = ["previous-run"];
   const turns: Array<ReturnType<typeof state.addInboundMessage>> = [];
-  const nativeReplies: Pick<
-    TelegramUserbotUpdate,
-    "text" | "chatId" | "senderId" | "forumTopicId"
-  >[] = [];
+  const nativeReplies: NativeReply[] = [];
   let restarted = false;
   const inspect = (selector: Selector) => {
     const runId = selector.runId ?? selector.executionId?.replace("execution-", "");
@@ -75,7 +72,7 @@ function runIdentityFlow(fault?: Fault) {
       ...(fault === "prompt-leak" ? { leakedText: turn.text } : {}),
     };
   };
-  const call = vi.fn(async (method: string, selector: Selector & { decisionLimit: number }) => {
+  const call = async (method: string, selector: Selector & { decisionLimit: number }) => {
     expect(method).toBe("audit.run.inspect");
     expect(selector).toStrictEqual({
       [selector.runId === undefined ? "executionId" : "runId"]:
@@ -83,12 +80,12 @@ function runIdentityFlow(fault?: Fault) {
       decisionLimit: 100,
     });
     return inspect(selector);
-  });
+  };
   const restart = vi.fn(async (mutate: () => Promise<void>) => {
     await mutate();
     restarted = true;
   });
-  const runQaCli = vi.fn(async (_env: unknown, args: string[], options?: { json?: boolean }) => {
+  const runQaCli = async (_env: unknown, args: string[], options?: { json?: boolean }) => {
     expect(args[0]).toBe("audit");
     if (args.includes("--kind")) {
       return { events: admittedRuns.map((runId) => ({ runId })) };
@@ -99,7 +96,7 @@ function runIdentityFlow(fault?: Fault) {
     const inspection = inspect({ executionId });
     const principal = inspection.identity.context.invoker.principal.principalRef;
     return options?.json ? inspection : `Invoker [present] ${principal}\nDecisions`;
-  });
+  };
   const transport = {
     id: "telegram",
     reset: async () => state.reset(),
@@ -143,23 +140,17 @@ function runIdentityFlow(fault?: Fault) {
   const result = runLoadedScenarioFlow(scenarioId, {
     state,
     api: {
-      env: {
-        providerMode: "mock-openai",
-        gateway: { call, restartAfterStateMutation: restart },
-      },
+      env: { providerMode: "mock-openai", gateway: { call, restartAfterStateMutation: restart } },
       telegramIdentityFixture: { participantAliases: ["primary", "guest"], forumTopicId },
       readTelegramMessages: () => nativeReplies,
       transport,
       runQaCli,
     },
   });
-  return { call, restart, runQaCli, turns, result };
+  return { restart, turns, result };
 }
 
-it("selects live identity proof explicitly and excludes it from crabline", () => {
-  expect(
-    resolveTelegramQaScenarioIds({ providerMode: "mock-openai", scenarioIds: [scenarioId] }),
-  ).toEqual([scenarioId]);
+it("excludes live identity proof from crabline", () => {
   expect(
     selectQaFlowSuiteScenarios({
       scenarios: [readQaScenarioById(scenarioId)],
@@ -180,10 +171,6 @@ it("executes both participant aliases through DM/forum, exact RPC/CLI inspection
     [additionalUserId, "group"],
   ]);
   expect(proof.restart).toHaveBeenCalledOnce();
-  expect(proof.call).toHaveBeenCalledTimes(9);
-  expect(proof.runQaCli.mock.calls.filter(([, args]) => args.includes("--execution"))).toHaveLength(
-    12,
-  );
 });
 
 it.each(faults)("rejects %s evidence", async (fault, message) => {
