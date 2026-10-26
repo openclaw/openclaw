@@ -14,15 +14,14 @@ const envFallbacks = {
   GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
   OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
 };
-function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string> = envFallbacks) {
-  for (const key of Object.keys(envFallbacks)) {
+function resolveGoogleMeetConfigFromTestEnv(expiry: string) {
+  for (const [key, value] of Object.entries(envFallbacks)) {
     const name = key.replace(/^OPENCLAW_/, "");
     vi.stubEnv(`OPENCLAW_${name}`, undefined);
     vi.stubEnv(name, undefined);
-  }
-  for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
+  vi.stubEnv("OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT", expiry);
   return resolveConfig({});
 }
 
@@ -32,12 +31,8 @@ it.each([
   ["custom-stt", "custom-stt"],
   ["google", "openai"],
 ])("resolves transcription fallback for %s", (provider, transcriptionProvider) => {
-  const { realtime } = resolveConfig({ realtime: { provider } });
-  expect(realtime).toMatchObject({ provider, transcriptionProvider });
-});
-
-it("preserves an empty realtime intro message for silent joins", () => {
-  expect(resolveConfig({ realtime: { introMessage: "" } }).realtime.introMessage).toBe("");
+  const { realtime } = resolveConfig({ realtime: { provider, introMessage: "" } });
+  expect(realtime).toMatchObject({ provider, transcriptionProvider, introMessage: "" });
 });
 
 it.each([
@@ -50,8 +45,11 @@ it.each([
   expect(resolveConfig({ chrome }).chrome.audioFormat).toBe(expected);
 });
 
-it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
-  const config = resolveGoogleMeetConfigFromTestEnv();
+it.each([
+  ["123456", 123456],
+  ["0x10", undefined],
+] as const)("resolves env fallbacks with decimal-only token expiry: %s", (expiry, expiresAt) => {
+  const config = resolveGoogleMeetConfigFromTestEnv(expiry);
   expect(config.defaults).toEqual({ meeting: "https://meet.google.com/abc-defg-hij" });
   expect(config.preview).toEqual({ enrollmentAcknowledged: true });
   expect(config.oauth).toEqual({
@@ -59,17 +57,8 @@ it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
     clientSecret: "client-secret",
     refreshToken: "refresh-token",
     accessToken: "access-token",
-    expiresAt: 123456,
+    expiresAt,
   });
-});
-
-it("ignores non-decimal env numeric fallbacks", () => {
-  const config = resolveGoogleMeetConfigFromTestEnv({
-    OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-    OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "0x10",
-  });
-
-  expect(config.oauth).toEqual({ accessToken: "access-token" });
 });
 it("keeps sparse audio config compatible", () => {
   expect(resolveConfig({}).chrome).toMatchObject({
