@@ -1,5 +1,5 @@
 import { createRouter } from "@openclaw/uirouter";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -19,7 +19,9 @@ import { completeConfigContext } from "./config-page.test-support.ts";
 import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
 import { pages } from "./route.ts";
 
-afterEach(() => vi.unstubAllGlobals());
+const utilityModel = { primary: "", fallbacks: ["fixture/backup"] };
+const utilityPatch = { agents: { defaults: { utilityModel } } };
+const error = "Synthetic observer save failed";
 
 async function setup() {
   vi.stubGlobal("localStorage", createStorageMock());
@@ -73,15 +75,13 @@ async function setup() {
   Object.assign(context, { router });
   const outlet = mountRouterOutlet({ router, retryContext: context });
   await router.navigate("appearance", context);
-  const toggle = () =>
-    outlet.querySelector<HTMLInputElement>('#settings-appearance-sidebar input[role="switch"]');
   const observerToggle = () =>
     [
       ...outlet.querySelectorAll<HTMLInputElement>(
         '#settings-appearance-sidebar input[role="switch"]',
       ),
     ].at(-1)!;
-  await waitForSolid(() => expect(toggle()).not.toBeNull());
+  await waitForSolid(() => expect(observerToggle()).toBeDefined());
   const picker = () =>
     outlet.querySelector<HTMLElement>(
       "#settings-appearance-sidebar openclaw-select-picker.model-picker__select",
@@ -96,6 +96,10 @@ async function setup() {
     context,
     observerToggle,
     picker,
+    saved: {
+      config: { ...config, gateway: { controlUi: { sessionObserver: false } } },
+      hash: "saved",
+    },
     async dispose() {
       held.resolve({ noop: true });
       await held.promise.catch(() => undefined);
@@ -108,131 +112,99 @@ async function setup() {
 }
 
 describe("Session Observer actions", () => {
+  let page: Awaited<ReturnType<typeof setup>>;
+  let retried: ReturnType<typeof createDeferred<unknown>>;
+  beforeEach(async () => {
+    page = await setup();
+    retried = createDeferred<unknown>();
+  });
+  afterEach(async () => {
+    retried.resolve({ noop: true });
+    await page.dispose();
+    vi.unstubAllGlobals();
+  });
+
   it.each(["saved", "rejected"] as const)(
-    "shows a held toggle and reconciles its %s owner result",
+    "shows a held toggle, reconciles its %s result and allows retry after rejection",
     async (result) => {
-      const page = await setup();
-      try {
-        const toggle = page.observerToggle();
-        expect(toggle.checked).toBe(true);
-        toggle.click();
+      const toggle = page.observerToggle();
+      expect(toggle.checked).toBe(true);
+      toggle.click();
+      await waitForSolid(() => {
+        expect(page.request).toHaveBeenCalledWith("config.patch", expect.anything());
+        expect(page.outlet.textContent).toContain("Saving…");
+        expect(toggle.getAttribute("aria-disabled")).toBe("true");
+        expect(toggle.disabled).toBe(false);
+        expect(toggle.checked).toBe(false);
+      });
+      expect(page.observerToggle()).toBe(toggle);
+      if (result === "saved") {
+        page.held.resolve(page.saved);
+      } else {
+        page.held.reject(new Error(error));
+      }
+      await waitForSolid(() => {
+        expect(page.outlet.textContent).not.toContain("Saving…");
+        expect(toggle.getAttribute("aria-disabled")).toBeNull();
+        expect(toggle.checked).toBe(result !== "saved");
+      });
+      expect(page.observerToggle()).toBe(toggle);
+      if (result === "rejected") {
+        expect(page.runtimeConfig.state.lastError).toContain(error);
+        expect(page.outlet.textContent).toContain(error);
+        page.request.mockImplementationOnce(() => retried.promise);
+        page.observerToggle().click();
         await waitForSolid(() => {
-          expect(page.request).toHaveBeenCalledWith("config.patch", expect.anything());
           expect(page.outlet.textContent).toContain("Saving…");
-          expect(toggle.getAttribute("aria-disabled")).toBe("true");
-          expect(toggle.disabled).toBe(false);
-          expect(toggle.checked).toBe(false);
+          expect(page.outlet.textContent).not.toContain(error);
         });
-        expect(page.observerToggle()).toBe(toggle);
-        if (result === "saved") {
-          page.held.resolve({
-            config: { ...page.config, gateway: { controlUi: { sessionObserver: false } } },
-            hash: "saved",
-          });
-        } else {
-          page.held.reject(new Error("Synthetic observer save failed"));
-        }
+        retried.resolve(page.saved);
         await waitForSolid(() => {
-          expect(page.outlet.textContent).not.toContain("Saving…");
-          expect(toggle.getAttribute("aria-disabled")).toBeNull();
-          expect(toggle.checked).toBe(result !== "saved");
+          expect(page.observerToggle().checked).toBe(false);
+          expect(page.observerToggle().getAttribute("aria-disabled")).toBeNull();
+          expect(page.outlet.textContent).not.toContain(error);
         });
-        expect(page.observerToggle()).toBe(toggle);
-        if (result === "rejected") {
-          expect(page.runtimeConfig.state.lastError).toContain("Synthetic observer save failed");
-          expect(page.outlet.textContent).toContain("Synthetic observer save failed");
-        }
-      } finally {
-        await page.dispose();
       }
     },
   );
 
-  it("clears the previous failure while a later toggle is pending", async () => {
-    const page = await setup();
-    const retried = createDeferred<unknown>();
-    try {
-      page.observerToggle().click();
-      await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
-      page.held.reject(new Error("Synthetic observer save failed"));
-      await waitForSolid(() => {
-        expect(page.outlet.textContent).toContain("Synthetic observer save failed");
-        expect(page.observerToggle().getAttribute("aria-disabled")).toBeNull();
-      });
-
-      page.request.mockImplementationOnce(() => retried.promise);
-      page.observerToggle().click();
-      await waitForSolid(() => {
-        expect(page.outlet.textContent).toContain("Saving…");
-        expect(page.outlet.textContent).not.toContain("Synthetic observer save failed");
-      });
-      retried.resolve({
-        config: { ...page.config, gateway: { controlUi: { sessionObserver: false } } },
-        hash: "retried",
-      });
-      await waitForSolid(() => {
-        expect(page.observerToggle().checked).toBe(false);
-        expect(page.observerToggle().getAttribute("aria-disabled")).toBeNull();
-        expect(page.outlet.textContent).not.toContain("Synthetic observer save failed");
-      });
-    } finally {
-      retried.resolve({ noop: true });
-      await page.dispose();
-    }
-  });
-
   it("keeps model selection optimistic and preserves the owner's fallback chain", async () => {
-    const page = await setup();
-    try {
-      await choosePickerValue(page.picker(), "");
-      await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
-      expect(page.picker().textContent).toContain("Disabled");
-      expect(page.observerToggle().disabled).toBe(true);
-      const patch = page.request.mock.calls.find(([method]) => method === "config.patch");
-      expect(patch?.[1]).toMatchObject({
-        raw: JSON.stringify({
-          agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
-        }),
-        replacePaths: ["agents.defaults.utilityModel.fallbacks"],
-      });
-      page.held.resolve({
-        config: {
-          ...page.config,
-          agents: { defaults: { utilityModel: { primary: "", fallbacks: ["fixture/backup"] } } },
-        },
-        hash: "saved",
-      });
-      await waitForSolid(() => expect(page.outlet.textContent).not.toContain("Saving…"));
-      expect(page.picker().textContent).toContain("Disabled");
-      expect(page.observerToggle().disabled).toBe(false);
-    } finally {
-      await page.dispose();
-    }
+    await choosePickerValue(page.picker(), "");
+    await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
+    expect(page.picker().textContent).toContain("Disabled");
+    expect(page.observerToggle().disabled).toBe(true);
+    const patch = page.request.mock.calls.find(([method]) => method === "config.patch");
+    expect(patch?.[1]).toMatchObject({
+      raw: JSON.stringify(utilityPatch),
+      replacePaths: ["agents.defaults.utilityModel.fallbacks"],
+    });
+    page.held.resolve({
+      config: { ...page.config, ...utilityPatch },
+      hash: "saved",
+    });
+    await waitForSolid(() => expect(page.outlet.textContent).not.toContain("Saving…"));
+    expect(page.picker().textContent).toContain("Disabled");
+    expect(page.observerToggle().disabled).toBe(false);
   });
 
   it("leaves Appearance while its write is held and keeps late rejection out of the destination", async () => {
-    const page = await setup();
-    try {
-      page.observerToggle().click();
-      await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
-      await page.router.navigate("advanced", page.context);
-      await waitForSolid(() =>
-        expect(page.outlet.querySelector(".page-title")?.textContent).toBe("Advanced"),
-      );
-      expect(page.outlet.querySelector("#settings-appearance-sidebar")).toBeNull();
-      page.held.reject(new Error("Late synthetic observer failure"));
-      await waitForSolid(() =>
-        expect(page.runtimeConfig.state.lastError).toContain("Late synthetic observer failure"),
-      );
-      expect(page.outlet.querySelector(".page-title")?.textContent).toBe("Advanced");
-      expect(page.outlet.textContent).not.toContain("Saving…");
-      await page.router.navigate("appearance", page.context);
-      await waitForSolid(() =>
-        expect(page.observerToggle()?.getAttribute("aria-disabled")).toBeNull(),
-      );
-      expect(page.observerToggle().checked).toBe(true);
-    } finally {
-      await page.dispose();
-    }
+    page.observerToggle().click();
+    await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
+    await page.router.navigate("advanced", page.context);
+    await waitForSolid(() =>
+      expect(page.outlet.querySelector(".page-title")?.textContent).toBe("Advanced"),
+    );
+    expect(page.outlet.querySelector("#settings-appearance-sidebar")).toBeNull();
+    page.held.reject(new Error("Late synthetic observer failure"));
+    await waitForSolid(() =>
+      expect(page.runtimeConfig.state.lastError).toContain("Late synthetic observer failure"),
+    );
+    expect(page.outlet.querySelector(".page-title")?.textContent).toBe("Advanced");
+    expect(page.outlet.textContent).not.toContain("Saving…");
+    await page.router.navigate("appearance", page.context);
+    await waitForSolid(() =>
+      expect(page.observerToggle()?.getAttribute("aria-disabled")).toBeNull(),
+    );
+    expect(page.observerToggle().checked).toBe(true);
   });
 });
