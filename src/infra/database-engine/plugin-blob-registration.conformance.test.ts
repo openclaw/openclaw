@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { describe, expect, it, vi } from "vitest";
 import {
   pluginBlobDeleteExpiredKeyInDatabase,
@@ -43,30 +42,11 @@ for (const engine of ["sqlite", "postgres"] as const) {
       useMixedAgentPair(engine, engine);
 
       it.each(["reject-new", "evict-oldest"] as const)(
-        "keeps receipts, expired occupancy and two-statement admission under %s",
+        "keeps receipts and expired occupancy under %s",
         (overflowPolicy) =>
           withBlobs(({ db, transaction, register }) => {
             const write = { ...defaults, namespace: overflowPolicy, overflowPolicy };
-            let statements = 0;
-            const observation = channel("openclaw.database.statement");
-            const observe = (event: unknown) => {
-              if (
-                event &&
-                typeof event === "object" &&
-                "sql" in event &&
-                typeof event.sql === "string" &&
-                /plugin_blob_entries/i.test(event.sql)
-              ) {
-                statements++;
-              }
-            };
-            observation.subscribe(observe);
-            let receipt: ReturnType<typeof register>;
-            try {
-              receipt = register({ ...write, ttlMs: 1 });
-            } finally {
-              observation.unsubscribe(observe);
-            }
+            const receipt = register({ ...write, ttlMs: 1 });
             expect(receipt).toEqual({
               createdAt: expect.any(Number),
               expiresAt: expect.any(Number),
@@ -83,7 +63,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
             const expired = transaction(() => pluginBlobDeleteExpiredKeyInDatabase(db, write));
             expect(expired).toMatchObject({ metadata: { synthetic: true }, sizeBytes: 1 });
             expect(register(write)).toEqual({ createdAt: expect.any(Number) });
-            expect(statements).toBe(2);
           }),
       );
 

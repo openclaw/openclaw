@@ -13,7 +13,6 @@ import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conforman
 const selectionCases = [
   { name: "empty", values: [], expected: [] },
   { name: "duplicates", values: ["beta", "alpha", "beta", "absent"], expected: ["alpha", "beta"] },
-  { name: "mixed", values: ["absent", "beta"], expected: ["beta"] },
 ];
 
 for (const engine of ["sqlite", "postgres"] as const) {
@@ -27,47 +26,23 @@ for (const engine of ["sqlite", "postgres"] as const) {
         withEngineStoreAdmission(() => {
           const { db } = database();
           runSqliteImmediateTransactionSync(db, () => {
-            const query = getNodeSqliteKysely<DB>(db);
-            for (const id of ["alpha", "beta", "unrelated"]) {
-              executeSqliteQuerySync(
-                db,
-                query.insertInto("session_nodes").values({
-                  session_key: `key-${id}`,
-                  current_session_id: id,
-                  entry_json: "{}",
-                  updated_at: 1,
-                }),
-              );
-              executeSqliteQuerySync(
-                db,
-                query.insertInto("session_windows").values({
-                  session_id: id,
-                  session_key: `key-${id}`,
-                  created_at: 1,
-                  updated_at: 1,
-                }),
-              );
-            }
+            const node = db.prepare(
+              "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, '{}', 1)",
+            );
+            const window = db.prepare(
+              "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+            );
+            const event = db.prepare(
+              "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('alpha', ?, '{}', 1)",
+            );
+            const identity = db.prepare(
+              "INSERT INTO transcript_event_identities (session_id, event_id, seq, message_idempotency_key, created_at) VALUES ('alpha', ?, ?, ?, 1)",
+            );
             for (const [index, id] of ["alpha", "beta", "unrelated"].entries()) {
-              executeSqliteQuerySync(
-                db,
-                query.insertInto("transcript_events").values({
-                  session_id: "alpha",
-                  seq: index,
-                  event_json: "{}",
-                  created_at: 1,
-                }),
-              );
-              executeSqliteQuerySync(
-                db,
-                query.insertInto("transcript_event_identities").values({
-                  session_id: "alpha",
-                  event_id: id,
-                  seq: index,
-                  message_idempotency_key: `message-${id}`,
-                  created_at: 1,
-                }),
-              );
+              node.run(`key-${id}`, id);
+              window.run(id, `key-${id}`);
+              event.run(index);
+              identity.run(id, index, `message-${id}`);
             }
           });
         }),

@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import type { EngineConnection } from "../sql-connection.js";
 import { runWithSqliteWorkerStateContext } from "../sqlite-worker-state-context.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -30,6 +31,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
         withEngineStoreAdmission(() => {
           const env = { ...process.env, OPENCLAW_STATE_DIR: pair.root };
           const database = openOpenClawStateDatabase({ env });
+          const write = <T>(run: (db: EngineConnection) => T) =>
+            runOpenClawStateWriteTransaction(({ db }) => run(db), { database, env });
           const job: CronStoredJob = {
             id: "one-shot",
             name: "synthetic one-shot",
@@ -45,20 +48,19 @@ for (const engine of ["sqlite", "postgres"] as const) {
             state: { nextRunAtMs: 1_000, runningAtMs: 1_000 },
           };
           const storeKey = "test";
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              replaceCronRows(db, storeKey, { version: 1, jobs: [job] });
-              const definition: Record<string, unknown> = {
-                ...job,
-                authoredNote: { keep: true, nested: [1, "two"] },
-              };
-              delete definition.state;
-              db.prepare(
-                "UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?",
-              ).run(JSON.stringify(definition), storeKey, job.id);
-            },
-            { database, env },
-          );
+          write((db) => {
+            replaceCronRows(db, storeKey, { version: 1, jobs: [job] });
+            const definition: Record<string, unknown> = {
+              ...job,
+              authoredNote: { keep: true, nested: [1, "two"] },
+            };
+            delete definition.state;
+            db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+              JSON.stringify(definition),
+              storeKey,
+              job.id,
+            );
+          });
           const result = runWithSqliteWorkerStateContext({ environment: env }, () =>
             finalizeCronRunsInWorker(database, {
               storeKey,
@@ -95,18 +97,16 @@ for (const engine of ["sqlite", "postgres"] as const) {
           const completedConfig = JSON.parse(completed!.job_json);
           expect(completedConfig.enabled).toBe(false);
           expect(completedConfig.authoredNote).toEqual({ keep: true, nested: [1, "two"] });
-          runOpenClawStateWriteTransaction(
-            ({ db }) =>
-              mutateCronRuntimeRowsInDatabase({
-                database: db,
-                storeKey,
-                jobIds: new Set([job.id]),
-                mutate: ({ jobs }) => {
-                  jobs.get(job.id)!.enabled = true;
-                  return { upsertJobIds: [job.id], value: undefined };
-                },
-              }),
-            { database, env },
+          write((db) =>
+            mutateCronRuntimeRowsInDatabase({
+              database: db,
+              storeKey,
+              jobIds: new Set([job.id]),
+              mutate: ({ jobs }) => {
+                jobs.get(job.id)!.enabled = true;
+                return { upsertJobIds: [job.id], value: undefined };
+              },
+            }),
           );
           const [resumed] = loadCronRows(database.db, storeKey);
           expect(resumed?.enabled).toBe(1);
@@ -125,26 +125,19 @@ for (const engine of ["sqlite", "postgres"] as const) {
           ).toBeUndefined();
           expect(readScratch({ kind: "heartbeat", agentId: "missing-monitor" })).toBeUndefined();
 
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              upsertCronJobRow(db, storeKey, { ...job, id: "heartbeat-monitor" }, 1);
-              // Current writers no longer create legacy heartbeat definitions.
-              db.prepare(
-                "UPDATE cron_jobs SET declaration_key = ?, payload_kind = ?, job_json = ? WHERE store_key = ? AND job_id = ?",
-              ).run(
-                "heartbeat:main",
-                "heartbeat",
-                JSON.stringify({
-                  ...job,
-                  id: "heartbeat-monitor",
-                  payload: { kind: "heartbeat" },
-                }),
-                storeKey,
-                "heartbeat-monitor",
-              );
-            },
-            { database, env },
-          );
+          write((db) => {
+            upsertCronJobRow(db, storeKey, { ...job, id: "heartbeat-monitor" }, 1);
+            // Current writers no longer create legacy heartbeat definitions.
+            db.prepare(
+              "UPDATE cron_jobs SET declaration_key = ?, payload_kind = ?, job_json = ? WHERE store_key = ? AND job_id = ?",
+            ).run(
+              "heartbeat:main",
+              "heartbeat",
+              JSON.stringify({ ...job, id: "heartbeat-monitor", payload: { kind: "heartbeat" } }),
+              storeKey,
+              "heartbeat-monitor",
+            );
+          });
           const selectors = [
             { kind: "job", jobId: job.id, createdAtMsFallback: 1 },
             { kind: "heartbeat", agentId: "main" },
@@ -155,24 +148,19 @@ for (const engine of ["sqlite", "postgres"] as const) {
               jobId,
               ...(selector.kind === "job" ? { configRevision: expect.any(String) } : {}),
             };
-            expect(readScratch(selector)).toEqual({
-              ...identity,
-              state: { currentRevision: 0 },
-            });
+            expect(readScratch(selector)).toEqual({ ...identity, state: { currentRevision: 0 } });
             for (const [content, expectedRevision] of [
               ["synthetic scratch", 0],
               [null, 1],
             ] as const) {
-              runOpenClawStateWriteTransaction(
-                ({ db }) =>
-                  writeCronJobScratchInDatabase(db, {
-                    storeKey,
-                    jobId,
-                    content,
-                    expectedRevision,
-                    nowMs: 10,
-                  }),
-                { database, env },
+              write((db) =>
+                writeCronJobScratchInDatabase(db, {
+                  storeKey,
+                  jobId,
+                  content,
+                  expectedRevision,
+                  nowMs: 10,
+                }),
               );
               const revision = expectedRevision + 1;
               expect(readScratch(selector)).toEqual({
@@ -184,12 +172,10 @@ for (const engine of ["sqlite", "postgres"] as const) {
               });
             }
           }
-          runOpenClawStateWriteTransaction(
-            ({ db }) =>
-              db
-                .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
-                .run("{malformed", storeKey, job.id),
-            { database, env },
+          write((db) =>
+            db
+              .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+              .run("{malformed", storeKey, job.id),
           );
           expect(
             readScratch({ kind: "job", jobId: job.id, createdAtMsFallback: 1 }),
@@ -199,20 +185,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
           const foreignStoreKey = "foreign-queue";
           const queueJobs = ["blocker", "z-first", "a-second", "cancelled", "omitted"].map(
             (id): CronStoredJob =>
-              Object.assign({}, job, {
-                id,
-                agentId: "main",
-                state: { nextRunAtMs: queueNow },
-              }),
+              Object.assign({}, job, { id, agentId: "main", state: { nextRunAtMs: queueNow } }),
           );
           const foreignJob = { ...queueJobs[4]!, id: "foreign-cancelled" };
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              replaceCronRows(db, queueStoreKey, { version: 1, jobs: queueJobs });
-              replaceCronRows(db, foreignStoreKey, { version: 1, jobs: [foreignJob] });
-            },
-            { database, env },
-          );
+          write((db) => {
+            replaceCronRows(db, queueStoreKey, { version: 1, jobs: queueJobs });
+            replaceCronRows(db, foreignStoreKey, { version: 1, jobs: [foreignJob] });
+          });
           runWithSqliteWorkerStateContext({ environment: env }, () => {
             const scheduled = (key: string, queuedJob: CronStoredJob) => ({
               receiptId: createCronScheduledRunId(key, queuedJob.id, queueNow),
