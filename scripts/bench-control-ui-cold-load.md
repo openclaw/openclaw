@@ -584,8 +584,9 @@ clocks. The result records created/active observers, observed targets, callbacks
 intervals, media queries, and global listeners before and after each action.
 Run timing comparisons separately without instrumentation, with
 `--thread-cpu-time --pairs 20 --compare-bundle-dir <other-build>` and an A/A
-control on a loaded host. Hidden idle requires `--headed`: the runner minimizes
-its own Chromium window and verifies native document visibility. Hidden samples
+control on a loaded host. Hidden idle runs headless: the runner launches full
+Chrome for Testing with `--headless=new`, minimizes its own window, and verifies
+native document visibility; no window appears on screen. Hidden samples
 use a fresh runner-owned profile and Playwright's `noDefaults` connection so its
 normal focus emulation cannot override native visibility. The profile and process
 are removed after each sample. A browser that

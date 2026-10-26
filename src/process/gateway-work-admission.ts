@@ -68,13 +68,6 @@ export type GatewayRootWorkAdmissionContinuationScope = {
   runSync: <T>(run: () => T) => T;
 };
 
-type GatewaySuspendAdmissionLease = {
-  drain: () => boolean;
-  commit: () => boolean;
-  rollback: (reason?: string) => boolean;
-  release: (reason?: string) => boolean;
-};
-
 export type GatewayRestartSignalAdmissionLease = {
   rollback: () => boolean;
 };
@@ -620,7 +613,12 @@ export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
   attribution?: { owner: string; leaseId: string; caller: string; reason: string },
-): GatewaySuspendAdmissionLease | null {
+): {
+  drain: () => boolean;
+  commit: () => boolean;
+  rollback: (reason?: string) => boolean;
+  release: (reason?: string) => boolean;
+} | null {
   if (isGatewayWorkAdmissionClosed()) {
     return null;
   }

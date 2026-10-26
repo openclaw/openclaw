@@ -54,6 +54,26 @@ function installObserver() {
       if (!active || !raw || typeof raw !== "object") {
         return;
       }
+      const rpc = active.rpc;
+      if (source === "openclaw.gateway.rpc" && rpc && raw.method === rpc.method) {
+        // Serial benchmark calls have no request ID in this diagnostic channel.
+        if (raw.phase === "received" && ++rpc.receivedCount === 1) {
+          rpc.processStart = process.cpuUsage();
+          rpc.threadStart = process.threadCpuUsage();
+        } else if (
+          raw.phase === "response" &&
+          raw.firstResponse === true &&
+          rpc.receivedCount === 1 &&
+          !rpc.cpu
+        ) {
+          const processCpu = process.cpuUsage(rpc.processStart);
+          const threadCpu = process.threadCpuUsage(rpc.threadStart);
+          rpc.cpu = {
+            rpcProcessCpuMs: (processCpu.user + processCpu.system) / 1000,
+            rpcMainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+          };
+        }
+      }
       const event = { source };
       for (const key of [
         "method",
@@ -135,6 +155,10 @@ function installObserver() {
           Socket.prototype.write = countOps ? countedWrite : write;
           active = {
             events: [],
+            rpc:
+              typeof message.method === "string"
+                ? { method: message.method, receivedCount: 0 }
+                : undefined,
             ...(countOps
               ? {
                   jsonStringifyMs: 0,
@@ -162,6 +186,7 @@ function installObserver() {
             processStart: _processStart,
             threadStart: _threadStart,
             startedAt,
+            rpc,
             ...metrics
           } = captured;
           result = {
@@ -169,6 +194,12 @@ function installObserver() {
             windowMs: performance.now() - startedAt,
             processCpuMs: (processCpu.user + processCpu.system) / 1000,
             mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+            ...(rpc
+              ? {
+                  rpcReceivedCount: rpc.receivedCount,
+                  ...(rpc.receivedCount === 1 ? rpc.cpu : {}),
+                }
+              : {}),
           };
         } else if (message.action === "profile-start") {
           inspector = new Session();

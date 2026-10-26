@@ -17,7 +17,6 @@ async function loadSessionsRoute(
   const context = {
     gateway: { snapshot: { phase: "connected", client: {} } },
     sessions,
-    runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
     agentSelection: { state: { selectedId: scopeId, scopeId } },
   } as unknown as ApplicationContext;
   const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions({

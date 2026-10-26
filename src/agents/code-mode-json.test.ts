@@ -24,6 +24,7 @@ describe("Code Mode JSON normalization", () => {
     const stringify = JSON.stringify;
     let serializedChars = 0;
     let serializations = 0;
+    const stringSpy = vi.spyOn(globalThis, "String");
     const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
       serializations++;
       const json = stringify(...args);
@@ -31,18 +32,23 @@ describe("Code Mode JSON normalization", () => {
       return json;
     });
     let result;
+    let stringConversions: number;
     try {
       result = state.takeResult(
         { status: channel === "error" ? "failed" : "completed" },
         channel === "error" ? { error: text } : {},
       );
     } finally {
+      stringConversions = stringSpy.mock.calls.length;
+      stringSpy.mockRestore();
       spy.mockRestore();
     }
     expect(JSON.stringify(result)).toHaveLength(16_000);
     // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
     expect(serializedChars).toBeLessThan(210_000);
     expect(serializations).toBeLessThanOrEqual(5);
+    // Decimal marker widths must not allocate one string per prefix byte.
+    expect(stringConversions).toBeLessThan(100);
   });
 
   it("matches fully serialized budgets for every randomized projection probe", () => {

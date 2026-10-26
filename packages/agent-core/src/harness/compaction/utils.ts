@@ -240,16 +240,12 @@ const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
 // Message cast.
-type PersistedSenderCarrier = {
-  role: string;
-};
-
 /**
  * Return exactly the persisted-sender text which is projected into a user
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+export function formatPersistedSenderSuffix(message: { role: string }): string {
   if (message.role !== "user") {
     return "";
   }

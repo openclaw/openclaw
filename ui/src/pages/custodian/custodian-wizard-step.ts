@@ -5,15 +5,13 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 
-type CustodianWizardSubmission = {
-  answer: WizardAnswer;
-  display: string;
-};
-
 export function custodianWizardSubmission(
   step: WizardStep,
   value: unknown,
-): CustodianWizardSubmission | null {
+): {
+  answer: WizardAnswer;
+  display: string;
+} | null {
   if (step.type === "note" || step.type === "action" || step.type === "progress") {
     return { answer: { stepId: step.id }, display: t("common.continue") };
   }

@@ -4,23 +4,33 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/codex-catalog-page-decode.ts
  * --sample measures allocations separately from untraced CPU; --projection excludes JSON decode.
  * Defaults to 2,000 pages (32,000 previews) per sample. Outputs one JSON record.
+ * Compare resultSha256 across revisions to verify byte-identical projected results.
+ * --owner /path/to/client-catalog-response.ts selects a preserved owner revision.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  decodeCodexCatalogFrame,
-  projectCodexCatalogMessage,
-} from "../../extensions/codex/src/app-server/client-catalog-response.js";
 
 const { values } = parseArgs({
   options: {
     iterations: { type: "string", default: "2000" },
     sample: { type: "boolean", default: false },
     projection: { type: "boolean", default: false },
+    owner: { type: "string" },
   },
 });
+const ownerUrl = values.owner
+  ? pathToFileURL(values.owner)
+  : new URL("../../extensions/codex/src/app-server/client-catalog-response.ts", import.meta.url);
+const {
+  decodeCodexCatalogFrame,
+  projectCodexCatalogMessage,
+}: typeof import("../../extensions/codex/src/app-server/client-catalog-response.js") = await import(
+  ownerUrl.href
+);
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const id = Number.MAX_SAFE_INTEGER - 2;
@@ -73,6 +83,7 @@ console.log(
     sample: values.sample,
     iterations,
     pageBytes: bytes.length,
+    resultSha256: createHash("sha256").update(expected).digest("hex"),
     hostLoad,
     elapsedMs,
     cpuUsPerPage: (used.user + used.system) / iterations,

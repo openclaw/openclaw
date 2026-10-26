@@ -14,14 +14,13 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 
-type ChatQueueStoreHost = {
+type ChatQueueSessionHost = {
   chatQueue: ChatQueueItem[];
   chatAttachments?: ChatAttachment[];
   chatRunId?: string | null;
   chatSending?: boolean;
   chatSendingScopeKey?: string | null;
-};
-type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
+} & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {

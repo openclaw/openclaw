@@ -25,21 +25,6 @@ export type GatewayRootWorkAdmission = {
   releaseObservers?: Set<(reason: "settled" | "reset") => void>;
 };
 
-type GatewayWorkAdmissionState = {
-  restartDrainReason: GatewayDrainReason | undefined;
-  restartDrainController: AbortController;
-  shutdownCleanupController: AbortController;
-  restartSignalPending: boolean;
-  restartSignalGeneration: number;
-  suspendPhase: GatewaySuspendAdmissionPhase;
-  suspendGeneration: number;
-  suspendAttribution?: string;
-  suspendInvalidated?: () => void;
-  activeRootWork: Set<GatewayRootWorkAdmission>;
-  suspendOpenWaiters: Set<() => void>;
-  suspendListeners: Set<(phase: GatewaySuspendAdmissionPhase) => void>;
-};
-
 export const currentRootWork = new AsyncContext<GatewayRootWorkAdmission>(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
 );
@@ -55,7 +40,20 @@ export function createShutdownCleanupController(): AbortController {
 
 export const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
-  (): GatewayWorkAdmissionState => ({
+  (): {
+    restartDrainReason: GatewayDrainReason | undefined;
+    restartDrainController: AbortController;
+    shutdownCleanupController: AbortController;
+    restartSignalPending: boolean;
+    restartSignalGeneration: number;
+    suspendPhase: GatewaySuspendAdmissionPhase;
+    suspendGeneration: number;
+    suspendAttribution?: string;
+    suspendInvalidated?: () => void;
+    activeRootWork: Set<GatewayRootWorkAdmission>;
+    suspendOpenWaiters: Set<() => void>;
+    suspendListeners: Set<(phase: GatewaySuspendAdmissionPhase) => void>;
+  } => ({
     restartDrainReason: undefined,
     restartDrainController: new AbortController(),
     shutdownCleanupController: createShutdownCleanupController(),
