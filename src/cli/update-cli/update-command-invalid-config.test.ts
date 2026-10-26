@@ -2,12 +2,131 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as materialize from "../../config/materialize.js";
+import * as deferredMigrations from "../../infra/deferred-plugin-migrations.js";
+import { GatewayLockNamespaceError } from "../../infra/gateway-lock-payload.js";
+import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import * as installSurface from "../../infra/update-runner-install-surface.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import {
+  resolveMutableUpdateFailure,
+  withUpdateAdmissionReporting,
+} from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
+
+it("preserves the ownership refusal through dry-run config loading without leaking holder details", async () => {
+  const privateDetail = "synthetic-private-holder";
+  const cause = new DoctorMaintenanceRefusalError(
+    privateDetail,
+    { kind: "data-at-risk", reason: "gateway-state-unverified" },
+    {
+      cause: new GatewayLockError(
+        privateDetail,
+        new GatewayLockNamespaceError({ host: privateDetail, pid: 4242 }),
+      ),
+    },
+  );
+  vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockRejectedValue(cause);
+
+  await expect(updateCommand({ channel: "dev", dryRun: true, json: true })).rejects.toMatchObject({
+    code: 1,
+  });
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reason: "config-read-failed",
+      recovery: expect.objectContaining({
+        serviceRestartSafe: false,
+        dataAtRisk: "gateway-state-unverified",
+      }),
+      failedStep: expect.objectContaining({
+        failureFacts: [expect.objectContaining({ code: "gateway-ownership-unverified" })],
+      }),
+    }),
+  );
+  const output = JSON.stringify([
+    vi.mocked(defaultRuntime.writeJson).mock.calls,
+    vi.mocked(defaultRuntime.error).mock.calls,
+  ]);
+  expect(output).toContain("openclaw gateway recover-lock");
+  expect(output).not.toContain(privateDetail);
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+});
+
+it.each(["contention", "cleanup", "data-at-risk", "revoked"] as const)(
+  "preserves config read control flow for %s before reporting",
+  async (kind) => {
+    const cause =
+      kind === "contention"
+        ? new SqliteReadOnlyInspectionContentionError("Synthetic contention")
+        : kind === "cleanup"
+          ? new CommandProcessCleanupError({
+              cause: new GatewayLockNamespaceError({ host: "synthetic-private-holder", pid: 4242 }),
+            })
+          : kind === "revoked"
+            ? new UpdateRequesterRevokedError()
+            : new DoctorMaintenanceRefusalError(
+                "synthetic-private-holder",
+                { kind: "data-at-risk", reason: "gateway-state-unverified" },
+                {
+                  cause: new GatewayLockNamespaceError({
+                    host: "synthetic-private-holder",
+                    pid: 4242,
+                  }),
+                },
+              );
+    vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockRejectedValue(cause);
+
+    const caught = await readUpdateChannelConfig(false).catch((error: unknown) => error);
+    expect(caught).toBe(cause);
+    const retained = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
+    expect(retained.configReadFailure).toBe(cause);
+
+    if (kind !== "cleanup" && kind !== "data-at-risk") {
+      return;
+    }
+    const originalRecovery = vi.fn(async () => ({
+      serviceRestartSafe: true as const,
+      version: "2026.10.3",
+    }));
+    const outcome = resolveMutableUpdateFailure({
+      cause: caught,
+      durationMs: 0,
+      mode: "npm",
+      root: fixture.root,
+      originalRecovery,
+    });
+    if (kind === "cleanup") {
+      await expect(outcome).rejects.toBe(cause);
+      await expect(
+        withUpdateAdmissionReporting({ json: true }, async () => {
+          throw caught;
+        }),
+      ).rejects.toBe(cause);
+    } else {
+      const { result, failure } = await outcome;
+      expect(failure.cause).toBe(cause);
+      expect(result.recovery).toMatchObject({
+        serviceRestartSafe: false,
+        dataAtRisk: "gateway-state-unverified",
+      });
+      expect(result.failedStep?.failureFacts).toEqual([
+        expect.objectContaining({ code: "gateway-ownership-unverified" }),
+      ]);
+      expect(JSON.stringify([result, vi.mocked(defaultRuntime.error).mock.calls])).not.toContain(
+        "synthetic-private-holder",
+      );
+    }
+    expect(originalRecovery).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   { kind: "unknown key", config: { unknownSetting: true }, affectedKey: "<root>", dryRun: false },

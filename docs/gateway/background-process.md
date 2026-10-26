@@ -112,9 +112,10 @@ while leaving unrelated work running.
 For managed background work on a paired device, enable [session hosting](/nodes/session-hosting) and select that device for an OpenClaw session. Use the worker's local `exec` with `background: true` and its `process` tool when permitted by the session's tool and exec policy. This runs the session on the device instead of sending individual remote `host=node` commands.
 
 On a paired-node or node-backed cloud worker, background processes belong to the
-session's environment. Finishing or cancelling a turn leaves already-backgrounded
-commands running. A later turn in the same environment can use `process` to poll,
-send input, or stop them; foreground commands still stop when their turn is cancelled.
+session's environment. Finishing a turn leaves already-backgrounded commands running.
+A later turn in the same environment can use `process` to poll, send input, or stop
+them. Cancelling an active worker turn also stops its retained background commands
+and releases the worker after process cleanup completes.
 
 The retained worker occupies one node worker slot. Reusing it needs no additional
 slot. If a command finishes between turns, its retained output remains available
@@ -144,9 +145,11 @@ Reading the output does not drain pending agent output or acknowledge completion
 notifications. **Stop** requests termination of the exact observed process instance.
 
 The list is bounded, prioritizes running processes, and follows the existing
-in-memory retention limits. It refreshes while visible; disconnected or
-unavailable workers show an error rather than an empty list. It does not provide
-an interactive terminal or enumerate unrelated operating-system processes.
+in-memory retention limits. It refreshes while visible. A connected node returns
+an empty list after confirming that the worker has fully retired and no launch
+is still active for that environment. Disconnected workers and uncertain cleanup show
+an error. It does not provide an interactive terminal or enumerate unrelated
+operating-system processes.
 
 ## Child process bridging
 

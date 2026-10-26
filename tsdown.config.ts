@@ -50,7 +50,7 @@ import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
-import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
+import { rootRuntimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -533,7 +533,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...createRootRuntimeProcessBuildEntries(pluginIds),
-    ...runtimeProcessDeclarationEntries,
+    ...rootRuntimeProcessDeclarationEntries,
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",

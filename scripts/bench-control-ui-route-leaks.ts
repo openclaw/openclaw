@@ -2,7 +2,7 @@
 // node --import ./scripts/tsx.mjs scripts/bench-control-ui-route-leaks.ts \
 //   --bundle-dir BASE --compare-bundle-dir HEAD --mode all --pairs 10 --profiles local,remote
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -39,22 +39,40 @@ import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway
 import { summarizeScriptCoverage } from "./lib/control-ui-cold-load-trace.ts";
 import { createInteractionFixture } from "./lib/control-ui-interaction-scenarios.ts";
 import {
+  captureDockScenario,
+  DOCK_SCENARIO_IDS,
+  dockAsset,
+  dockContextOptions,
+  dockFixture,
+  dockTarget,
+  installDockInputTrace,
+  isDockScenario,
+  type DockAssetRequest,
+  type DockScenarioId,
+} from "./lib/control-ui-route-dock-scenarios.ts";
+import { qualifyRouteNetworkClock, routeNetworkPhase } from "./lib/control-ui-route-network.ts";
+import {
   appsGatewayInitScript,
-  appsNetworkPhase,
   appsPilotFixture,
   appsPilotTarget,
   appsProbeSnapshot,
   clickFirstAppAndWait,
   isAppsOpenId,
   isAppsPilotId,
-  qualifyAppsClock,
   startAppsPilotSandbox,
   verifyFirstAppAndClose,
   waitForAppsCatalog,
   type AppsPilotId,
 } from "./route-leaks-apps-pilot.ts";
 
-type ProbeRoute = RouteId | "sharing" | AppsPilotId | "desktop-document" | "portal-embedded";
+type ProbeRoute =
+  | RouteId
+  | "sharing"
+  | AppsPilotId
+  | "desktop-document"
+  | "portal-embedded"
+  | "settings-native-root"
+  | DockScenarioId;
 let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
 const { values } = parseArgs({
@@ -74,6 +92,8 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(
     "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
+    `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
   );
   process.exit(0);
 }
@@ -114,9 +134,11 @@ const defaults = [
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   if (
     id !== "sharing" &&
+    id !== "settings-native-root" &&
     id !== "desktop-document" &&
     id !== "portal-embedded" &&
     !isAppsPilotId(id) &&
+    !isDockScenario(id) &&
     !APP_ROUTE_IDS.some((route) => route === id)
   ) {
     throw new Error(`Unknown route: ${id}`);
@@ -125,6 +147,12 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
 });
 const appsProbesEnabled = routes.some(isAppsPilotId);
 const interactionIds = values.interactions?.split(",") ?? [];
+if (routes.includes("settings-native-root") && interactionIds.length) {
+  throw new Error("Native Settings root is a cold-only cell; do not combine with --interactions");
+}
+if (routes.some(isDockScenario) && interactionIds.length) {
+  throw new Error(`Dock cells (${DOCK_SCENARIO_IDS.join(",")}) own their native first-open phases`);
+}
 const securityInteractions = ["settings-security-immediate", "settings-security-idle"];
 const knownInteractions = [
   "agents-files",
@@ -154,12 +182,23 @@ function routeTarget(
   id: ProbeRoute,
   sessionKey: string,
 ): {
-  route: RouteId | "desktop-document";
+  route: RouteId | "desktop-document" | "browser-document";
   pathname: string;
   search: string;
   selector: string | undefined;
   requiredMethods?: string[];
 } {
+  if (id === "settings-native-root") {
+    return {
+      route: "settings",
+      pathname: "/settings",
+      search: "",
+      selector: '.settings-embed-list a[href="/settings/appearance"]',
+    };
+  }
+  if (isDockScenario(id)) {
+    return dockTarget(id);
+  }
   if (isAppsPilotId(id)) {
     return appsPilotTarget();
   }
@@ -255,6 +294,9 @@ function fixtureFor(
   id: ProbeRoute,
   baseUrl: string,
 ): ControlUiMockGatewayScenario {
+  if (isDockScenario(id)) {
+    return dockFixture(build, id);
+  }
   if (isAppsPilotId(id)) {
     if (!appsSandbox) {
       throw new Error("Apps sandbox was not prepared");
@@ -266,6 +308,9 @@ function fixtureFor(
   return {
     ...fixture,
     ...workboard,
+    ...(id === "settings-native-root"
+      ? { automaticallyFetchFavicons: false, operatorScopes: ["operator.admin", "operator.read"] }
+      : {}),
     serverBuildId: build.buildId,
     serverVersion: build.version,
     ...(id === "systems" || id === "desktop-document"
@@ -535,17 +580,7 @@ const variants = [
       ]
     : []),
 ];
-type AssetRequest = {
-  requestId: string;
-  url: string;
-  type: string;
-  initiator: unknown;
-  wireBytes?: number;
-  timestampSeconds?: number;
-  finishedTimestampSeconds?: number;
-  status?: number;
-  failed?: string;
-};
+type AssetRequest = DockAssetRequest;
 type CoverageEntry = Awaited<ReturnType<Page["coverage"]["stopJSCoverage"]>>[number];
 const evaluatedUrls = (entries: CoverageEntry[]) =>
   entries
@@ -642,18 +677,22 @@ async function metrics(cdp: CDPSession) {
 
 function cpuDelta(before: Record<string, number>, after: Record<string, number>) {
   return Object.fromEntries(
-    [
-      ["taskMs", "TaskDuration"],
-      ["scriptMs", "ScriptDuration"],
-      ["layoutMs", "LayoutDuration"],
-      ["styleMs", "RecalcStyleDuration"],
-    ].map(([name, metric]) => {
-      const first = before[metric!],
-        last = after[metric!];
+    (
+      [
+        ["taskMs", "TaskDuration", 1_000],
+        ["scriptMs", "ScriptDuration", 1_000],
+        ["layoutMs", "LayoutDuration", 1_000],
+        ["styleMs", "RecalcStyleDuration", 1_000],
+        ["layoutCount", "LayoutCount", 1],
+        ["recalcStyleCount", "RecalcStyleCount", 1],
+      ] as const
+    ).map(([name, metric, scale]) => {
+      const first = before[metric],
+        last = after[metric];
       if (!Number.isFinite(first) || !Number.isFinite(last) || last! < first!) {
         throw new Error(`Invalid threadTicks metric: ${metric}`);
       }
-      return [name!, 1000 * (last! - first!)];
+      return [name, scale * (last! - first!)];
     }),
   );
 }
@@ -908,6 +947,10 @@ try {
             await server.selectBuild(variant.root);
             const context = await browser.newContext({
               viewport: { width: 1440, height: 1000 },
+              ...(route === "settings-native-root"
+                ? { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" }
+                : {}),
+              ...(isDockScenario(route) ? dockContextOptions(route) : {}),
               serviceWorkers: "block",
             });
             const page = await context.newPage();
@@ -941,7 +984,8 @@ try {
                         body: '<!doctype html><title>Route probe portal</title><h1 data-route-probe-portal>Route probe portal</h1><button type="button">Ready</button>',
                         contentType: "text/html",
                       }
-                    : prepared.assets.get(pathname),
+                    : ((isDockScenario(route) ? dockAsset(route, pathname) : undefined) ??
+                      prepared.assets.get(pathname)),
               );
               const target = routeTarget(route, fixture.sessionKey!);
               result.target = target;
@@ -951,6 +995,16 @@ try {
                 throw new Error(String(result.gap));
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (route === "settings-native-root") {
+                await page.addInitScript(() => {
+                  Object.assign(window, {
+                    __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+                  });
+                });
+              }
+              if (isDockScenario(route)) {
+                await page.addInitScript(installDockInputTrace);
+              }
               const gatewayInit = createControlUiMockGatewayInitScript(fixture);
               await page.addInitScript({
                 content:
@@ -1018,6 +1072,7 @@ try {
                 const request = requests.get(event.requestId);
                 if (request) {
                   request.failed = event.errorText;
+                  request.failedTimestampSeconds = event.timestamp;
                 }
               });
               if (mode === "coverage") {
@@ -1031,6 +1086,28 @@ try {
               await page.goto(`${server.baseUrl}${target.pathname}${target.search}`, {
                 waitUntil: "domcontentloaded",
               });
+              if (isDockScenario(route)) {
+                await captureDockScenario({
+                  id: route,
+                  mode: mode as "coverage" | "timing",
+                  page,
+                  cdp,
+                  requests,
+                  before,
+                  output,
+                  prefix,
+                  screenshots: values.screenshots,
+                  result,
+                  metrics,
+                  cpuDelta,
+                  summarize: (coverage, phaseRequests) =>
+                    summarizeCoverage(coverage, phaseRequests, variant.root, prepared.assets),
+                });
+                if (errors.length) {
+                  throw new Error(errors.join("\n"));
+                }
+                continue;
+              }
               if (route === "systems" || route === "desktop-document") {
                 const rfb = await installScriptedRfbServer(page);
                 await page.waitForFunction(
@@ -1134,6 +1211,29 @@ try {
                         frame.contentDocument.querySelector("button:not(:disabled)") !== null
                       );
                     })();
+                  const nativeSettingsSettled =
+                    probeRoute !== "settings-native-root" ||
+                    (() => {
+                      const rows = [...document.querySelectorAll(".settings-embed-list a")];
+                      return (
+                        document.querySelector("html.openclaw-native-embed .shell--embed") !==
+                          null &&
+                        document.querySelector(
+                          ".native-embed-header openclaw-settings-save-indicator",
+                        ) !== null &&
+                        rows.length > 0 &&
+                        rows.every(
+                          (row) =>
+                            row.getClientRects().length > 0 &&
+                            getComputedStyle(row).visibility !== "hidden" &&
+                            row.getBoundingClientRect().height >= 44,
+                        ) &&
+                        document.querySelector(
+                          ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, openclaw-macos-titlebar-controls",
+                        ) === null &&
+                        document.documentElement.scrollWidth <= innerWidth
+                      );
+                    })();
                   const portalRailSettled =
                     probeRoute !== "portal-embedded" ||
                     (() => {
@@ -1150,6 +1250,7 @@ try {
                     desktopSettled &&
                     portalSettled &&
                     portalRailSettled &&
+                    nativeSettingsSettled &&
                     approvalsSettled &&
                     (routeId === "desktop-document" ||
                       (snapshot?.routeReady &&
@@ -1303,7 +1404,7 @@ try {
                 appsFirstAction.preClickProbe = await appsProbeSnapshot(page, started);
                 const readyProbe = await appsProbeSnapshot(page, ended);
                 appsFirstAction.readyProbe = readyProbe;
-                const clock = qualifyAppsClock(
+                const clock = qualifyRouteNetworkClock(
                   atEnd,
                   navigationStart,
                   readyProbe.completedResourcesAtCutoff,
@@ -1316,9 +1417,9 @@ try {
                   );
                 }
                 appsFirstAction.networkPhases = {
-                  cold: appsNetworkPhase(atEnd, navigationStart, 0, readyMs),
-                  postColdBeforeClick: appsNetworkPhase(atEnd, navigationStart, readyMs, started),
-                  firstOpen: appsNetworkPhase(atEnd, navigationStart, started, ended),
+                  cold: routeNetworkPhase(atEnd, navigationStart, 0, readyMs),
+                  postColdBeforeClick: routeNetworkPhase(atEnd, navigationStart, readyMs, started),
+                  firstOpen: routeNetworkPhase(atEnd, navigationStart, started, ended),
                 };
                 appsFirstAction.frameUrlsAtReady = page.frames().map((frame) => frame.url());
                 if (stepCoverage) {
@@ -1347,7 +1448,7 @@ try {
                   navigationStart: after.NavigationStart,
                   coldMetricTimestamp: after.Timestamp,
                 };
-                const clock = qualifyAppsClock(
+                const clock = qualifyRouteNetworkClock(
                   requestsAtReady,
                   after.NavigationStart!,
                   probe.completedResourcesAtCutoff,
@@ -1668,8 +1769,11 @@ try {
                 .catch(() => null);
             } finally {
               results.push(result);
-              await context.close();
-              await save();
+              try {
+                await appendFile(path.join(output, "samples.jsonl"), `${JSON.stringify(result)}\n`);
+              } finally {
+                await context.close();
+              }
               console.log(
                 JSON.stringify({
                   mode,
@@ -1682,6 +1786,9 @@ try {
                   error: result.error,
                 }),
               );
+            }
+            if (result.dockClockFailure) {
+              throw new Error("Dock clock qualification failed; stopped after saving the failure");
             }
             if (abortAfterContext) {
               throw new Error("Apps clock qualification failed; stopped after saving the failure");
@@ -1698,7 +1805,11 @@ try {
     try {
       await appsSandbox?.close();
     } finally {
-      await server.close();
+      try {
+        await server.close();
+      } finally {
+        await save();
+      }
     }
   }
 }

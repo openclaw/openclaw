@@ -13,7 +13,7 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
   };
   const entries = new Map<string, string>();
   const reads = vi.fn(() => new Map(entries));
-  const prepared = vi
+  using _ = vi
     .spyOn(pendingInputs, "prepareForeignLiveSessionPendingInputEntries")
     .mockResolvedValueOnce(reads);
   const foreign: PersistedUserTurnMessage = {
@@ -23,20 +23,17 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
     idempotencyKey: "foreign:user",
   };
   const activeSession = { agent: { state: { messages: [foreign] } } };
-  try {
-    const reconcile = await prepareForeignPendingUserTurns({ getSessionTarget: () => target });
-    entries.set("foreign-entry", "foreign:user");
-    expect(reconcile?.(activeSession, undefined)?.ownsEntry("foreign-entry")).toBe(true);
-    expect(activeSession.agent.state.messages).toEqual([]);
-    entries.clear();
-    activeSession.agent.state.messages = [foreign];
-    const frozen = reconcile?.(activeSession, undefined);
-    expect(activeSession.agent.state.messages).toEqual([]);
-    expect(frozen?.ownsEntry("foreign-entry")).toBe(true);
-    const calls = reads.mock.calls.length;
-    expect(frozen?.omitInput([foreign])).toEqual([]);
-    expect(reads).toHaveBeenCalledTimes(calls);
-  } finally {
-    prepared.mockRestore();
-  }
+
+  const reconcile = await prepareForeignPendingUserTurns({ getSessionTarget: () => target });
+  entries.set("foreign-entry", "foreign:user");
+  expect(reconcile?.(activeSession, undefined)?.ownsEntry("foreign-entry")).toBe(true);
+  expect(activeSession.agent.state.messages).toEqual([]);
+  entries.clear();
+  activeSession.agent.state.messages = [foreign];
+  const frozen = reconcile?.(activeSession, undefined);
+  expect(activeSession.agent.state.messages).toEqual([]);
+  expect(frozen?.ownsEntry("foreign-entry")).toBe(true);
+  const calls = reads.mock.calls.length;
+  expect(frozen?.omitInput([foreign])).toEqual([]);
+  expect(reads).toHaveBeenCalledTimes(calls);
 });

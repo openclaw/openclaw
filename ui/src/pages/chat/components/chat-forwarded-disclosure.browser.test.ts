@@ -7,6 +7,7 @@ import groupedCss from "../../../styles/chat/grouped.css?inline";
 import messageCss from "../../../styles/chat/message-layout.css?inline";
 import startupCss from "../../../styles/chat/startup-layout.css?inline";
 import textCss from "../../../styles/chat/text.css?inline";
+import identityAvatarCss from "../../../styles/identity-avatar.css?inline";
 import mobileCss from "../../../styles/layout.mobile.css?inline";
 
 let stylesheet: HTMLStyleElement;
@@ -14,9 +15,15 @@ let stylesheet: HTMLStyleElement;
 // Match the app's default font before measuring the disclosure's inline baseline.
 beforeEach(async () => {
   stylesheet = document.createElement("style");
-  stylesheet.textContent = [baseCss, mobileCss, startupCss, messageCss, textCss, groupedCss].join(
-    "\n",
-  );
+  stylesheet.textContent = [
+    baseCss,
+    identityAvatarCss,
+    mobileCss,
+    startupCss,
+    messageCss,
+    textCss,
+    groupedCss,
+  ].join("\n");
   document.head.append(stylesheet);
   const typefaces = resolveTypefaces("claw");
   syncTypefaceStylesheets(typefaces);
@@ -244,7 +251,7 @@ it.each([
     const fallback = slot.querySelector<HTMLElement>(":scope > .identity-avatar--agent")!;
     await expect.poll(() => fallback.querySelector("svg") !== null).toBe(true);
     expect(image.getBoundingClientRect().height).toBe(loaded ? 18 : 0);
-    expect(fallback.getBoundingClientRect().height).toBe(loaded ? 0 : 18);
+    expect(fallback.getBoundingClientRect().height).toBe(18);
     expect(slot.scrollHeight).toBe(18);
   },
 );

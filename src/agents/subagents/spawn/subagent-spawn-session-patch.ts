@@ -53,6 +53,14 @@ import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import { emitSessionLifecycleEvent, upsertSessionEntryCore } from "./subagent-spawn.runtime.js";
 
+type InitialSubagentSession = {
+  status: "ok";
+  storePath: string;
+  controllerTarget: SessionTarget;
+  entry?: SessionEntry;
+  freshChild?: FreshChildSession;
+};
+
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
   requesterAgentId: string;
@@ -66,6 +74,8 @@ export async function createInitialSubagentSession(input: {
   gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
+  signal?: AbortSignal;
+  onCreated?: (session: InitialSubagentSession) => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
@@ -91,16 +101,7 @@ export async function createInitialSubagentSession(input: {
   blind?: boolean;
   outputSchema?: Record<string, unknown>;
   firstAdmission?: { delivery?: DeliveryContext; group: TrustedGroupMetadata };
-}): Promise<
-  | {
-      status: "ok";
-      storePath: string;
-      controllerTarget: SessionTarget;
-      entry?: SessionEntry;
-      freshChild?: FreshChildSession;
-    }
-  | { status: "error"; error: string }
-> {
+}): Promise<InitialSubagentSession | { status: "error"; error: string }> {
   const params = {
     ...input,
     assertActive: composeSessionSourceAssertion([
@@ -251,6 +252,7 @@ export async function createInitialSubagentSession(input: {
               titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
               useRequestedTitleSelection: false,
               runSetupScript: false,
+              signal: params.signal,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
               onTitleStateChanged: () =>
@@ -323,34 +325,37 @@ export async function createInitialSubagentSession(input: {
                   composeSessionSourceAssertion([params.assertActive, assertSourceCurrent]),
                 ),
               );
-            return childMemory
+            const entry = childMemory
               ? await runWithSessionActorStorage(childMemory, write)
               : await write();
+            const session: InitialSubagentSession = {
+              status: "ok",
+              storePath: physicalStorePath,
+              controllerTarget: captureSessionTarget({
+                storeScope: storePath,
+                sessionKey: params.childSessionKey,
+                agentId: params.targetAgentId,
+                incarnation: entry?.sessionId,
+              }),
+              entry: entry ?? undefined,
+              ...(params.firstAdmission && entry
+                ? {
+                    freshChild: {
+                      agentId: params.targetAgentId,
+                      // Lifecycle admission uses the store selector, not the physical database path.
+                      storePath,
+                      entry,
+                    },
+                  }
+                : {}),
+            };
+            // Retain exact-child cleanup before source settlement can reject a committed write.
+            params.onCreated?.(session);
+            return session;
           };
-          const entry = preparedWorktree?.withCommit
+          return preparedWorktree?.withCommit
             ? await preparedWorktree.withCommit(commit)
             : await commit();
-          return {
-            status: "ok" as const,
-            storePath: physicalStorePath,
-            controllerTarget: captureSessionTarget({
-              storeScope: storePath,
-              sessionKey: params.childSessionKey,
-              agentId: params.targetAgentId,
-              incarnation: entry?.sessionId,
-            }),
-            entry: entry ?? undefined,
-            ...(params.firstAdmission && entry
-              ? {
-                  freshChild: {
-                    agentId: params.targetAgentId,
-                    // Lifecycle admission uses the store selector, not the physical database path.
-                    storePath,
-                    entry,
-                  },
-                }
-              : {}),
-          };
         } finally {
           await childMemory?.actor.release();
         }

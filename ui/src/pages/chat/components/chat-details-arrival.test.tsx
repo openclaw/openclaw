@@ -214,3 +214,241 @@ it("admits each real Environment content source without an empty section", async
   });
   expect(view.group("environment")?.textContent).toContain("worker:device");
 });
+
+function automationPage(name: string): CronJobsListResult<CronCompactJob> {
+  return {
+    jobs: [
+      {
+        id: name,
+        name,
+        agentId: "main",
+        enabled: true,
+        updatedAtMs: 1,
+        nextRunAt: null,
+        nextRunAtMs: null,
+        scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 600_000 },
+        lastRunAt: null,
+        lastRunAtMs: null,
+        lastRunStatus: null,
+        lastRunError: null,
+      },
+    ],
+    snapshotRevision: name,
+    offset: 0,
+    limit: 50,
+    total: 1,
+    hasMore: false,
+    nextOffset: null,
+  };
+}
+
+function automationGateway(request: ReturnType<typeof createGatewayRequestMock>) {
+  const { gateway, publish } = createApplicationGateway();
+  publish({
+    ...gateway.snapshot,
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: ["operator.read"] } },
+    assistantAgentId: "main",
+    sessionKey: "agent:main:arrival",
+  });
+  return { gateway, publish };
+}
+
+it("retires an automation page when the logical session changes", async () => {
+  const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const current = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const request = createGatewayRequestMock()
+    .mockReturnValueOnce(retired.promise)
+    .mockReturnValueOnce(current.promise);
+  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
+  expect(request).toHaveBeenCalledOnce();
+  view.update({
+    sessionKey: "agent:main:replacement",
+    selectedSession: { key: "agent:main:replacement", kind: "direct", sessionId: "replacement-1" },
+  });
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]?.[1]).toMatchObject({
+    sessionKey: "agent:main:replacement",
+    sessionAgentId: "main",
+  });
+  retired.resolve(automationPage("Retired automation"));
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.container.textContent).not.toContain("Retired automation");
+
+  current.resolve(automationPage("Current automation"));
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("automations")?.textContent).toContain("Current automation");
+  expect(view.container.textContent).not.toContain("Retired automation");
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it.each([false, true])(
+  "keeps disclosure reset and restored preference: controlled=%s",
+  async (controlled) => {
+    const request = createGatewayRequestMock(() =>
+      Promise.resolve(automationPage("Scheduled check")),
+    );
+    const onExpandedChange = vi.fn();
+    const view = mountDetails({
+      pullRequestsGateway: automationGateway(request).gateway,
+      ...(controlled
+        ? { desktopDisclosures: { expanded: { automations: false }, onExpandedChange } }
+        : {}),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    const summary = () => view.group("automations")!.querySelector("summary")!;
+    expect(summary().getAttribute("aria-expanded")).toBe(controlled ? "false" : "true");
+    if (!controlled) {
+      summary().click();
+      flush();
+      expect(summary().getAttribute("aria-expanded")).toBe("false");
+    }
+    view.update({ selectedSession: undefined });
+    view.update({ selectedSession: view.initial.selectedSession });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(summary().getAttribute("aria-expanded")).toBe(controlled ? "false" : "true");
+    expect(request).toHaveBeenCalledOnce();
+    expect(onExpandedChange).not.toHaveBeenCalled();
+  },
+);
+
+it("resets only the automation reveal count across physical identity changes", async () => {
+  const page = automationPage("Scheduled check");
+  page.jobs = Array.from({ length: 12 }, (_, index) => ({
+    ...page.jobs[0]!,
+    id: `scheduled-${index}`,
+    name: `Scheduled check ${index}`,
+  }));
+  page.total = page.jobs.length;
+  const request = createGatewayRequestMock(() => Promise.resolve(page));
+  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  const count = () =>
+    view.group("automations")!.querySelectorAll(".chat-summary__automation").length;
+  const more = () =>
+    view.group("automations")!.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
+  expect(count()).toBe(10);
+  more().click();
+  flush();
+  expect(count()).toBe(12);
+  view.update({ progressCardInitialLoading: false });
+  expect(count()).toBe(12);
+
+  view.update({ selectedSession: undefined });
+  view.update({ selectedSession: view.initial.selectedSession });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(count()).toBe(10);
+  more().click();
+  flush();
+  expect(count()).toBe(12);
+  view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(count()).toBe(10);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+it("accepts one replacement-client page while its physical session row is restored", async () => {
+  const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const current = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const oldRequest = createGatewayRequestMock(() => retired.promise);
+  const newRequest = createGatewayRequestMock(() => current.promise);
+  const source = automationGateway(oldRequest);
+  const view = mountDetails({ pullRequestsGateway: source.gateway });
+  expect(oldRequest).toHaveBeenCalledOnce();
+  const hello = source.gateway.snapshot.hello;
+  const client = createTestGatewayClient(newRequest);
+  source.publish({ ...source.gateway.snapshot, client, phase: "connecting", hello: null });
+  // The Gateway fixture publishes connection facts, not the session owner's Details props.
+  view.update({ selectedSession: undefined });
+  expect(newRequest).not.toHaveBeenCalled();
+  source.publish({ ...source.gateway.snapshot, client, phase: "connected", hello });
+  flush();
+  expect(newRequest).toHaveBeenCalledOnce();
+  view.update({ selectedSession: view.initial.selectedSession });
+  expect(newRequest).toHaveBeenCalledOnce();
+
+  retired.resolve(automationPage("Retired client automation"));
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.container.textContent).not.toContain("Retired client automation");
+  current.resolve(automationPage("Replacement client automation"));
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("automations")?.textContent).toContain("Replacement client automation");
+  expect(view.container.textContent).not.toContain("Retired client automation");
+  expect(oldRequest).toHaveBeenCalledOnce();
+  expect(newRequest).toHaveBeenCalledOnce();
+
+  view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
+  expect(view.group("automations")?.textContent).toContain("Replacement client automation");
+  expect(newRequest).toHaveBeenCalledOnce();
+});
+
+it("does not reapply a pending reveal after the same physical identity is restored", async () => {
+  const first = automationPage("Scheduled check");
+  first.jobs = Array.from({ length: 50 }, (_, index) => ({
+    ...first.jobs[0]!,
+    id: `scheduled-${index}`,
+    name: `Scheduled check ${index}`,
+  }));
+  first.total = 51;
+  first.hasMore = true;
+  first.nextOffset = 50;
+  const appended = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const request = createGatewayRequestMock()
+    .mockResolvedValueOnce(first)
+    .mockReturnValueOnce(appended.promise);
+  const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  const group = () => view.group("automations")!;
+  const count = () => group().querySelectorAll(".chat-summary__automation").length;
+  const more = () => group().querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
+  expect(count()).toBe(10);
+  for (const expected of [20, 30, 40, 50]) {
+    more().click();
+    flush();
+    expect(count()).toBe(expected);
+    expect(request).toHaveBeenCalledOnce();
+  }
+  const button = more();
+  button.focus();
+  button.click();
+  flush();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]?.[1]).toMatchObject({ limit: 50, offset: 50 });
+  view.update({ selectedSession: undefined });
+  view.update({ selectedSession: view.initial.selectedSession });
+  expect(request).toHaveBeenCalledTimes(2);
+  // The pending read retains its current frame; the reset lands with that read.
+  expect(count()).toBe(50);
+
+  appended.resolve({
+    ...automationPage("Appended automation"),
+    snapshotRevision: first.snapshotRevision,
+    offset: 50,
+    total: 51,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(count()).toBe(10);
+  expect(group().textContent).not.toContain("Appended automation");
+  expect(request).toHaveBeenCalledTimes(2);
+
+  for (const expected of [20, 30, 40, 50, 51]) {
+    more().click();
+    flush();
+    expect(count()).toBe(expected);
+    expect(request).toHaveBeenCalledTimes(2);
+  }
+  expect(group().textContent).toContain("Appended automation");
+});

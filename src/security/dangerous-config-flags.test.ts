@@ -12,10 +12,7 @@ const pluginEntries = { "workspace-danger": { config: { mode: "danger" } } };
 function writeDangerousWorkspacePlugin(workspaceDir: string) {
   const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
   fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "index.js"),
-    "export default { id: 'workspace-danger' };\n",
-  );
+  fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({

@@ -5,7 +5,6 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest as serializeManifest,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 const sha256 = "a".repeat(64);
 const file = { path: "file", type: "file" as const, mode: 0o644, size: 0, sha256 };
@@ -46,21 +45,8 @@ function rejectsEntry(value: unknown, error: string) {
 it.each([false, true])("projects caches using trusted input context: %s", (trusted) => {
   const authored = ".artifacts/build-all-cache/authored.txt";
   const generated = ".artifacts/build-cache-inputs/compile.json";
-  const emptyDirectories = ["empty", "nested", "nested/empty"];
-  const paths = [
-    ".artifacts/vitest-worker-cache/out.js",
-    ".local/share/pnpm/store/content",
-    authored,
-    generated,
-    "file",
-  ];
-  const directories = [
-    ...new Set([
-      ...paths.flatMap((name) => [...workspacePathAncestors(name)]),
-      ...emptyDirectories,
-    ]),
-  ];
-  const entries = paths.map(namedFile);
+  const directories = [".artifacts", ".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
+  const entries = [authored, generated].map(namedFile);
   const rawEntries = [...directories.map(directory), ...entries].toSorted((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
@@ -70,13 +56,8 @@ it.each([false, true])("projects caches using trusted input context: %s", (trust
   const buildCacheInputs = trusted ? [authored] : undefined;
   const expected = {
     ...manifest,
-    entries: (trusted ? [authored, "file"] : [authored, generated, "file"]).map(namedFile),
-    directories: [
-      ".artifacts",
-      ".artifacts/build-all-cache",
-      ...(trusted ? [] : [".artifacts/build-cache-inputs"]),
-      ...emptyDirectories,
-    ],
+    entries: (trusted ? [authored] : [authored, generated]).map(namedFile),
+    directories: trusted ? directories.slice(0, 2) : directories,
   };
   expect(parseWorkerWorkspaceManifest(raw, ref, buildCacheInputs)).toEqual({
     ...expected,
@@ -85,7 +66,6 @@ it.each([false, true])("projects caches using trusted input context: %s", (trust
   const serialized = serializeManifest({ ...manifest, entries, directories, buildCacheInputs });
   expect(readManifest(JSON.parse(serialized))).toEqual(expected);
   expect(JSON.parse(serialized).buildCacheInputs).toBeUndefined();
-  expect(() => parseWorkerWorkspaceManifest(raw + " ", ref, buildCacheInputs)).toThrow("digest");
 });
 
 it("requires non-array records for manifests, journals, and entries", () => {

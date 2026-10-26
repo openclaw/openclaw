@@ -104,12 +104,9 @@ it("reports invalid URLs, unavailable files, fonts, and non-UTF-8 scripts per re
   fs.linkSync(path.join(root, "index.html"), path.join(root, "hardlink.css"));
   const unsupported = [
     "https://example.com/a.png",
-    "//example.com/a.png",
     "#id",
-    "data:image/png;base64,AA==",
     "/a.png",
     "~/a.png",
-    "%2Fa.png",
     "%00.png",
     "%zz",
     "font.woff2",

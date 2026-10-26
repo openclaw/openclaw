@@ -34,6 +34,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "long-transcript-sessions": { type: "string" },
       "chat-startup-sessions": { type: "string" },
       "worktree-files": { type: "string" },
+      "worktree-local-origin": { type: "boolean" },
       "worktree-file-bytes": { type: "string" },
       "worktree-install-failure": { type: "boolean" },
       "worktree-cold-commits": { type: "string" },
@@ -113,6 +114,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     (worktreeFiles > 0 ||
       worktreeColdCommits > 0 ||
       values["nested-repository"] ||
+      values["worktree-local-origin"] ||
       values["worktree-install-failure"]) &&
     projects === 0
   ) {
@@ -139,6 +141,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     longTranscriptSessions,
     chatStartupSessions,
     worktreeFiles,
+    worktreeLocalOrigin: values["worktree-local-origin"] ?? false,
     worktreeFileBytes,
     worktreeColdCommits,
     worktreeInstallFailure: values["worktree-install-failure"] ?? false,

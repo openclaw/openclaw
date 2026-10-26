@@ -43,12 +43,69 @@ import {
   holdSubagentExecution,
   seedRow,
 } from "./session-row-projection.read-fixture.test-support.js";
+import * as sharingPolicy from "./session-sharing-policy.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("does not derive discarded send diagnostics while interleaving row modes and viewers", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const owner = ensureProfileForEmail("owner@row-mode.test");
+    const guest = ensureProfileForEmail("guest@row-mode.test");
+    const clients = [owner, guest].map((profile) => sharingPolicyClient({ user: profile.id }));
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const client of clients) {
+      prepareGatewayRecipientProfile(client);
+    }
+    for (const visibility of ["shared", "draft"] as const) {
+      seedRow(`agent:main:${visibility}`, {
+        sessionId: visibility,
+        updatedAt: 1,
+        visibility,
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
+    }
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const diagnostics = vi.spyOn(sharingPolicy, "authorizeSessionAgentRun");
+    for (const rowMode of ["sidebar", "compact", "dashboard", undefined, "sidebar"] as const) {
+      for (const [index, client] of clients.entries()) {
+        diagnostics.mockClear();
+        const result = await listProjectedSessions({
+          projection,
+          client,
+          opts: { rowMode },
+          acceptsSerializedJson: true,
+        });
+        expect(result.count).toBe(index === 0 ? 2 : 1);
+        const row = result.sessions.find((candidate) => candidate.key === "agent:main:shared")!;
+        if (rowMode === "sidebar" || rowMode === "dashboard") {
+          expect(diagnostics).not.toHaveBeenCalled();
+          expect(row.sendDisabledReason).toBeUndefined();
+        } else {
+          expect(diagnostics).toHaveBeenCalled();
+          expect(row.sendDisabledReason).toBe(
+            index === 0 ? null : "session is shared for this connection",
+          );
+        }
+      }
+    }
+    setUserProfileRole(guest.id, "none");
+    prepareGatewayRecipientProfile(clients[1]!);
+    expect(
+      (
+        await listProjectedSessions({
+          projection,
+          client: clients[1],
+          opts: { rowMode: "sidebar" },
+        })
+      ).sessions,
+    ).toEqual([]);
+  });
+});
 
 it("separates promoted navigation activity from live controller activity", async () => {
   using clock = vi.spyOn(Date, "now");

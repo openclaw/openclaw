@@ -57,7 +57,7 @@ import {
 } from "./session-recovery-source.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import { SessionMutationFactsUnavailableError } from "./session-sharing-preparation.js";
-import { prepareRestartInterruptedSubagentRecovery } from "./session-subagent-reactivation.js";
+import { prepareSubagentRestartRecovery } from "./session-subagent-reactivation.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -134,7 +134,7 @@ export async function recoverGatewaySession(params: {
   const recovery = initialSource.mainRestartRecovery;
   const subagentRecovery =
     !recovery && params.mode !== "new-session"
-      ? await prepareRestartInterruptedSubagentRecovery({
+      ? await prepareSubagentRestartRecovery({
           sessionKey: sourceTarget.canonicalKey,
           agentId: sourceTarget.agentId,
           entry: initialSource,
@@ -167,7 +167,7 @@ export async function recoverGatewaySession(params: {
       "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
     );
   }
-  if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
+  if (!subagentRecovery && isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({
       ...params,
       target: sourceTarget,
@@ -230,8 +230,8 @@ export async function recoverGatewaySession(params: {
             current.lifecycleRevision !== initialSource.lifecycleRevision ||
             (subagentRecovery
               ? current.lastRunId !== subagentRecovery.runId ||
-                current.status !== "interrupted" ||
-                current.abortedLastRun !== true ||
+                current.status !== initialSource.status ||
+                current.abortedLastRun !== initialSource.abortedLastRun ||
                 current.mainRestartRecovery !== undefined
               : !recovery ||
                 current.mainRestartRecovery?.cycleId !== recovery.cycleId ||

@@ -6,7 +6,6 @@ import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
-import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
@@ -18,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
+import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const initialExitCode = process.exitCode;
@@ -133,20 +133,59 @@ function fixture(scenario: Scenario, withDatabase = true) {
       database.close();
     }
   }
-  const snapshot = () =>
-    listDirectoryTreeStrictSync(home)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(home, filename),
-          fs.readFileSync(filename).toString("hex"),
-          fs.statSync(filename).mode,
-        ];
-      });
+  const snapshot = () => snapshotUpdateFixtureFiles(home);
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
+
+it.each(["absent", "file", "unreadable"] as const)(
+  "checks unresolved cron update admission (heartbeat source: %s)",
+  async (sourceKind) => {
+    const f = fixture({
+      name: sourceKind,
+      scratch: source,
+      invalidSource: sourceKind === "unreadable",
+    });
+    fs.writeFileSync(
+      f.configPath,
+      JSON.stringify({
+        agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
+      }),
+    );
+    if (sourceKind === "absent") {
+      fs.unlinkSync(f.sourcePath);
+    }
+    {
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      const oldKey = path.join(
+        path.dirname(process.env.OPENCLAW_STATE_DIR!),
+        "old",
+        "cron",
+        "jobs.json",
+      );
+      db.prepare("UPDATE cron_jobs SET store_key = ?").run(oldKey);
+      db.prepare("UPDATE cron_job_scratch SET store_key = ?").run(oldKey);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    const blocked = sourceKind === "unreadable";
+    expect(process.exitCode).toBe(blocked ? 3 : 0);
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: blocked ? "refuse" : "admit",
+      reasons: blocked
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("regular file"),
+            }),
+          ]
+        : [],
+    });
+    expect(f.snapshot()).toEqual(before);
+  },
+);
 
 it.each<Scenario>([
   {

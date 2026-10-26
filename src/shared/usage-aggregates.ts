@@ -26,14 +26,47 @@ type CreatorAccumulator = Omit<CreatorUsage, "daily" | "sessionActivity"> & {
   sessionActivity: Map<string, CreatorUsage["sessionActivity"][number]>;
 };
 
+// Reports repeat a few provider/model pairs across thousands of rows; build each key once.
+const modelIdentities = new Map<string, Map<string, string>>();
+
 /** Builds a collision-free identity while preserving legacy missing-as-unknown grouping. */
 export function usageModelIdentity(provider?: string, model?: string): string {
-  return JSON.stringify([provider ?? "unknown", model ?? "unknown"]);
+  const providerKey = provider ?? "unknown";
+  const modelKey = model ?? "unknown";
+  let models = modelIdentities.get(providerKey);
+  if (!models) {
+    models = new Map();
+    modelIdentities.set(providerKey, models);
+  }
+  let identity = models.get(modelKey);
+  if (identity === undefined) {
+    identity = JSON.stringify([providerKey, modelKey]);
+    models.set(modelKey, identity);
+  }
+  return identity;
 }
 
 /** Extends the model identity with its calendar bucket without delimiter ambiguity. */
 export function usageDailyModelIdentity(date: string, provider?: string, model?: string): string {
-  return JSON.stringify([date, provider ?? "unknown", model ?? "unknown"]);
+  // Same bytes as JSON.stringify([date, provider, model]).
+  return `[${JSON.stringify(date)},${usageModelIdentity(provider, model).slice(1)}`;
+}
+
+/** Sorted union of a row's activity dates; usually the lists already agree. */
+function sessionActivityDates(usage: NonNullable<SessionUsageEntry["usage"]>): string[] {
+  const activity = usage.activityDates ?? [];
+  const extra = [
+    ...(usage.dailyBreakdown ?? []).map(({ date }) => date),
+    ...(usage.dailyMessageCounts ?? []).map(({ date }) => date),
+  ];
+  const known = new Set(activity);
+  if (
+    extra.every((date) => known.has(date)) &&
+    activity.every((date, i) => i === 0 || activity[i - 1]! < date)
+  ) {
+    return activity;
+  }
+  return [...new Set([...activity, ...extra])].toSorted();
 }
 
 function createLatencyAccumulator(): LatencyAccumulator {
@@ -208,13 +241,7 @@ export function createUsageAggregateAccumulator() {
     addCostUsageTotals(creator.totals, usage);
     if (countedSession) {
       creator.sessionCount += 1;
-      const dates = [
-        ...new Set([
-          ...(usage.activityDates ?? []),
-          ...(usage.dailyBreakdown?.map(({ date }) => date) ?? []),
-          ...(usage.dailyMessageCounts?.map(({ date }) => date) ?? []),
-        ]),
-      ].toSorted();
+      const dates = sessionActivityDates(usage);
       const key = JSON.stringify(dates);
       const activity = creator.sessionActivity.get(key) ?? { dates, sessionCount: 0 };
       activity.sessionCount += 1;

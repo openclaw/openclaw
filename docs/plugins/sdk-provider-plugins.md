@@ -632,6 +632,41 @@ for the phase to settle, then merges model rows and provider outcomes in provide
 label order. Hooks retain their individual discovery deadlines; completion order
 does not change catalog precedence.
 
+## Per-request credentials in custom transports
+
+`createStreamFn` receives an optional `requestAuth` capability with `version: 1`
+and `resolve({ signal }): Promise<{ apiKey: string; assertCurrent(): void }>`.
+The embedded run's auth owner supplies it for a selected stored OAuth profile.
+Await it immediately before **every physical request**, including provider-private
+continuation and stream-recovery requests, then call the result's `assertCurrent()`
+and check cancellation again before dispatch. Do not cache the returned bearer
+or fall back to `StreamOptions.apiKey` on rejection.
+
+The capability re-reads the canonical credential owner and uses the existing
+OAuth refresh/rotation machinery. It stays bound to the selected profile,
+provider, account and automation authorization, and rejects after the run closes,
+the auth selection advances, or cancellation. Closure during awaited preparation
+also prevents returning credentials. An already-claimed OAuth refresh retains
+its existing independent settlement owner.
+
+This is additive: older hosts, other completion entrypoints, and calls without a
+selected stored OAuth profile may omit it. Bounded auth views such as
+`openclaw agent exec` with state-database shared auth, and env-only scopes, omit
+it because those views cannot supply canonical account authorization. Their
+existing local-credential and shared-OAuth exclusion rules remain unchanged.
+Setup-owned verification of a replacement OAuth sign-in also omits the capability:
+it uses the exact active setup credential scope, not ambient account authorization.
+The replacement stays unavailable outside that scope until verified activation.
+Runtime-only external OAuth profiles also omit the capability: the external
+credential source retains ownership, without requiring a canonical stored row.
+Persisted external profiles retain canonical capture and retirement checks.
+Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
+during an attempt. Static API keys are unchanged. Account-less legacy OAuth
+credentials may keep the same refresh
+grant; a rotated grant without account identity fails closed rather than assuming
+it belongs to the same account. This capability does not retry HTTP 401, replay
+conversations, or transfer refresh grants to a transport.
+
 ## Provider stream decorators
 
 `wrapStreamFn` receives optional request context for provider-owned behavior:

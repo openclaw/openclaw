@@ -1,8 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
-import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
-import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
+import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
+import { connectShellIdle } from "./app-shell-idle.runtime.ts";
+
+vi.mock("./control-ui-favicon-status.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-favicon-status.runtime.ts")>()),
+  connectControlUiFavicon: () => () => {},
+}));
 
 const cleanups: Array<() => void> = [];
 const idleCallbacks: Array<() => void> = [];
@@ -46,7 +56,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup(routeId?: "advanced") {
+function setup(routeId?: "advanced" | "dashboard" | "workboard") {
   const currentLocation = {
     pathname: routeId ? "/control/settings/advanced" : "/chat",
     search: "",
@@ -81,33 +91,67 @@ function setup(routeId?: "advanced") {
   let notify = () => {};
   const outlet = { presentationSettled: false };
   const transcript = { ready: false };
-  const shell = document.body.appendChild(document.createElement("div"));
+  const host = createShellOwner();
+  const shell = document.body.appendChild(host.element);
+  const pane = document.createElement("openclaw-chat-pane");
+  const paneState = {
+    presented: true,
+    visuallyPresented: true,
+    conversationPresented: true,
+    transcriptLoading: false,
+    composerReady: true,
+  };
+  for (const key of Object.keys(paneState) as (keyof typeof paneState)[]) {
+    Object.defineProperty(pane, key, { get: () => paneState[key] });
+  }
+  Object.defineProperty(pane, "transcriptReady", { get: () => transcript.ready });
+  const panes = [pane];
+  const pluginPages: HTMLElementTagNameMap["openclaw-plugin-page"][] = [];
+  const loading = new Set<string>();
+  vi.spyOn(host, "queryRenderedElements").mockImplementation((tag) =>
+    tag === "openclaw-chat-pane" ? panes : tag === "openclaw-plugin-page" ? pluginPages : [],
+  );
+  Object.defineProperty(host, "routeOutlet", { value: outlet });
   const preloadRoute = vi.fn(async () => {});
-  const stop = connectNavigationPrefetch({
-    shell,
-    basePath: "/control",
-    resourceBasePath: "/control",
-    router: {
-      getState: () => state,
-      subscribe: (listener) => {
-        notify = () => listener(state);
-        return () => true;
-      },
-    },
-    gateway: {
-      snapshot: createApplicationGatewaySnapshot({
+  const context = createContext(
+    createApplicationGateway(
+      createApplicationGatewaySnapshot({
         phase: "connected",
         assistantAgentId: "main",
         sessionKey: "main",
       }),
-      subscribe: () => () => {},
+    ).gateway,
+    createSessions("main", []),
+  );
+  Object.assign(context, {
+    basePath: "/control",
+    resourceBasePath: "/control",
+    preload: preloadRoute,
+    router: {
+      getState: () => state,
+      subscribe: (listener: (value: ReturnType<ApplicationRouter["getState"]>) => void) => {
+        notify = () => listener(state);
+        return () => true;
+      },
     },
-    outlet: () => outlet,
-    transcriptsReady: () => transcript.ready,
-    preloadRoute,
   });
+  Object.assign(context.plugins, { isLoading: (id: string) => loading.has(id) });
+  const stop = connectShellIdle(host, context, 0);
   cleanups.push(stop, () => shell.remove());
-  return { state, outlet, transcript, shell, stop, preloadRoute, notify: () => notify() };
+  return {
+    state,
+    outlet,
+    transcript,
+    shell,
+    stop,
+    preloadRoute,
+    notify: () => notify(),
+    panes,
+    pane,
+    paneState,
+    pluginPages,
+    loading,
+  };
 }
 
 const hints = () =>
@@ -343,4 +387,58 @@ it("keeps native route intent in development without a built asset descriptor", 
   fixture.stop();
   await vi.advanceTimersByTimeAsync(50);
   expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
+});
+
+async function expectNativeIntent(fixture: ReturnType<typeof setup>, ready: boolean) {
+  const trigger = fixture.shell.appendChild(document.createElement("a"));
+  trigger.href = "/control/sessions";
+  trigger.className = "nav-item";
+  const before = fixture.preloadRoute.mock.calls.length;
+  trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fixture.preloadRoute).toHaveBeenCalledTimes(before + (ready ? 1 : 0));
+  trigger.remove();
+}
+
+it("waits for a current pane but lets an intentionally hidden conversation stay unloaded", async () => {
+  const fixture = setup("dashboard");
+  fixture.outlet.presentationSettled = true;
+  fixture.panes.length = 0;
+  await expectNativeIntent(fixture, false);
+  fixture.paneState.conversationPresented = false;
+  fixture.transcript.ready = false;
+  fixture.paneState.composerReady = false;
+  fixture.panes.push(fixture.pane);
+  await expectNativeIntent(fixture, true);
+  fixture.paneState.conversationPresented = true;
+  fixture.paneState.transcriptLoading = true;
+  await expectNativeIntent(fixture, false);
+  fixture.paneState.transcriptLoading = false;
+  fixture.transcript.ready = true;
+  await expectNativeIntent(fixture, false);
+  fixture.paneState.composerReady = true;
+  await expectNativeIntent(fixture, true);
+  fixture.paneState.presented = false;
+  await expectNativeIntent(fixture, false);
+  fixture.paneState.presented = true;
+  fixture.paneState.visuallyPresented = false;
+  await expectNativeIntent(fixture, false);
+});
+
+it("waits for mounted plugin activation without waiting for unrelated plugins", async () => {
+  const fixture = setup("workboard");
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const page = document.createElement("openclaw-plugin-page");
+  page.pluginId = "workboard";
+  fixture.pluginPages.push(page);
+  fixture.loading.add("workboard");
+  fixture.loading.add("unrelated");
+  await expectNativeIntent(fixture, false);
+  fixture.loading.delete("workboard");
+  await expectNativeIntent(fixture, true);
+  page.pluginId = "unrelated";
+  await expectNativeIntent(fixture, false);
+  fixture.pluginPages.length = 0;
+  await expectNativeIntent(fixture, true);
 });

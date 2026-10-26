@@ -38,22 +38,18 @@ export type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents" | "memory"> & 
 
 export function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
-    getPluginStateCapacity() {
-      return getPluginStateCapacityForTests("memory-core", env);
-    },
-    importPluginStateEntries(options, entries) {
+    getPluginStateCapacity: () => getPluginStateCapacityForTests("memory-core", env),
+    importPluginStateEntries: (options, entries) =>
       importPluginStateEntriesForDoctorForTests(
         "memory-core",
         { ...options, env: options.env ?? env },
         entries,
-      );
-    },
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("memory-core", {
+      ),
+    openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("memory-core", {
         ...options,
         env: options.env ?? env,
-      });
-    },
+      }),
   };
 }
 

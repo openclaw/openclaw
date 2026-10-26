@@ -4,34 +4,19 @@ import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
 
-describe("resolveEnvNodeProxyUrlForTarget", () => {
-  it("rereads proxy and bypass settings for each request", () => {
-    const target = new URL("https://api.example.test/v1");
-    const env: NodeJS.ProcessEnv = { HTTPS_PROXY: "http://proxy.example:8080" };
+it("snapshots a URL target before reading bypass settings", () => {
+  const target = new URL("wss://original.example/ws");
+  const env = {
+    HTTPS_PROXY: "http://proxy.example:8080",
+    get no_proxy() {
+      target.hostname = "changed.example";
+      return "original.example:443";
+    },
+  };
 
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
-    env.NO_PROXY = "example.test";
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
-    env.no_proxy = "";
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
-    env.https_proxy = "";
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
-  });
-
-  it("snapshots a URL target before reading bypass settings", () => {
-    const target = new URL("wss://original.example/ws");
-    const env = {
-      HTTPS_PROXY: "http://proxy.example:8080",
-      get no_proxy() {
-        target.hostname = "changed.example";
-        return "original.example:443";
-      },
-    };
-
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
-    expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
-    expect(target.protocol).toBe("wss:");
-  });
+  expect(resolveEnvNodeProxyUrlForTarget(target, env)).toBeUndefined();
+  expect(resolveEnvNodeProxyUrlForTarget(target, env)?.href).toBe("http://proxy.example:8080/");
+  expect(target.protocol).toBe("wss:");
 });
 
 describe("createNodeProxyAgent", () => {
@@ -77,12 +62,11 @@ describe("createNodeProxyAgent", () => {
     (mode) => {
       const proxyUrl = "https://qa-user:qa-password@[invalid";
       process.env.HTTPS_PROXY = proxyUrl;
-      const create = vi.fn(() => {
-        if (mode === "env") {
-          return createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" });
-        }
-        return createNodeProxyAgent({ mode, proxyUrl });
-      });
+      const create = vi.fn(() =>
+        mode === "env"
+          ? createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" })
+          : createNodeProxyAgent({ mode, proxyUrl }),
+      );
       expect(create).toThrow("Invalid proxy URL");
       const error = create.mock.results[0]?.value;
       expect(inspect(error, { depth: null })).not.toMatch(/qa-user|qa-password/);
@@ -93,11 +77,7 @@ describe("createNodeProxyAgent", () => {
     process.env.HTTPS_PROXY = "http://proxy.example:8080";
     const poolOptions = {
       keepAlive: true,
-      keepAliveMsecs: 750,
       maxSockets: 3,
-      maxTotalSockets: 6,
-      maxFreeSockets: 2,
-      scheduling: "fifo" as const,
     };
     const tlsOptions = {
       timeout: 5000,

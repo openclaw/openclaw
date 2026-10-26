@@ -8,7 +8,10 @@ import type { EventLogEntry } from "../api/event-log.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import {
+  readAvatarGatewayContext,
+  setAvatarGatewayOrigin,
+} from "../lib/identity-avatar-context.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import type { BootRecord } from "./boot-record.ts";
@@ -402,7 +405,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
           accept();
         }
         Object.defineProperty(current(), "recoveryScope", { value: recoveryScope });
+        Object.defineProperty(current(), "recoveryScopeReady", { value: true });
         current().testOptions.onRecoveryScopeChange?.();
+        expect(readAvatarGatewayContext().storageScope).toBe(recoveryScope || undefined);
         expect(sessionStorage.getItem(ownKey)).toBe(recoveryScope ? request : null);
         expect(sessionStorage.getItem(oldKey)).toBeNull();
         expect(sessionStorage.getItem(otherGatewayKey)).toBe(request);

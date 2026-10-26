@@ -27,21 +27,18 @@ const taggedEmail = { email: "User+Tag@Example.com" };
 
 describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adopt)", () => {
   it("preserves Copilot credentials when the shipped policy artifact is missing", () => {
-    const load = vi
+    using _ = vi
       .spyOn(facadeLoader, "loadBundledPluginPublicSurfaceModuleSyncCore")
       .mockImplementation(() => {
         throw new facadeLoader.MissingPublicSurfaceError("Missing Copilot policy artifact");
       });
-    try {
-      expect(isSafeToCopyOAuthRoutingScope(copilot("acme.ghe.com"), copilot("acme.ghe.com"))).toBe(
-        false,
-      );
-      expect(isSafeToCopyOAuthRoutingScope({ provider: "openai" }, { provider: "openai" })).toBe(
-        true,
-      );
-    } finally {
-      load.mockRestore();
-    }
+
+    expect(isSafeToCopyOAuthRoutingScope(copilot("acme.ghe.com"), copilot("acme.ghe.com"))).toBe(
+      false,
+    );
+    expect(isSafeToCopyOAuthRoutingScope({ provider: "openai" }, { provider: "openai" })).toBe(
+      true,
+    );
   });
 
   it.each([

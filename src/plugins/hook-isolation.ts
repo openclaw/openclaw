@@ -61,6 +61,15 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
     }
     return false;
   }
+  if (!sourceData && (Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype)) {
+    // Native cloning materializes ordinary fields as data properties, including getter results.
+    for (const key of Reflect.ownKeys(value)) {
+      if (containsSharedMemory(Reflect.get(value, key), seen)) {
+        return true;
+      }
+    }
+    return false;
+  }
   if (sourceData && !(value instanceof Error) && !Array.isArray(value)) {
     const prototype = Object.getPrototypeOf(value);
     // Non-plain values retain their native clone semantics. Inspect their
@@ -90,9 +99,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // Bun omits Error.cause, so scan unowned source edges too; owned transcript JSON is frozen.
-    // Accessors run only in the native clone; its unowned result is fully scanned below.
-    if (containsSharedMemory(value, new Set<object>(), true)) {
+    // Bun omits Error.cause, so only it needs a source scan in addition to the snapshot.
+    if (process.versions.bun && containsSharedMemory(value, new Set<object>(), true)) {
       throw new TypeError("shared memory cannot be isolated");
     }
     const cloned = structuredClone(value);
@@ -114,6 +122,7 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
   try {
     const unowned: unknown[] = [];
     const positions: Array<{ target: object; key: string }> = [];
+    const freshMetadata = new Set<object>();
     const isolate = (target: object, key: string, value: unknown, owned = false) => {
       const kind = typeof value;
       if (
@@ -123,10 +132,26 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
       ) {
         return;
       }
+      if (typeof value === "object" && freshMetadata.has(value)) {
+        // The projector already detached the envelope; only its children need isolation.
+        isolateProperties(value);
+        return;
+      }
       unowned.push(value);
       positions.push({ target, key });
     };
-    const messages = projectModelContextMessages(event.messages);
+    const isolateProperties = (target: object, skipKey?: string) => {
+      for (const key of Reflect.ownKeys(target)) {
+        if (typeof key === "symbol") {
+          Reflect.deleteProperty(target, key);
+        } else if (key !== skipKey) {
+          isolate(target, key, Reflect.get(target, key));
+        }
+      }
+    };
+    const messages = projectModelContextMessages(event.messages, (metadata) => {
+      freshMetadata.add(metadata);
+    });
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
       if (message && typeof message === "object") {
@@ -158,13 +183,7 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
       isolate(messages, String(index), message);
     }
     const snapshot = { ...event, messages };
-    for (const key of Reflect.ownKeys(snapshot)) {
-      if (typeof key === "symbol") {
-        Reflect.deleteProperty(snapshot, key);
-      } else if (key !== "messages") {
-        isolate(snapshot, key, Reflect.get(snapshot, key));
-      }
-    }
+    isolateProperties(snapshot, "messages");
     if (unowned.length) {
       // One graph clone preserves aliases among unowned values and native-value checks.
       const cloned = cloneHookIsolationValue(hookName, unowned);

@@ -467,7 +467,9 @@ export async function sessionsCommand(
 
   const primaryTarget = targets[0];
   if (primaryTarget && targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
+    runtime.log(
+      info(`Session store: ${sanitizeTerminalText(resolveSessionStoreDisplayPath(primaryTarget))}`),
+    );
   } else {
     runtime.log(
       info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),

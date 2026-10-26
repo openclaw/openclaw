@@ -362,6 +362,16 @@ describePosix("prior-CI forward main admission", () => {
     expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8]);
   });
 
+  it("refuses a final GraphQL fork from the preliminary observed tip", () => {
+    const first = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+    const fork = f.commit(f.tree("before\n", "forked advance\n"), [f.base]);
+    configureMerge(f, {
+      observations: [...unchanged(3), { main: first }, { main: fork }],
+    });
+
+    refuse("both observed and verified main");
+  });
+
   it.each([
     ["same main", "PR or main changed during observation"],
     ["persistent", "mergeability recalculation"],

@@ -1,6 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { Server } from "@modelcontextprotocol/server";
 import { Type } from "typebox";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 
 export function createTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -21,12 +22,7 @@ export const failureOf = (promise: Promise<unknown>) =>
   );
 
 export async function waitForStart(started: Promise<unknown>, call: Promise<unknown>) {
-  await Promise.race([
-    started,
-    call.then(() => {
-      throw new Error("Tool settled before the fixture gate");
-    }),
-  ]);
+  await awaitGateBeforeSettlement(started, call, "Tool settled before the fixture gate");
 }
 
 export function createMcpConnection(server: Server, name = "mcp-test-client") {

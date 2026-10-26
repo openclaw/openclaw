@@ -17,18 +17,6 @@ import {
   type GatewayAssistantInjectionContext,
 } from "./server-methods/chat-inject.js";
 
-export type AssistantHumanMentionMessage = {
-  sessionKey: string;
-  agentId?: string;
-  /** Exact displayed Markdown; mention spans are UTF-16 offsets into it. */
-  text: string;
-  mentions: readonly HumanMention[];
-  /** Human profile the Inbox names as sender, for example the session owner. */
-  onBehalfOfProfileId: string;
-  /** Stable caller key; a retry replays the same transcript row and Inbox source. */
-  idempotencyKey: string;
-};
-
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 
 function invalid(message: string): Result<never, ErrorShape> {
@@ -45,7 +33,17 @@ function invalid(message: string): Result<never, ErrorShape> {
  */
 export async function injectAssistantMessageWithHumanMentions(
   context: GatewayAssistantInjectionContext & { mentionInbox?: MentionInbox },
-  params: AssistantHumanMentionMessage,
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    /** Exact displayed Markdown; mention spans are UTF-16 offsets into it. */
+    text: string;
+    mentions: readonly HumanMention[];
+    /** Human profile the Inbox names as sender, for example the session owner. */
+    onBehalfOfProfileId: string;
+    /** Stable caller key; a retry replays the same transcript row and Inbox source. */
+    idempotencyKey: string;
+  },
   sessionMutationCommitGuard?: () => void,
 ): Promise<Result<{ messageId: string; replayed?: true }, ErrorShape>> {
   const { mentionInbox } = context;

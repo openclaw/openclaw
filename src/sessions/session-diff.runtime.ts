@@ -161,7 +161,7 @@ async function collectUntrackedFiles(
   if (listing === null) {
     throw new Error("Unable to read untracked Git changes");
   }
-  const paths = listing.split("\0").filter(Boolean);
+  const paths = listing.split("\0", MAX_UNTRACKED_FILES + 1).filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   const safePaths: string[] = [];

@@ -433,9 +433,17 @@ export async function readProxyBody(
   return Buffer.concat(chunks);
 }
 
+const TERMINAL_RESPONSE_CANDIDATE = /response\.(?:completed|failed|incomplete)|\\u/u;
+
 export function isTerminalResponse(bytes: Buffer): boolean {
+  const text = bytes.toString("utf8");
+  // Ordinary deltas cannot settle a response. Escaped names and all possible
+  // terminal matches still use JSON parsing, including duplicate/malformed keys.
+  if (!TERMINAL_RESPONSE_CANDIDATE.test(text)) {
+    return false;
+  }
   try {
-    const event: unknown = JSON.parse(bytes.toString("utf8"));
+    const event: unknown = JSON.parse(text);
     return (
       isJsonObject(event) &&
       (event.type === "response.failed" ||

@@ -644,12 +644,20 @@ export function normalizeModelCatalog(
       : undefined;
   });
   const runtimeAugment = value.runtimeAugment === true;
+  const configuredEndpointDiscovery = [
+    ...new Set(
+      normalizeTrimmedStringList(value.configuredEndpointDiscovery)
+        .map(normalizeProviderId)
+        .filter((provider) => discovery?.[provider] === "runtime"),
+    ),
+  ];
   const catalog = {
     ...(Object.keys(modelsDev).length > 0 ? { modelsDev } : {}),
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(configuredEndpointDiscovery.length > 0 ? { configuredEndpointDiscovery } : {}),
     ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;

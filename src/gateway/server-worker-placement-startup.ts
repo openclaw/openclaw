@@ -147,9 +147,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     hasCurrentDeviceRunner: (deviceId) =>
       nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
-  let metadataChanges:
-    | ReturnType<typeof subscribeGatewayWorkerPlacementMetadataChanges>
-    | undefined;
+  let metadata: ReturnType<typeof subscribeGatewayWorkerPlacementMetadataChanges> | undefined;
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
@@ -405,7 +403,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       ...params,
       runnerAvailability,
     });
-    metadataChanges = changes;
+    metadata = changes;
     const uninstallPlacementChanges = params.placements.subscribeChanges((placement) => {
       sessionRetirement.markPending(placement.sessionId);
       diskSpace.invalidate();
@@ -427,6 +425,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     const scope = scheduler.scope();
     const optionalWorkSignal = AbortSignal.any([scope.signal, getGatewayRestartDrainSignal()]);
     const operations = new Map<"reconcile" | "disk-space" | "auto-suspend", Promise<void>>();
+    let reconcileIncludesActive = false;
     let reconciliationPhase: string | undefined;
     const reconcilePhase = (name: string, run: () => Promise<void>) => {
       reconciliationPhase = name;
@@ -468,34 +467,40 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       });
       return current;
     };
-    const reconcileActivePlacements = (): Promise<void> => {
+    const reconcileActivePlacements = (includeActive = true): Promise<void> => {
       if (isReconciliationPaused()) {
         return Promise.resolve();
       }
-      return (
-        operations.get("reconcile") ??
-        trackOperation(
-          "reconcile",
-          runWithSpawnBroker(spawnBroker, async () => {
-            await reconcilePhase("reconcile.session-retirement", () =>
-              sessionRetirement.reconcile(optionalWorkSignal),
-            );
-            if (isReconciliationPaused()) {
-              return;
-            }
+      const pending = operations.get("reconcile");
+      if (pending) {
+        // A periodic sweep must still recover active owners after an identity-only pass.
+        const resume = () => reconcileActivePlacements();
+        return includeActive && !reconcileIncludesActive ? pending.then(resume, resume) : pending;
+      }
+      reconcileIncludesActive = includeActive;
+      return trackOperation(
+        "reconcile",
+        runWithSpawnBroker(spawnBroker, async () => {
+          await reconcilePhase("reconcile.session-retirement", () =>
+            sessionRetirement.reconcile(optionalWorkSignal),
+          );
+          if (isReconciliationPaused()) {
+            return;
+          }
+          if (includeActive) {
             await reconcilePhase("reconcile.active", () => dispatchService.reconcileActive());
-            if (isReconciliationPaused()) {
-              return;
-            }
-            await reconcilePhase("reconcile.publications", () =>
-              reconcilePublications(isReconciliationPaused),
-            );
-            if (!isReconciliationPaused()) {
-              void nodeWorkspaceRetention.schedule();
-            }
-          }),
-          "Worker placement reconcile sweep failed",
-        )
+          }
+          if (isReconciliationPaused()) {
+            return;
+          }
+          await reconcilePhase("reconcile.publications", () =>
+            reconcilePublications(isReconciliationPaused),
+          );
+          if (!isReconciliationPaused()) {
+            void nodeWorkspaceRetention.schedule();
+          }
+        }),
+        "Worker placement reconcile sweep failed",
       );
     };
     const sweepDiskSpace = (): Promise<void> => {
@@ -546,14 +551,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         if (previousSessionId && previousSessionId !== currentSessionId) {
           sessionRetirement.markPending(previousSessionId);
           const pending = operations.get("reconcile");
-          if (!pending) {
-            void reconcileActivePlacements();
-            return;
-          }
-          // The sweep owns reporting and settlement; returning it would create an
-          // unobserved rejecting promise for this best-effort event subscriber.
-          const resume = () => void reconcileActivePlacements();
-          void pending.then(resume, resume);
+          // Retire changed identities without sweeping unrelated active placements.
+          // The sweep owns reporting; this best-effort subscriber must not return its promise.
+          const resume = () => void reconcileActivePlacements(false);
+          void (pending ? pending.then(resume, resume) : reconcileActivePlacements(false));
         }
       }),
     );
@@ -696,7 +697,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       ...runnerAvailability,
       markChanged(nodeId: string) {
         runnerAvailability.markChanged();
-        metadataChanges?.runnerChanged(nodeId);
+        metadata?.runnerChanged(nodeId);
         scheduleDiskSpaceSweep?.();
       },
     },
