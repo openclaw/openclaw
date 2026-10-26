@@ -34,6 +34,7 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     ["--worktree-files", "500001"],
     ["--projects", "0", "--worktree-files", "1"],
     ["--projects", "0", "--nested-repository"],
+    ["--projects", "0", "--worktree-local-origin"],
     ["--projects", "0", "--github-options-connected"],
     ["--cron-announce-last", "--cron", "0"],
     ["--cron-announce-last", "--sessions", "1", "--runs", "0"],
@@ -145,9 +146,19 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     const generated = await generateTeamShapeFixture(
       options(
         stateDir,
-        "--sessions 20 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1",
+        "--sessions 20 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1 --worktree-local-origin --worktree-files 5 --worktree-file-bytes 256",
       ),
     );
+    const project = generated.summary.projectWorktrees[0]!;
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", project.repoRoot, ...args], {
+        env: generated.env,
+        encoding: "utf8",
+      }).trim();
+    const origin = git("remote", "get-url", "origin");
+    expect(path.dirname(origin)).toBe(at("fixture-remotes"));
+    expect(git("ls-remote", "--symref", "origin", "HEAD")).toContain("ref: refs/heads/main\tHEAD");
+    expect(git("--git-dir", origin, "rev-parse", "HEAD")).toBe(git("rev-parse", "refs/heads/main"));
     expect(process.env === originalEnv).toBe(true);
     expect(generated.env).toMatchObject({
       OPENCLAW_PROFILE: "team-shape-40967",
