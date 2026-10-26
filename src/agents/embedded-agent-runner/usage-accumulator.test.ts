@@ -63,15 +63,16 @@ describe("usage-accumulator", () => {
       { input: 120, output: 30, cacheRead: 82_000, cacheWrite: 0, total: 82_150 },
       FINAL_USAGE,
     );
-    expect(acc).toMatchObject({
+    expect(toNormalizedUsage(acc)).toMatchObject({
       input: 370,
       output: 120,
       reasoningTokens: 19,
       cacheRead: 246_000,
       cacheWrite: 5_000,
+      cacheWrite1h: 3_000,
+      cacheWrite5m: 2_000,
       total: 251_490,
     });
-    expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000, cacheWrite5m: 2_000 });
   });
 
   it("carries complete costs across attempts without claiming provider provenance", () => {
@@ -142,15 +143,12 @@ describe("usage-accumulator", () => {
   });
 
   it("accumulates both TTL buckets across attempt and run totals", () => {
-    const attempt = createAccumulatorWithUsage(FIRST_USAGE, {
+    const attempt = normalizedAttempt(FIRST_USAGE, {
       cacheWrite: 10,
       cacheWrite1h: 4,
       cacheWrite5m: 6,
     });
-    const run = createUsageAccumulator();
-    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
-    mergeUsageIntoAccumulator(run, { cacheWrite: 5, cacheWrite5m: 5 });
-    expect(toNormalizedUsage(run)).toMatchObject({
+    expect(normalizedAttempt(attempt, { cacheWrite: 5, cacheWrite5m: 5 })).toMatchObject({
       cacheWrite: 5_015,
       cacheWrite1h: 3_004,
       cacheWrite5m: 2_011,
@@ -160,11 +158,8 @@ describe("usage-accumulator", () => {
   it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
     "preserves a reported zero %s across attempt and run totals without inventing its sibling",
     (bucket) => {
-      const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10, [bucket]: 0 });
-      const run = createUsageAccumulator();
-      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
-      mergeUsageIntoAccumulator(run, { input: 50 });
-      const normalized = toNormalizedUsage(run);
+      const attempt = normalizedAttempt({ input: 100, cacheWrite: 10, [bucket]: 0 });
+      const normalized = normalizedAttempt(attempt, { input: 50 });
       expect(normalized).toMatchObject({ input: 150, cacheWrite: 10, [bucket]: 0 });
       const sibling = bucket === "cacheWrite1h" ? "cacheWrite5m" : "cacheWrite1h";
       expect(normalized).not.toHaveProperty(sibling);
@@ -172,10 +167,8 @@ describe("usage-accumulator", () => {
   );
 
   it("keeps both TTL buckets absent when no attempt reports a breakdown", () => {
-    const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10 });
-    const run = createUsageAccumulator();
-    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
-    expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite1h");
-    expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite5m");
+    const run = normalizedAttempt(normalizedAttempt({ input: 100, cacheWrite: 10 }));
+    expect(run).not.toHaveProperty("cacheWrite1h");
+    expect(run).not.toHaveProperty("cacheWrite5m");
   });
 });

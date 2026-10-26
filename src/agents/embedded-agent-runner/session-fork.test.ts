@@ -92,7 +92,7 @@ function fork(
   streamFn: StreamFn,
   requestModel: Model = model,
   requestContext = context,
-  assertCurrent = () => {},
+  overrides: Partial<Parameters<typeof runEmbeddedSessionFork>[0]> = {},
 ) {
   return runEmbeddedSessionFork({
     context: requestContext,
@@ -101,7 +101,8 @@ function fork(
     apiKey: "synthetic-key",
     options: { transport: "sse" },
     question: "Review only",
-    assertCurrent,
+    assertCurrent() {},
+    ...overrides,
   });
 }
 
@@ -299,10 +300,12 @@ it("blocks the physical send when access is withdrawn during guarded DNS prepara
     revoked = true;
   });
   await expect(
-    fork(streamFn, model, context, () => {
-      if (revoked) {
-        throw new Error("Session access withdrawn");
-      }
+    fork(streamFn, model, context, {
+      assertCurrent() {
+        if (revoked) {
+          throw new Error("Session access withdrawn");
+        }
+      },
     }),
   ).rejects.toThrow("Session access withdrawn");
   expect(physicalFetch).not.toHaveBeenCalled();
@@ -343,14 +346,9 @@ it("rechecks native SSE fork authority before replaying a redirect body", async 
           requestContext,
           options,
         );
-      const result = runEmbeddedSessionFork({
-        context,
-        streamFn,
-        model: requestModel,
+      const result = fork(streamFn, requestModel, context, {
         apiKey,
-        options: { transport: "sse" },
-        question: "Review only",
-        assertCurrent: () => {
+        assertCurrent() {
           if (revoked) {
             throw new Error("Session access withdrawn");
           }
@@ -430,17 +428,7 @@ it("rebuilds full history independently when the parent uses HTTP continuation",
   const continuation = await request().json();
   expect(continuation.previous_response_id).toBe("resp_fork");
   expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
-  await expect(
-    runEmbeddedSessionFork({
-      context: prepared,
-      streamFn,
-      model: requestModel,
-      apiKey: "synthetic-key",
-      options,
-      question: "Review only",
-      assertCurrent() {},
-    }),
-  ).resolves.toBe("Answer");
+  await expect(fork(streamFn, requestModel, prepared, { options })).resolves.toBe("Answer");
   const replay = await request().json();
   expect(replay.previous_response_id).toBeUndefined();
   expectText(JSON.stringify(replay.input), ["Parent question", "Continue parent", "Review only"]);
@@ -472,14 +460,7 @@ it("returns provider-reported usage and denies requested tools before answering"
     return stream;
   };
   await expect(
-    runEmbeddedSessionFork({
-      context,
-      streamFn,
-      model,
-      question: "Review only",
-      assertCurrent() {},
-      onUsage,
-    }),
+    fork(streamFn, model, context, { apiKey: undefined, options: undefined, onUsage }),
   ).resolves.toBe("Answer");
   expect(requests).toHaveLength(2);
   expectText(JSON.stringify(requests[1]?.messages), ["Tool execution denied", "denied"]);
