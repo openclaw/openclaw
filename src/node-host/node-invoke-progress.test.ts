@@ -104,16 +104,3 @@ it("releases a cancelled progress wait and queued chunks without cancelling anot
     client.close();
   }
 });
-
-it("does not send a worker request whose signal is already aborted", async () => {
-  const send = vi.fn();
-  const client = new NodeHostWorkerBridgeClient(send);
-  client.setConnection(1, true);
-  const controller = new AbortController();
-  controller.abort(new Error("cancelled before progress"));
-  await expect(
-    client.request("node.invoke.progress", {}, { signal: controller.signal }),
-  ).rejects.toThrow("cancelled before progress");
-  expect(send).not.toHaveBeenCalled();
-  client.close();
-});

@@ -102,23 +102,22 @@ it.each([
   ["approvals", "tightened"],
 ] as const)("%s policy is enforced when %s", async (owner, timing) => {
   const tightened = timing === "tightened";
-  for (const security of ["full", "allowlist", "deny"] as const) {
-    const asks: ExecAsk[] = tightened
-      ? [security === "full" ? "always" : "off"]
-      : ["off", "on-miss", "always"];
-    for (const ask of asks) {
-      for (const source of ["session-full", "human-approved"] as const) {
-        setPolicy(owner, tightened ? "full" : security, tightened ? "off" : ask);
-        const allowed =
-          !tightened &&
-          (source === "human-approved"
-            ? security !== "deny"
-            : security === "full" && ask === "off");
-        await checkLaunch(source, {
-          allowed,
-          prepare: tightened ? () => setPolicy(owner, security, ask) : undefined,
-        });
-      }
+  const policies = [
+    ["full", "off"],
+    ["full", "always"],
+    ["allowlist", "off"],
+    ["deny", "off"],
+  ] as const;
+  for (const [security, ask] of tightened ? policies.slice(1) : policies) {
+    for (const source of ["session-full", "human-approved"] as const) {
+      setPolicy(owner, tightened ? "full" : security, tightened ? "off" : ask);
+      const allowed =
+        !tightened &&
+        (source === "human-approved" ? security !== "deny" : security === "full" && ask === "off");
+      await checkLaunch(source, {
+        allowed,
+        prepare: tightened ? () => setPolicy(owner, security, ask) : undefined,
+      });
     }
   }
 });

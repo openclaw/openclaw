@@ -27,6 +27,15 @@ describe("NodeHostWorkerBridgeClient", () => {
   afterEach(() => client.close());
   const messages = () => write.mock.calls.map(([message]) => message);
 
+  it("does not send a worker request whose signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before progress"));
+    await expect(
+      client.request("node.invoke.progress", {}, { signal: controller.signal }),
+    ).rejects.toThrow("cancelled before progress");
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("fences pending RPCs and retained invocation output after route replacement", async () => {
     const pending = client.request("skills.bins");
     const rejected = expect(pending).rejects.toThrow("route changed");
