@@ -1,27 +1,33 @@
 import { runInNewContext } from "node:vm";
 import { JSDOM } from "jsdom";
-import { expect, it, vi } from "vitest";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import { assert, expect, it, vi } from "vitest";
 import { meetStatusScript } from "./google-meet-page-scripts.js";
+import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 
 const label = "BlackHole 2ch (Virtual)";
+const outputLabel = (name: string) => (name.includes("OpenClaw") ? "OpenClaw Meeting Audio" : name);
 const microphoneMenu = `<button aria-haspopup="menu" aria-label="Microphone: ${label}"></button>`;
 const speakerMenu = `<button aria-haspopup="menu" aria-label="Speaker: ${label}"></button>`;
 const nativeMicrophone = `<select aria-label="Microphone"><option selected>${label}</option></select>`;
-const devices = [
-  { deviceId: "input-1", kind: "audioinput", label },
-  { deviceId: "output-1", kind: "audiooutput", label },
-];
 
 async function inspectAudioPage(
   controls: string,
   options: {
     readOnly?: boolean;
     outputAvailable?: boolean;
+    deviceLabel?: string;
+    muted?: boolean;
     setup?: (document: Document) => void;
   } = {},
 ) {
+  const deviceLabel = options.deviceLabel ?? label;
+  const devices = [
+    { deviceId: "input-1", kind: "audioinput", label: deviceLabel },
+    { deviceId: "output-1", kind: "audiooutput", label: outputLabel(deviceLabel) },
+  ];
   const dom = new JSDOM(
-    `<button id="microphone" aria-label="Turn on microphone"></button>
+    `<button id="microphone" aria-label="Turn ${options.muted === false ? "off" : "on"} microphone"></button>
      <button aria-label="Leave call"></button>${controls}`,
     { url: "https://meet.google.com/abc-defg-hij" },
   );
@@ -97,6 +103,99 @@ it.each([true, false])(
     }
   },
 );
+
+it.each([
+  ["BlackHole 2ch", true],
+  ["Monitor of OpenClaw Meeting Audio", true],
+  ["OpenClaw Meeting Audio", false],
+] as const)("routes %s only after input verification (%s)", async (deviceLabel, verified) => {
+  let media: HTMLAudioElement;
+  const setSinkId = vi.fn(async (value: string) => {
+    Object.defineProperty(media, "sinkId", { value, configurable: true });
+  });
+  const events = vi.fn();
+  const { health, click } = await inspectAudioPage(
+    `<select aria-label="Microphone"><option>MacBook Microphone</option>${verified ? `<option>${deviceLabel}</option>` : ""}</select>`,
+    {
+      deviceLabel,
+      muted: verified,
+      setup(document) {
+        const select = document.querySelector("select")!;
+        select.addEventListener("input", events);
+        select.addEventListener("change", events);
+        media = Object.assign(document.createElement("audio"), { setSinkId });
+        document.body.append(media);
+      },
+    },
+  );
+  expect(health).toMatchObject({
+    audioInputRouted: verified,
+    audioOutputRouted: true,
+    micMuted: !verified,
+    ...(verified
+      ? { audioInputDeviceLabel: deviceLabel, audioOutputDeviceLabel: outputLabel(deviceLabel) }
+      : {
+          audioInputRouteError: "Meet did not confirm OpenClaw Meeting Audio as its microphone.",
+          manualAction: { reason: "meet-audio-choice-required" },
+        }),
+  });
+  expect(click).toHaveBeenCalledOnce();
+  if (verified) {
+    expect(health.manualAction).toBeUndefined();
+    expect(events).toHaveBeenCalledTimes(2);
+    expect(setSinkId).toHaveBeenCalledWith("output-1");
+  } else {
+    expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", health)).toBe(false);
+  }
+});
+
+it.each([true, false])("requires current Meet capture ownership (%s)", async (owns) => {
+  const url = "https://meet.google.com/abc-defg-hij";
+  const source = GOOGLE_MEET_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+    action: "start",
+    captureId: "capture-1",
+    meetingSessionId: "session-1",
+    meetingUrl: url,
+  });
+  const result = runInNewContext(`(${source})()`, {
+    URL,
+    location: { href: url },
+    window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+    document: {
+      querySelectorAll: () => [
+        { getAttribute: (name: string) => (name === "aria-label" ? "Leave call" : null) },
+      ],
+    },
+    AudioContext: function AudioContext() {
+      throw new Error("capture admitted");
+    },
+  });
+  await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+});
+
+it("parses input-route health and retries until both routes are ready", () => {
+  const status = {
+    inCall: true,
+    micMuted: false,
+    audioInputRouted: true,
+    audioInputDeviceLabel: "OpenClaw Meeting Audio",
+    audioOutputRouted: false,
+    manualAction: { reason: "meet-audio-choice-required", message: "Select the virtual speaker" },
+  };
+  const adapter = GOOGLE_MEET_PLATFORM_ADAPTER.browser;
+  const pending = adapter.parseStatus({ result: JSON.stringify(status) });
+  expect(pending).toMatchObject(status);
+  assert(pending, "expected parsed Google Meet browser health");
+  expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
+  expect(
+    MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
+      ...pending,
+      audioOutputRouted: true,
+      manualAction: undefined,
+    }),
+  ).toBe(true);
+  expect(MeetingPlatformAdapter.isRealtimeRouteReady("agent", pending)).toBe(false);
+});
 
 it.each([
   `<button aria-haspopup="menu" aria-label="Microphone settings: ${label}"></button>`,

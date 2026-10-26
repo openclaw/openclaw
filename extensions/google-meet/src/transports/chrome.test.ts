@@ -146,18 +146,13 @@ it("caps browser gateway timeout padding", async () => {
     "/tabs/open": meetTab("meet-tab"),
     "/act": { result: JSON.stringify({ manualAction }) },
   });
-  const baseConfig = resolveGoogleMeetConfig({});
-
   await launchChromeMeet({
     runtime: browserRuntime(gatewayRequest),
-    config: {
-      ...baseConfig,
-      chrome: { ...baseConfig.chrome, joinTimeoutMs, reuseExistingTab: false },
-    },
+    config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs, reuseExistingTab: false } }),
     fullConfig: {},
     meetingSessionId: "session-1",
     mode: "transcribe",
-    url: "https://meet.google.com/abc-defg-hij",
+    url: MEET_URL,
     logger,
   });
 
@@ -291,10 +286,6 @@ it.each([
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (invocation) => ({
       payload: { result: evaluate(invocation.params as Record<string, unknown>) },
     }));
-    const runtime = browserRuntime(request, {
-      list: unexpected,
-      invoke,
-    });
     const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
     try {
       // Finalization replaces the source inside the page VM; expect an independent wire value.
@@ -314,20 +305,19 @@ it.each([
           speaker: line.speaker,
         },
       });
-      const expectedSnapshot = {
-        droppedLines: 0,
-        epoch: "caption-epoch",
-        lines: expectedLines.map(withProvenance),
-        pendingLines: finalize === true ? [] : [withProvenance(visible)],
-      };
       const result = await readChromeMeetTranscript({
-        runtime,
+        runtime: browserRuntime(request, { list: unexpected, invoke }),
         config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs } }),
         ...(transport === "chrome-node" ? { transport, nodeId: "transcript-node" } : {}),
         ...(finalize === undefined ? {} : { finalize }),
         ...session,
       });
-      expect(result).toStrictEqual(expectedSnapshot);
+      expect(result).toStrictEqual({
+        droppedLines: 0,
+        epoch: "caption-epoch",
+        lines: expectedLines.map(withProvenance),
+        pendingLines: finalize === true ? [] : [withProvenance(visible)],
+      });
       expect(captionState.lines).toEqual(expectedLines);
       expect(captionState.visible).toEqual(finalize === true ? [] : [visible]);
       const params = {
@@ -337,16 +327,14 @@ it.each([
         timeoutMs,
       };
       const envelope = { timeoutMs: timeoutMs + 5_000, scopes: ["operator.admin"] };
-      const nodeRequest = {
-        nodeId: "transcript-node",
-        command: "browser.proxy",
-        params,
-        ...envelope,
-      };
       expect(request.mock.calls).toStrictEqual(
         transport === "chrome" ? [["browser.request", params, envelope]] : [],
       );
-      expect(invoke.mock.calls).toStrictEqual(transport === "chrome-node" ? [[nodeRequest]] : []);
+      expect(invoke.mock.calls).toStrictEqual(
+        transport === "chrome-node"
+          ? [[{ nodeId: "transcript-node", command: "browser.proxy", params, ...envelope }]]
+          : [],
+      );
     } finally {
       now.mockRestore();
     }
