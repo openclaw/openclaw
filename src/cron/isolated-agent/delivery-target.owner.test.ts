@@ -56,36 +56,30 @@ const sourcePlan = (
     resolvedDelivery,
   });
 
-it("resolves the requested owner channel/account without inheriting heartbeat policy or a group", async () => {
-  expect(await resolve({ target: "owner", channel: "beta", accountId: "secondary" })).toMatchObject(
-    {
-      ok: true,
-      channel: "beta",
-      to: "user:bob",
-      accountId: "secondary",
-      mode: "explicit",
-    },
-  );
-});
-
+const unavailable = { ok: false, channel: "none", mode: "explicit" };
+const suppressed = { ok: false, deliverySuppressionReason: "channel_transform" };
 it.each([
-  { name: "missing owner", config: { ...cfg, commands: {} }, accountId: undefined },
-  { name: "unknown owner account", config: cfg, accountId: "missing" },
-])("does not route $name to a remembered group or enable the message tool", async (row) => {
-  const result = await resolve({ target: "owner", accountId: row.accountId }, row.config);
-  expect(result).toMatchObject({ ok: false, channel: "none", mode: "explicit" });
-  expect(result.to).toBeUndefined();
-  expect(sourcePlan(result)).toMatchObject({
-    messageTool: { enabled: false },
-    fallback: { skipWhenMessageToolSentToTarget: false },
-  });
-});
-
-it.each([
-  { name: "owner", target: "owner" as const, channel: "beta" },
-  { name: "explicit", channel: "beta", to: "user:bob" },
-])("reports intentional DM suppression for $name delivery", async ({ name: _name, ...target }) => {
-  const result = await resolve({ ...target, directPolicy: "block" });
-  expect(result).toMatchObject({ ok: false, deliverySuppressionReason: "channel_transform" });
-  expect(sourcePlan(result, target).messageTool.enabled).toBe(false);
-});
+  [
+    "owner account",
+    { target: "owner", channel: "beta", accountId: "secondary" },
+    cfg,
+    { ok: true, channel: "beta", to: "user:bob", accountId: "secondary", mode: "explicit" },
+  ],
+  ["missing owner", { target: "owner" }, { ...cfg, commands: {} }, unavailable],
+  ["unknown account", { target: "owner", accountId: "missing" }, cfg, unavailable],
+  ["blocked owner", { target: "owner", channel: "beta", directPolicy: "block" }, cfg, suppressed],
+  ["blocked explicit", { channel: "beta", to: "user:bob", directPolicy: "block" }, cfg, suppressed],
+] as const)(
+  "resolves %s without inheriting the remembered group",
+  async (_name, target, config, expected) => {
+    const result = await resolve(target, config);
+    expect(result).toMatchObject(expected);
+    if (!expected.ok) {
+      expect(sourcePlan(result, target).messageTool.enabled).toBe(false);
+      if (expected === unavailable) {
+        expect(result.to).toBeUndefined();
+        expect(sourcePlan(result, target).fallback.skipWhenMessageToolSentToTarget).toBe(false);
+      }
+    }
+  },
+);
