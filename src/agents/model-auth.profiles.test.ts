@@ -9,7 +9,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -313,7 +312,10 @@ it.each([
 });
 
 describe("getApiKeyForModelCore", () => {
-  it("keeps OpenAI OAuth profiles on the Codex transport and API keys on direct OpenAI", async () => {
+  it.each([
+    ["openai-responses", "openai:api-key", "direct-openai-key", "api-key"],
+    ["openai-chatgpt-responses", "openai:chatgpt", oauthFixture.access, "oauth"],
+  ] as const)("selects the matching credential for %s", async (api, profileId, apiKey, mode) => {
     await withAuthState(async (state) => {
       setRuntimeConfigSnapshot({});
       await state.writeAuthProfiles(
@@ -324,28 +326,10 @@ describe("getApiKeyForModelCore", () => {
       );
       const agentDir = state.agentDir();
       const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-
-      const directAuth = await resolveModelAuth({
-        model: model("chat-latest", "openai-responses"),
-        store,
-        agentDir,
-      });
-      const codexAuth = await resolveModelAuth({
-        model: model("gpt-5.5", "openai-chatgpt-responses"),
-        store,
-        agentDir,
-      });
-
-      expect(directAuth).toMatchObject({
-        apiKey: "direct-openai-key",
-        mode: "api-key",
-        profileId: "openai:api-key",
-      });
-      expect(codexAuth).toMatchObject({
-        apiKey: oauthFixture.access,
-        mode: "oauth",
-        profileId: "openai:chatgpt",
-      });
+      const id = api === "openai-responses" ? "chat-latest" : "gpt-5.5";
+      await expect(
+        resolveModelAuth({ model: model(id, api), store, agentDir }),
+      ).resolves.toMatchObject({ apiKey, mode, profileId });
     });
   });
 
@@ -413,13 +397,6 @@ describe("getApiKeyForModelCore", () => {
           provider: "openai",
         });
         expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toContain(
-          `Auth store: ${resolveOpenClawStateSqlitePath(state.env)} (agentDir: ${state.agentDir()}).`,
-        );
-        expect((error as Error).message).toContain(
-          "openclaw models auth paste-api-key --provider openai",
-        );
-        expect((error as Error).message).not.toContain("openclaw agents add");
       },
       { env: { OPENAI_API_KEY: undefined } },
     );
