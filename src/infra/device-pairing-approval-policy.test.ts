@@ -64,33 +64,30 @@ it("preserves the current token when a stale handshake waits for the issuance lo
   });
 });
 
-it.each(["owner", "bootstrap"] as const)(
-  "keeps %s approval pending when its policy is revoked while waiting for the lock",
-  async (lane) => {
-    const baseDir = await roots.make();
-    const pending = await requestOperator(baseDir);
-    let allowed = true;
-    const options = { isApprovalCurrent: () => allowed };
-    const approve = () =>
-      lane === "bootstrap"
-        ? approveBootstrapDevicePairing(pending.request.requestId, profile, options, baseDir)
-        : approveDevicePairing(pending.request.requestId, { ...options, ...caller }, baseDir);
-    await withHeldPairingLock(async (unlock) => {
-      const approval = approve();
-      allowed = false;
-      await unlock();
+it.each(["owner", "bootstrap"] as const)("refuses stale %s approval", async (lane) => {
+  const baseDir = await roots.make();
+  const pending = await requestOperator(baseDir);
+  let allowed = true;
+  const options = { isApprovalCurrent: () => allowed };
+  const approve = () =>
+    lane === "bootstrap"
+      ? approveBootstrapDevicePairing(pending.request.requestId, profile, options, baseDir)
+      : approveDevicePairing(pending.request.requestId, { ...options, ...caller }, baseDir);
+  await withHeldPairingLock(async (unlock) => {
+    const approval = approve();
+    allowed = false;
+    await unlock();
 
-      await expect(approval).resolves.toEqual({
-        status: "forbidden",
-        reason: "approval-policy-changed",
-      });
-      await expect(getPairedDevice("browser", baseDir)).resolves.toBeNull();
-      expect((await listDevicePairing(baseDir)).pending.map((entry) => entry.requestId)).toEqual([
-        pending.request.requestId,
-      ]);
-
-      allowed = true;
-      await expect(approve()).resolves.toMatchObject({ status: "approved" });
+    await expect(approval).resolves.toEqual({
+      status: "forbidden",
+      reason: "approval-policy-changed",
     });
-  },
-);
+    await expect(getPairedDevice("browser", baseDir)).resolves.toBeNull();
+    expect((await listDevicePairing(baseDir)).pending.map((entry) => entry.requestId)).toEqual([
+      pending.request.requestId,
+    ]);
+
+    allowed = true;
+    await expect(approve()).resolves.toMatchObject({ status: "approved" });
+  });
+});
