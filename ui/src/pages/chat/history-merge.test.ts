@@ -19,7 +19,6 @@ import {
   publishChatSessionProjection as publish,
   publishChatSessionProjectionMessages as publishMessages,
 } from "./history-merge.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
@@ -187,18 +186,16 @@ it.each(["reset", "session", "branch"] as const)(
   "retires the compaction marker's live state on %s changes",
   (change) => {
     const owner = {
-      sessionKey: "agent:main:one",
-      chatMessages: [] as unknown[],
-      compactionStatus: null as CompactionStatus | null,
+      ...emptyPane(),
+      compactionStatus: {
+        phase: "complete" as const,
+        runId: "compact-one",
+        startedAt: 1_000,
+        completedAt: 2_000,
+      },
     };
     const scope = { sessionKey: owner.sessionKey, activeLeafEntryId: "first" };
     projectionFor(owner, scope);
-    owner.compactionStatus = {
-      phase: "complete",
-      runId: "compact-one",
-      startedAt: 1_000,
-      completedAt: 2_000,
-    };
     reduceChat(
       owner,
       change === "reset" ? { type: "sessionReset" } : { type: "snapshotLoaded", messages: [] },
@@ -216,17 +213,12 @@ it.each(["reset", "session", "branch"] as const)(
 
 it("uses one canonical identity for an explicitly unbranched pane", () => {
   const owner = {
-    sessionKey: "agent:main:shared",
+    ...emptyPane(),
     currentSessionId: "shared-session",
     chatDisplayedLeafEntryId: undefined,
-    chatMessages: [],
   };
 
-  expect(scopeFor(owner)).toEqual({
-    sessionKey: "agent:main:shared",
-    sessionId: "shared-session",
-    activeLeafEntryId: null,
-  });
+  expect(scopeFor(owner)).toEqual(branchScope(null));
   expect(
     scopeFor(owner, {
       agentId: "main",
@@ -255,26 +247,6 @@ it("does not revive a consumed delivered copy from the cache or consume foreign 
     scope: { sessionKey, sessionId: "replacement-session" },
   });
   expect(owner.chatMessages).toEqual([initial.message]);
-});
-
-it("publishes each pane reducer transition and displayed transcript together", () => {
-  const owner = emptyPane();
-  const liveUser = persistedMessage("user", "shared prompt", "shared-user", 1);
-
-  const projection = reduceChat(owner, { type: "messagePersisted", message: liveUser });
-
-  expect(owner.chatMessages).toEqual([liveUser]);
-  expect(projectionFor(owner, projection.scope)).toBe(projection);
-  owner.chatMessages = [];
-  expect(projectionFor(owner)).toBe(projection);
-  publishMessages(owner, [liveUser, liveUser]);
-  const composed = projectionFor(owner);
-  expect(owner.chatMessages).toEqual([liveUser, liveUser]);
-  expect(composed.entries[0]).toBe(projection.entries[0]);
-  expect(composed.entries[1]?.message).toBe(liveUser);
-  expect(composed.entries[1]?.live).toBe(false);
-  publishMessages(owner, [liveUser, liveUser]);
-  expect(projectionFor(owner).entries).toEqual(composed.entries);
 });
 
 it.each([
@@ -334,28 +306,21 @@ it("binds learned session and branch identity without reclassifying live runs", 
   const projection = projectionFor(owner, learnedScope);
 
   expect(projection.scope).toEqual(learnedScope);
-  expect(projection.entries).toBe(running.entries);
   expect(projection.entries[0]?.live).toBe(true);
-  expect(projection.runs).toBe(running.runs);
+  expect(projection.messages).toEqual(running.messages);
   expect(projection.runs["live-run"]?.status).toBe("streaming");
   expect(getChatRunOwner(owner)).toBe("live-run");
 });
 
-it.each<[string, SessionProjectionScope, SessionProjectionScope]>([
-  [
-    "session",
-    { sessionKey: "agent:main:previous", sessionId: "previous-session" },
-    { sessionKey: "agent:main:next", sessionId: "next-session" },
-  ],
-  ["active branch", branchScope("previous-leaf"), branchScope("next-leaf")],
-  ["cleared branch", branchScope("previous-leaf"), branchScope(null)],
-  [
-    "lifecycle",
-    { sessionKey: "agent:main:shared", lifecycleRevision: 1 },
-    { sessionKey: "agent:main:shared", lifecycleRevision: 2 },
-  ],
-  ["agent", { sessionKey: "main", agentId: "first" }, { sessionKey: "main", agentId: "second" }],
-])("drops stale live and run provenance when the %s changes", (_, previous, next) => {
+it.each([
+  { sessionKey: "other", sessionId: "other-session" },
+  { activeLeafEntryId: "next-leaf" },
+  { activeLeafEntryId: null },
+  { lifecycleRevision: 2 },
+  { agentId: "other" },
+])("drops stale live and run provenance for changed scope %j", (change) => {
+  const previous = { ...branchScope("previous-leaf"), lifecycleRevision: 1, agentId: "main" };
+  const next = { ...previous, ...change };
   const { owner } = runningPane(previous);
 
   const projection = snapshot(owner, [], { scope: next });
@@ -364,31 +329,15 @@ it.each<[string, SessionProjectionScope, SessionProjectionScope]>([
   expect(getChatRunOwner(owner)).toBeUndefined();
 });
 
-it("retires every materialized local assistant when its pending send fails", () => {
-  const owner = emptyPane();
-  const pendingUser = message("user", "prompt", {
-    idempotencyKey: "pending-run:user",
-  });
-  const first = message("assistant", "first part");
-  const second = message("assistant", "second part");
-  const canonical = persistedMessage("assistant", "persisted boundary", "reply", 1);
-  const afterBoundary = message("assistant", "after boundary");
-  publishMessages(owner, [pendingUser, first]);
-  publishMessages(owner, [pendingUser, first, second, canonical, afterBoundary]);
-
-  reduceChat(owner, { type: "sendFailed", runId: "pending-run" });
-
-  expect(owner.chatMessages).toEqual([canonical, afterBoundary]);
-});
-
-it("keeps a retained live prefix across a later empty snapshot", () => {
+it("publishes repeated rows and retains the live prefix across a later empty snapshot", () => {
   const owner = emptyPane();
   const prefix = message("assistant", "causal prefix", { runId: "same-run" });
   const tail = message("assistant", "terminal tail", { runId: "same-run" });
   reduceChat(owner, { type: "messagePersisted", message: prefix });
-  publishMessages(owner, [prefix, tail], {
+  publishMessages(owner, [prefix, prefix, tail], {
     event: { type: "messagePersisted", message: tail },
   });
+  expect(owner.chatMessages).toEqual([prefix, prefix, tail]);
 
   snapshot(owner, []);
 

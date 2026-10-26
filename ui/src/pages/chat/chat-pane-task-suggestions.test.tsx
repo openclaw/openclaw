@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { flush } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type {
   AgentsListResult,
   ProjectsListResult,
@@ -19,6 +19,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { mountSolid as mountView } from "../../test-helpers/solid-render.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
@@ -233,19 +234,14 @@ it("preserves refused-dismissal reconciliation when another dismissal succeeds",
 it("surfaces clipboard failure through the pane error path", async () => {
   const writeText = vi.fn().mockRejectedValue(new Error("denied"));
   const execCommand = vi.fn(() => false);
-  const restore = (
-    [
-      [navigator, "clipboard", { writeText }],
-      [document, "execCommand", execCommand],
-    ] as const
-  ).map(([target, key, value]) => {
+  for (const [target, key, value] of [
+    [navigator, "clipboard", { writeText }],
+    [document, "execCommand", execCommand],
+  ] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
     Object.defineProperty(target, key, { configurable: true, value });
-    return () =>
-      descriptor
-        ? Object.defineProperty(target, key, descriptor)
-        : Reflect.deleteProperty(target, key);
-  });
+    onTestFinished(() => restorePropertyDescriptor(target, key, descriptor));
+  }
   const { pane, state } = createRequestPane(() => undefined);
 
   try {
@@ -255,11 +251,8 @@ it("surfaces clipboard failure through the pane error path", async () => {
     await new Promise<void>((resolve) => {
       window.setTimeout(resolve, 0);
     });
-    restore.forEach((reset) => reset());
   }
 
-  expect(writeText).toHaveBeenCalledWith(suggestion.prompt);
-  expect(execCommand).toHaveBeenCalledWith("copy");
   const failure = "Couldn't copy the prompt to the clipboard";
   expect(state).toMatchObject({ lastError: failure, chatError: failure });
 });

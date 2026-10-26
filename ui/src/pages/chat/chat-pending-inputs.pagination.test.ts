@@ -36,7 +36,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 
 beforeEach(() => {
   installTranscriptDomMocks();
@@ -47,11 +47,11 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-function queuedInput(id: string, acceptedAt: number, messageId?: string) {
+function queuedInput(id: string, acceptedAt: number, messageId?: string, runId = id) {
   return {
     ...input,
     id,
-    runId: id,
+    runId,
     acceptedAt,
     state: "queued",
     queued: true,
@@ -191,60 +191,36 @@ describe("server-owned pending input pagination", () => {
     expect(host.chatQueue).toEqual([]);
   });
 
-  it("discovers the whole live queue without changing the visible history page", async () => {
+  it("discovers the whole queue without changing pages and retains it until an exact receipt", async () => {
+    let queued = true;
     const oldest = queuedInput("old", 1, "pending:old");
     const newest = queuedInput("new", 2, "pending:new");
     const latestPage = { items: [newest], total: 21, nextBefore: 21, queuedCount: 2 };
-    const host = makeHost((params: { pendingBefore?: number }) => ({
-      sessionId,
-      messages: [],
-      pendingInputs:
-        params.pendingBefore === 21 ? { items: [oldest], total: 21, queuedCount: 2 } : latestPage,
-    }));
-    applyChatPendingInputs(host, { items: [], total: 0 });
-    await loadChatPendingInputs(host);
-    expectPage(host, latestPage);
-    expect(
-      getChatPendingInputs(host)
-        ?.queuedInputs.map((item) => item.runId)
-        .toSorted(),
-    ).toEqual(["new", "old"]);
-    expect(await queueText(host)).toEqual(["old", "new"]);
-    expect(host.request).toHaveBeenCalledTimes(2);
-  });
-
-  it("discovers and retains a live queue beyond the latest page until an exact receipt retires it", async () => {
-    let queued = true;
     const host = makeHost((params: { pendingBefore?: number; inputRunIds?: string[] }) => ({
       sessionId,
       messages: [],
       pendingInputs:
-        params.pendingBefore === 21
-          ? {
-              items: [
-                {
-                  ...input,
-                  state: queued ? "queued" : "cancelled",
-                  ...(queued ? { queued: true } : {}),
-                },
-              ],
-              total: 21,
-            }
-          : { items: [], total: 21, nextBefore: 21 },
-      inputReceipts: params.inputRunIds?.some((runId) => runId === input.runId)
-        ? [{ runId: input.runId, state: "pending", ...(queued ? { queued: true } : {}) }]
-        : [],
+        params.pendingBefore === 21 ? { items: [oldest], total: 21, queuedCount: 2 } : latestPage,
+      inputReceipts: params.inputRunIds?.map((runId) => ({
+        runId,
+        state: "pending",
+        ...(runId !== oldest.runId || queued ? { queued: true } : {}),
+      })),
     }));
-    applyChatPendingInputs(host, { items: [], total: 21, nextBefore: 21 });
-    await loadChatPendingInputs(host, 21);
-    applyChatPendingInputs(host, { items: [], total: 21, nextBefore: 21 });
-    expect(readChatInputRunIds(host)).toContain(input.runId);
+    applyChatPendingInputs(host, { items: [], total: 0 });
+    await loadChatPendingInputs(host);
+    expectPage(host, latestPage);
+    expect(await queueText(host)).toEqual(["old", "new"]);
+    expect(host.request).toHaveBeenCalledTimes(2);
+    applyChatPendingInputs(host, latestPage);
+    expect(readChatInputRunIds(host)).toContain(oldest.runId);
     await loadChatHistory(host);
-    expect(await queueText(host)).toEqual(["Keep my accepted input"]);
+    expect(await queueText(host)).toEqual(["old", "new"]);
     queued = false;
+    latestPage.queuedCount = 1;
     await loadChatHistory(host);
-    expect(await queueText(host)).toEqual([]);
-    expect(readChatInputRunIds(host)).not.toContain(input.runId);
+    expect(await queueText(host)).toEqual(["new"]);
+    expect(readChatInputRunIds(host)).not.toContain(oldest.runId);
   });
 
   it.each([
@@ -257,42 +233,25 @@ describe("server-owned pending input pagination", () => {
       const refresh = createDeferred<unknown>();
       const canonical = {
         role: "user",
-        content: "Canonical transcript stays visible",
+        content: "Canonical",
         __openclaw: { id: "canonical", seq: 1 },
       };
       const latestPage: ChatPendingInputsPage = {
         items: [
-          {
-            ...queuedInput("latest-input", input.acceptedAt, "pending:latest-input"),
-            runId: "latest-run",
-          },
+          queuedInput("latest-input", input.acceptedAt, "pending:latest-input", "latest-run"),
         ],
         total: 21,
         nextBefore: 21,
       };
       const refreshedLatestPage: ChatPendingInputsPage = {
         ...latestPage,
-        items: [
-          {
-            ...latestPage.items[0]!,
-            id: "newer-input",
-            runId: "newer-run",
-            message: { role: "user", content: "New queued input" },
-          },
-        ],
+        items: [queuedInput("newer-input", input.acceptedAt, undefined, "newer-run")],
       };
       const olderPage: ChatPendingInputsPage = { items: [input], total: 21 };
       const refreshedOlderPage: ChatPendingInputsPage = {
         items: [{ ...input, state: "cancelled" }],
         total: 21,
       };
-      const sessionInfo = {
-        key: sessionKey,
-        sessionId,
-        hasActiveRun: true,
-        status: "running",
-      };
-      const cache: ChatMessageCache = new Map();
       let olderReads = 0;
       let refreshFinished = false;
       const host = makeChatPageHost({
@@ -302,7 +261,6 @@ describe("server-owned pending input pagination", () => {
         chatStream: "Live output",
         chatMessages: [canonical],
         chatHistoryPagination: { hasMore: false, completeSnapshot: true },
-        chatMessagesBySession: cache,
         requestHandlers: {
           "chat.history": (params: { pendingBefore?: number }) =>
             params.pendingBefore === 21
@@ -315,7 +273,7 @@ describe("server-owned pending input pagination", () => {
         },
       });
       cacheChatSessionSnapshot(
-        cache,
+        host.chatMessagesBySession,
         host,
         { sessionKey },
         {
@@ -361,7 +319,7 @@ describe("server-owned pending input pagination", () => {
         ...(delivery === "delta"
           ? { kind: "delta", deltaCursor: "next", messages: [] }
           : { sessionId, messages: [canonical] }),
-        sessionInfo,
+        sessionInfo: { key: sessionKey, sessionId, hasActiveRun: true, status: "running" },
         pendingInputs: refreshedLatestPage,
         inputReceipts: [
           { runId: "consumed-source", state: "consumed", consumedByEventId: "aggregate" },
@@ -386,7 +344,7 @@ describe("server-owned pending input pagination", () => {
       expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(host).toMatchObject({ chatRunId: "active-run", chatStream: "Live output" });
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-      expect(await queueText(host)).toEqual(["New queued input"]);
+      expect(await queueText(host)).toEqual(["newer-input"]);
       expect(readChatInputRunIds(host)).toContain("newer-run");
       expect(readChatInputRunIds(host)).not.toContain("latest-run");
 

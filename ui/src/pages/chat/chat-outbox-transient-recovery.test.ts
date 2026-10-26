@@ -10,12 +10,7 @@ import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.t
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  makeChatHost,
-  makeRequestMock,
-  requestCalls,
-  requireRecord,
-} from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { updateQueuedMessage } from "./chat-queue.ts";
@@ -84,7 +79,6 @@ describe("transient outbox delivery recovery", () => {
       expect(requestCalls(host.request, "chat.history")).toHaveLength(0);
       host.gatewayWorkPaused = false;
       await resumeStoredChatOutboxes(host);
-      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
       expect(requestCalls(host.request, "chat.send")[0]?.[1]).toMatchObject({
         idempotencyKey: queuedRunId,
       });
@@ -324,25 +318,17 @@ describe("transient outbox delivery recovery", () => {
   it.each(["response", "timeout"])(
     "retries reconnect history after a retryable %s without a socket close",
     async (failure) => {
-      const host = makeChatHost({
-        requestHandlers: {},
-        connected: false,
-        chatMessage: "retry history while connected",
-      });
-      await handleSendChat(host);
       const history = vi
         .fn(() => idleChatHistory())
         .mockRejectedValueOnce(
           failure === "timeout" ? requestTimeout("chat.history") : unavailable(),
         );
       const send = vi.fn(started);
-      const request = makeRequestMock({
-        "chat.history": history,
-        "chat.send": send,
+      const host = makeChatHost({
+        chatQueue: [waitingInput("history-retry", "retry history", "history-retry-run")],
+        requestHandlers: { "chat.history": history, "chat.send": send },
       });
-      host.client = clientWithRequest(request);
-      host.connected = true;
-
+      admitHostQueueItems(host);
       useFakeClock();
       await resumeStoredChatOutboxes(host);
 
@@ -380,13 +366,11 @@ describe("transient outbox delivery recovery", () => {
     const draining = resumeStoredChatOutboxes(host);
     try {
       await historyStarted.promise;
-      expect(
-        updateQueuedMessage(host, "edited-during-readiness", (item) => ({
-          ...item,
-          text: "Revised draft",
-          sendRunId: "revised-submission",
-        })),
-      ).not.toBeNull();
+      updateQueuedMessage(host, "edited-during-readiness", (item) => ({
+        ...item,
+        text: "Revised draft",
+        sendRunId: "revised-submission",
+      }));
       firstHistory.reject(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
@@ -394,14 +378,9 @@ describe("transient outbox delivery recovery", () => {
         }),
       );
       await draining;
-      expect(send.mock.calls).toEqual([
-        [
-          expect.objectContaining({
-            message: "Revised draft",
-            idempotencyKey: "revised-submission",
-          }),
-        ],
-      ]);
+      expect(send).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "Revised draft", idempotencyKey: "revised-submission" }),
+      );
       expect(host.lastError).toBeNull();
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } finally {

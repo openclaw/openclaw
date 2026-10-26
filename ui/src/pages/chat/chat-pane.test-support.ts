@@ -4,11 +4,7 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type {
-  GatewayBrowserClient,
-  GatewayEventFrame,
-  GatewayEventListener,
-} from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -24,7 +20,10 @@ import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import {
   createTestGatewayClient,
@@ -116,10 +115,7 @@ export type TestChatPane = HTMLElement &
     context: ApplicationContext;
     state: ChatPageHost;
     connectedClient: GatewayBrowserClient | null;
-    routeResolutionPending: boolean;
-    synchronizeInputs: ChatPaneRuntime["synchronizeInputs"];
     applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
-    connectedCallback: () => void;
     connectionGeneration: number;
     catalogLoadGeneration: number;
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
@@ -128,7 +124,6 @@ export type TestChatPane = HTMLElement &
     recoverSession: () => Promise<boolean>;
     restartRecoveryComposerBanner: ChatPaneRuntime["restartRecoveryComposerBanner"];
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
-    disconnectedCallback: () => void;
     discardStagedAttachments?: () => void;
     resumeStagedAttachments?: () => void;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
@@ -142,7 +137,6 @@ export type TestChatPane = HTMLElement &
     suggestionChatProps: ChatPaneRuntime["suggestionChatProps"];
     addCurrentSessionSuggestion: () => Promise<void>;
     resetSessionSuggestions: () => void;
-    sessionSuggestionsRequestVersion: number;
     sessionSuggestionsRefreshPromise: Promise<void> | undefined;
     sessionSuggestionTargetSignature: string;
     syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
@@ -156,7 +150,6 @@ export type TestChatPane = HTMLElement &
     refreshSessionSuggestions: () => Promise<void>;
     resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
     deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
-    paneLabel: string | undefined;
     catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
     handleTranscriptScroll: (event: Event) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
@@ -170,7 +163,6 @@ export type TestChatPane = HTMLElement &
     resetOlderMessagesViewport: () => void;
     readReplyMessage: (messageId: string) => unknown;
     hasOlderMessages: () => boolean;
-    olderCursorsSeen: Set<string>;
     beginHeaderRename: (row: GatewaySessionRow) => void;
     handleHeaderSessionAction: ChatPaneRuntime["handleHeaderSessionAction"];
     cancelHeaderRename: () => void;
@@ -293,12 +285,7 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
       state: { selectedId: "main" },
       subscribe: () => () => {},
     },
-    runtimeConfig: {
-      state: { configNeedsApply: false, configSnapshot: null },
-      ensureLoaded: async () => undefined,
-      ensureDisplayLoaded: async () => undefined,
-      subscribe: () => () => {},
-    },
+    runtimeConfig: createRuntimeConfigFixture(),
     placementStartup: {
       get: () => null,
       hasPendingTurn: () => false,
@@ -319,53 +306,45 @@ export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
   };
 }
 
+function createRuntimeConfigFixture() {
+  return {
+    state: { configNeedsApply: false, configSnapshot: null },
+    ensureLoaded: async () => undefined,
+    ensureDisplayLoaded: async () => undefined,
+    subscribe: () => () => {},
+  };
+}
+
 export function createSessionContext(
   client: GatewayBrowserClient,
   sessions?: SessionCapability,
 ): ApplicationContext & {
   publishGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
 } {
-  const eventListeners = new Set<GatewayEventListener>();
   const agentSelectionListeners = new Set<(state: { selectedId: string | null }) => void>();
   const agentSelectionState = { selectedId: "main" as string | null };
-  const snapshotListeners = new Set<
-    (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
-  >();
-  let snapshot: ApplicationContext["gateway"]["snapshot"] = createApplicationGatewaySnapshot({
-    client,
-    phase: "connected",
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "taskSuggestions.list",
-      "session.suggestions.list",
-    ]),
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods([
+        ...SESSION_MUTATION_TEST_METHODS,
+        "taskSuggestions.list",
+        "session.suggestions.list",
+      ]),
+    }),
+  );
   const context = withLiveCapabilities({
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
+    gateway: Object.assign(gateway, {
       connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
       eventLog: [],
-      subscribe: (listener: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void) => {
-        snapshotListeners.add(listener);
-        return () => snapshotListeners.delete(listener);
-      },
-      subscribeEvents: (listener: GatewayEventListener) => {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
       subscribeEventLog: () => () => {},
       connect: vi.fn(),
       setSessionKey: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
-      emitTestEvent: (event: GatewayEventFrame) => {
-        for (const listener of eventListeners) {
-          listener(event);
-        }
-      },
-    },
+      emitTestEvent: publishEvent,
+    }),
     agentSelection: {
       state: agentSelectionState,
       set: (agentId: string | null) => {
@@ -386,12 +365,7 @@ export function createSessionContext(
         terminalEnabled: false,
       },
     },
-    runtimeConfig: {
-      state: { configNeedsApply: false, configSnapshot: null },
-      ensureLoaded: async () => undefined,
-      ensureDisplayLoaded: async () => undefined,
-      subscribe: () => () => {},
-    },
+    runtimeConfig: createRuntimeConfigFixture(),
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: {
@@ -404,14 +378,7 @@ export function createSessionContext(
   } as unknown as Omit<ApplicationContext, FixtureContextServices> & {
     sessions?: SessionCapability;
   });
-  return Object.assign(context, {
-    publishGatewaySnapshot(next: ApplicationContext["gateway"]["snapshot"]) {
-      snapshot = next;
-      for (const listener of snapshotListeners) {
-        listener(next);
-      }
-    },
-  });
+  return Object.assign(context, { publishGatewaySnapshot: publish });
 }
 
 export function createPaneTestHost<R extends ChatPaneRuntime>(

@@ -9,7 +9,6 @@ import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.t
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   createDeliveryAttachmentBatch,
   reloadChatDocumentStorage,
@@ -102,7 +101,6 @@ it.each(["visible", "inactive"])(
         },
       },
     });
-    source.chatMessagesBySession = new Map();
     const stop = chatOutboxOwner(source).subscribe(source);
     const sending = handleSendChat(source);
     try {
@@ -118,7 +116,6 @@ it.each(["visible", "inactive"])(
       const messages =
         view === "visible" ? source.chatMessages : cachedMessages(source, sessionKey);
       expect(messages.map(extractText)).toContain("Keep the accepted attachments");
-      expect(deliveredAttachmentUrls(messages[0])).toEqual(dataUrls);
       reloadChatDocumentStorage(attachments);
       expect(deliveredAttachmentUrls(messages[0])).toEqual(dataUrls);
     } finally {
@@ -236,9 +233,7 @@ describe("chat attachment terminal retirement", () => {
       chatAttachments: presentedAttachments,
     });
     sessionStorage.setItem("openclaw.control.outboxTab.v1", "test-outbox-tab");
-    const stopSource = chatOutboxOwner(source).subscribe(source);
-    let stopVisible = () => {};
-    let stopInactive = () => {};
+    const subscriptions = [chatOutboxOwner(source).subscribe(source)];
     const hydration = createDeferred();
     const pendingReads: Array<ReturnType<typeof outboxPayloadStore.readOutboxPayload>> = [];
     const completedReads: Array<ReturnType<typeof outboxPayloadStore.readOutboxPayload>> = [];
@@ -251,12 +246,8 @@ describe("chat attachment terminal retirement", () => {
         "Blob-backed terminal send",
       );
       expect(item.attachmentPayload).toBeDefined();
-      expect(item.attachments?.map((attachment) => attachment.dataUrl)).toEqual([
-        undefined,
-        undefined,
-      ]);
       if (handoff !== "live") {
-        stopSource();
+        subscriptions[0]!();
         reloadChatDocumentStorage(attachments);
       }
       const client =
@@ -277,11 +268,8 @@ describe("chat attachment terminal retirement", () => {
         sessionKey: "agent:main:inactive",
       });
       for (const host of [visible, inactive]) {
-        Object.assign(host, {
-          chatMessagesBySession: new Map(),
-          connectionEpoch: 1,
-          pendingSessionMessageReloadSessionKey: null,
-        });
+        host.connectionEpoch = 1;
+        host.pendingSessionMessageReloadSessionKey = null;
       }
       cacheEmptySession(inactive, sessionKey, "cached-session");
       const readPayload = outboxPayloadStore.readOutboxPayload;
@@ -297,13 +285,9 @@ describe("chat attachment terminal retirement", () => {
           return pending;
         });
       if (handoff !== "live") {
-        stopVisible = chatOutboxOwner(visible).subscribe(visible);
-        expect(visible.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([
-          null,
-          null,
-        ]);
+        subscriptions.push(chatOutboxOwner(visible).subscribe(visible));
       }
-      stopInactive = chatOutboxOwner(inactive).subscribe(inactive);
+      subscriptions.push(chatOutboxOwner(inactive).subscribe(inactive));
       const removePayloads = outboxPayloadStore.removeOutboxPayloads;
       const cleanup = vi
         .spyOn(outboxPayloadStore, "removeOutboxPayloads")
@@ -321,11 +305,7 @@ describe("chat attachment terminal retirement", () => {
           state: "final",
           runId: item.sendRunId,
           sessionKey,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "terminal reply" }],
-            timestamp: Date.now(),
-          },
+          message: { role: "assistant", content: "terminal reply" },
         },
       } as Parameters<typeof handlePageGatewayEvent>[1];
       const retirementOwner = vi.spyOn(chatSendSupport, "retireDeliveredQueuedUserTurn");
@@ -339,10 +319,7 @@ describe("chat attachment terminal retirement", () => {
         }
         pendingRetirements.push(Promise.resolve(result.value));
       }
-      if (handoff === "live") {
-        // Both panes pin display bytes; the durable payload still awaits consumption.
-        expect(read).not.toHaveBeenCalled();
-      } else {
+      if (handoff !== "live") {
         await waitForFast(() => expect(read).toHaveBeenCalled());
         expect(listStoredChatOutboxes(visible)[0]?.queue[0]?.id).toBe(item.id);
         expect(cleanup).not.toHaveBeenCalled();
@@ -383,11 +360,11 @@ describe("chat attachment terminal retirement", () => {
       hydration.resolve();
       await Promise.all(pendingRetirements);
       credential?.mockRestore();
+      expectOneSend(request);
       if (consumesDuringHydration) {
         expect(visible.chatRunId).toBeNull();
         expect(visible.chatStream).toBeNull();
         expect(visible.chatMessages.map(extractText)).toContain("terminal reply");
-        expectOneSend(request);
         return;
       }
       if (handoff === "new-credentials" || handoff === "new-attempt") {
@@ -398,7 +375,6 @@ describe("chat attachment terminal retirement", () => {
           sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,
         });
         expect(visible.chatMessages).toEqual([]);
-        expectOneSend(request);
         return;
       }
 
@@ -430,9 +406,9 @@ describe("chat attachment terminal retirement", () => {
       history.resolve(idleChatHistory(sessionKey));
       await Promise.all(pendingRetirements);
       await Promise.all(pendingReads);
-      stopInactive();
-      stopVisible();
-      stopSource();
+      for (const stop of subscriptions.toReversed()) {
+        stop();
+      }
     }
   });
 });

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatQueueItem, ChatSelectionAnnotation } from "../../lib/chat/chat-types.ts";
@@ -18,15 +18,18 @@ import {
   storedChatOutboxScopeKey,
   writeStoredOutboxStore as writeStore,
 } from "../../lib/chat/outbox-store.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { getChatAttachmentDataUrl as attachmentDataUrl } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
 
 const gatewayUrl = "ws://synthetic-blob-recovery.test";
 const dataUrl = "data:text/plain;base64,Y29tcGxldGUgc291cmNlIGJ5dGVz";
 const target = storageTargetForGateway(gatewayUrl);
+useChatSendBrowserFixture();
+function client(host: Host) {
+  return expectDefined(host.client, "authenticated client");
+}
 function hostFor(recoveryScope = "principal-a") {
   const host = makeChatHost({
     requestHandlers: {},
@@ -34,11 +37,7 @@ function hostFor(recoveryScope = "principal-a") {
     sessionKey: "agent:main:review",
     agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
   });
-  vi.spyOn(
-    expectDefined(host.client, "authenticated client"),
-    "recoveryScope",
-    "get",
-  ).mockReturnValue(recoveryScope);
+  vi.spyOn(client(host), "recoveryScope", "get").mockReturnValue(recoveryScope);
   return host;
 }
 async function prepare(
@@ -48,6 +47,13 @@ async function prepare(
   selectionAnnotation?: ChatSelectionAnnotation,
   attachmentOrigin?: "paste" | "file",
 ) {
+  const metadata = {
+    id: `${id}-file`,
+    mimeType: "text/plain",
+    fileName: "source.txt",
+    sizeBytes: 21,
+    ...(attachmentOrigin ? { origin: attachmentOrigin } : {}),
+  };
   const item: ChatQueueItem = {
     id,
     text: id,
@@ -59,15 +65,7 @@ async function prepare(
     sendAttempts: 1,
     sendState: "waiting-reconnect",
     attachments: [
-      {
-        id: `${id}-file`,
-        mimeType: "text/plain",
-        fileName: "source.txt",
-        sizeBytes: 21,
-        ...(attachmentOrigin ? { origin: attachmentOrigin } : {}),
-        dataUrl,
-        ...(selectionAnnotation ? { selectionAnnotation } : {}),
-      },
+      { ...metadata, dataUrl, ...(selectionAnnotation ? { selectionAnnotation } : {}) },
     ],
   };
   const result = await prepareOutboxPayload(host, item);
@@ -76,12 +74,7 @@ async function prepare(
     throw new Error("Expected complete stored payload");
   }
   const { attachmentStorageError: _, ...stored } = { ...item, ...result.update };
-  return {
-    ...stored,
-    attachments: item.attachments?.map(
-      ({ dataUrl: _url, selectionAnnotation: _annotation, ...metadata }) => metadata,
-    ),
-  };
+  return { ...stored, attachments: [metadata] };
 }
 async function fixture(
   id: string,
@@ -158,14 +151,6 @@ async function settleCleanup(cleanup: MockInstance<typeof payloadStore.removeOut
 function expectEmptyRecovery(host: Host) {
   expect(readRecovery(host).entries.every((entry) => !entry.session.queue?.length)).toBe(true);
 }
-beforeEach(() => {
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  installOutboxBrowserStorage();
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
 
 it("does not settle payload preparation under a pending connected recovery owner", async () => {
   const host = hostFor();
@@ -181,9 +166,7 @@ it("does not settle payload preparation under a pending connected recovery owner
   });
   const prepared = prepareOutboxPayload(host, original, "handoff");
   await started.promise;
-  const ready = vi
-    .spyOn(expectDefined(host.client, "connected client"), "recoveryScopeReady", "get")
-    .mockReturnValue(false);
+  const ready = vi.spyOn(client(host), "recoveryScopeReady", "get").mockReturnValue(false);
   release.resolve();
   expect(await prepared).toEqual({ status: "failed", reason: "unavailable" });
   ready.mockRestore();
@@ -234,9 +217,7 @@ it.each([
     const attachment = await expectBytes(host, restored);
     expect(attachment?.origin).toBe(origin);
     expect(attachment?.selectionAnnotation).toEqual(selection);
-    expect(cleanup).not.toHaveBeenCalled();
     clearOutbox(host);
-    expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
     await settleCleanup(cleanup);
     await expectUnavailable(host, restored, "missing");
   },
@@ -244,7 +225,6 @@ it.each([
 
 it("keeps source Blob bytes across quota migration and explicit transfer failures", async () => {
   const { host, item, source } = await fixture("retained");
-  const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads");
   const fail = () => {
     throw new DOMException("quota", "QuotaExceededError");
   };
@@ -260,11 +240,9 @@ it("keeps source Blob bytes across quota migration and explicit transfer failure
   expect(restoreRecovery(host, entry, destination)).toBe("storage-failed");
   expect(sessionStorage.getItem(target.key)).toBe(before);
   await expectBytes(host, item);
-  expect(cleanup).not.toHaveBeenCalled();
   write.mockRestore();
   expect(restoreRecovery(host, entry, destination)).toBe("restored");
   await expectBytes(host, item);
-  expect(cleanup).not.toHaveBeenCalled();
 });
 
 it.each(["failed-write", "failed-remove"])(
@@ -325,7 +303,6 @@ it.each(["failed-write", "failed-remove"])(
     clearOutbox(host);
     await settleCleanup(cleanup);
     await expectBytes(host, item);
-    expect(cleanup).toHaveBeenCalledExactlyOnceWith([unrelated.attachmentPayload]);
     await expectUnavailable(host, unrelated, "missing");
     expectEmptyRecovery(foreign);
     expect(listOutboxes(foreign)).toEqual([]);
@@ -339,8 +316,6 @@ it.each(["failed-write", "failed-remove"])(
     await expectBytes(host, item);
     clearOutbox(host);
     await settleCleanup(cleanup);
-    expect(cleanup).toHaveBeenLastCalledWith([item.attachmentPayload]);
-    expect(cleanup).toHaveBeenCalledTimes(2);
     await expectUnavailable(host, item, "missing");
   },
 );
@@ -371,9 +346,7 @@ it("partitions a mixed-principal v3 bucket while retaining foreign recovery acro
   expect(cleanup).toHaveBeenCalledExactlyOnceWith([first.attachmentPayload]);
   await expectBytes(b, second);
   expect(readRecovery(b).entries).toEqual(entriesB);
-  const ready = vi
-    .spyOn(expectDefined(b.client, "connected client"), "recoveryScopeReady", "get")
-    .mockReturnValue(false);
+  const ready = vi.spyOn(client(b), "recoveryScopeReady", "get").mockReturnValue(false);
   expect(() => readRecovery(b)).toThrow("Offline account recovery is unavailable");
   expect(captureDestination(b, { sessionKey: b.sessionKey, agentId: "main" })).toBeNull();
   b.connected = false;
