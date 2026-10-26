@@ -498,7 +498,7 @@ describe("session-share receiver identity integration", () => {
         return (await page)[0]!.sessions;
       };
       try {
-        await Promise.all(services.map((service) => service.start(context)));
+        await Promise.all(services.map(async (service) => await service.start(context)));
         const profile = githubProfile(4242, "catalog-person", "Catalog Person");
         const hostId = `node:${nodeId}`;
         const namespacedIdentity = { ...remoteIdentity, domain: hostId };
@@ -550,7 +550,7 @@ describe("session-share receiver identity integration", () => {
       } finally {
         scheduler.beginClose();
         try {
-          await Promise.all(services.map((service) => service.stop?.(context)));
+          await Promise.all(services.map(async (service) => await service.stop?.(context)));
         } finally {
           await scheduler.stop().finally(() => vi.useRealTimers());
         }

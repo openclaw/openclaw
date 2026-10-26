@@ -29,6 +29,7 @@ vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) =
   readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
+// mock-isolation: Fixed placement descriptors isolate command policy from runtime catalog state.
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
   resolveWorkerPlacementCapabilities: vi.fn((runtimeId: string) =>
     runtimeId === "codex"

@@ -37,6 +37,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     listProfilesForProvider(store, provider),
 }));
+// mock-isolation: Any persisted read violates this prepared-auth status contract.
 vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: mocks.persistedAuth,
   ensureAuthProfileStoreAsync: mocks.persistedAuth,
