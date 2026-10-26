@@ -193,6 +193,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
+      const offeredFunctionNames = new Set<string>();
+      if (Array.isArray(payload.tools)) {
+        for (const tool of payload.tools) {
+          if (tool && typeof tool === "object" && "function" in tool && tool.function?.name) {
+            offeredFunctionNames.add(tool.function.name);
+          }
+        }
+      }
       const headers = mergeTransportHeaders(model.headers, options?.headers) ?? {};
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
@@ -230,6 +238,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         explicitIds: Set<string>;
         functionNames: Set<string>;
         indexes: Set<number>;
+        isAssembled?: boolean;
       };
       // Persist every identity fact across chunks. The SDK defaults omitted indexes
       // to zero, so only a unique compatible candidate may receive later arguments.
@@ -248,6 +257,43 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           );
         }
         return candidates[0];
+      };
+
+      const extendsCallName = (
+        currentName: string,
+        incomingName: string,
+        identity: ToolBlock,
+      ): boolean => {
+        if (!currentName) {
+          return true;
+        }
+        if (currentName === incomingName || identity.functionNames.has(incomingName)) {
+          return true;
+        }
+        if (
+          offeredFunctionNames &&
+          offeredFunctionNames.size > 0 &&
+          offeredFunctionNames.has(currentName)
+        ) {
+          return false;
+        }
+        if (
+          incomingName.startsWith(currentName) &&
+          (!offeredFunctionNames ||
+            offeredFunctionNames.size === 0 ||
+            [...offeredFunctionNames].some((name) => name.startsWith(incomingName)))
+        ) {
+          return true;
+        }
+        if (
+          offeredFunctionNames &&
+          offeredFunctionNames.size > 0 &&
+          (offeredFunctionNames.has(currentName + incomingName) ||
+            [...offeredFunctionNames].some((name) => name.startsWith(currentName + incomingName)))
+        ) {
+          return true;
+        }
+        return false;
       };
 
       const resolveToolBlock = (params: {
@@ -271,7 +317,16 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         if (idCandidates.length > 0) {
           let candidates = idCandidates;
           if (nameCandidates.length > 0) {
-            candidates = candidates.filter((identity) => nameCandidates.includes(identity));
+            const canExtendIdCandidate =
+              idCandidates.length === 1 &&
+              Boolean(
+                functionName &&
+                  extendsCallName(idCandidates[0].block.name, functionName, idCandidates[0]),
+              );
+
+            if (!canExtendIdCandidate) {
+              candidates = candidates.filter((identity) => nameCandidates.includes(identity));
+            }
           }
           const candidate = requireSingleCandidate(candidates);
           if (!candidate) {
@@ -283,8 +338,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         }
 
         if (nameCandidates.length > 0) {
+          // Do not treat a default-zero index as proof of an assembled call's identity.
+          // Require an identity that distinguishes the calls (explicit ID or a nonzero index)
+          // so subsequent independent idless calls remain separate.
           const idCompatibleCandidates = nameCandidates.filter(
-            (identity) => !explicitId || identity.explicitIds.size === 0,
+            (identity) =>
+              (!explicitId || identity.explicitIds.size === 0) &&
+              (!identity.isAssembled ||
+                (toolCallIndex !== undefined && toolCallIndex > 0 && identity.indexes.has(toolCallIndex))),
           );
           if (
             idCompatibleCandidates.length <= 1 &&
@@ -297,9 +358,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           }
           const indexCompatibleCandidates = idCompatibleCandidates.filter(
             (identity) =>
-              toolCallIndex === undefined ||
-              identity.indexes.size === 0 ||
-              identity.indexes.has(toolCallIndex),
+              toolCallIndex === undefined
+                ? identity.indexes.size === 0
+                : identity.indexes.size === 0 || identity.indexes.has(toolCallIndex),
           );
           return requireSingleCandidate(indexCompatibleCandidates);
         }
@@ -428,7 +489,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
             if (item.type === "thinking") {
               appendContentDelta(
                 "thinking",
-                item.thinking.map((part) => ("text" in part ? part.text : "")).join(""),
+                item.thinking
+                  .map((part: { text?: string }) => ("text" in part ? (part.text ?? "") : ""))
+                  .join(""),
               );
             } else if (item.type === "text") {
               appendContentDelta("text", item.text);
@@ -486,13 +549,40 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
             identity.explicitIds.add(providedCallId);
           }
           if (functionName) {
-            if (identity.functionNames.size > 0 && !identity.functionNames.has(functionName)) {
+            if (!block.name) {
+              block.name = functionName;
+              identity.functionNames.add(functionName);
+            } else if (block.name === functionName || identity.functionNames.has(functionName)) {
+              // Preserve one-shot name repetitions without duplicate concatenation.
+            } else if (
+              functionName.startsWith(block.name) &&
+              !(offeredFunctionNames && offeredFunctionNames.has(block.name)) &&
+              (!offeredFunctionNames ||
+                offeredFunctionNames.size === 0 ||
+                [...offeredFunctionNames].some((name) => name.startsWith(functionName)))
+            ) {
+              // Cumulative name prefix update.
+              block.name = functionName;
+              identity.functionNames.clear();
+              identity.functionNames.add(functionName);
+              identity.isAssembled = true;
+            } else if (
+              offeredFunctionNames &&
+              offeredFunctionNames.size > 0 &&
+              !offeredFunctionNames.has(block.name) &&
+              (offeredFunctionNames.has(block.name + functionName) ||
+                [...offeredFunctionNames].some((name) => name.startsWith(block.name + functionName)))
+            ) {
+              // Append nonempty name fragment towards an offered function tool.
+              block.name += functionName;
+              identity.functionNames.clear();
+              identity.functionNames.add(block.name);
+              identity.isAssembled = true;
+            } else {
               throw new Error(
                 "Mistral streamed tool-call continuation changed function name; refusing to merge arguments",
               );
             }
-            block.name = functionName;
-            identity.functionNames.add(functionName);
           }
           if (toolCallIndex !== undefined) {
             identity.indexes.add(toolCallIndex);

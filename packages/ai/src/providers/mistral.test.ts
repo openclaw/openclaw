@@ -149,14 +149,19 @@ async function runMistralToolFixture(
   responseId: string,
   rawChunks: unknown[][],
   randomUUID?: string,
+  testContext?: Context,
 ) {
   if (randomUUID) {
     mistralMockState.randomUUIDs = [randomUUID];
   }
   const parsedChunks = rawChunks.map((chunk) => chunk.map(parseMistralToolCall));
   mistralMockState.streamResult = mistralToolStream(responseId, ...parsedChunks);
-  const result = await runMistralFixture();
-  return { result, toolCalls: result.content.filter((block) => block.type === "toolCall") };
+  const result = await runMistralFixture(testContext);
+  return {
+    result,
+    parsedChunks,
+    toolCalls: result.content.filter((block) => block.type === "toolCall"),
+  };
 }
 
 function makeMistralToolResultContext(
@@ -466,6 +471,470 @@ describe("Mistral provider", () => {
       errorMessage: "Mistral streamed tool-call identities conflict; refusing to merge arguments",
     });
     expect(toolCalls).toEqual([]);
+  });
+
+  it("accumulates fragmented function names across continuations with stable id and index", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-fragmented-name",
+      [
+        [
+          {
+            id: "call_weather",
+            index: 0,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_weather",
+            index: 0,
+            function: { name: "weather", arguments: '"Paris"}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_weather",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("preserves one-shot names and handles empty name continuations without duplication", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-oneshot-name",
+      [
+        [
+          {
+            id: "call_1",
+            index: 0,
+            function: { name: "get_weather", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_1",
+            index: 0,
+            function: { name: "get_weather", arguments: '"London"' },
+          },
+        ],
+        [
+          {
+            id: "call_1",
+            index: 0,
+            function: { name: "", arguments: "}" },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "get_weather",
+      arguments: { city: "London" },
+    });
+  });
+
+  it("accumulates independently indexed parallel fragmented function names", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-parallel-fragmented",
+      [
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+          {
+            id: "call_1",
+            index: 1,
+            function: { name: "search_", arguments: '{"query":' },
+          },
+        ],
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "weather", arguments: '"Tokyo"}' },
+          },
+          {
+            id: "call_1",
+            index: 1,
+            function: { name: "docs", arguments: '"OpenClaw"}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [
+          { ...makeHealthyTool(), name: "get_weather" },
+          { ...makeHealthyTool(), name: "search_docs" },
+        ] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_0",
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      id: "call_1",
+      name: "search_docs",
+      arguments: { query: "OpenClaw" },
+    });
+  });
+
+  it("rejects differing name continuation when no function tools were offered", async () => {
+    const { result, toolCalls } = await runMistralToolFixture("response-no-tools-differing-name", [
+      [
+        {
+          id: "call_1",
+          index: 0,
+          function: { name: "get_weather", arguments: "{}" },
+        },
+      ],
+      [
+        {
+          id: "call_1",
+          index: 0,
+          function: { name: "read_file", arguments: "{}" },
+        },
+      ],
+    ]);
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Mistral streamed tool-call continuation changed function name",
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("prevents assembled-name aliases from capturing subsequent independent idless calls while preserving compatible continuations", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-assembled-alias-collision",
+      [
+        [
+          {
+            id: "call_a",
+            index: 1,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_a",
+            index: 1,
+            function: { name: "weather", arguments: '"Paris"' },
+          },
+        ],
+        [
+          {
+            index: 0,
+            function: { name: "get_weather", arguments: '{"city":"Tokyo"}' },
+          },
+        ],
+        [
+          {
+            index: 1,
+            function: { name: "get_weather", arguments: ',"units":"c"}' },
+          },
+        ],
+      ],
+      "00000000-0000-4000-8000-000000429251",
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_a",
+      name: "get_weather",
+      arguments: { city: "Paris", units: "c" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    });
+  });
+
+  it("does not treat default-zero index as proof of an assembled call identity and keeps independent idless calls separate", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-assembled-default-zero-independent-call",
+      [
+        [
+          {
+            id: "call_1",
+            index: 0,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_1",
+            index: 0,
+            function: { name: "weather", arguments: '"Paris"}' },
+          },
+        ],
+        [
+          {
+            index: 0,
+            function: { name: "get_weather", arguments: '{"city":"Tokyo"}' },
+          },
+        ],
+      ],
+      "00000000-0000-4000-8000-000000429251",
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    });
+  });
+
+  it("preserves explicit-ID match when another call owns the assembled name", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-explicit-id-match-when-sibling-owns-name",
+      [
+        [
+          {
+            id: "call_a",
+            index: 1,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_b",
+            index: 0,
+            function: { name: "get_weather", arguments: '{"city":"Tokyo"}' },
+          },
+        ],
+        [
+          {
+            id: "call_a",
+            function: { name: "get_weather", arguments: '"Paris"}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_a",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      id: "call_b",
+      name: "get_weather",
+      arguments: { city: "Tokyo" },
+    });
+  });
+
+  it("prevents opening-fragment aliases from capturing subsequent independent calls", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-opening-fragment-collision",
+      [
+        [
+          {
+            id: "call_a",
+            index: 1,
+            function: { name: "get_", arguments: '{"city":' },
+          },
+        ],
+        [
+          {
+            id: "call_a",
+            index: 1,
+            function: { name: "weather", arguments: '"Paris"}' },
+          },
+        ],
+        [
+          {
+            index: 0,
+            function: { name: "fetch_data", arguments: '{"city":"Berlin"}' },
+          },
+        ],
+      ],
+      "00000000-0000-4000-8000-000000429252",
+      {
+        ...context,
+        tools: [
+          { ...makeHealthyTool(), name: "get_weather" },
+          { ...makeHealthyTool(), name: "fetch_data" },
+        ] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_a",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      name: "fetch_data",
+      arguments: { city: "Berlin" },
+    });
+  });
+
+  it("rejects cumulative prefix continuation when new name is not a prefix of any offered tool", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-cumulative-prefix-unoffered-reject",
+      [
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "get_", arguments: '{"v":1}' },
+          },
+        ],
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "get_unknown", arguments: ',"extra":2}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Mistral streamed tool-call continuation changed function name",
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("rejects renaming a complete offered tool when a longer prefix arrives on the same call", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-complete-tool-reject-longer-prefix-rename",
+      [
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "a", arguments: '{"v":1}' },
+          },
+        ],
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "ab", arguments: ',"extra":2}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [
+          { ...makeHealthyTool(), name: "a" },
+          { ...makeHealthyTool(), name: "ab" },
+        ] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Mistral streamed tool-call continuation changed function name",
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("does not allow a complete offered tool to be replaced by a longer prefix from another call", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-complete-offered-tool-not-replaced",
+      [
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "a", arguments: '{"v":' },
+          },
+        ],
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "a", arguments: "1}" },
+          },
+        ],
+        [
+          {
+            id: "call_1",
+            index: 1,
+            function: { name: "ab", arguments: '{"v":2}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [
+          { ...makeHealthyTool(), name: "a" },
+          { ...makeHealthyTool(), name: "ab" },
+        ] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_0",
+      name: "a",
+      arguments: { v: 1 },
+    });
+    expect(toolCalls[1]).toMatchObject({
+      id: "call_1",
+      name: "ab",
+      arguments: { v: 2 },
+    });
   });
 
   it("joins thinking text before string content and skips empty reference-only chunks", async () => {
