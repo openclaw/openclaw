@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import { compareCards } from "./store-card-helpers.js";
@@ -54,7 +55,9 @@ function writeJson(value: unknown): void {
 }
 
 function writeLine(value: string): void {
-  process.stdout.write(`${value}\n`);
+  // Notes and diagnostics retain report line breaks without executing stored controls.
+  const text = value.split("\n").map(sanitizeTerminalText).join("\n");
+  process.stdout.write(`${text}\n`);
 }
 
 function formatCardLine(card: WorkboardCard): string {
