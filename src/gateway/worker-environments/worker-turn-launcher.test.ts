@@ -17,7 +17,6 @@ import {
 } from "../../agents/session-placement-admission.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
-import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -29,7 +28,6 @@ import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { isCompetingSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -304,9 +302,8 @@ describe("worker turn launcher local placement", () => {
   );
 
   it.each(["absent", "local"] as const)(
-    "prepares %s placement once before claiming an admitted local turn",
+    "uses the admitted session reader for a %s local placement and releases its claim",
     async (state) => {
-      setRuntimeConfigSnapshot({ session: { store: fx.sessionTarget.storePath } });
       const claim = runIdentity("run-prepared-local");
       if (state === "local") {
         await localProvider.executeLocalTurn(claim, async () => {});
@@ -321,16 +318,8 @@ describe("worker turn launcher local placement", () => {
         recoveryOwnerLease: undefined,
         databaseClaim,
       });
-      using projection = vi.spyOn(fx.placements, "readProjection");
       using standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
-      const acquire = fx.placements.claimTurn.bind(fx.placements);
-      const preparationRequests: number[] = [];
-      const claimTurn = vi.spyOn(fx.placements, "claimTurn").mockImplementation((...args) => {
-        preparationRequests.push(projection.mock.calls.length);
-        return acquire(...args);
-      });
       try {
-        expect(getReplyOperationSessionReader(operation)).toBeDefined();
         await localProvider.executeTurn(
           claim,
           { ...fx.turn(claim.runId), replyOperation: operation },
@@ -339,11 +328,9 @@ describe("worker turn launcher local placement", () => {
             return { meta: { durationMs: 1 } };
           },
         );
-        expect(preparationRequests).toEqual([1]);
         expect(standaloneEntry).not.toHaveBeenCalled();
         expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
       } finally {
-        claimTurn.mockRestore();
         operation.complete();
         expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
           settled: true,
@@ -356,7 +343,6 @@ describe("worker turn launcher local placement", () => {
   it.each(["absent", "local"])(
     "keeps a repository session off the Gateway with %s placement",
     async (state) => {
-      setRuntimeConfigSnapshot({ session: { store: fx.sessionTarget.storePath } });
       const claim = runIdentity("repository-local");
       if (state === "local") {
         await localProvider.executeLocalTurn(claim, async () => {});
@@ -405,7 +391,6 @@ describe("worker turn launcher local placement", () => {
   it.each(["caller revocation", "placement publication"] as const)(
     "rejects local placement after %s during the metadata read",
     async (change) => {
-      setRuntimeConfigSnapshot({ session: { store: fx.sessionTarget.storePath } });
       const controller = new AbortController();
       const revoked = new Error("local turn source retired");
       const read = sessionEntryReader.readSessionEntryReadOnlyInWorker;

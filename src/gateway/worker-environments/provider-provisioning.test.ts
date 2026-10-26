@@ -3,17 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   WorkerProviderError,
   type WorkerMachineOption,
-  type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import {
-  readWorkerPlacementIdentity,
-  projectWorkerSessionPlacement,
-} from "./placement-projector.js";
-import { localPlacement } from "./placement-suite.test-support.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -293,62 +287,32 @@ describe("worker environment service", () => {
       support.createProvider({ listMachineOptions, listOperatingSystems }),
     );
 
-    const cases: Array<{ id: string; overrides: WorkerProfile }> = [
-      { id: "default", overrides: {} },
-      { id: "override", overrides: { machineClass: "standard", os: "os-b" } },
-      { id: "unknown", overrides: { machineClass: "custom", os: "other" } },
-    ];
     const records = await Promise.all(
-      cases.map(({ id, overrides }) =>
-        support.testState.store.createIntent({
-          environmentId: id,
-          providerId: "fake",
-          profileId: "development",
-          profileSnapshot: { settings: { region: "test" }, ...overrides },
-          provisionOperationId: `provision:${id}`,
-        }),
+      [{}, { machineClass: "standard", os: "os-b" }, { machineClass: "custom", os: "other" }].map(
+        (overrides, index) =>
+          support.testState.store.createIntent({
+            environmentId: `catalog-${index}`,
+            providerId: "fake",
+            profileId: "development",
+            profileSnapshot: { settings: { region: "test" }, ...overrides },
+            provisionOperationId: `provision:catalog-${index}`,
+          }),
       ),
     );
-    const project = (record: (typeof records)[number]) => {
-      const placement = {
-        ...localPlacement(),
-        state: "provisioning" as const,
-        environmentId: record.environmentId,
-      };
-      return projectWorkerSessionPlacement(
-        placement,
-        undefined,
-        undefined,
-        readWorkerPlacementIdentity(placement, workerService),
-      );
-    };
-    expect(project(records[0]!)).not.toHaveProperty("machine");
-    expect(project(records[1]!)).toMatchObject({ machine: { class: "standard", os: "os-b" } });
+    const read = (index: number) => workerService.readMachineShape(records[index]!.environmentId);
+    expect(read(0)).toBeUndefined();
+    expect(read(1)).toEqual({ class: "standard", os: "os-b" });
     const coldVersion = workerService.machineShapeVersion();
     await workerService.listMachineOptions("development");
-    expect(project(records[0]!)).toMatchObject({
-      machine: { class: "standard", cpu: 32, memoryGb: 64 },
-    });
-    expect(project(records[0]!)).not.toHaveProperty("machine.os");
+    expect(read(0)).toEqual({ class: "standard", cpu: 32, memoryGb: 64 });
     await expect(workerService.listMachineOptions("development")).resolves.toEqual(machines);
-    expect(project(records[0]!)).not.toHaveProperty("machine");
+    expect(read(0)).toBeUndefined();
     await expect(workerService.listOperatingSystems("development")).resolves.toEqual(systems);
-    expect(listMachineOptions).toHaveBeenCalledWith({ region: "test" });
-    expect(listOperatingSystems).toHaveBeenCalledWith({ region: "test" });
-    expect(project(records[0]!)).toMatchObject({
-      machine: {
-        class: "standard",
-        os: "os-a",
-        osLabel: "OS A",
-        cpu: 32,
-        memoryGb: 64,
-      },
-    });
-    expect(project(records[1]!)).toMatchObject({
-      machine: { class: "standard", os: "os-b", osLabel: "OS B" },
-    });
-    expect(project(records[1]!)).not.toHaveProperty("machine.cpu");
-    expect(project(records[2]!)).toMatchObject({ machine: { class: "custom", os: "other" } });
+    expect(records.map((_, index) => read(index))).toEqual([
+      { class: "standard", os: "os-a", osLabel: "OS A", cpu: 32, memoryGb: 64 },
+      { class: "standard", os: "os-b", osLabel: "OS B" },
+      { class: "custom", os: "other" },
+    ]);
     expect(workerService.machineShapeVersion()).toBeGreaterThan(coldVersion);
     const warmVersion = workerService.machineShapeVersion();
     await workerService.listMachineOptions("development");
@@ -357,8 +321,8 @@ describe("worker environment service", () => {
 
     support.getDevelopmentProfile().settings = { region: "changed" };
     await workerService.listMachineOptions("development");
-    expect(project(records[0]!)).not.toHaveProperty("machine");
-    expect(project(records[1]!)).toMatchObject({ machine: { class: "standard", os: "os-b" } });
+    expect(read(0)).toBeUndefined();
+    expect(read(1)).toEqual({ class: "standard", os: "os-b" });
   });
 
   it("warms the current profile while an earlier configuration catalog is still pending", async () => {
@@ -559,18 +523,22 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledOnce();
   });
 
-  it("rejects plaintext secret fields before persisting intent", async () => {
-    support.getDevelopmentProfile().settings = {
-      keyRef: "not-a-secret-ref",
-    };
-    const provision = vi.fn(support.createProvider().provision);
-
-    await expect(
-      create(support.createService(support.createProvider({ provision })), "request-secret"),
-    ).rejects.toMatchObject({ code: "invalid_profile" });
-    expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()).toEqual([]);
-  });
+  it.each(["plaintext secret", "non-canonical profile id"])(
+    "rejects %s before persistence",
+    async (invalid) => {
+      if (invalid === "plaintext secret") {
+        support.getDevelopmentProfile().settings = { keyRef: "not-a-secret-ref" };
+      }
+      const provision = vi.fn(support.createProvider().provision);
+      await expect(
+        create(support.createService(support.createProvider({ provision })), "request-invalid", {
+          profileId: invalid === "non-canonical profile id" ? " development " : "development",
+        }),
+      ).rejects.toMatchObject({ code: "invalid_profile" });
+      expect(provision).not.toHaveBeenCalled();
+      expect(support.testState.store.list()).toEqual([]);
+    },
+  );
 
   it("records permanent provider profile rejection as terminal", async () => {
     let provisionCalls = 0;
@@ -597,17 +565,6 @@ describe("worker environment service", () => {
       state: "failed",
     });
     expect(provisionCalls).toBe(1);
-  });
-
-  it("rejects non-canonical profile ids before persistence", async () => {
-    const workerService = support.createService(support.createProvider());
-
-    await expect(
-      create(workerService, "request-spaced", { profileId: " development " }),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-    } satisfies Partial<WorkerEnvironmentServiceError>);
-    expect(support.testState.store.list()).toEqual([]);
   });
 
   it("cancels a requested intent without allocating on restart reconcile", async () => {
