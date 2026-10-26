@@ -2,26 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 const mediaMetadataPlugins = vi.hoisted(() => {
-  const nativeDocumentInputs = ["pdf"];
   const pdf = { pdf: { textExtraction: "MiniMax-M2.7", image: false } };
   const minimax = { capabilities: ["image"], documentModels: pdf };
   return [
     {
       contracts: {
-        mediaUnderstandingProviders: ["google", "minimax", "minimax-portal", "openrouter"],
+        mediaUnderstandingProviders: [
+          "google",
+          "minimax",
+          "minimax-portal",
+          "openrouter",
+          "openai",
+        ],
       },
       mediaUnderstandingProviderMetadata: {
-        google: { capabilities: ["image"], autoPriority: { image: 30 }, nativeDocumentInputs },
+        google: { capabilities: ["image"], autoPriority: { image: 30 } },
         minimax: { ...minimax, autoPriority: { image: 40 } },
         "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
         openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
-      },
-    },
-    {
-      contracts: { mediaUnderstandingProviders: ["anthropic", "openai"] },
-      mediaUnderstandingProviderMetadata: {
-        anthropic: { nativeDocumentInputs },
-        openai: { nativeDocumentInputs: [] },
+        openai: {},
       },
     },
   ];
@@ -39,7 +38,6 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => {
 });
 
 import {
-  providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
   resolveDocumentMediaModel,
@@ -133,14 +131,6 @@ describe("media defaults", () => {
       "google",
       "minimax",
       "minimax-portal",
-    ]);
-  });
-  it("reads native PDF support from provider metadata", () => {
-    const supports = (providerId: string) => providerSupportsNativePdfDocument({ providerId });
-    expect([supports("anthropic"), supports("google"), supports("openai")]).toEqual([
-      true,
-      true,
-      false,
     ]);
   });
   it("reads document model hints from provider metadata", () => {

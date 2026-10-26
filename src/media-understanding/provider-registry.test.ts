@@ -1,7 +1,6 @@
-// Provider registry tests cover runtime provider loading, normalization aliases,
-// manifest-only image capability, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { mediaModels } from "./media-config.test-support.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -13,13 +12,6 @@ const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));
-
-function createMediaProvider(
-  params: Pick<MediaUnderstandingProvider, "id" | "capabilities"> &
-    Partial<MediaUnderstandingProvider>,
-): MediaUnderstandingProvider {
-  return params;
-}
 
 function requireMediaProvider(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -40,31 +32,13 @@ describe("media-understanding provider registry", () => {
 
   it("adds configured image only for static opt-ins without mutating registrations or overrides", () => {
     const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          acme: {
-            baseUrl: "https://fixture.invalid",
-            models: [
-              {
-                id: "vision",
-                name: "Vision",
-                input: ["text", "image"],
-                reasoning: false,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      },
+      models: mediaModels("acme", "vision", ["text", "image"]),
     };
-    const registered = Object.freeze(
-      createMediaProvider({
-        id: "acme",
-        capabilities: ["audio"],
-        inheritConfiguredImageCapability: true,
-      }),
-    );
+    const registered = Object.freeze({
+      id: "acme",
+      capabilities: ["audio"],
+      inheritConfiguredImageCapability: true,
+    } satisfies MediaUnderstandingProvider);
     const projected = requireMediaProvider(
       buildMediaUnderstandingRegistry(undefined, cfg, [registered]),
       "acme",
@@ -86,49 +60,31 @@ describe("media-understanding provider registry", () => {
         ).capabilities,
       ).toEqual(["audio"]);
     }
-    expect(
-      requireMediaProvider(
-        buildMediaUnderstandingRegistry({ acme: { id: "acme", capabilities: ["video"] } }, cfg, [
-          registered,
-        ]),
-        "acme",
-      ).capabilities,
-    ).toEqual(["video"]);
+    const overrideImage = vi.fn(async () => ({ text: "override image" }));
+    const override = {
+      id: "acme",
+      capabilities: ["image"],
+      describeImage: overrideImage,
+    } satisfies MediaUnderstandingProvider;
+    const provider = requireMediaProvider(
+      buildMediaUnderstandingRegistry({ acme: override }, cfg, [registered]),
+      "acme",
+    );
+    expect(provider.capabilities).toEqual(["image"]);
+    expect(provider.describeImage).toBe(overrideImage);
+    expect(provider.describeImages).toBeUndefined();
     expect(registered.capabilities).toEqual(["audio"]);
   });
 
-  it("preserves partial native overrides for dispatch", () => {
-    const overrideImage = vi.fn(async () => ({ text: "override image" }));
-    const registry = buildMediaUnderstandingRegistry(
-      {
-        zai: createMediaProvider({
-          id: "zai",
-          capabilities: ["image"],
-          describeImage: overrideImage,
-        }),
-      },
-      undefined,
-      [createMediaProvider({ id: "zai", capabilities: ["image"] })],
-    );
-
-    const provider = requireMediaProvider(registry, "zai");
-    expect(provider.describeImage).toBe(overrideImage);
-    expect(provider.describeImages).toBeUndefined();
-  });
-
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
-          glm: {
-            models: [{ id: "glm-4.6v", input: ["text", "image"] }],
-          },
-          textOnly: {
-            models: [{ id: "text-model", input: ["text"] }],
-          },
+          ...mediaModels("glm", "glm-4.6v", ["text", "image"]).providers,
+          ...mediaModels("textOnly", "text-model", ["text"]).providers,
         },
       },
-    } as never;
+    };
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
     const glmProvider = requireMediaProvider(registry, "glm");
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
