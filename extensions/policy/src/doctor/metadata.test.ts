@@ -25,43 +25,38 @@ describe("policy doctor metadata", () => {
         rule.emptyList,
         rule.scopeSelectors,
       ]),
-    ).toEqual([
-      ["agents.workspace.allowedAccess", "allowlist-subset", "disabled", ["agentIds"]],
-      ["agents.workspace.denyTools", "denylist-superset", undefined, ["agentIds"]],
-      ["tools.profiles.allow", "allowlist-subset", "disabled", ["agentIds"]],
-      ["tools.fs.requireWorkspaceOnly", "requires-true", undefined, ["agentIds"]],
-      ["tools.exec.allowSecurity", "allowlist-subset", "disabled", ["agentIds"]],
-      ["tools.exec.requireAsk", "allowlist-subset", "disabled", ["agentIds"]],
-      ["tools.exec.allowHosts", "allowlist-subset", "disabled", ["agentIds"]],
-      ["tools.elevated.allow", "requires-false", undefined, ["agentIds"]],
-      ["tools.alsoAllow.expected", "exact-list", "meaningful", ["agentIds"]],
-      ["tools.denyTools", "denylist-superset", undefined, ["agentIds"]],
-      ["sandbox.requireMode", "allowlist-subset", "disabled", ["agentIds"]],
-      ["sandbox.allowBackends", "allowlist-subset", "disabled", ["agentIds"]],
-      ["sandbox.containers.denyHostNetwork", "requires-true", undefined, ["agentIds"]],
-      ["sandbox.containers.denyContainerNamespaceJoin", "requires-true", undefined, ["agentIds"]],
-      ["sandbox.containers.requireReadOnlyMounts", "requires-true", undefined, ["agentIds"]],
-      [
-        "sandbox.containers.denyContainerRuntimeSocketMounts",
-        "requires-true",
-        undefined,
-        ["agentIds"],
-      ],
-      ["sandbox.containers.denyUnconfinedProfiles", "requires-true", undefined, ["agentIds"]],
-      ["sandbox.browser.requireCdpSourceRange", "requires-true", undefined, ["agentIds"]],
-      ["ingress.channels.allowDmPolicies", "allowlist-subset", "disabled", ["channelIds"]],
-      ["ingress.channels.denyOpenGroups", "requires-true", undefined, ["channelIds"]],
-      ["ingress.channels.requireMentionInGroups", "requires-true", undefined, ["channelIds"]],
-      [
-        "dataHandling.memory.denySessionTranscriptIndexing",
-        "requires-true",
-        undefined,
-        ["agentIds"],
-      ],
-      ["execApprovals.agents.allowSecurity", "allowlist-subset", "disabled", ["agentIds"]],
-      ["execApprovals.agents.allowAutoAllowSkills", "requires-false", undefined, ["agentIds"]],
-      ["execApprovals.agents.allowlist.expected", "exact-list", "meaningful", ["agentIds"]],
-    ]);
+    ).toEqual(
+      `agents.workspace.allowedAccess|allowlist-subset|disabled|agentIds
+       agents.workspace.denyTools|denylist-superset||agentIds
+       tools.profiles.allow|allowlist-subset|disabled|agentIds
+       tools.fs.requireWorkspaceOnly|requires-true||agentIds
+       tools.exec.allowSecurity|allowlist-subset|disabled|agentIds
+       tools.exec.requireAsk|allowlist-subset|disabled|agentIds
+       tools.exec.allowHosts|allowlist-subset|disabled|agentIds
+       tools.elevated.allow|requires-false||agentIds
+       tools.alsoAllow.expected|exact-list|meaningful|agentIds
+       tools.denyTools|denylist-superset||agentIds
+       sandbox.requireMode|allowlist-subset|disabled|agentIds
+       sandbox.allowBackends|allowlist-subset|disabled|agentIds
+       sandbox.containers.denyHostNetwork|requires-true||agentIds
+       sandbox.containers.denyContainerNamespaceJoin|requires-true||agentIds
+       sandbox.containers.requireReadOnlyMounts|requires-true||agentIds
+       sandbox.containers.denyContainerRuntimeSocketMounts|requires-true||agentIds
+       sandbox.containers.denyUnconfinedProfiles|requires-true||agentIds
+       sandbox.browser.requireCdpSourceRange|requires-true||agentIds
+       ingress.channels.allowDmPolicies|allowlist-subset|disabled|channelIds
+       ingress.channels.denyOpenGroups|requires-true||channelIds
+       ingress.channels.requireMentionInGroups|requires-true||channelIds
+       dataHandling.memory.denySessionTranscriptIndexing|requires-true||agentIds
+       execApprovals.agents.allowSecurity|allowlist-subset|disabled|agentIds
+       execApprovals.agents.allowAutoAllowSkills|requires-false||agentIds
+       execApprovals.agents.allowlist.expected|exact-list|meaningful|agentIds`
+        .split("\n")
+        .map((line) => {
+          const [path, strictness, emptyList, scope] = line.trim().split("|");
+          return [path, strictness, emptyList || undefined, [scope]];
+        }),
+    );
   });
 
   it("classifies every policy finding for fix recommendation coverage", () => {
