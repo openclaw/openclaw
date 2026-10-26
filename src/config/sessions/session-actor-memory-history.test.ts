@@ -7,6 +7,7 @@ import type {
 } from "./session-actor-memory-history-contract.js";
 import { mutateMemory, readMemory } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import { transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const sessionKey = "agent:main:dashboard:incognito-history";
@@ -54,6 +55,8 @@ const messageIds = (messages: readonly unknown[]) =>
   messages.flatMap((item) =>
     isRecord(item) && isRecord(item["__openclaw"]) ? [item["__openclaw"].id] : [],
   );
+const bytes = (...events: unknown[]) =>
+  Buffer.byteLength(events.map((event) => JSON.stringify(event)).join("\n"));
 
 async function fixture(events: unknown[], entry: Partial<InternalSessionEntry> = {}) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
@@ -141,25 +144,13 @@ describe("memory actor history", () => {
     expect(visible.events.map((row) => row.seq)).toEqual([1, 2]);
     const [write, page] = await Promise.all([
       actor.appendToolResult(
-        {
-          commandId: "branch",
-          phaseId: "turn",
-          turn: {
-            agentId: "main",
-            sessionKey,
-            options: {
-              expectedSessionId: sessionId,
-              sessionFile: "/synthetic/transcript",
-              messages: [
-                {
-                  message: { role: "assistant", content: "New branch" },
-                  eventId: "new",
-                  parentId: "user",
-                },
-              ],
-            },
+        transcriptTurnCommand({ agentId: "main", sessionKey, sessionId }, "branch", [
+          {
+            message: { role: "assistant", content: "New branch" },
+            eventId: "new",
+            parentId: "user",
           },
-        },
+        ]),
         authority,
       ),
       read("recent", { options: { maxMessages: 10 } }),
@@ -233,7 +224,7 @@ describe("memory actor history", () => {
       found: true,
       oversized: true,
       seq: 2,
-      serializedBytes: Buffer.byteLength(JSON.stringify(large)),
+      serializedBytes: bytes(large),
     });
     expect(
       await read("by-id", { messageId: "small", options: { currentOnly: true, maxBytes: 1024 } }),
@@ -501,10 +492,7 @@ describe("memory actor history facts", () => {
       options: { includeByteSize: true, includeUsage: true },
     });
     expect(accounting).toEqual({
-      byteSize: [fresh, compact, answer].reduce(
-        (sum, event) => sum + Buffer.byteLength(JSON.stringify(event)) + 1,
-        0,
-      ),
+      byteSize: bytes(fresh, compact, answer) + 1,
       eventCount: 3,
       usage: undefined,
     });
@@ -535,17 +523,13 @@ describe("memory actor history facts", () => {
       { event: first, eventSeq: 1, seq: 1 },
       { event: last, eventSeq: 3, seq: 3 },
     ]);
-    expect(page.serializedBytes).toBe(
-      Buffer.byteLength(JSON.stringify(first)) + Buffer.byteLength(JSON.stringify(last)) + 2,
-    );
+    expect(page.serializedBytes).toBe(bytes(first, last) + 1);
     page.events.length = 0;
     expect(await read("latest-assistant", {})).toMatchObject({ id: "last", text: "Short answer" });
     expect(await read("stats", {})).toMatchObject({
       eventCount: 4,
       maxSeq: 3,
-      sizeBytes: Buffer.byteLength(
-        transcriptEvents.map((event) => JSON.stringify(event)).join("\n"),
-      ),
+      sizeBytes: bytes(...transcriptEvents),
     });
   });
 
@@ -597,28 +581,21 @@ describe("memory actor history facts", () => {
     const answer = message("answer", "opaque", "assistant", "Answer");
     const { read } = await fixture([user, opaque, answer]);
     const projected = { type: "custom", id: "opaque", parentId: "user", customType: "tool-state" };
-    expect(
-      await read("maintenance", {
-        request: {
-          operation: "suffix",
-          startSeq: 2,
-          maxBytes: 1000,
-          maxEvents: 2,
-          retainedCustomDataIds: ["opaque"],
-        },
-      }),
-    ).toEqual({ kind: "transcript-maintenance", events: [projected, answer] });
-    await expect(
+    const suffix = (retainedCustomDataIds: string[]) =>
       read("maintenance", {
         request: {
           operation: "suffix",
           startSeq: 2,
           maxBytes: 1000,
           maxEvents: 2,
-          retainedCustomDataIds: [],
+          retainedCustomDataIds,
         },
-      }),
-    ).rejects.toThrow("byte limit");
+      });
+    expect(await suffix(["opaque"])).toEqual({
+      kind: "transcript-maintenance",
+      events: [projected, answer],
+    });
+    await expect(suffix([])).rejects.toThrow("byte limit");
     expect(await read("maintenance", { request: { operation: "previous", beforeSeq: 3 } })).toEqual(
       { kind: "transcript-maintenance", previous: opaque },
     );

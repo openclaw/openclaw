@@ -736,17 +736,18 @@ describe("SQLite historical session disk budget", () => {
     const databasePath = database().path;
     const diskBudget = await import("./disk-budget.js");
     const probe = diskBudget.hasRetainedSessionTranscriptArchives;
-    vi.spyOn(diskBudget, "hasRetainedSessionTranscriptArchives").mockImplementation(
-      async (pathname) => {
+    const probeSpy = vi
+      .spyOn(diskBudget, "hasRetainedSessionTranscriptArchives")
+      .mockImplementation(async (pathname) => {
         const retained = await probe(pathname);
         expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         return retained;
-      },
-    );
+      });
 
     await expect(inspectSqliteSessionHistoryDiskBudget(budget(1, 0))).resolves.toMatchObject({
       wouldMutate: true,
     });
+    expect(probeSpy).toHaveBeenCalledOnce();
     expect(sessionExists("inspect-old")).toBe(true);
   });
 
