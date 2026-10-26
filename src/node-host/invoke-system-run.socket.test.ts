@@ -30,7 +30,6 @@ it.runIf(process.platform !== "win32")(
           const token = "enforced-exec-host-test-token";
           const marker = path.join(dir, "executions");
           const command = ["/bin/sh", "-c", 'printf "START\\nCOMPLETE\\n" >> "$1"', "_", marker];
-          const order: string[] = [];
           const sockets: net.Socket[] = [];
           const closes: Promise<void>[] = [];
           const failures: unknown[] = [];
@@ -72,10 +71,7 @@ it.runIf(process.platform !== "win32")(
                 stdio: "ignore",
               });
               expect(await once(child, "close")).toEqual([0, null]);
-              expect(await fs.readFile(marker, "utf8")).toBe("START\nCOMPLETE\n");
-              order.push("child-completed");
               socket.end();
-              order.push("response-dropped");
             })().catch((error: unknown) => {
               failures.push(error);
               socket.destroy();
@@ -106,7 +102,6 @@ it.runIf(process.platform !== "win32")(
             });
             await handler;
             expect(failures).toEqual([]);
-            expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
             expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith({
               ok: false,

@@ -7,25 +7,12 @@ import {
   stopNodeHostWorkerFromSignal,
 } from "./worker-support.js";
 
-describe("parseNodeHostWorkerInput", () => {
-  const input = {
-    type: "invoke-input",
-    generation: 1,
-    invokeId: "invoke-1",
-    seq: 2,
-    payloadJSON: "x",
-  };
-  const cancel = { type: "invoke-cancel", generation: 1, invokeId: "invoke-1" };
-  const parse = (frame: object) => parseNodeHostWorkerInput(JSON.stringify(frame));
-
-  it("accepts ordered input and cancel control frames", () => {
-    expect(parse(input)).toEqual(input);
-    expect(parse(cancel)).toEqual(cancel);
-  });
-
-  it("rejects malformed JSON frames", () => {
-    expect(parseNodeHostWorkerInput("{")).toBeNull();
-  });
+it.each([
+  { type: "invoke-input", generation: 1, invokeId: "invoke-1", seq: 2, payloadJSON: "x" },
+  { type: "invoke-cancel", generation: 1, invokeId: "invoke-1" },
+  null,
+])("parses worker control frame %j", (frame) => {
+  expect(parseNodeHostWorkerInput(frame === null ? "{" : JSON.stringify(frame))).toEqual(frame);
 });
 
 describe("NodeHostWorkerBridgeClient", () => {
@@ -57,16 +44,13 @@ describe("NodeHostWorkerBridgeClient", () => {
   });
 
   it("preserves structured gateway rejection for the shared publisher", async () => {
+    const error = { code: "INVALID_REQUEST", message: "unknown method: node.skills.update" };
     const response = client.request("node.skills.update");
     const rejection = expect(response).rejects.toMatchObject({
-      gatewayCode: "INVALID_REQUEST",
-      message: "unknown method: node.skills.update",
+      gatewayCode: error.code,
+      message: error.message,
     });
-    client.handleResponse({
-      ...responseFrame,
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "unknown method: node.skills.update" },
-    });
+    client.handleResponse({ ...responseFrame, ok: false, error });
     await rejection;
     await expect(response).rejects.toBeInstanceOf(GatewayClientRequestError);
   });
