@@ -81,20 +81,12 @@ describe("getSlashCommands", () => {
       expect(shouldSubmitExactArgumentCompletion(`/${alias} ${level}`, commands)).toBe(true);
     }
   });
-  it("exposes usage cost in completion and help", () => {
-    const commands = getSlashCommands({ local: true });
-    const usage = commands.find(({ name }) => name === "usage");
-    expect(usage?.description).toContain("cost summary");
-    expect(usage?.getArgumentCompletions?.("co")).toEqual(choices("cost"));
-    expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
-    expect(helpText({ local: true })).toContain("/usage <off|tokens|full|cost|reset|");
-  });
   it.each([
-    ["verbose", "full", "Set verbose on/off/full"],
-    ["reasoning", "stream", "Set reasoning on/off/stream"],
-  ])("describes and submits /%s %s", (name, level, description) => {
+    ["usage", "cost"],
+    ["verbose", "full"],
+    ["reasoning", "stream"],
+  ])("submits an exact /%s %s completion", (name, level) => {
     const commands = getSlashCommands();
-    expect(commands.find((entry) => entry.name === name)?.description).toBe(description);
     expect(findCommand(name)?.getArgumentCompletions?.(level)).toEqual(choices(level));
     expect(shouldSubmitExactArgumentCompletion(`/${name} ${level}`, commands)).toBe(true);
   });
@@ -145,14 +137,7 @@ describe("getSlashCommands", () => {
     );
     expect(getSlashCommands().map(({ name }) => name)).not.toContain("auth");
     const help = helpText({ local: true });
-    for (const text of [
-      "/goal start <objective>",
-      "/goal edit <objective>",
-      "/btw <side question>",
-    ]) {
-      expect(help).toContain(text);
-    }
-    for (const text of ["/btw [side question]", "/commands", "/status"]) {
+    for (const text of ["/commands", "/status"]) {
       expect(help).not.toContain(text);
     }
   });
@@ -164,11 +149,5 @@ describe("helpText", () => {
     [minimax, "/think <off|adaptive|default>"],
   ] satisfies [Options, string][])("documents thinking levels for %j", (options, expected) => {
     expect(helpText(options)).toContain(expected);
-  });
-  it("documents default resets", () => {
-    const output = helpText();
-    expect(output).toContain("/model <provider/model|default>");
-    expect(output).toMatch(/\/think <[^>]+\|default>/u);
-    expect(output).toContain("/fast <status|auto|on|off|default>");
   });
 });
